@@ -1,0 +1,19 @@
+# SERP Squad CRM — app.serpsquad.com (automatic HTTPS via Caddy)
+app.serpsquad.com {
+	encode gzip
+
+	# API + the pixel go to the Node server (bound to localhost)
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle /px.js {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# everything else: the built SPA
+	handle {
+		root * /var/www/serpsquad/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

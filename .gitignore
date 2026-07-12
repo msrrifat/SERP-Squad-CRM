@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.DS_Store
+
+# runtime state & secrets — never commit these
+server/credentials.json
+server/data/
+server/auth/
+*.log

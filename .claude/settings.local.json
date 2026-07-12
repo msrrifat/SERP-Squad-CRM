@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(command -v node nvm volta fnm bun)",
+      "Read(//Users/saifurrifat/.nvm/versions/**)",
+      "Bash(perl -i -pe 's/\\\\x00/\\\\\\\\u0000/g' \"serp-squad jul 5.jsx\")",
+      "WebFetch(domain:claude.ai)",
+      "mcp__claude-in-chrome__navigate",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "Bash(awk 'NR>=830 && NR<=850 && /^\\\\];|^];/ {print NR\": \"$0}' \"serp-squad jul 5.jsx\")",
+      "Bash(awk -F: '$1 > 6300')",
+      "Bash(python3 -)",
+      "Bash(grep -n -E \"^\\(export \\)?\\(const|let\\) [A-Za-z_$][A-Za-z0-9_$]* = .*, *[A-Za-z_$][A-Za-z0-9_$]* *=\" _archive/serp-squad-monolith-jul5.jsx)"
+    ]
+  }
+}
