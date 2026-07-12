@@ -395,13 +395,17 @@ export function buildZip(files) {           // files: [{ path, content }]
   let pos = 0; chunks.forEach((c) => { out.set(c, pos); pos += c.length; });
   return new Blob([out], { type: "application/zip" });
 }
-export function exportSiteZip(plan, ctx) {
+export function exportSiteZip(plan, ctx, { pagesOnly = false } = {}) {
   const files = plan.map(({ node, page, chrome }) => ({
     path: (node.url === "/" ? "index.html" : node.url.replace(/^\//, "") + "/index.html"),
     content: serializeHtml(page, chrome, ctx),
   }));
-  files.push({ path: "robots.txt", content: `User-agent: *\nAllow: /\nSitemap: https://${ctx.website}/sitemap.xml\n` });
-  files.push({ path: "sitemap.xml", content: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${plan.map(({ node }) => `  <url><loc>https://${ctx.website}${node.url}</loc></url>`).join("\n")}\n</urlset>\n` });
+  /* pagesOnly: partial export onto an existing site — must not ship a
+     robots/sitemap that would clobber the site's real ones */
+  if (!pagesOnly) {
+    files.push({ path: "robots.txt", content: `User-agent: *\nAllow: /\nSitemap: https://${ctx.website}/sitemap.xml\n` });
+    files.push({ path: "sitemap.xml", content: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${plan.map(({ node }) => `  <url><loc>https://${ctx.website}${node.url}</loc></url>`).join("\n")}\n</urlset>\n` });
+  }
   return buildZip(files);
 }
 

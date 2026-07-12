@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   ChevronDown, ChevronRight, FileText, Layers, Network, Plus, RefreshCw, Search,
-  Sparkles, Target, Trash2, TriangleAlert, Wand2, X,
+  Sparkles, Target, Trash2, TriangleAlert, UploadCloud, Wand2, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { realDfs } from "./indexcheck.jsx";
@@ -153,7 +153,7 @@ const LiveChip = ({ live, provider }) => (
   </span>
 );
 
-function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove }) {
+function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish }) {
   const [open, setOpen] = useState(true);
   const meta = PAGE_TYPE_META[node.type] || { label: node.type, color: "#64748B" };
   const hasKids = (node.children || []).length > 0;
@@ -172,19 +172,20 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove }) {
           {done && <span className="shrink-0 rounded-full px-1.5 py-px text-[8.5px] font-bold uppercase" style={{ background: "#DCFCE7", color: "#166534" }}>{done}</span>}
         </button>
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
+          <button onClick={() => onPublish(node)} title="Publish only this page to the site" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-emerald-600"><UploadCloud size={12} /></button>
           <button onClick={() => onAddChild(node)} title="Add subpage" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Plus size={12} /></button>
           <button onClick={() => onRemove(node)} title="Remove" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"><Trash2 size={12} /></button>
         </div>
       </div>
       {open && (node.children || []).map((c) => (
-        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} />
+        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} />
       ))}
     </div>
   );
 }
 
 /* ---- per-page content pipeline editor ---- */
-function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onClose }) {
+function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
   const seo = node.seo || {};
   /* functional through to project state — concurrent stages can't clobber each other */
   const setSeo = (patch) => onPatch((cur) => ({ seo: { ...(cur.seo || {}), ...(typeof patch === "function" ? patch(cur.seo || {}) : patch) } }));
@@ -301,6 +302,12 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
             <div className="ll-display truncate text-[14px] font-semibold">{node.title}</div>
             <div className="ll-mono text-[10.5px] text-gray-400">{project.website}{node.url} · market: {locationName}{ai?.key ? ` · AI: ${ai.provider}` : " · no AI provider (drafts)"}</div>
           </div>
+          {onPublish && (
+            <button onClick={onPublish} title="Publish only this page to the connected site"
+              className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white" style={{ background: accent }}>
+              <UploadCloud size={12} /> Publish this page
+            </button>
+          )}
           <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100"><X size={16} /></button>
         </div>
 
@@ -535,26 +542,23 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
           <div>
             {tree.map((p) => (
               <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
-                onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }} />
+                onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }}
+                onPublish={(n) => setDeploying({ only: n })} />
             ))}
           </div>
           {/* ---- the money button: turn the whole researched map into a live site ---- */}
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-4">
-            <button onClick={() => setDeploying(true)}
+            <button onClick={() => setDeploying({})}
               className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-[13.5px] font-bold text-white" style={{ background: accent }}>
               <Network size={15} /> Create full website from this map
             </button>
             <span className="text-[10.5px] leading-relaxed text-gray-400">
               Builds every page with the full technical-SEO spec — meta, headings, schema, smart internal links,
               reviews, NAP + map block, pricing — and deploys via the WordPress REST API (HTML, Elementor or Block Editor).
+              Need just one new page on the existing site? Use the <UploadCloud size={10} className="inline" /> button on any row to publish that page alone — nothing else is touched.
             </span>
           </div>
         </Card>
-      )}
-
-      {deploying && (
-        <DeployModal tree={tree} arch={arch} project={project} opt={opt} setOpt={setOpt} accent={accent}
-          brandVoice={brandVoice} log={log} onClose={() => setDeploying(false)} />
       )}
 
       {openNode && (() => {
@@ -564,9 +568,15 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
         return (
           <PageEditor node={openNode} project={project} brandVoice={brandVoice} niche={arch?.niche || niche || project.name}
             accent={accent} dfs={dfs} ai={aiConfig} locationName={locationName} siteLinks={siteLinks}
-            onPatch={(patch) => patchNode(openNode.id, patch)} onClose={() => setOpenId(null)} />
+            onPatch={(patch) => patchNode(openNode.id, patch)} onPublish={() => setDeploying({ only: openNode })} onClose={() => setOpenId(null)} />
         );
       })()}
+
+      {/* rendered last so it stacks above an open PageEditor when publishing from inside it */}
+      {deploying && (
+        <DeployModal tree={tree} arch={arch} project={project} opt={opt} setOpt={setOpt} accent={accent}
+          brandVoice={brandVoice} log={log} only={deploying.only || null} onClose={() => setDeploying(false)} />
+      )}
     </div>
   );
 }
@@ -593,13 +603,14 @@ const buildersFor = (platform) =>
   : platform === "webflow" ? [B_WEBFLOW, B_EXPORT]
   : [B_CUSTOM_PUSH, B_EXPORT];
 
-function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log, onClose }) {
+function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log, only = null, onClose }) {
   const w = opt.website || {};
   const BUILDERS = buildersFor(w.platform);
   const [builder, setBuilder] = useState(BUILDERS[0].key);
-  const [cleanup, setCleanup] = useState(true);
+  /* single-page mode never wipes the site; a lone article defaults to publishing today */
+  const [cleanup, setCleanup] = useState(!only);
   const [wfSiteId, setWfSiteId] = useState(w.webflowSiteId || "");
-  const [schedStart, setSchedStart] = useState(new Date(Date.now() + 864e5).toISOString().slice(0, 10));
+  const [schedStart, setSchedStart] = useState(new Date(Date.now() + (only ? 0 : 864e5)).toISOString().slice(0, 10));
   const [schedEvery, setSchedEvery] = useState(3);
   const [progress, setProgress] = useState(null); // [{url, status, note}]
   const [done, setDone] = useState(false);
@@ -629,7 +640,11 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
     gbp, brandVoice, website: project.website, accent,
     media, reviews: demoReviews(project.name.split(" — ")[0], ""), reviewSource,
   };
-  const plan = buildDeployPlan(tree, ctx);
+  /* the plan is always composed from the FULL tree so internal links, parent
+     slugs and silo context stay correct — then scoped to one node when
+     publishing a single page onto the existing site */
+  const fullPlan = buildDeployPlan(tree, ctx);
+  const plan = only ? fullPlan.filter((x) => x.node.id === only.id) : fullPlan;
   const articles = plan.filter((x) => x.node.type === "article");
   const withContent = plan.filter((x) => x.node.seo?.content).length;
   const dates = scheduleDates(articles.length, schedStart, Math.max(1, +schedEvery || 3));
@@ -643,7 +658,8 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
       slug: node.url.split("/").filter(Boolean).pop() || "home",
       parentSlug: page.parentUrl ? page.parentUrl.split("/").filter(Boolean).pop() : null,
       title: page.h1, metaTitle: page.metaTitle, metaDesc: page.metaDesc,
-      ...(isPost && artIdx >= 0 ? { status: "future", date: dates[artIdx].toISOString() } : { status: "publish" }),
+      ...(isPost && artIdx >= 0 && dates[artIdx].getTime() > Date.now()
+        ? { status: "future", date: dates[artIdx].toISOString() } : { status: "publish" }),
     };
     /* WordPress builds neutralize the theme: Elementor pages go on the blank
        Canvas template (bypasses theme layout entirely); HTML/Gutenberg carry a
@@ -661,15 +677,15 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
 
     /* CUSTOM-CODED: static export — a real ZIP download, no builder */
     if (builder === "export") {
-      const blob = exportSiteZip(plan, ctx);
+      const blob = exportSiteZip(plan, ctx, { pagesOnly: !!only });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = project.website.replace(/\W+/g, "-") + "-site-export.zip";
+      a.download = project.website.replace(/\W+/g, "-") + (only ? "-page" + only.url.replace(/\W+/g, "-") : "-site-export") + ".zip";
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       rows.forEach((_, i) => mark(i, "done", "exported"));
       mirrorLocal(false);
-      log?.(`Exported static site ZIP (${plan.length} pages + sitemap + robots)`, project.website);
+      log?.(only ? `Exported single page ZIP (${only.url})` : `Exported static site ZIP (${plan.length} pages + sitemap + robots)`, project.website);
       setDone(true);
       return;
     }
@@ -692,7 +708,7 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
         for (let i = 0; i < rows.length; i++) { mark(i, "creating"); await new Promise((res2) => setTimeout(res2, 100)); mark(i, "done", "demo"); }
       }
       mirrorLocal(!live);
-      log?.(`Deployed website to Webflow CMS (${plan.length} items${live ? "" : ", demo"})`, project.website);
+      log?.(only ? `Published single item to Webflow CMS (${only.url}${live ? "" : ", demo"})` : `Deployed website to Webflow CMS (${plan.length} items${live ? "" : ", demo"})`, project.website);
       setDone(true);
       return;
     }
@@ -743,12 +759,39 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
       }
     }
     mirrorLocal(!live);
-    log?.(`Deployed full website (${plan.length} pages, ${builder}${live ? "" : ", demo"})`, project.website);
+    log?.(only ? `Published single page ${only.url} (${builder}${live ? "" : ", demo"})` : `Deployed full website (${plan.length} pages, ${builder}${live ? "" : ", demo"})`, project.website);
     setDone(true);
   };
-  /* mirror the deployed site into the Pages/Posts tabs (labeled when demo) */
+  /* mirror the deployed site into the Pages/Posts tabs (labeled when demo);
+     single-page publishes UPSERT into the existing lists instead of replacing them */
   const mirrorLocal = (isDemo) => {
     const now = Date.now();
+    if (only) {
+      const item = plan[0];
+      if (!item) return;
+      const slug = item.node.url.split("/").filter(Boolean).pop() || "home";
+      setOpt("website", (cur) => item.node.type === "article"
+        ? {
+            blogs: [
+              { id: "db" + now, title: item.page.h1, slug, metaTitle: item.page.metaTitle, metaDesc: item.page.metaDesc, categories: [],
+                ...(dates[0] && dates[0].getTime() > now
+                  ? { status: "scheduled", scheduledAt: dates[0].getTime() }
+                  : { status: "published", publishedAt: now }),
+                createdAt: now, builder, deployed: true, demo: isDemo },
+              ...(cur.blogs || []).filter((b) => b.slug !== slug),
+            ],
+            lastDeploy: now,
+          }
+        : {
+            pages: [
+              ...(cur.pages || []).filter((p) => p.url !== item.node.url),
+              { id: "dp" + now, url: item.node.url, name: item.page.h1, metaTitle: item.page.metaTitle, metaDesc: item.page.metaDesc,
+                dirty: false, updatedAt: now, builder, deployed: true, demo: isDemo },
+            ],
+            lastDeploy: now,
+          });
+      return;
+    }
     setOpt("website", (cur) => ({
       ...(w.platform === "webflow" && wfSiteId.trim() ? { webflowSiteId: wfSiteId.trim() } : {}),
       pages: plan.filter((x) => x.node.type !== "article").map((x, i) => ({
@@ -769,7 +812,8 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
 
   const st = { pending: "text-gray-300", creating: "text-blue-500", done: "text-emerald-600", error: "text-red-500" };
   return (
-    <Modal title="Create full website from this map" sub={`${plan.length} pages · ${articles.length} scheduled posts · ${project.website}`} onClose={onClose} wide>
+    <Modal title={only ? `Publish single page — ${only.title}` : "Create full website from this map"}
+      sub={only ? `${project.website}${only.url} · the rest of the site is untouched` : `${plan.length} pages · ${articles.length} scheduled posts · ${project.website}`} onClose={onClose} wide>
       {!progress ? (
         <div className="space-y-4">
           {/* 1 — builder choice */}
@@ -788,24 +832,34 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
               ))}
             </div>
           </div>
-          {/* 2 — options */}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-gray-100 p-3">
-              <Toggle on={cleanup} onChange={setCleanup} label="Remove ALL existing pages & posts first"
-                desc="Cleans the site before deploying the new map — old content is deleted permanently on the live site." />
-            </div>
-            <div className="rounded-xl border border-gray-100 p-3">
-              <div className="text-[12px] font-semibold text-gray-700">Blog publishing schedule ({articles.length} posts)</div>
-              <div className="mt-1.5 flex items-center gap-2 text-[12px] text-gray-500">
-                start <input type="date" value={schedStart} onChange={(e) => setSchedStart(e.target.value)} className={inputCls + " w-auto"} />
-                every <input type="number" min={1} value={schedEvery} onChange={(e) => setSchedEvery(e.target.value)} className={inputCls + " w-16"} /> day(s)
+          {/* 2 — options (single-page mode: never cleans up; one date picker for a lone post) */}
+          <div className={"grid gap-3 " + (only ? "" : "sm:grid-cols-2")}>
+            {!only && (
+              <div className="rounded-xl border border-gray-100 p-3">
+                <Toggle on={cleanup} onChange={setCleanup} label="Remove ALL existing pages & posts first"
+                  desc="Cleans the site before deploying the new map — old content is deleted permanently on the live site." />
               </div>
-              <div className="mt-1 text-[10px] text-gray-400">Posts deploy as WordPress "scheduled" — they auto-publish on their dates.</div>
-            </div>
+            )}
+            {only && articles.length === 0 && (
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3.5 py-2.5 text-[11.5px] text-emerald-800">
+                <b>Adds one page to the existing site.</b> No cleanup runs and nothing else is created, changed or removed —
+                internal links on this page still follow the full site map.
+              </div>
+            )}
+            {articles.length > 0 && (
+              <div className="rounded-xl border border-gray-100 p-3">
+                <div className="text-[12px] font-semibold text-gray-700">{only ? "Publish date (today = publish immediately)" : `Blog publishing schedule (${articles.length} posts)`}</div>
+                <div className="mt-1.5 flex items-center gap-2 text-[12px] text-gray-500">
+                  {only ? "publish on" : "start"} <input type="date" value={schedStart} onChange={(e) => setSchedStart(e.target.value)} className={inputCls + " w-auto"} />
+                  {!only && <>every <input type="number" min={1} value={schedEvery} onChange={(e) => setSchedEvery(e.target.value)} className={inputCls + " w-16"} /> day(s)</>}
+                </div>
+                <div className="mt-1 text-[10px] text-gray-400">{only ? "A future date deploys the post as scheduled — it auto-publishes on that date." : 'Posts deploy as WordPress "scheduled" — they auto-publish on their dates.'}</div>
+              </div>
+            )}
           </div>
           {/* 3 — preflight */}
           <div className="rounded-xl bg-gray-50 p-3.5 text-[11.5px] leading-relaxed text-gray-600">
-            <b className="text-gray-800">Preflight</b> · {plan.length} pages ({withContent} with researched content — the rest use the SEO template)
+            <b className="text-gray-800">Preflight</b> · {plan.length} page{plan.length === 1 ? "" : "s"} ({withContent} with researched content — the rest use the SEO template)
             · reviews: {reviewSource ? "Google review source connected" : "demo reviews (add the review link in Branding & Automation → Properties)"}
             · NAP: {gbp.bizName ? gbp.bizName : "⚠ no GBP business info"} · media: {media.length ? `${media.length} synced items` : "none synced (Media tab) — pages deploy without images"}
             <br />Every page ships: meta ≤60/≤160 · single H1 + section H2/H3 · JSON-LD graph · smart sub-service links (city page first) · pricing · signs-you-need · why-{ctx.brand} · cities/neighborhood coverage · NAP + embedded map · FAQ schema · semantic header/footer — <b>fully responsive</b>, with CMS/theme layout, page-width and font defaults overridden so the design is 100% system-controlled.
@@ -840,7 +894,9 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
             </div>
           )}
           <button onClick={deploy} className="w-full rounded-xl py-3 text-[14px] font-bold text-white" style={{ background: accent }}>
-            {builder === "export" ? `Download static site ZIP (${plan.length} pages)` : live ? `Deploy ${plan.length} pages to ${project.website}` : `Run demo deploy (${plan.length} pages)`}
+            {only
+              ? (builder === "export" ? `Download this page as a ZIP` : live ? `Publish ${only.url} to ${project.website}` : `Run demo publish (1 page)`)
+              : (builder === "export" ? `Download static site ZIP (${plan.length} pages)` : live ? `Deploy ${plan.length} pages to ${project.website}` : `Run demo deploy (${plan.length} pages)`)}
           </button>
         </div>
       ) : (
@@ -856,7 +912,9 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
           </div>
           {done && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-[12px] text-emerald-800">
-              Website deployed — pages are in <b>Pages</b>, scheduled posts in <b>Posts</b>{live ? "" : " (labeled demo)"}. Internal links, schema and the NAP/map block are baked into every page.
+              {only
+                ? <>Page published{live ? "" : " (demo)"} — it now appears in <b>{only.type === "article" ? "Posts" : "Pages"}</b>. The rest of the site was not touched.</>
+                : <>Website deployed — pages are in <b>Pages</b>, scheduled posts in <b>Posts</b>{live ? "" : " (labeled demo)"}. Internal links, schema and the NAP/map block are baked into every page.</>}
             </div>
           )}
           <button onClick={onClose} className="w-full rounded-xl border border-gray-200 py-2.5 text-[13px] font-semibold text-gray-600">{done ? "Close" : "Run in background (close)"}</button>
