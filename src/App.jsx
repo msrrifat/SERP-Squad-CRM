@@ -22,6 +22,7 @@ import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./
 import { genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
+import { setAppOrigin } from "./lib/appOrigin.js";
 
 /* Heavy screens are code-split: each loads on first use, keeping the initial
    bundle (dashboard) small. React.lazy + the named-export shim below. */
@@ -65,6 +66,7 @@ export default function App() {
   const [session, setSession] = useState(null);     // { clientId } when a client is signed in
   const [teamSession, setTeamSession] = useState(null); // { memberId } when a team member (not the owner) is signed in
   useEffect(() => { setAccountView(null); setPmJump(null); }, [teamSession?.memberId]); // personal screens never leak across user switches
+  useEffect(() => { setAppOrigin(company.appDomain); }, [company.appDomain]); // pixel & public URLs follow the configured/hosted domain
   const [showReport, setShowReport] = useState(null); // null | "performance" | "work"
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [dark, setDark] = useState(false);

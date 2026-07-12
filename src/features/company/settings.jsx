@@ -426,6 +426,16 @@ export function CompanyBrandSection({ company, onChange, onGoApis }) {
           </Labeled>
         </div>
         <div className="mt-3">
+          <Labeled label="App domain (pixel & public links)">
+            <input value={company.appDomain || ""} onChange={(e) => onChange({ appDomain: e.target.value })}
+              placeholder="auto — detected from where the CRM is hosted (e.g. app.serpsquad.com)" className={"ll-mono " + inputCls} />
+            <p className="mt-1 text-[10.5px] text-gray-400">
+              Leave blank for automatic: when this CRM is served from any real domain or subdomain, pixel snippets and
+              public links adopt it instantly. Set a value only to force a specific origin.
+            </p>
+          </Labeled>
+        </div>
+        <div className="mt-3">
           <Labeled label="Dashboard sidebar background">
             <div className="flex flex-wrap items-center gap-2">
               {["#FFFFFF", "#F8FAFC", "#1F2A44", "#0F172A", "#111827", "#0E7C66", "#312E81", "#3B0764"].map((c) => (

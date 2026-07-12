@@ -21,6 +21,7 @@ import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr } from "../../lib/rng.js";
 import { mkOpt } from "../../data/seed.js";
 import { projectLocations } from "../../data/gen.js";
+import { appOrigin } from "../../lib/appOrigin.js";
 import { AppleMapsIcon, BingIcon, GoogleGIcon } from "../performance/views.jsx";
 import { BrandingOptTab, ListingsScannerTab } from "./branding.jsx";
 import { IndexCheckerTab, IndexTag, checkIndexApi, indexStale } from "./indexcheck.jsx";
@@ -764,12 +765,12 @@ export function buildPixelPayload(pages) {
   return map;
 }
 
-/* the pixel is served by YOUR OWN API server (server/index.js GET /px.js) at
-   the production domain. Snippets ALWAYS render the production origin so a
-   copied snippet works on any client site — never a localhost URL. */
-export const PIXEL_PROD_ORIGIN = "https://app.serpsquad.com";
-export const pixelOrigin = () => PIXEL_PROD_ORIGIN;
-export const pixelSnippet = (key) => `<script async src="${PIXEL_PROD_ORIGIN}/px.js" data-key="${key}"></script>`;
+/* the pixel is served by YOUR OWN API server (GET /px.js). The origin resolves
+   automatically: Company Settings override → the domain the CRM is actually
+   served from (connect the repo to any domain/subdomain and snippets adapt
+   instantly) → the production fallback. Never a localhost URL. */
+export const pixelOrigin = () => appOrigin();
+export const pixelSnippet = (key) => `<script async src="${appOrigin()}/px.js" data-key="${key}"></script>`;
 
 /* Connector registry — n8n-style: auth, operations, guide, honest capability notes */
 export const WEB_PLATFORMS = {
@@ -1688,7 +1689,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         log?.(`Website pixel verified — ${d.hits} hit(s), last from ${d.page || "your site"}`, project.website);
         crawlSite();
       } else {
-        setVerifyNote(`No pixel hit recorded yet for ${siteKey}. Place the snippet on the site, open any page once, then check again. The pixel reports to ${PIXEL_PROD_ORIGIN} — verification completes once the CRM is hosted there (see DEPLOYMENT.md). For local testing you can hit the local server directly: curl -X POST localhost:8787/api/pixel/verify -d '{"key":"${siteKey}"}' -H 'content-type: application/json'.`);
+        setVerifyNote(`No pixel hit recorded yet for ${siteKey}. Place the snippet on the site, open any page once, then check again. The pixel reports to ${appOrigin()} — verification completes once the CRM is hosted there (see DEPLOYMENT.md). For local testing you can hit the local server directly: curl -X POST localhost:8787/api/pixel/verify -d '{"key":"${siteKey}"}' -H 'content-type: application/json'.`);
       }
     } catch { setVerifyNote("API server unreachable (npm run api) — pixel verification requires it."); }
     setVerifying(false);
@@ -1763,7 +1764,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 <div className="relative">
                   <pre className="ll-mono overflow-x-auto rounded-xl bg-gray-900 p-3 text-[11px] leading-relaxed text-emerald-300">{pixelSnippet(siteKey)}</pre>
                   <p className="mt-1 text-[10px] leading-relaxed text-gray-400">
-                    Always points at <span className="ll-mono">{PIXEL_PROD_ORIGIN}/px.js</span> — safe to install on any client site.
+                    Points at <span className="ll-mono">{appOrigin()}/px.js</span> — resolved automatically from where this CRM is hosted (override it in Company Settings → App domain). Safe to install on any client site.
                     Verification lights up once the CRM is hosted there (a local-only CRM can't receive hits from remote websites).
                   </p>
                   <button onClick={() => { navigator.clipboard?.writeText(pixelSnippet(siteKey)); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
