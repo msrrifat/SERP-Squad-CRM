@@ -619,6 +619,27 @@ async function handleDfsBalance(body) {
   } catch (e) { return [502, { error: "provider_error", detail: "DataForSEO: " + (e?.message || e) }]; }
 }
 
+/* ---- custom-coded sites: proxy to the drop-in publisher endpoint
+   (serp-squad-publish.php uploaded to the site root, authed by site key) ---- */
+async function customEndpoint(body, payload) {
+  if (!body?.site) return [400, { error: "bad_request", detail: "site required" }];
+  if (!body?.siteKey) return [503, { error: "not_configured", detail: "Site key missing — it's shown in the Connector tab." }];
+  try {
+    const r = await fetch(`https://${String(body.site).replace(/^https?:\/\//, "").replace(/\/$/, "")}/serp-squad-publish.php`, {
+      method: "POST", signal: AbortSignal.timeout(30000),
+      headers: { "content-type": "application/json", "X-SS-Key": body.siteKey },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => null);
+    if (d === null) return [502, { error: "provider_error", detail: `The publisher endpoint didn't answer with JSON (HTTP ${r.status}) — is serp-squad-publish.php uploaded to the site root?` }];
+    return [r.ok ? 200 : 502, r.ok ? { live: true, ...d } : { error: "provider_error", detail: "Publisher endpoint: " + (d.detail || d.error || `HTTP ${r.status}`) }];
+  } catch (e) {
+    return [502, { error: "provider_error", detail: `Could not reach https://${body.site}/serp-squad-publish.php — upload the drop-in file (server/custom-site-endpoint/) and check the domain. (${e?.message || e})` }];
+  }
+}
+const handleCustomTest = (body) => customEndpoint(body, { action: "health" });
+const handleCustomDeploy = (body) => customEndpoint(body, body.payload || {});
+
 /* ---- handlers ---- */
 async function handleScan(body) {
   const creds = resolveCreds(body);
@@ -822,7 +843,7 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -840,6 +861,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/auth/2fa/start" ? await handle2faStart(body)
         : req.url === "/api/auth/2fa/verify" ? handle2faVerify(body)
         : req.url === "/api/auth/device-check" ? handleDeviceCheck(body)
+        : req.url === "/api/custom/test" ? await handleCustomTest(body)
+        : req.url === "/api/custom/deploy" ? await handleCustomDeploy(body)
         : req.url === "/api/dfs-balance" ? await handleDfsBalance(body)
         : req.url === "/api/wp/media" ? await handleWpMedia(body)
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)

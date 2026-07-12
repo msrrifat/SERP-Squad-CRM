@@ -821,17 +821,18 @@ export const WEB_PLATFORMS = {
     notes: ["Handle (slug) changes create automatic 301 redirects via the Admin API."],
   },
   custom: {
-    label: "Custom website", tag: "Pixel · any stack",
+    label: "Custom website", tag: "Pixel + publisher endpoint · any stack",
     credential: null,
-    caps: { meta: "pixel", alt: "pixel", headings: "pixel", slugs: false, blogs: false, schema: "pixel" },
+    caps: { meta: "pixel", alt: "pixel", headings: "pixel", slugs: true, blogs: true, schema: "pixel" },
     guide: [
       "Paste the snippet before </head> on every page (or add it once via Google Tag Manager).",
-      "That's it — the pixel fetches your approved edits per-path and applies them in the browser.",
-      "Optional but recommended: add our Cloudflare Worker so edits are rendered at the edge and ALL crawlers (including non-JS bots like GPTBot) see the optimized HTML.",
+      "PUBLISHING: upload serp-squad-publish.php (from server/custom-site-endpoint/) to the site's web root and paste your site key inside it — the tool can then create pages and blog posts directly on the site, no CMS needed.",
+      "SCHEDULING: scheduled posts are queued on the site and go live automatically at their date (the endpoint publishes due posts on every visit) — /blog/ gets a generated index page.",
+      "Optional: add our Cloudflare Worker so pixel edits are rendered at the edge for ALL crawlers (including non-JS bots like GPTBot).",
     ],
     notes: [
-      "NOT AVAILABLE — URL slug changes: impossible client-side; they require server/router access.",
-      "NOT AVAILABLE — Blog publishing: there's no CMS to publish into; we can export HTML for your developer instead.",
+      "Pages/posts are static HTML files the endpoint writes — the fastest possible output, fully system-designed.",
+      "Cleanup only ever removes files the endpoint itself created (tracked in a manifest) — your existing site files are never touched.",
     ],
   },
 };

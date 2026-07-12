@@ -583,13 +583,15 @@ const B_HTML = { key: "html", label: "HTML page building", desc: "Fully system-d
 const B_ELEMENTOR = { key: "elementor", label: "Elementor page building", desc: "Native Elementor sections/widgets on the blank Canvas template — the theme's header/footer/layout are bypassed completely; fully editable in Elementor. Needs Elementor + the companion plugin.", badge: "Editable in Elementor" };
 const B_GUTENBERG = { key: "gutenberg", label: "WordPress Block Editor", desc: "Native Gutenberg blocks, editable in the default WP editor — with a scoped reset that overrides the theme's page width, font sizes and layout defaults.", badge: "Native WP" };
 const B_WEBFLOW = { key: "webflowcms", label: "Webflow CMS (Collections)", desc: "The standard Webflow pattern — pages pushed as CMS Collection items (Services / Locations / Blog Posts) that drive your Collection templates, then the site is published. Fully editable in the Designer.", badge: "Native Webflow" };
-const B_EXPORT = { key: "export", label: "Static HTML export (ZIP)", desc: "For custom-coded sites — downloads every page as /path/index.html plus sitemap.xml and robots.txt. Upload the extracted folder to any host; no builder or CMS needed.", badge: "Any host" };
+const B_EXPORT = { key: "export", label: "Static HTML export (ZIP)", desc: "Downloads every page as /path/index.html plus sitemap.xml and robots.txt. Upload the extracted folder to any host; no builder or CMS needed.", badge: "Any host" };
+const B_CUSTOM_PUSH = { key: "custompush", label: "Publish directly to the site", desc: "Pushes fully system-designed static pages & blog posts straight onto the custom-coded site through the drop-in publisher endpoint (serp-squad-publish.php in the web root). Scheduled posts auto-publish on their dates; /blog/ gets a generated index.", badge: "Live publish" };
 /* the builder set follows the connected platform (Elementor & Block Editor are
-   WordPress-native; Webflow uses its CMS; custom-coded sites are plain HTML) */
+   WordPress-native; Webflow uses its CMS; custom-coded sites publish through
+   the drop-in endpoint or export as a ZIP) */
 const buildersFor = (platform) =>
   platform === "wordpress" ? [B_HTML, B_ELEMENTOR, B_GUTENBERG]
   : platform === "webflow" ? [B_WEBFLOW, B_EXPORT]
-  : [B_EXPORT];
+  : [B_CUSTOM_PUSH, B_EXPORT];
 
 function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log, onClose }) {
   const w = opt.website || {};
@@ -604,9 +606,11 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
 
   /* credentials may be a raw string (legacy) or the connector's {value,…} object */
   const credStr = typeof w.credential === "string" ? w.credential : (w.credential?.value || "");
+  const siteKey = w.siteKey || "";
   const canLive = builder === "export" ? false
     : w.platform === "wordpress" ? /:/.test(credStr)
     : w.platform === "webflow" ? credStr.length > 10 && !!wfSiteId.trim()
+    : builder === "custompush" ? !!siteKey
     : false;
   const [mode, setMode] = useState("demo");
   const live = builder !== "export" && mode === "live" && canLive;
@@ -699,8 +703,31 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
           body: JSON.stringify({ ...auth, keepSlugs: plan.map((x) => x.node.url.split("/").filter(Boolean).pop() || "home") }) });
       } catch { /* cleanup failure is non-fatal — pages still deploy by slug */ }
     }
+    if (live && builder === "custompush" && cleanup) {
+      try {
+        await fetch("/api/custom/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({ site: project.website, siteKey, payload: { action: "cleanup", keep: plan.filter((x) => x.node.type !== "article").map((x) => x.node.url.replace(/^\//, "") || "/") } }) });
+      } catch { /* non-fatal */ }
+    }
     for (let i = 0; i < plan.length; i++) {
       mark(i, "creating");
+      if (live && builder === "custompush") {
+        const { node, page, chrome } = plan[i];
+        const isPost = node.type === "article";
+        const artIdx = articles.findIndex((a) => a.node.id === node.id);
+        const cPayload = isPost
+          ? { action: "deploy_post", slug: node.url.split("/").filter(Boolean).pop(), title: page.h1, metaDesc: page.metaDesc,
+              publishAt: artIdx >= 0 ? dates[artIdx].getTime() : undefined, html: serializeHtml(page, chrome, ctx) }
+          : { action: "deploy_page", path: node.url.replace(/^\//, ""), html: serializeHtml(page, chrome, ctx) };
+        try {
+          const r = await fetch("/api/custom/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+            body: JSON.stringify({ site: project.website, siteKey, payload: cPayload }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok) mark(i, "done", d.scheduled ? "scheduled" : "published");
+          else mark(i, "error", d.detail || `HTTP ${r.status}`);
+        } catch (e) { mark(i, "error", String(e?.message || e)); }
+        continue;
+      }
       const payload = payloadFor(plan[i], i);
       if (live) {
         try {
