@@ -4,6 +4,7 @@ import {
   Sparkles, Target, Trash2, TriangleAlert, UploadCloud, Wand2, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
+import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { realDfs } from "./indexcheck.jsx";
 import {
   PAGE_TYPE_META, adjustStructure, auditStructure, buildLinkPlan, countPages,
@@ -22,19 +23,6 @@ import { buildDeployPlan, demoReviews, exportSiteZip, scheduleDates, serializeEl
    geo-targeted to the project's market. */
 
 /* ---- AI plumbing ---- */
-async function aiGenerate(ai, { system, prompt, json = false, maxTokens }) {
-  if (!ai?.key) { const e = new Error("no AI provider configured"); e.code = 503; throw e; }
-  const res = await fetch("/api/generate", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(240000),
-    body: JSON.stringify({ provider: ai.provider, apiKey: ai.key, model: ai.model, system, prompt, json, maxTokens }),
-  });
-  if (res.ok) return (await res.json()).text;
-  const err = await res.json().catch(() => ({}));
-  const e = new Error(err.detail || err.hint || err.error || `HTTP ${res.status}`);
-  e.code = res.status;
-  throw e;
-}
 const parseJsonLoose = (text) => {
   const m = String(text).match(/\{[\s\S]*\}/);
   return JSON.parse(m ? m[0] : text);
@@ -74,20 +62,6 @@ Description: <meta description, ≤160 chars, primary keyword + concrete benefit
 - Include 1-2 image suggestions as ![alt text](suggested: description) with keyword-bearing alt text.
 - Weave required entities naturally; never keyword-stuff. FAQ: bold question + genuinely useful 2-4 sentence answer.
 - Meet or exceed the word target. Follow the brand voice block exactly.`;
-
-function brandVoiceBlock(bv, brand) {
-  if (!bv) return `Brand: ${brand}.`;
-  const files = (bv.files || []).map((f) => `--- ${f.name} ---\n${f.text}`).join("\n").slice(0, 6000);
-  return [
-    `Brand: ${bv.brandName || brand}. ${bv.tagline ? "Positioning: " + bv.tagline + "." : ""}`,
-    bv.brandInfo ? `About: ${bv.brandInfo}` : "",
-    bv.toneWords ? `Tone: ${bv.toneWords}` : "",
-    bv.doList ? `Always: ${bv.doList}` : "",
-    bv.dontList ? `Never: ${bv.dontList}` : "",
-    bv.avoidWords ? `Banned words: ${bv.avoidWords}` : "",
-    files ? `Guideline files (must follow):\n${files}` : "",
-  ].filter(Boolean).join("\n");
-}
 
 /* validate + normalize an AI structure payload */
 function normalizeStructure(raw, fromCompetitors) {

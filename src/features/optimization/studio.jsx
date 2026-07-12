@@ -18,7 +18,8 @@ import {
 import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, inputCls } from "../../ui/primitives.jsx";
 import { escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.jsx";
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
-import { hashStr } from "../../lib/rng.js";
+import { hashStr, mulberry32 } from "../../lib/rng.js";
+import { AiWriteButton } from "../../lib/aiwrite.jsx";
 import { mkOpt } from "../../data/seed.js";
 import { projectLocations } from "../../data/gen.js";
 import { appOrigin } from "../../lib/appOrigin.js";
@@ -184,13 +185,13 @@ export function OptimizationView({ project, accent, onUpdate, log, access = null
         )}
         {activeTab === "brandvoice" && <BrandVoiceTab opt={opt} setOpt={setOpt} accent={accent} project={project} />}
         {activeTab === "gbp" && (activeLoc?.integrations?.gbp
-          ? <GbpOptTab key={activeLoc?.id} opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} />
+          ? <GbpOptTab key={activeLoc?.id} opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} ai={aiConfig} locId={activeLoc?.id} />
           : <BpNotConnected label="Google Business Profile" loc={activeLoc} />)}
         {activeTab === "bing" && (activeLoc?.integrations?.bing
-          ? <PlaceOptTab key={activeLoc?.id} kind="bing" opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} />
+          ? <PlaceOptTab key={activeLoc?.id} kind="bing" opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} ai={aiConfig} locId={activeLoc?.id} />
           : <BpNotConnected label="Bing Places" loc={activeLoc} />)}
         {activeTab === "apple" && (activeLoc?.integrations?.apple
-          ? <PlaceOptTab key={activeLoc?.id} kind="apple" opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} />
+          ? <PlaceOptTab key={activeLoc?.id} kind="apple" opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} ai={aiConfig} locId={activeLoc?.id} />
           : <BpNotConnected label="Apple Maps" loc={activeLoc} />)}
         {activeTab === "website" && <WebsiteOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiProviders={aiProviders} aiConfig={aiConfig} dfs={dfs} />}
         {activeTab === "listings" && <ListingsScannerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
@@ -215,6 +216,178 @@ function BpNotConnected({ label, loc }) {
   );
 }
 
+/* ---------------- Reviews (all three profile providers) ----------------
+   Deterministic demo reviews seeded per project+provider+location (labeled
+   demo — in production the list syncs from each provider's reviews API).
+   Replies are stored in the provider's per-location slice and, live, push
+   through the same API. AI-drafted replies always follow the Brand Voice. */
+const REVIEW_META = {
+  gbp: { api: "Business Profile API · locations.reviews / reviews.updateReply", replyMax: 4096 },
+  bing: { api: "Bing Places listing dashboard API", replyMax: 4096 },
+  apple: { api: "Apple Business Connect · place reviews", replyMax: 4000 },
+};
+const RV_NAMES = ["Maria G.", "James P.", "Sofia R.", "Daniel K.", "Aisha B.", "Tom H.", "Elena V.", "Chris M.", "Priya S.", "Leo W.", "Hannah F.", "Marcus D.", "Olivia T.", "Sam N."];
+const RV_TEXTS = {
+  5: [
+    "Absolutely fantastic experience at {biz}. The team was friendly, explained everything clearly and the results speak for themselves. Highly recommend!",
+    "Best in the area by far. Booking was easy, they ran right on time and the quality of work was outstanding.",
+    "I've been coming to {biz} for over a year now — consistently professional, honest pricing and genuinely caring staff.",
+    "From the first phone call to the final result, everything was smooth. You can tell they take pride in what they do.",
+    "Five stars isn't enough. Quick, clean, professional — and they followed up afterwards to make sure everything was perfect.",
+  ],
+  4: [
+    "Great service overall. Slight wait past my appointment time, but the quality made up for it.",
+    "Very professional and thorough. Prices are a touch higher than others nearby, but you get what you pay for.",
+    "Really solid experience — knowledgeable staff and a clean, modern space. Parking nearby is the only headache.",
+  ],
+  3: [
+    "Decent work, but communication could be better — I had to call twice to get an update on my appointment.",
+    "The service itself was fine, but scheduling was a hassle and my confirmation email never arrived.",
+  ],
+  2: [
+    "Disappointed with my last visit. I waited over 40 minutes and felt rushed once I was seen. May give them another chance.",
+    "Not the experience I hoped for — the quote changed after the work started and nobody explained why.",
+  ],
+};
+const RV_AGES = ["2 days ago", "5 days ago", "1 week ago", "2 weeks ago", "3 weeks ago", "1 month ago", "2 months ago", "3 months ago", "5 months ago"];
+export function genDemoReviews(projectId, kind, locId, bizName) {
+  const r = mulberry32(hashStr(`${projectId}|${kind}|${locId}|reviews`));
+  const count = 5 + Math.floor(r() * 4);
+  const nameOff = Math.floor(r() * RV_NAMES.length);
+  const used = {};
+  let hadLow = false; // at most ONE sub-4-star review — a realistic healthy profile
+  return Array.from({ length: count }, (_, i) => {
+    const roll = r();
+    let rating = roll < 0.6 ? 5 : roll < 0.84 ? 4 : roll < 0.94 ? 3 : 2;
+    if (rating <= 3) { if (hadLow) rating = 4; else hadLow = true; }
+    const pool = RV_TEXTS[rating];
+    const idx = used[rating] || 0; used[rating] = idx + 1; // cycle, don't repeat, texts within a tier
+    const text = pool[idx % pool.length];
+    return {
+      id: `rv${i}`,
+      author: RV_NAMES[(nameOff + i * 3) % RV_NAMES.length],
+      rating,
+      age: RV_AGES[Math.min(i + Math.floor(r() * 2), RV_AGES.length - 1)],
+      text: text.replaceAll("{biz}", bizName),
+    };
+  });
+}
+
+function Stars({ n }) {
+  return (
+    <span className="flex items-center gap-px">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star key={i} size={11} fill={i <= n ? "#F59E0B" : "none"} stroke={i <= n ? "#F59E0B" : "#D1D5DB"} />
+      ))}
+    </span>
+  );
+}
+
+export function ReviewsPanel({ kind, name, data, set, accent, log, project, ai, brandVoice, locId }) {
+  const meta = REVIEW_META[kind];
+  const bizName = data.bizName || project.name;
+  const brand = project.name.split(" — ")[0];
+  const reviews = genDemoReviews(project.id, kind, locId || "primary", bizName);
+  const replies = data.reviewReplies || {};
+  const [openId, setOpenId] = useState(null);
+  const [draft, setDraft] = useState("");
+  const avg = reviews.reduce((s, x) => s + x.rating, 0) / reviews.length;
+
+  const startReply = (rv) => { setOpenId(rv.id); setDraft(replies[rv.id]?.text || ""); };
+  const postReply = (rv) => {
+    if (!draft.trim()) return;
+    set({ reviewReplies: { ...replies, [rv.id]: { text: draft.trim().slice(0, meta.replyMax), at: Date.now() } } });
+    log?.(`Replied to a ${name} review (${rv.author})`, project.name);
+    setOpenId(null); setDraft("");
+  };
+  const deleteReply = (rv) => {
+    const next = { ...replies }; delete next[rv.id];
+    set({ reviewReplies: next });
+    log?.(`Removed a ${name} review reply (${rv.author})`, project.name);
+  };
+
+  return (
+    <Card className="space-y-3 p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="ll-display text-[15px] font-semibold">Reviews</div>
+        <Stars n={Math.round(avg)} />
+        <span className="text-[12px] font-semibold text-gray-700">{avg.toFixed(1)}</span>
+        <span className="text-[11.5px] text-gray-400">· {reviews.length} reviews</span>
+        <span className="rounded bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">demo</span>
+      </div>
+      <div className="text-[11px] text-gray-400">
+        Demo reviews for preview — in production this list syncs live from the {meta.api}, and posted replies publish
+        through the same API. AI-drafted replies always follow your <b>Brand Voice</b> and the {meta.replyMax.toLocaleString()}-character reply limit.
+      </div>
+      <div className="space-y-2">
+        {reviews.map((rv) => {
+          const reply = replies[rv.id];
+          const editing = openId === rv.id;
+          return (
+            <div key={rv.id} className="rounded-xl border border-gray-100 p-3">
+              <div className="flex items-start gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[12px] font-bold text-white"
+                  style={{ background: `hsl(${hashStr(rv.author) % 360},42%,52%)` }}>{rv.author[0]}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12.5px] font-semibold text-gray-800">{rv.author}</span>
+                    <Stars n={rv.rating} />
+                    <span className="text-[10.5px] text-gray-400">{rv.age}</span>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-gray-600">{rv.text}</p>
+
+                  {reply && !editing && (
+                    <div className="mt-2 rounded-lg bg-gray-50 p-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10.5px] font-bold text-gray-700">Reply from {bizName}</span>
+                        <span className="ll-mono text-[9.5px] text-gray-400">{fmtTs2(reply.at)}</span>
+                        <span className="ml-auto flex gap-2">
+                          <button onClick={() => startReply(rv)} className="text-[10.5px] font-semibold" style={{ color: accent }}>Edit</button>
+                          <button onClick={() => deleteReply(rv)} className="text-[10.5px] font-semibold text-red-400 hover:text-red-500">Delete</button>
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11.5px] leading-relaxed text-gray-600">{reply.text}</p>
+                    </div>
+                  )}
+
+                  {editing && (
+                    <div className="mt-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} label="AI draft reply"
+                          limit={meta.replyMax > 900 ? 700 : meta.replyMax} current={draft}
+                          what={`a public reply from the business owner to this customer review on ${name}`}
+                          context={`Business: ${bizName}.\nReviewer: ${rv.author}. Rating: ${rv.rating}/5. Review: "${rv.text}"\nRules: thank the reviewer by first name; address their specific points; ${rv.rating <= 3 ? "acknowledge the problem sincerely, apologize once without excuses, and invite them to continue the conversation offline (phone/email)" : "reinforce what they loved and warmly invite them back"}; never offer incentives for reviews; keep it short (2-4 sentences).`}
+                          onText={(t) => setDraft(t)} />
+                        <CharCount value={draft} max={meta.replyMax} />
+                      </div>
+                      <textarea value={draft} maxLength={meta.replyMax} rows={3} autoFocus
+                        onChange={(e) => setDraft(e.target.value)}
+                        placeholder={`Reply publicly as ${bizName}…`} className={inputCls + " resize-none"} />
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => { setOpenId(null); setDraft(""); }} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-medium text-gray-600">Cancel</button>
+                        <button onClick={() => postReply(rv)} disabled={!draft.trim()}
+                          className="flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+                          <Send size={11} /> Post reply
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!reply && !editing && (
+                    <button onClick={() => startReply(rv)} className="mt-1.5 flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
+                      <MessageSquare size={11} /> Reply
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 /* ---------------- GBP tab ---------------- */
 /* deterministic preview for GBP photos that only exist by name (live-profile mock):
    real uploads carry a dataUrl and render as-is */
@@ -226,8 +399,12 @@ export const photoThumb = (name) => {
   return "data:image/svg+xml," + encodeURIComponent(svg);
 };
 
-export function GbpOptTab({ opt, setOpt, accent, log, project }) {
+export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId = null }) {
   const [gbpTab, setGbpTab] = useState("info");
+  const brandVoice = opt.brandVoice;
+  const brand = project.name.split(" — ")[0];
+  /* shared context every AI write gets — keeps copy grounded in the listing */
+  const bizCtx = () => `Business: ${opt.gbp.bizName || project.name}. Categories: ${(opt.gbp.categories || []).join(", ") || "—"}. Address: ${opt.gbp.address || "—"}. Services: ${(opt.gbp.svcCats || []).flatMap((c) => c.services.map((s) => s.name)).join(", ") || "—"}.`;
   const [savedInfo, setSavedInfo] = useState(false);
   const g = opt.gbp;
   const set = (patch) => setOpt("gbp", patch);
@@ -296,7 +473,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
     <div className="space-y-4">
       {/* GBP section top bar */}
       <div className="flex flex-wrap gap-1.5">
-        {[["info", "Business information"], ["services", "Services"], ["products", "Products"], ["posts", "Posts/Updates"], ["photos", "Photos"]].map(([key, label]) => (
+        {[["info", "Business information"], ["services", "Services"], ["products", "Products"], ["posts", "Posts/Updates"], ["photos", "Photos"], ["reviews", "Reviews"]].map(([key, label]) => (
           <button key={key} onClick={() => setGbpTab(key)}
             className="rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
             style={gbpTab === key ? { background: accent + "10", borderColor: accent, color: accent } : { background: "var(--chip-bg, #fff)", borderColor: "#E5E7EB", color: "var(--chip-fg, #4B5563)" }}>
@@ -335,8 +512,14 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
           </div>
         </Labeled>
         <div className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">Name, categories, phone & address are locked — changing these core identity fields triggers Google re-verification and can suspend the listing. Update them directly in Google if ever needed.</div>
-        <Labeled label={<span className="flex items-center justify-between">Description <CharCount value={g.description} max={750} /></span>}>
-          <textarea value={g.description} onChange={(e) => set({ description: e.target.value })} rows={3} className={inputCls + " resize-none"} />
+        <Labeled label={<span className="flex items-center justify-between">Description
+          <span className="flex items-center gap-2">
+            <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={750} current={g.description}
+              what="the business description for our Google Business Profile listing (what we do, who we serve, what makes us different — no phone numbers or URLs, Google forbids them)"
+              context={bizCtx()} onText={(t) => set({ description: t })} />
+            <CharCount value={g.description} max={750} />
+          </span></span>}>
+          <textarea value={g.description} maxLength={750} onChange={(e) => set({ description: e.target.value })} rows={3} className={inputCls + " resize-none"} />
         </Labeled>
         <Labeled label="Business hours">
           <div className="grid gap-1 sm:grid-cols-2">
@@ -367,8 +550,15 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
             <input value={composer.title} onChange={(e) => setComposer({ ...composer, title: e.target.value })} className={inputCls} />
           </Labeled>
         )}
-        <Labeled label={<span className="flex items-center justify-between">Post text <CharCount value={composer.body} max={1500} /></span>}>
-          <textarea value={composer.body} onChange={(e) => setComposer({ ...composer, body: e.target.value })} rows={3} className={inputCls + " resize-none"} placeholder="What's new?" />
+        <Labeled label={<span className="flex items-center justify-between">Post text
+          <span className="flex items-center gap-2">
+            <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={1500} current={composer.body}
+              what={`the text for a Google Business Profile ${composer.type} post${composer.title ? ` titled "${composer.title}"` : ""} (engaging, concrete, ends leading into the "${composer.cta}" call-to-action)`}
+              context={bizCtx() + (composer.type === "offer" && composer.coupon ? ` Coupon code: ${composer.coupon}.` : "")}
+              onText={(t) => setComposer((c) => ({ ...c, body: t }))} />
+            <CharCount value={composer.body} max={1500} />
+          </span></span>}>
+          <textarea value={composer.body} maxLength={1500} onChange={(e) => setComposer({ ...composer, body: e.target.value })} rows={3} className={inputCls + " resize-none"} placeholder="What's new?" />
         </Labeled>
         {composer.type !== "update" && (
           <div className="grid grid-cols-2 gap-2">
@@ -555,6 +745,11 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
 
       </>)}
 
+      {gbpTab === "reviews" && (
+        <ReviewsPanel kind="gbp" name="Google" data={g} set={set} accent={accent} log={log}
+          project={project} ai={ai} brandVoice={brandVoice} locId={locId} />
+      )}
+
       {/* Add / edit product — Google-style dialog */}
       {editProd && prodEdit && (
         <Modal title={editProd === "new" ? "Add product" : "Edit product"} onClose={() => setEditProd(null)}>
@@ -582,7 +777,14 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
             </Labeled>
           </div>
           <div className="mt-3 space-y-3">
-            <Labeled label={<span className="flex items-center justify-between">Product description — optional <CharCount value={prodEdit.desc} max={1000} /></span>}>
+            <Labeled label={<span className="flex items-center justify-between">Product description — optional
+              <span className="flex items-center gap-2">
+                <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={1000} current={prodEdit.desc}
+                  what={`the Google Business Profile product description for "${prodEdit.name || "this product"}"`}
+                  context={bizCtx() + (prodEdit.category ? ` Product category: ${prodEdit.category}.` : "") + (prodEdit.price ? ` Price: $${prodEdit.price}.` : "")}
+                  onText={(t) => setProdEdit((p) => ({ ...p, desc: t }))} />
+                <CharCount value={prodEdit.desc} max={1000} />
+              </span></span>}>
               <textarea value={prodEdit.desc} maxLength={1000} rows={3} onChange={(e) => setProdEdit({ ...prodEdit, desc: e.target.value.slice(0, 1000) })} className={inputCls + " resize-none"} />
             </Labeled>
             <Labeled label="Product landing page url (optional)">
@@ -627,7 +829,14 @@ export function GbpOptTab({ opt, setOpt, accent, log, project }) {
                   className={"ll-mono " + inputCls + " disabled:bg-gray-50 disabled:text-gray-300"} />
               </Labeled>
             </div>
-            <Labeled label={<span className="flex items-center justify-between">Service description <CharCount value={editDraft.desc} max={300} /></span>}>
+            <Labeled label={<span className="flex items-center justify-between">Service description
+              <span className="flex items-center gap-2">
+                <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={300} current={editDraft.desc}
+                  what={`the Google Business Profile service description for "${editDraft.name}" (what's included, the benefit, why choose us)`}
+                  context={bizCtx() + (["fixed", "from"].includes(editDraft.priceType) && editDraft.price ? ` Price: ${editDraft.priceType === "from" ? "from " : ""}$${editDraft.price}.` : "")}
+                  onText={(t) => setEditDraft((d) => ({ ...d, desc: t }))} />
+                <CharCount value={editDraft.desc} max={300} />
+              </span></span>}>
               <textarea value={editDraft.desc} maxLength={300} rows={4}
                 onChange={(e) => setEditDraft({ ...editDraft, desc: e.target.value.slice(0, 300) })}
                 className={inputCls + " resize-none"} />
@@ -2225,13 +2434,16 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
   );
 }
 
-export function PlaceOptTab({ kind, opt, setOpt, accent, log, project }) {
+export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null, locId = null }) {
   const meta = PLACE_META[kind];
   const pl = opt[kind] || {};
   const set = (patch) => setOpt(kind, patch);
   const [tab, setTab] = useState("info");
   const [savedInfo, setSavedInfo] = useState(false);
   const [show, setShow] = useState({ title: "", text: "", url: "", image: null });
+  const brandVoice = opt.brandVoice;
+  const brand = project.name.split(" — ")[0];
+  const bizCtx = () => `Business: ${pl.bizName || project.name}. Categories: ${(pl.categories || []).join(", ") || "—"}. Address: ${pl.address || "—"}.`;
 
   if (!pl.connected) return (
     <Card className="p-8 text-center">
@@ -2253,7 +2465,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project }) {
     </Card>
   );
 
-  const TABS = [["info", "Business information"], ["photos", "Photos"], ...(kind === "apple" ? [["showcases", "Showcases"]] : [])];
+  const TABS = [["info", "Business information"], ["photos", "Photos"], ...(kind === "apple" ? [["showcases", "Showcases"]] : []), ["reviews", "Reviews"]];
   const publishShowcase = () => {
     if (!show.title.trim()) return;
     set({ showcases: [{ id: "sc" + Date.now(), ...show, createdAt: Date.now() }, ...(pl.showcases || [])] });
@@ -2295,8 +2507,14 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project }) {
           <div className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
             Name, categories, phone & address are locked — changing core identity fields triggers re-verification on {meta.name}. Update them at the source if ever needed.
           </div>
-          <Labeled label={<span className="flex items-center justify-between">Description <CharCount value={pl.description || ""} max={meta.descMax} /></span>}>
-            <textarea value={pl.description || ""} onChange={(e) => set({ description: e.target.value })} rows={3} className={inputCls + " resize-none"} />
+          <Labeled label={<span className="flex items-center justify-between">Description
+            <span className="flex items-center gap-2">
+              <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={meta.descMax} current={pl.description || ""}
+                what={`the business description for our ${meta.name} listing (what we do, who we serve, what makes us different)`}
+                context={bizCtx()} onText={(t) => set({ description: t })} />
+              <CharCount value={pl.description || ""} max={meta.descMax} />
+            </span></span>}>
+            <textarea value={pl.description || ""} maxLength={meta.descMax} onChange={(e) => set({ description: e.target.value })} rows={3} className={inputCls + " resize-none"} />
           </Labeled>
           <Labeled label="Business hours">
             <div className="grid gap-1 sm:grid-cols-2">
@@ -2358,10 +2576,22 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project }) {
           <Card className="space-y-3 p-5">
             <div className="ll-display text-[15px] font-semibold">New showcase</div>
             <div className="text-[11.5px] text-gray-400">Showcases are Apple Maps' promotional cards — announcements, offers and seasonal features shown on your place card.</div>
-            <Labeled label={<span className="flex items-center justify-between">Title * <CharCount value={show.title} max={58} /></span>}>
+            <Labeled label={<span className="flex items-center justify-between">Title *
+              <span className="flex items-center gap-2">
+                <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={58} current={show.title}
+                  what={`a punchy title for an Apple Maps Showcase promotional card${show.text ? ` whose text is: "${show.text}"` : ""}`}
+                  context={bizCtx()} onText={(t) => setShow((s) => ({ ...s, title: t }))} />
+                <CharCount value={show.title} max={58} />
+              </span></span>}>
               <input value={show.title} maxLength={58} onChange={(e) => setShow({ ...show, title: e.target.value })} className={inputCls} />
             </Labeled>
-            <Labeled label={<span className="flex items-center justify-between">Text <CharCount value={show.text} max={500} /></span>}>
+            <Labeled label={<span className="flex items-center justify-between">Text
+              <span className="flex items-center gap-2">
+                <AiWriteButton ai={ai} brandVoice={brandVoice} brand={brand} accent={accent} limit={500} current={show.text}
+                  what={`the text for an Apple Maps Showcase promotional card${show.title ? ` titled "${show.title}"` : ""} (an announcement, offer or seasonal feature shown on our place card)`}
+                  context={bizCtx()} onText={(t) => setShow((s) => ({ ...s, text: t }))} />
+                <CharCount value={show.text} max={500} />
+              </span></span>}>
               <textarea value={show.text} maxLength={500} rows={3} onChange={(e) => setShow({ ...show, text: e.target.value })} className={inputCls + " resize-none"} />
             </Labeled>
             <Labeled label="Link (optional)"><input value={show.url} onChange={(e) => setShow({ ...show, url: e.target.value })} placeholder="https://…" className={inputCls} /></Labeled>
@@ -2388,6 +2618,11 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project }) {
             {(pl.showcases || []).length === 0 && <div className="py-3 text-center text-[11.5px] text-gray-300">No showcases yet.</div>}
           </Card>
         </div>
+      )}
+
+      {tab === "reviews" && (
+        <ReviewsPanel kind={kind} name={meta.name} data={pl} set={set} accent={accent} log={log}
+          project={project} ai={ai} brandVoice={brandVoice} locId={locId} />
       )}
     </div>
   );
