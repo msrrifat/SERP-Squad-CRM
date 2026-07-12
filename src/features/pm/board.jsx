@@ -551,6 +551,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
                           </button>
                         )}
                         <span className={"min-w-0 flex-1 text-[13px] font-semibold leading-snug " + (r.completedAt ? "text-gray-400 line-through" : "text-gray-800")}>{r.name}</span>
+                        {r.auto && <span title="Created & filled automatically from Optimization Studio work" className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-violet-700">Auto</span>}
                         <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide" style={{ background: chip.bg, color: chip.fg }}>{chip.label}</span>
                       </div>
                       <div className="flex items-center gap-2 pl-6 text-[10.5px] text-gray-400">

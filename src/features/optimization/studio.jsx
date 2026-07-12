@@ -20,6 +20,7 @@ import { escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.j
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { AiWriteButton } from "../../lib/aiwrite.jsx";
+import { WorkCtx, useWork } from "../../lib/worklog.jsx";
 import { mkOpt } from "../../data/seed.js";
 import { projectLocations } from "../../data/gen.js";
 import { appOrigin } from "../../lib/appOrigin.js";
@@ -32,7 +33,7 @@ import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keyword
 
 export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send };
 export const SOCIAL_COLORS = { fb: "#1877F2", ig: "#E4405F", li: "#0A66C2", x: "#111827", yt: "#FF0000", tt: "#111827", pin: "#E60023", th: "#111827", bs: "#0285FF" };
-export function OptimizationView({ project, accent, onUpdate, log, access = null, aiProviders = [], aiConfig = null, dfs }) {
+export function OptimizationView({ project, accent, onUpdate, log, work = null, access = null, aiProviders = [], aiConfig = null, dfs }) {
   const opt = project.opt || mkOpt();
   const [tab, setTab] = useState("gbp");
 
@@ -128,6 +129,7 @@ export function OptimizationView({ project, accent, onUpdate, log, access = null
   );
 
   return (
+    <WorkCtx.Provider value={work}>
     <div className="ll-fade flex flex-col gap-4 lg:flex-row lg:items-start">
       {/* vertical secondary nav — which properties are connected.
           Responsive: 2-up grid on phones, 3-up on small tablets, single column
@@ -199,6 +201,7 @@ export function OptimizationView({ project, accent, onUpdate, log, access = null
         {activeTab === "indexchk" && <IndexCheckerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
       </div>
     </div>
+    </WorkCtx.Provider>
   );
 }
 
@@ -285,6 +288,7 @@ function Stars({ n }) {
 
 export function ReviewsPanel({ kind, name, data, set, accent, log, project, ai, brandVoice, locId }) {
   const meta = REVIEW_META[kind];
+  const work = useWork();
   const bizName = data.bizName || project.name;
   const brand = project.name.split(" — ")[0];
   const reviews = genDemoReviews(project.id, kind, locId || "primary", bizName);
@@ -296,13 +300,16 @@ export function ReviewsPanel({ kind, name, data, set, accent, log, project, ai, 
   const startReply = (rv) => { setOpenId(rv.id); setDraft(replies[rv.id]?.text || ""); };
   const postReply = (rv) => {
     if (!draft.trim()) return;
+    const isEdit = !!replies[rv.id];
     set({ reviewReplies: { ...replies, [rv.id]: { text: draft.trim().slice(0, meta.replyMax), at: Date.now() } } });
+    work?.(kind, isEdit ? "reviewReplyUpdated" : "reviewReplied", { detail: `${rv.author} · ${rv.rating}★` });
     log?.(`Replied to a ${name} review (${rv.author})`, project.name);
     setOpenId(null); setDraft("");
   };
   const deleteReply = (rv) => {
     const next = { ...replies }; delete next[rv.id];
     set({ reviewReplies: next });
+    work?.(kind, "reviewReplyDeleted", { detail: rv.author });
     log?.(`Removed a ${name} review reply (${rv.author})`, project.name);
   };
 
@@ -401,6 +408,7 @@ export const photoThumb = (name) => {
 
 export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId = null }) {
   const [gbpTab, setGbpTab] = useState("info");
+  const work = useWork();
   const brandVoice = opt.brandVoice;
   const brand = project.name.split(" — ")[0];
   /* shared context every AI write gets — keeps copy grounded in the listing */
@@ -416,20 +424,24 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
   const openSvc = (catId, sv) => { setEditSvc({ catId, svcId: sv.id }); setEditDraft({ name: sv.name, priceType: sv.priceType || (sv.price ? "fixed" : "none"), price: sv.price || "", desc: sv.desc || "" }); };
   const saveSvc = () => {
     set({ svcCats: g.svcCats.map((c) => c.id !== editSvc.catId ? c : { ...c, services: c.services.map((x) => x.id === editSvc.svcId ? { ...x, ...editDraft, price: ["fixed", "from"].includes(editDraft.priceType) ? editDraft.price : "" } : x) }) });
+    work?.("gbp", "svcUpdated", { detail: editDraft.name });
     setEditSvc(null);
   };
   const deleteSvc = () => {
     set({ svcCats: g.svcCats.map((c) => c.id !== editSvc.catId ? c : { ...c, services: c.services.filter((x) => x.id !== editSvc.svcId) }) });
+    work?.("gbp", "svcDeleted", { detail: editDraft?.name });
     setEditSvc(null);
   };
   const addService = (catId) => {
     const nm = (svcDraft[catId] || "").trim(); if (!nm) return;
     set({ svcCats: g.svcCats.map((c) => c.id !== catId ? c : { ...c, services: [...c.services, { id: "sv" + Date.now(), name: nm, priceType: "none", price: "", desc: "" }] }) });
+    work?.("gbp", "svcAdded", { detail: nm });
     setSvcDraft({ ...svcDraft, [catId]: "" });
   };
   const addCategory = () => {
     const nm = catDraft.trim(); if (!nm) return;
     set({ svcCats: [...(g.svcCats || []), { id: "sc" + Date.now(), name: nm, services: [] }] });
+    work?.("gbp", "catAdded", { detail: nm });
     setCatDraft("");
   };
   const [prodFilter, setProdFilter] = useState("All products");
@@ -440,9 +452,13 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
   const saveProd = () => {
     if (editProd === "new") set({ products: [...g.products, { id: "pd" + Date.now(), ...prodEdit }] });
     else set({ products: g.products.map((x) => (x.id === editProd ? { ...x, ...prodEdit } : x)) });
+    work?.("gbp", editProd === "new" ? "prodAdded" : "prodUpdated", { detail: prodEdit.name });
     setEditProd(null);
   };
-  const deleteProd = () => { set({ products: g.products.filter((x) => x.id !== editProd) }); setEditProd(null); };
+  const deleteProd = () => {
+    work?.("gbp", "prodDeleted", { detail: g.products.find((x) => x.id === editProd)?.name });
+    set({ products: g.products.filter((x) => x.id !== editProd) }); setEditProd(null);
+  };
   const prodCats = [...new Set(g.products.map((p) => p.category).filter(Boolean))];
   const shownProds = g.products.filter((p) => prodFilter === "All products" || p.category === prodFilter);
 
@@ -464,6 +480,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
       publishAt: composer.when === "now" ? null : new Date(composer.publishAt).getTime(), createdAt: Date.now() };
     delete post.when;
     set({ posts: [post, ...g.posts] });
+    work?.("gbp", composer.when === "now" ? "postPublished" : "postScheduled", { detail: composer.title || composer.body });
     log?.(composer.when === "now" ? "Published GBP post" : "Scheduled GBP post", project.name);
     setComposer({ type: "update", title: "", body: "", cta: "Learn more", ctaUrl: "", startDate: "", endDate: "", coupon: "", image: null, when: "now", publishAt: "" });
   };
@@ -532,7 +549,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
             ))}
           </div>
         </Labeled>
-        <button onClick={() => { log?.("Saved GBP business info", project.name); setSavedInfo(true); setTimeout(() => setSavedInfo(false), 1500); /* PROD: locations.patch with the edited fields */ }}
+        <button onClick={() => { work?.("gbp", "infoSaved"); log?.("Saved GBP business info", project.name); setSavedInfo(true); setTimeout(() => setSavedInfo(false), 1500); /* PROD: locations.patch with the edited fields */ }}
           className="rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: savedInfo ? "#16A34A" : accent }}>
           {savedInfo ? "Saved ✓" : "Save to Google"}
         </button>
@@ -610,7 +627,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                   {p.coupon && ` · code ${p.coupon}`}
                 </div>
               </div>
-              <button onClick={() => set({ posts: g.posts.filter((x) => x.id !== p.id) })}
+              <button onClick={() => { work?.("gbp", "postDeleted", { detail: p.title || p.body }); set({ posts: g.posts.filter((x) => x.id !== p.id) }); }}
                 className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
             </div>
           ))}
@@ -632,7 +649,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                 {ci === 0 && <div className="text-[9px] font-medium uppercase tracking-wide text-gray-400">Primary category</div>}
               </div>
               {ci > 0 && (
-                <button onClick={() => set({ svcCats: g.svcCats.filter((c) => c.id !== cat.id) })}
+                <button onClick={() => { work?.("gbp", "catDeleted", { detail: cat.name }); set({ svcCats: g.svcCats.filter((c) => c.id !== cat.id) }); }}
                   className="shrink-0 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
               )}
             </div>
@@ -722,7 +739,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                 <span className="min-w-0 flex-1 truncate text-gray-600">{ph.name}</span>
                 <span className="ll-mono shrink-0 text-gray-400">{fmtTs2(ph.addedAt)}</span>
               </div>
-              <button onClick={() => set({ photos: g.photos.filter((x) => x.id !== ph.id) })}
+              <button onClick={() => { work?.("gbp", "photoDeleted", { detail: ph.name }); set({ photos: g.photos.filter((x) => x.id !== ph.id) }); }}
                 className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
             </div>
           ))}
@@ -733,7 +750,9 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
           <input type="file" accept="image/*" multiple className="hidden"
             onChange={(e) => {
               // read each file to a dataUrl so the gallery previews exactly what was pushed
-              [...(e.target.files || [])].forEach((f) => {
+              const files = [...(e.target.files || [])];
+              if (files.length) work?.("gbp", "photosUploaded", { count: files.length, detail: files[0].name + (files.length > 1 ? "…" : "") });
+              files.forEach((f) => {
                 const rd = new FileReader();
                 rd.onload = () => set((cur) => ({ photos: [...cur.photos, { id: "ph" + Date.now() + Math.random().toString(36).slice(2, 5), name: f.name, addedAt: Date.now(), dataUrl: rd.result }] }));
                 rd.readAsDataURL(f);
@@ -1776,6 +1795,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
 
 export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders = [], aiConfig = null, dfs }) {
   const w = opt.website;
+  const work = useWork();
   const set = (patch) => setOpt("website", patch);
   const [connectStep, setConnectStep] = useState(null); // null | "pick" | platform key
   const [sub, setSub] = useState("connection");           // connection | pages | posts
@@ -1793,7 +1813,16 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const siteKey = w.siteKey || `ss_live_${project.id}_${hashStr(project.website).toString(36).slice(0, 6)}`;
 
   const trackedKws = [...new Set(project.tracking.map((t) => t.keyword))];
-  const patchPage = (id, p) => set((cur) => ({ pages: cur.pages.map((x) => (x.id === id ? { ...x, ...(typeof p === "function" ? p(x) : p), dirty: true, updatedAt: Date.now() } : x)) }));
+  /* one "page optimized" work entry per page per visit — edits are continuous,
+     the work log counts pages touched, not keystrokes */
+  const pagesWorked = useRef(new Set());
+  const patchPage = (id, p) => {
+    if (!pagesWorked.current.has(id)) {
+      pagesWorked.current.add(id);
+      work?.("website", "pageOptimized", { detail: w.pages.find((x) => x.id === id)?.url });
+    }
+    set((cur) => ({ pages: cur.pages.map((x) => (x.id === id ? { ...x, ...(typeof p === "function" ? p(x) : p), dirty: true, updatedAt: Date.now() } : x)) }));
+  };
 
   /* ---- Google index tags: REAL checks only, auto-rechecked when >7 days old.
      If the API server / credentials are absent, tags stay "Index unknown" —
@@ -1807,6 +1836,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     const due = (w.blogs || []).filter((b) => b.status === "scheduled" && b.scheduledAt && b.scheduledAt <= Date.now());
     if (due.length) {
       set((cur) => ({ blogs: (cur.blogs || []).map((b) => (b.status === "scheduled" && b.scheduledAt && b.scheduledAt <= Date.now() ? { ...b, status: "published", publishedAt: b.scheduledAt } : b)) }));
+      work?.("website", "blogAutoPublished", { count: due.length, detail: due[0]?.title });
       log?.(`Auto-published ${due.length} scheduled post${due.length > 1 ? "s" : ""}`, project.website);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1830,6 +1860,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         set((cur) => (kind === "page"
           ? { pages: cur.pages.map((x) => (x.id === item.id ? { ...x, index: idx } : x)) }
           : { blogs: cur.blogs.map((x) => (x.id === item.id ? { ...x, index: idx } : x)) }));
+        work?.("website", "indexRechecked", { detail: (item.url || "/" + item.slug) + (r.indexed ? " — indexed" : " — not indexed") });
         log?.(`Index recheck: ${url} — ${r.indexed ? "indexed" : "not indexed"}`, project.website);
       } else setIdxErr("Check failed for " + url + (r?.error ? ": " + r.error : ""));
     } catch (e) {
@@ -1869,6 +1900,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const deploy = () => {
     const payload = buildPixelPayload(w.pages); // PROD: await fetch("/v1/deploy", {method:"POST", body: JSON.stringify({ key: siteKey, payload })})
     set({ pages: w.pages.map((p) => ({ ...p, dirty: false })), lastDeploy: Date.now() });
+    work?.("website", "changesDeployed", { detail: `${dirtyCount} page${dirtyCount > 1 ? "s" : ""}` });
     log?.(`Deployed ${dirtyCount} page change${dirtyCount > 1 ? "s" : ""} (${Object.keys(payload).length} paths)`, project.name);
   };
   const crawlSite = () => {
@@ -1885,7 +1917,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         return { pages: [...cur.pages, ...newPages], blogs: [...oldPosts, ...cur.blogs], crawled: true, lastCrawl: Date.now() };
       });
       setCrawling(false);
-      setTimeout(() => log?.(`Crawled ${project.website} \u2014 imported ${added.pages} page${added.pages === 1 ? "" : "s"} & ${added.posts} old post${added.posts === 1 ? "" : "s"}`, project.name), 0);
+      setTimeout(() => { work?.("website", "siteCrawled", { detail: `${added.pages} pages, ${added.posts} posts` }); log?.(`Crawled ${project.website} \u2014 imported ${added.pages} page${added.pages === 1 ? "" : "s"} & ${added.posts} old post${added.posts === 1 ? "" : "s"}`, project.name); }, 0);
     }, 1900);
   };
   const [verifyNote, setVerifyNote] = useState(null);
@@ -1896,6 +1928,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       const d = await r.json();
       if (d.verified) {
         set({ verified: true });
+        work?.("website", "pixelVerified");
         log?.(`Website pixel verified — ${d.hits} hit(s), last from ${d.page || "your site"}`, project.website);
         crawlSite();
       } else {
@@ -1916,7 +1949,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         setCredNote({ ok: !!d.checks?.authenticated, text: d.detail, checks: d.checks });
         if (d.checks?.authenticated) {
           set({ credential: { type: plat.credential.type, value: val, masked: val.split(":")[0] + ":••••••••", status: "valid", user: d.checks.user, addedAt: Date.now() } });
-          setCredDraft(""); log?.(`WordPress connected as ${d.checks.user}`, project.website);
+          setCredDraft(""); work?.("website", "wpConnected", { detail: d.checks.user }); log?.(`WordPress connected as ${d.checks.user}`, project.website);
         }
       } catch { setCredNote({ ok: false, text: "API server unreachable (npm run api) — the credential test runs server-side." }); }
     } else {
@@ -2004,7 +2037,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               )}
               <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
                 <button onClick={() => setConnectStep("pick")} className="rounded-lg border border-gray-200 px-4 py-2 text-[12.5px] font-medium text-gray-600">Back</button>
-                <button onClick={() => { set({ connected: true, platform: connectStep, siteKey, verified: false, credential: null }); setConnectStep(null); log?.(`Connected ${WEB_PLATFORMS[connectStep].label} website`, project.website); }}
+                <button onClick={() => { set({ connected: true, platform: connectStep, siteKey, verified: false, credential: null }); setConnectStep(null); work?.("website", "webConnected", { detail: WEB_PLATFORMS[connectStep].label }); log?.(`Connected ${WEB_PLATFORMS[connectStep].label} website`, project.website); }}
                   className="rounded-lg px-5 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
                   I've installed it — connect
                 </button>
@@ -2326,14 +2359,16 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           onSave={(post) => {
             if (openPost === "new") {
               set({ blogs: [{ ...post, id: "bl" + Date.now(), createdAt: Date.now() }, ...w.blogs] });
+              work?.("website", post.status === "published" ? "blogPublished" : post.status === "scheduled" ? "blogScheduled" : "blogDrafted", { detail: post.title });
               log?.(post.status === "published" ? "Published blog post to website" : post.status === "scheduled" ? "Scheduled blog post" : "Saved blog draft", post.title);
             } else {
               set({ blogs: w.blogs.map((x) => (x.id === openPost ? { ...x, ...post, updatedAt: Date.now() } : x)) });
+              work?.("website", "blogUpdated", { detail: post.title });
               log?.("Updated blog post on website", post.title);
             }
             setOpenPost(null);
           }}
-          onDelete={openPost !== "new" ? () => { set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); log?.("Deleted blog post from website", w.blogs.find((x) => x.id === openPost)?.title || ""); } : null}
+          onDelete={openPost !== "new" ? () => { const t = w.blogs.find((x) => x.id === openPost)?.title || ""; set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); work?.("website", "blogDeleted", { detail: t }); log?.("Deleted blog post from website", t); } : null}
           onClose={() => setOpenPost(null)} />
       )}
       </>)}
@@ -2375,6 +2410,7 @@ const PLACE_META = {
 export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
   const w = opt.website || {};
   const media = w.media || [];
+  const work = useWork();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const demoLibrary = () => {
@@ -2394,7 +2430,7 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
         const r = await fetch("/api/wp/media", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
           body: JSON.stringify({ site: project.website, credential: w.credential }) });
         const d = await r.json().catch(() => ({}));
-        if (r.ok) { setOpt("website", { media: d.media.map((m) => ({ ...m, title: m.name, demo: false })) }); log?.(`Synced ${d.media.length} media items`, project.website); setBusy(false); return; }
+        if (r.ok) { setOpt("website", { media: d.media.map((m) => ({ ...m, title: m.name, demo: false })) }); work?.("website", "mediaSynced", { detail: `${d.media.length} items` }); log?.(`Synced ${d.media.length} media items`, project.website); setBusy(false); return; }
         setErr(d.detail || `HTTP ${r.status}`);
       } catch (e) { setErr("API server unreachable — " + (e?.message || e)); }
     } else {
@@ -2441,6 +2477,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
   const [tab, setTab] = useState("info");
   const [savedInfo, setSavedInfo] = useState(false);
   const [show, setShow] = useState({ title: "", text: "", url: "", image: null });
+  const work = useWork();
   const brandVoice = opt.brandVoice;
   const brand = project.name.split(" — ")[0];
   const bizCtx = () => `Business: ${pl.bizName || project.name}. Categories: ${(pl.categories || []).join(", ") || "—"}. Address: ${pl.address || "—"}.`;
@@ -2469,6 +2506,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
   const publishShowcase = () => {
     if (!show.title.trim()) return;
     set({ showcases: [{ id: "sc" + Date.now(), ...show, createdAt: Date.now() }, ...(pl.showcases || [])] });
+    work?.("apple", "showcasePublished", { detail: show.title });
     log?.("Published Apple Maps showcase", project.name);
     setShow({ title: "", text: "", url: "", image: null });
   };
@@ -2528,7 +2566,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
             </div>
           </Labeled>
           <div className="flex items-center gap-2">
-            <button onClick={() => { setSavedInfo(true); setTimeout(() => setSavedInfo(false), 1800); log?.(`Saved ${meta.name} business info`, project.name); }}
+            <button onClick={() => { setSavedInfo(true); setTimeout(() => setSavedInfo(false), 1800); work?.(kind, "infoSaved"); log?.(`Saved ${meta.name} business info`, project.name); }}
               className="rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
               Save to {meta.name}
             </button>
@@ -2550,7 +2588,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
                   <span className="min-w-0 flex-1 truncate text-gray-600">{ph.name}</span>
                   <span className="ll-mono shrink-0 text-gray-400">{fmtTs2(ph.addedAt)}</span>
                 </div>
-                <button onClick={() => set({ photos: (pl.photos || []).filter((x) => x.id !== ph.id) })}
+                <button onClick={() => { work?.(kind, "photoDeleted", { detail: ph.name }); set({ photos: (pl.photos || []).filter((x) => x.id !== ph.id) }); }}
                   className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
               </div>
             ))}
@@ -2560,7 +2598,9 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
             <Upload size={13} /> Upload photos to {meta.name}
             <input type="file" accept="image/*" multiple className="hidden"
               onChange={(e) => {
-                [...(e.target.files || [])].forEach((f) => {
+                const files = [...(e.target.files || [])];
+                if (files.length) work?.(kind, "photosUploaded", { count: files.length, detail: files[0].name + (files.length > 1 ? "…" : "") });
+                files.forEach((f) => {
                   const rd = new FileReader();
                   rd.onload = () => set((cur) => ({ photos: [...(cur.photos || []), { id: "ph" + Date.now() + Math.random().toString(36).slice(2, 5), name: f.name, addedAt: Date.now(), dataUrl: rd.result }] }));
                   rd.readAsDataURL(f);
@@ -2611,7 +2651,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
                   {sc.text && <div className="mt-0.5 line-clamp-2 text-[12px] text-gray-500">{sc.text}</div>}
                   <div className="ll-mono mt-1 text-[10px] text-gray-400">Published · {fmtTs2(sc.createdAt)}</div>
                 </div>
-                <button onClick={() => set({ showcases: (pl.showcases || []).filter((x) => x.id !== sc.id) })}
+                <button onClick={() => { work?.("apple", "showcaseDeleted", { detail: sc.title }); set({ showcases: (pl.showcases || []).filter((x) => x.id !== sc.id) }); }}
                   className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
               </div>
             ))}
@@ -2630,6 +2670,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
 
 export function SocialOptTab({ opt, setOpt, accent, log }) {
   const soc = opt.social;
+  const work = useWork();
   const set = (patch) => setOpt("social", patch);
   const [editId, setEditId] = useState(null);
   const [composer, setComposer] = useState({ platforms: [], text: "", image: null, when: "now", publishAt: "" });
@@ -2640,6 +2681,7 @@ export function SocialOptTab({ opt, setOpt, accent, log }) {
   const publish = () => {
     if (!composer.text.trim() || composer.platforms.length === 0) return;
     set({ posts: [{ id: "sp" + Date.now(), platforms: composer.platforms, text: composer.text, image: composer.image, status: composer.when === "now" ? "published" : "scheduled", publishAt: composer.when === "now" ? null : new Date(composer.publishAt).getTime(), createdAt: Date.now() }, ...soc.posts] });
+    work?.("social", composer.when === "now" ? "socialPosted" : "socialScheduled", { count: Math.max(1, composer.platforms.length), detail: composer.text });
     log?.(composer.when === "now" ? `Published to ${composer.platforms.length} social platform(s)` : "Scheduled social post", "");
     setComposer({ platforms: [], text: "", image: null, when: "now", publishAt: "" });
   };
@@ -2667,7 +2709,7 @@ export function SocialOptTab({ opt, setOpt, accent, log }) {
                   </button>
                 )}
                 <OAuthButton label="Connect" accent={accent} connected={a.connected}
-                  onDone={() => { set({ accounts: soc.accounts.map((x) => x.id === a.id ? { ...x, connected: true, handle: x.handle || "@yourhandle", name: x.name || a.platform } : x) }); log?.(`Connected ${a.platform}`, ""); }}
+                  onDone={() => { set({ accounts: soc.accounts.map((x) => x.id === a.id ? { ...x, connected: true, handle: x.handle || "@yourhandle", name: x.name || a.platform } : x) }); work?.("social", "socialConnected", { detail: a.platform }); log?.(`Connected ${a.platform}`, ""); }}
                   onDisconnect={() => set({ accounts: soc.accounts.map((x) => x.id === a.id ? { ...x, connected: false } : x) })} />
               </div>
               {editing && a.connected && (
@@ -2679,7 +2721,7 @@ export function SocialOptTab({ opt, setOpt, accent, log }) {
                       <textarea value={a.bio} rows={2} onChange={(e) => set({ accounts: soc.accounts.map((x) => x.id === a.id ? { ...x, bio: e.target.value } : x) })} className={inputCls + " resize-none"} />
                     </Labeled>
                   </div>
-                  <button onClick={() => { setEditId(null); log?.(`Updated ${a.platform} page info`, ""); }}
+                  <button onClick={() => { setEditId(null); work?.("social", "socialInfoUpdated", { detail: a.platform }); log?.(`Updated ${a.platform} page info`, ""); }}
                     className="w-fit rounded-lg px-3.5 py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>Save to platform</button>
                 </div>
               )}

@@ -10,6 +10,7 @@ import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { CITY_DATA } from "../../lib/geo.js";
 import { isoDate } from "../../lib/months.jsx";
 import { SOCIAL_COLORS, SOCIAL_ICONS, SocialOptTab, photoThumb } from "./studio.jsx";
+import { useWork } from "../../lib/worklog.jsx";
 
 /* ================= Branding & Automation =================
    Off-page SEO hub: branded Web 2.0 properties + automated content
@@ -591,6 +592,7 @@ function MediaTab({ br, set, accent }) {
 
 /* ---------------- Web 2.0 article sites ---------------- */
 function SitesTab({ br, set, accent, log, project, brandName, opt }) {
+  const work = useWork();
   const [credDraft, setCredDraft] = useState({});
   const [provisioning, setProvisioning] = useState(null); // { key, step }
   const siteState = (k) => br.sites[k] || {};
@@ -620,6 +622,7 @@ function SitesTab({ br, set, accent, log, project, brandName, opt }) {
         patchSite(pl.key, { siteCreated: true, createdAt: Date.now(), siteUrl, pages: BRAND_PAGES, categories: BRAND_CATS });
         set((cur) => ({ properties: { ...(cur.properties || {}), web2: { ...((cur.properties || {}).web2 || {}), [pl.key]: "https://" + siteUrl } } }));
         setProvisioning(null);
+        work?.("social", "brandedSite", { detail: pl.name });
         log?.(`Provisioned branded site on ${pl.name}`, project.name);
       }
     }, 600 * (i + 1)));
@@ -880,6 +883,7 @@ function BlockEditor({ blocks, onChange, media, accent, contentType }) {
 }
 
 function CampaignWizard({ c, patch, onBack, accent, log, project, brandName, br, opt }) {
+  const work = useWork();
   const [citySearch, setCitySearch] = useState("");
   const [stateSearch, setStateSearch] = useState("");
   const [genBusy, setGenBusy] = useState(null); // "topics" | "content"
@@ -924,6 +928,7 @@ function CampaignWizard({ c, patch, onBack, accent, log, project, brandName, br,
       launched: true, step: 7,
       topics: c.topics.map((t) => (t.selected ? { ...t, status: t.date <= today ? "published" : "scheduled" } : t)),
     });
+    work?.("social", "campaignLaunched", { detail: c.name });
     log?.(`Campaign "${c.name}": ${publishNow} published now, ${selTopics.length - publishNow} scheduled across ${(c.channels || []).length} channels`, project.name);
   };
   const nextBtn = (enabled, onClick, label = "Go to next step", busyKey = null) => (
@@ -1252,6 +1257,7 @@ function CampaignWizard({ c, patch, onBack, accent, log, project, brandName, br,
    match confidence, NAP-consistency flags and a citation health score.
    PROD: per-directory search APIs / SERP queries, fuzzy NAP matching. */
 export function ListingsScannerTab({ opt, setOpt, accent, log, project, dfs }) {
+  const work = useWork();
   const br = opt.branding || {};
   const set = (patch) => setOpt("branding", patch);
   const scanData = br.listingScan || null;
@@ -1283,6 +1289,7 @@ export function ListingsScannerTab({ opt, setOpt, accent, log, project, dfs }) {
       properties: { ...(cur.properties || {}), listings: { ...((cur.properties || {}).listings || {}), ...Object.fromEntries(foundList.map(([n, r]) => [n, r.url])) } },
     }));
     setRunning(null);
+    work?.("listings", "citationScan", { detail: `${foundList.length}/${resultsArr.length} found, ${napIssues} NAP issue(s)` });
     log?.(`Citation scan (${live ? "live" : "demo"}): ${foundList.length}/${resultsArr.length} found, ${napIssues} NAP issue(s)`, project.name);
   };
 

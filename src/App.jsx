@@ -23,6 +23,7 @@ import { genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
 import { setAppOrigin } from "./lib/appOrigin.js";
+import { applyOptWork, ensureMonthlyWorkRecord } from "./lib/worklog.jsx";
 
 /* Heavy screens are code-split: each loads on first use, keeping the initial
    bundle (dashboard) small. React.lazy + the named-export shim below. */
@@ -451,6 +452,37 @@ export default function App() {
     setClients((cs) => cs.map((c) => c.id !== activeClientId ? c : {
       ...c, projects: c.projects.map((p) => (p.id === activeProjectId ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
     }));
+  /* ---- automated Optimization Studio → PM work log ----
+     team members assigned to a project (incl. the owner) become the monthly
+     record's assignees; the acting member lands on each logged task */
+  const teamNamesFor = (projectId) =>
+    (company.team || [])
+      .filter((m) => m.isOwner || m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(projectId)))
+      .map((m) => m.name);
+  const logWork = (section, key, opts = {}) =>
+    updateProject((p) => applyOptWork(p, {
+      section, key, ...opts,
+      member: currentUser?.name || "You (Owner)",
+      teamNames: teamNamesFor(p.id),
+    }) || {});
+  /* 1st of each month (and on load): every project gets its fresh monthly
+     work record — idempotent, so re-runs are no-ops */
+  useEffect(() => {
+    setClients((cs) => {
+      let changed = false;
+      const next = cs.map((c) => ({
+        ...c,
+        projects: c.projects.map((p) => {
+          const patch = ensureMonthlyWorkRecord(p, teamNamesFor(p.id));
+          if (!patch) return p;
+          changed = true;
+          return { ...p, ...patch };
+        }),
+      }));
+      return changed ? next : cs;
+    });
+  }, [monthKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const addTracking = (entries) => { updateProject({ tracking: [...project.tracking, ...entries] }); logActivity(`Added ${entries.length} keyword${entries.length > 1 ? "s" : ""}`, project?.name); };
   const deleteTracking = (id) => { updateProject({ tracking: project.tracking.filter((t) => t.id !== id) }); logActivity("Removed a tracked keyword", project?.name); };
   const applyRerun = (updates) => {
@@ -773,7 +805,7 @@ export default function App() {
 
         <div className="mx-auto max-w-6xl p-5">
           {project && activeSection === "optimization" && (
-            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} /></Lazy>
+            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} work={logWork} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} /></Lazy>
           )}
           {project && activeSection === "adsmgr" && (
             <Lazy><AdsView project={project} accent={accent} onUpdate={updateProject} log={logActivity} company={company} aiConfig={aiConfig} /></Lazy>

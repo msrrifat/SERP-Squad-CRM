@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
+import { useWork } from "../../lib/worklog.jsx";
 import { realDfs } from "./indexcheck.jsx";
 import {
   PAGE_TYPE_META, adjustStructure, auditStructure, buildLinkPlan, countPages,
@@ -160,6 +161,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish 
 
 /* ---- per-page content pipeline editor ---- */
 function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
+  const work = useWork();
   const seo = node.seo || {};
   /* functional through to project state — concurrent stages can't clobber each other */
   const setSeo = (patch) => onPatch((cur) => ({ seo: { ...(cur.seo || {}), ...(typeof patch === "function" ? patch(cur.seo || {}) : patch) } }));
@@ -181,6 +183,7 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
       setScanNote(live
         ? `Live: Google's top ${results.length} for "${seo.primaryKw.trim()}" scanned from ${locationName}.`
         : `Demo competitors added — add DataForSEO credentials for live geo-targeted SERP scans (would scan from ${locationName}).`);
+      work?.("website", "serpScanned", { detail: `"${seo.primaryKw.trim()}"` });
     } catch (e) { setStageErr("SERP scan failed: " + e.message); } finally { setScanning(false); }
   };
 
@@ -256,8 +259,9 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
       const wc = md.split(/\s+/).length;
       const linksUsed = [...new Set([...md.matchAll(/\]\((\/[^)\s]*)\)/g)].map((m2) => m2[1]))];
       setSeo({ content: { generatedAt: Date.now(), live: true, provider: ai.provider, markdown: md, metaTitle, metaDesc, schema, internalLinksUsed: linksUsed, wordCount: wc, targetMet: wc >= (seo.structure.wordTarget || 900) * 0.85 } });
+      work?.("website", "contentWritten", { detail: node.title });
     },
-    () => setSeo({ content: { ...genPageContent(node, seo.structure, brandVoice, project.name, niche, siteLinks), live: false } }));
+    () => { setSeo({ content: { ...genPageContent(node, seo.structure, brandVoice, project.name, niche, siteLinks), live: false } }); work?.("website", "contentWritten", { detail: node.title }); });
 
   const Btn = ({ on, disabled, icon: Icon, label, busyKey, primary }) => (
     <button onClick={on} disabled={disabled || busy}
@@ -433,6 +437,7 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
 
 /* ================= the tab ================= */
 export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiConfig = null }) {
+  const work = useWork();
   const w = opt.website || {};
   const arch = w.architecture || null;
   /* functional writes — a scan finishing during a generation can't clobber the tree */
@@ -471,6 +476,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       tree = genSiteArchitecture(niche, services, project.name, locations);
     }
     setOpt("website", (cur) => ({ architecture: { ...(cur?.architecture || {}), tree, niche, services, locations, live, generatedAt: Date.now() } }));
+    work?.("website", "archGenerated", { detail: `${countPages(tree)} pages` });
     log?.(`Generated website architecture (${countPages(tree)} pages${live ? ", AI" : ", draft"})`, project.name);
     setBusy(false);
   };
@@ -578,6 +584,7 @@ const buildersFor = (platform) =>
   : [B_CUSTOM_PUSH, B_EXPORT];
 
 function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log, only = null, onClose }) {
+  const work = useWork();
   const w = opt.website || {};
   const BUILDERS = buildersFor(w.platform);
   const [builder, setBuilder] = useState(BUILDERS[0].key);
@@ -659,6 +666,7 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       rows.forEach((_, i) => mark(i, "done", "exported"));
       mirrorLocal(false);
+      work?.("website", only ? "pagePublished" : "siteDeployed", { detail: only ? `${only.url} · ZIP` : `${plan.length} pages · ZIP export` });
       log?.(only ? `Exported single page ZIP (${only.url})` : `Exported static site ZIP (${plan.length} pages + sitemap + robots)`, project.website);
       setDone(true);
       return;
@@ -682,6 +690,7 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
         for (let i = 0; i < rows.length; i++) { mark(i, "creating"); await new Promise((res2) => setTimeout(res2, 100)); mark(i, "done", "demo"); }
       }
       mirrorLocal(!live);
+      work?.("website", only ? "pagePublished" : "siteDeployed", { detail: only ? `${only.url} · Webflow` : `${plan.length} items · Webflow CMS` });
       log?.(only ? `Published single item to Webflow CMS (${only.url}${live ? "" : ", demo"})` : `Deployed website to Webflow CMS (${plan.length} items${live ? "" : ", demo"})`, project.website);
       setDone(true);
       return;
@@ -733,6 +742,7 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
       }
     }
     mirrorLocal(!live);
+    work?.("website", only ? "pagePublished" : "siteDeployed", { detail: only ? only.url : `${plan.length} pages, ${builder}` });
     log?.(only ? `Published single page ${only.url} (${builder}${live ? "" : ", demo"})` : `Deployed full website (${plan.length} pages, ${builder}${live ? "" : ", demo"})`, project.website);
     setDone(true);
   };

@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { FileText, Mic, Plus, Trash2, Upload, X } from "lucide-react";
 import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
+import { useWork } from "../../lib/worklog.jsx";
 
 /* ================= Brand Voice =================
    The single source of truth every writing tool in the app pulls from:
@@ -11,7 +12,14 @@ import { fmtTs2 } from "../../lib/format.jsx";
    prompt snippets) are stored as text and prepended to the generation prompt. */
 export function BrandVoiceTab({ opt, setOpt, accent, project }) {
   const bv = opt.brandVoice || {};
-  const set = (patch) => setOpt("brandVoice", patch);
+  const work = useWork();
+  /* guideline edits are continuous typing — log ONE work entry per visit
+     that actually changed something, not one per keystroke */
+  const editLogged = useRef(false);
+  const set = (patch) => {
+    if (!editLogged.current) { editLogged.current = true; work?.("brandvoice", "bvUpdated"); }
+    setOpt("brandVoice", patch);
+  };
   const [err, setErr] = useState(null);
 
   const addFiles = (fileList) => {
@@ -19,6 +27,7 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
     [...fileList].forEach((f) => {
       if (f.size > 400_000) { setErr(`${f.name} is over 400KB — paste the key parts as a guideline instead.`); return; }
       if (!/\.(txt|md|markdown)$/i.test(f.name) && !f.type.startsWith("text")) { setErr(`${f.name}: only .txt / .md text files (style guides, prompts).`); return; }
+      work?.("brandvoice", "bvFileAdded", { detail: f.name });
       const rd = new FileReader();
       rd.onload = () => set((cur) => ({ files: [...(cur.files || []), { id: "bf" + Date.now() + Math.random().toString(36).slice(2, 5), name: f.name, text: String(rd.result).slice(0, 200_000), addedAt: Date.now() }] }));
       rd.readAsText(f);

@@ -3,6 +3,7 @@ import { CheckCircle2, Clock, RefreshCw, Search, X } from "lucide-react";
 import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
+import { useWork } from "../../lib/worklog.jsx";
 
 /* ================= Google index checker =================
    REAL checks only. The API server runs one `site:<url>` query per URL through
@@ -55,6 +56,7 @@ export function IndexTag({ idx, checking }) {
 
 /* ================= the Index Checker rail section ================= */
 export function IndexCheckerTab({ opt, setOpt, accent, log, project, dfs }) {
+  const work = useWork();
   const store = opt.indexChecker || {};
   const [raw, setRaw] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,6 +76,7 @@ export function IndexCheckerTab({ opt, setOpt, accent, log, project, dfs }) {
     try {
       const { results } = await checkIndexApi(valid.slice(0, 50), dfs);
       setOpt("indexChecker", { results, at: Date.now() });
+      work?.("indexchk", "indexCheckRun", { detail: `${results.filter((r) => r.indexed).length}/${results.length} indexed` });
       log?.(`Index check: ${results.filter((r) => r.indexed).length}/${results.length} indexed`, project.name);
     } catch (e) {
       setErr(e.code === 503
