@@ -1023,7 +1023,7 @@ export function ReportBuilder({ project, data, tracking, clientProjects = [], re
   const colorPick = (b) => (
     <Labeled label="Color">
       <div className="flex items-center gap-1.5">
-        {[accent, ...ACCENTS.map((a) => a.hex)].slice(0, 6).map((hx) => (
+        {[...new Set([accent, ...ACCENTS.map((a) => a.hex)])].slice(0, 6).map((hx) => (
           <button key={hx} onClick={() => patch(b.id, { color: hx === accent ? null : hx })}
             className="h-6 w-6 rounded-full border-2"
             style={{ background: hx, borderColor: (b.color || accent) === hx ? "#18202F" : "transparent" }} />
