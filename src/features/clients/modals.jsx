@@ -76,6 +76,21 @@ export function ClientSettingsBody({ client, onChange }) {
                 this client, their visitors will see <b>{wl.name || client.companyName || client.name}</b> branding —
                 SERP Squad is hidden everywhere: header, footer and report cover.
               </div>
+              {/* white-label clients can run on THEIR OWN DataForSEO account */}
+              <div className="rounded-xl border border-gray-100 p-3">
+                <Toggle on={!!client.dfs?.useOwn}
+                  onChange={(v) => onChange({ dfs: { login: "", password: "", ...(client.dfs || {}), useOwn: v } })}
+                  label="Client supplies their own DataForSEO API"
+                  desc="Disables the agency's DataForSEO credentials for every project of this client. The client adds their own API login in their portal → Settings — until then, scans and rank checks honestly show as not configured (never billed to your account)." />
+                {client.dfs?.useOwn && (
+                  <div className="mt-2 flex items-center gap-2 text-[11px]">
+                    <span className="rounded-full px-2 py-0.5 font-bold uppercase tracking-wide"
+                      style={client.dfs.login && client.dfs.password ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
+                      {client.dfs.login && client.dfs.password ? `● Client API connected (${client.dfs.login})` : "○ Waiting for the client's credentials"}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

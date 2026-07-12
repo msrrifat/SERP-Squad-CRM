@@ -22,6 +22,67 @@ import { AdsPerformanceView } from "../ads/dashboard.jsx";
 import { ROLE_CLIENT_LABEL } from "../../data/seed.js";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
 
+/* white-label client's own DataForSEO credentials — powers rank tracking,
+   geo-grid scans and index checks for THEIR projects (the agency's account is
+   disabled for this client). Same honesty rules: no credentials → no data. */
+function ClientApiSettings({ client, brand, accent, onUpdateClient }) {
+  const dfs = client.dfs || {};
+  const [draft, setDraft] = useState({ login: dfs.login || "", password: dfs.password || "" });
+  const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [note, setNote] = useState(null);
+  const connected = !!(dfs.login && dfs.password);
+  const save = () => {
+    onUpdateClient?.((c) => ({ dfs: { ...(c.dfs || {}), useOwn: true, login: draft.login.trim(), password: draft.password.trim() } }));
+    setSaved(true); setTimeout(() => setSaved(false), 2500);
+  };
+  const test = async () => {
+    setTesting(true); setNote(null);
+    try {
+      const r = await fetch("/api/serp-top", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ keyword: "coffee shop", locationName: "United States", top: 1, dfs: { login: draft.login.trim(), password: draft.password.trim(), connected: true } }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setNote(r.ok ? { ok: true, text: "Credentials verified — a live SERP call succeeded. Your projects now run on your own DataForSEO account." }
+        : { ok: false, text: d.detail || d.error || `Verification failed (HTTP ${r.status}) — check the API login (your DataForSEO email) and API password.` });
+    } catch { setNote({ ok: false, text: "Could not reach the verification service — try again shortly." }); }
+    setTesting(false);
+  };
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <Card className="p-5">
+        <div className="ll-display text-[15px] font-semibold">Your DataForSEO API</div>
+        <p className="mt-1 text-[12px] leading-relaxed text-gray-500">
+          Your projects run on <b>your own</b> DataForSEO account — rank tracking, map-grid scans and index checks
+          bill to your API balance directly. Create an account at <b>app.dataforseo.com</b>; the dashboard's
+          API Access page shows your API login (email) and API password.
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Labeled label="API login (email)"><input value={draft.login} onChange={(e) => setDraft({ ...draft, login: e.target.value })} placeholder="you@company.com" className={"ll-mono " + inputCls} /></Labeled>
+          <Labeled label="API password"><input type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} placeholder="••••••••" className={"ll-mono " + inputCls} /></Labeled>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button onClick={save} disabled={!draft.login.trim() || !draft.password.trim()}
+            className="rounded-xl px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+            {saved ? "Saved ✓" : "Save credentials"}
+          </button>
+          <button onClick={test} disabled={testing || !draft.login.trim() || !draft.password.trim()}
+            className="rounded-xl border px-4 py-2 text-[13px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
+            {testing ? "Testing…" : "Test with a live call"}
+          </button>
+          <span className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            style={connected ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
+            {connected ? "● Connected" : "○ Not connected"}
+          </span>
+        </div>
+        {note && <div className={"mt-2 rounded-lg border px-3 py-2 text-[11.5px] leading-relaxed " + (note.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>{note.text}</div>}
+        <p className="mt-2 text-[10px] text-gray-400">Until valid credentials are saved, dashboards that depend on live scans show "not configured" — nothing is ever fabricated or billed elsewhere.</p>
+      </Card>
+    </div>
+  );
+}
+
 /* the client's side of the private owner ↔ client line */
 function MessagesPane({ client, brand, accent, maskName, onSend, onReact, onRead }) {
   const ch = client.ownerChat || { msgs: [], reads: {} };
@@ -211,7 +272,8 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
     if (n.key === "web") return (project?.integrations.ga || project?.integrations.gsc) && lg.canViewWeb !== false;
     return true;
   }), ...(canPm ? [{ key: "pm", label: "Project Management", icon: ListTodo }] : []),
-  { key: "messages", label: "Messages", icon: MessageSquare }];
+  { key: "messages", label: "Messages", icon: MessageSquare },
+  ...(client.dfs?.useOwn ? [{ key: "apisettings", label: "Settings", icon: Settings }] : [])];
   /* private owner ↔ client line (the owner answers from the dashboard chat) */
   const ownerChat = client.ownerChat || { msgs: [], reads: {} };
   const msgUnread = (ownerChat.msgs || []).filter((m) => m.author !== client.contact && m.ts > ((ownerChat.reads || {})[client.contact] || 0)).length;
@@ -309,6 +371,9 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
             {view === "gbp" && (project.integrations.gbp || project.integrations.bing || project.integrations.apple) && lg.canViewGbp !== false && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
             {view === "web" && lg.canViewWeb !== false && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
             {view === "adsperf" && !!lg.canViewAds && <AdsPerformanceView project={project} accent={accent} />}
+            {view === "apisettings" && client.dfs?.useOwn && (
+              <ClientApiSettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
+            )}
             {view === "messages" && (
               <AvaMaskCtx.Provider value={avaMask}>
                 <MessagesPane client={client} brand={brand} accent={accent} maskName={maskName}

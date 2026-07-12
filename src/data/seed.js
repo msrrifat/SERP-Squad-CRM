@@ -295,6 +295,8 @@ export const SEED_CLIENTS = [
     companyName: "Bloom & Vine Ltd.", companyWebsite: "bloomandvine.shop", address: "London, UK",
     whiteLabel: { enabled: true, name: "Bloom & Vine Insights", website: "bloomandvine.shop", logo: null },
     login: { enabled: true, email: "imogen@bloomandvine.shop", password: "bloom123", projectIds: ["p4"], canViewRanks: true, canDownload: true, canManageTasks: true, canComment: true, canUseAgent: true },
+    /* white-label demo: this client runs on their OWN DataForSEO account */
+    dfs: { useOwn: true, login: "", password: "" },
     projects: [
       mkProject("p4", "Bloom & Vine — London", "bloomandvine.shop", "#E11D48", [
         seedEntry("bloomandvine.shop", "florist near me", "London", "Mobile", 180),

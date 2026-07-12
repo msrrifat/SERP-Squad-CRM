@@ -164,6 +164,15 @@ export default function App() {
     [project?.id, project?.name, project?.demoMode, trackedKeywords.join("|"), activeClient?.companyName, monthKey, locSig(project)]
   );
   const accent = project?.accent || "#1F2A44";
+  /* white-label clients may run on their OWN DataForSEO account: when enabled,
+     the agency credentials are disabled for that client's projects and the
+     client's portal-entered login is used instead (unconfigured → honest 503s) */
+  const dfsForClient = (c) => {
+    if (!c?.dfs?.useOwn) return company.dfs;
+    const ok = !!(c.dfs.login && c.dfs.password);
+    return { login: c.dfs.login || "", password: c.dfs.password || "", connected: ok, clientOwned: true };
+  };
+  const activeDfs = dfsForClient(activeClient);
   /* AI agent scope: admins/owner see every project; members need the per-client
      "AI Agent" grant AND assignment. The agent brain only ever receives this list. */
   const agentScope = useMemo(() => {
@@ -764,7 +773,7 @@ export default function App() {
 
         <div className="mx-auto max-w-6xl p-5">
           {project && activeSection === "optimization" && (
-            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={company.dfs} /></Lazy>
+            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} /></Lazy>
           )}
           {project && activeSection === "adsmgr" && (
             <Lazy><AdsView project={project} accent={accent} onUpdate={updateProject} log={logActivity} company={company} aiConfig={aiConfig} /></Lazy>
@@ -792,11 +801,11 @@ export default function App() {
           {project && data && activeSection === "performance" && (
             <>
               {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
-              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={company.dfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onRerun={applyRerun} readOnly={!canKeywords} dfs={company.dfs} />}
+              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
               {activeView === "gbp" && (project.integrations.gbp || project.integrations.bing || project.integrations.apple) && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
-                  dfs={company.dfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
+                  dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
               )}
               {activeView === "web" && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
               {activeView === "adsperf" && <Lazy><AdsPerformanceView project={project} accent={accent} /></Lazy>}
