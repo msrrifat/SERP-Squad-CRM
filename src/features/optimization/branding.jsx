@@ -4,6 +4,7 @@ import {
   MapPin, Plus, RefreshCw, Rocket, Search, Send, Share2, Trash2, Upload, X, Zap,
 } from "lucide-react";
 import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { CITY_DATA } from "../../lib/geo.js";
@@ -1363,6 +1364,7 @@ export function ListingsScannerTab({ opt, setOpt, accent, log, project, dfs }) {
           <button onClick={runScan} disabled={!!running || !params.name.trim()}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {running ? <><RefreshCw size={12} className="animate-spin" /> Scanning…</> : <><Search size={12} /> {params.depth === "quick" ? "Quick scan (Tier 1 — 20 directories)" : "Deep scan (all " + BIZ_DIRECTORIES.length + " directories)"}</>}
+            {!running && <DfsCostChip requests={params.depth === "quick" ? BIZ_DIRECTORIES.filter((d) => d.tier === 1).length : BIZ_DIRECTORIES.length} kind="organic" className="ml-1 border-white/40 bg-white/20 text-white" />}
           </button>
           {running && (
             <div className="flex flex-1 items-center gap-2">

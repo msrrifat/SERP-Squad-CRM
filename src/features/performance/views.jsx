@@ -17,6 +17,7 @@ import {
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
 import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
@@ -516,6 +517,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[13px] font-medium text-white" style={{ background: accent }}>
                     <Plus size={14} /> Add keywords
                   </button>
+                  {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organic" />}
                   <button onClick={doRerun} disabled={selected.size === 0 || rerunning}
                     className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium disabled:opacity-40"
                     style={selected.size > 0 && !rerunning

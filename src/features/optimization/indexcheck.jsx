@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { CheckCircle2, Clock, RefreshCw, Search, X } from "lucide-react";
 import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
+import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 
 /* ================= Google index checker =================
@@ -105,6 +106,7 @@ export function IndexCheckerTab({ opt, setOpt, accent, log, project, dfs }) {
         <button onClick={run} disabled={busy || !valid.length}
           className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
           {busy ? <><RefreshCw size={12} className="animate-spin" /> Checking {Math.min(valid.length, 50)} URL{valid.length === 1 ? "" : "s"} on Google…</> : <><Search size={12} /> Check indexing</>}
+          {!busy && valid.length > 0 && <DfsCostChip requests={Math.min(valid.length, 50)} kind="organic" className="ml-1 border-white/40 bg-white/20 text-white" />}
         </button>
         {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[11.5px] leading-relaxed text-amber-800">{err}</div>}
       </Card>

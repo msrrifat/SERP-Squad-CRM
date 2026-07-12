@@ -320,7 +320,7 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
               <div className="ll-display flex items-center gap-2 text-[13.5px] font-semibold"><Search size={14} style={{ color: accent }} /> Ranked competitors</div>
               <button onClick={scan} disabled={scanning || !seo.primaryKw?.trim()}
                 className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-                {scanning ? <><RefreshCw size={11} className="animate-spin" /> Scanning Google…</> : <><Search size={11} /> Scan competitors</>}
+                {scanning ? <><RefreshCw size={11} className="animate-spin" /> Scanning Google…</> : <><Search size={11} /> Scan competitors <span className="ll-mono ml-1 text-[8.5px] opacity-80" title="1 DataForSEO organic live-advanced request">≈$0.003</span></>}
               </button>
             </div>
             <div className="text-[11px] text-gray-400">Scans Google's top 5 organic results for the primary keyword — geo-targeted to <b>{locationName}</b> so you're analyzing the SERP your customers actually see.</div>

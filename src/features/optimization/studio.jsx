@@ -1630,7 +1630,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     setIdxBusy((b2) => ({ ...b2, [key]: false }));
   };
   const RecheckBtn = ({ kind, item }) => (
-    <button title={`Re-check Google index for this ${kind} now`} disabled={!!idxBusy[kind + item.id]}
+    <button title={`Re-check Google index for this ${kind} now — 1 DataForSEO request ≈ $0.003`} disabled={!!idxBusy[kind + item.id]}
       onClick={(e) => { e.stopPropagation(); recheckOne(kind, item); }}
       className="rounded-md border border-gray-200 p-1 text-gray-300 hover:border-gray-300 hover:text-gray-600 disabled:opacity-60">
       <RefreshCw size={9} className={idxBusy[kind + item.id] ? "animate-spin" : ""} />

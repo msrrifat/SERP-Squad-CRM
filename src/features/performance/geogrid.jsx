@@ -5,6 +5,7 @@ import {
   RefreshCw, Search, Target, Trash2, TrendingDown, TrendingUp, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, Seg, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
 import { fmt, fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { realDfs } from "../optimization/indexcheck.jsx";
@@ -576,7 +577,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             </button>
             <button onClick={() => runSnapshot(rp)} disabled={!!scanState}
               className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-              {running ? <><RefreshCw size={10} className="animate-spin" /> {scanState.kw ? `"${scanState.kw}" (${scanState.kwIndex + 1}/${scanState.total})` : "Running…"}</> : <><Search size={10} /> Run now</>}
+              {running ? <><RefreshCw size={10} className="animate-spin" /> {scanState.kw ? `"${scanState.kw}" (${scanState.kwIndex + 1}/${scanState.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "maps"))}</span></>}
             </button>
             <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
             <button onClick={() => patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
@@ -693,6 +694,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
           <button onClick={onRun} disabled={!!scanState}
             className="flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {scanState ? <><RefreshCw size={10} className="animate-spin" /> "{scanState.kw}" ({scanState.kwIndex + 1}/{scanState.total})</> : <><Search size={10} /> Run snapshot now</>}
+            {!scanState && <DfsCostChip requests={activePointCount(rp) * rp.keywords.length} kind="maps" className="ml-1 border-white/40 bg-white/20 text-white" />}
           </button>
           <span className="relative">
             <button onClick={() => setActionsOpen(!actionsOpen)} className="rounded-lg border border-gray-200 bg-white px-3.5 py-1.5 text-[11.5px] font-semibold text-gray-700 shadow-sm hover:border-gray-300">Actions</button>
