@@ -594,6 +594,31 @@ async function handleWpTest(body) {
   } catch (e) { return [200, { checks, detail: "Auth check failed: " + (e?.message || e) }]; }
 }
 
+/* ---- DataForSEO account balance: GET v3/appendix/user_data ---- */
+async function handleDfsBalance(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "DataForSEO credentials missing — add them in Company Settings → API settings." }];
+  try {
+    const r = await fetch("https://api.dataforseo.com/v3/appendix/user_data", {
+      headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(20000),
+    });
+    const d = await r.json().catch(() => ({}));
+    const task = d.tasks?.[0];
+    if (!r.ok || d.status_code !== 20000 || !task || task.status_code >= 40000) {
+      return [502, { error: "provider_error", detail: "DataForSEO: " + (task?.status_message || d.status_message || `HTTP ${r.status}`) }];
+    }
+    const u = task.result?.[0] || {};
+    return [200, {
+      live: true, login: creds.login,
+      balance: u.money?.balance ?? null,
+      spentTotal: u.money?.total ?? null,
+      dayLimit: u.money?.limits?.day ?? null,
+      backlinksSubscription: !!u.backlinks_subscription_expiry_date,
+      checkedAt: Date.now(),
+    }];
+  } catch (e) { return [502, { error: "provider_error", detail: "DataForSEO: " + (e?.message || e) }]; }
+}
+
 /* ---- handlers ---- */
 async function handleScan(body) {
   const creds = resolveCreds(body);
@@ -797,7 +822,7 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -815,6 +840,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/auth/2fa/start" ? await handle2faStart(body)
         : req.url === "/api/auth/2fa/verify" ? handle2faVerify(body)
         : req.url === "/api/auth/device-check" ? handleDeviceCheck(body)
+        : req.url === "/api/dfs-balance" ? await handleDfsBalance(body)
         : req.url === "/api/wp/media" ? await handleWpMedia(body)
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)
         : req.url === "/api/wp/cleanup" ? await handleWpCleanup(body)

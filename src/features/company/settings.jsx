@@ -294,6 +294,19 @@ export function ApiCard({ api, company, onChange }) {
     });
   };
 
+  /* live DataForSEO account balance (real appendix/user_data call) */
+  const [balance, setBalance] = useState(null); // { busy } | { err } | data
+  const fetchBalance = async () => {
+    setBalance({ busy: true });
+    try {
+      const r = await fetch("/api/dfs-balance", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000),
+        body: JSON.stringify({ dfs: { login: company.dfs.login, password: company.dfs.password } }) });
+      const d = await r.json().catch(() => ({}));
+      setBalance(r.ok ? d : { err: d.detail || `HTTP ${r.status}` });
+    } catch { setBalance({ err: "API server unreachable (npm run api) — the balance check runs server-side." }); }
+  };
+  useEffect(() => { if (api.useDfs && connected) fetchBalance(); }, [api.useDfs, connected]); // eslint-disable-line
+
   const isAiProvider = AI_PROVIDER_IDS.includes(api.id);
   const activeAi = isAiProvider ? effectiveAiId(company) : null;
   const isActiveAi = isAiProvider && connected && activeAi === api.id;
@@ -319,6 +332,27 @@ export function ApiCard({ api, company, onChange }) {
         </span>
       </div>
       <p className="mb-3 text-[11.5px] leading-relaxed text-gray-400">{api.desc}</p>
+      {api.useDfs && connected && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2">
+          <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Account balance</span>
+          {balance?.busy && <span className="ll-mono text-[11px] text-gray-400">checking…</span>}
+          {balance?.err && <span className="min-w-0 flex-1 text-[10.5px] leading-snug text-amber-700">{balance.err}</span>}
+          {balance?.live && (
+            <>
+              <span className="ll-display text-[16px] font-bold" style={{ color: balance.balance > 5 ? "#16A34A" : "#DC2626" }}>
+                ${(balance.balance ?? 0).toFixed(2)}
+              </span>
+              {balance.dayLimit != null && <span className="ll-mono text-[9.5px] text-gray-400">day limit ${balance.dayLimit}</span>}
+              <span className="ll-mono text-[9.5px] text-gray-400">{balance.login}</span>
+              {balance.balance <= 5 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase text-red-600">low — top up</span>}
+            </>
+          )}
+          <button onClick={fetchBalance} disabled={balance?.busy} title="Refresh balance from DataForSEO"
+            className="ml-auto rounded-lg border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-500 hover:border-gray-300 disabled:opacity-50">
+            ↻ Refresh
+          </button>
+        </div>
+      )}
       {isAiProvider && connected && !isActiveAi && (
         <button onClick={() => onChange({ activeAi: api.id })}
           className="mb-3 w-full rounded-lg border border-emerald-300 bg-emerald-50 py-1.5 text-[11.5px] font-semibold text-emerald-700 hover:bg-emerald-100">
