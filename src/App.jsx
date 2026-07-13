@@ -541,6 +541,10 @@ export default function App() {
   if (screen === "tools") {
     return <Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}
       placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs}
+      clients={clients}
+      onUpdateProjectById={(cid, pid, patch) => setClients((cs) => cs.map((c) => c.id !== cid ? c : {
+        ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
+      }))}
       onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
   }
   if (screen === "login") {

@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
+import { KwBankPicker } from "../tools/kwbank.jsx";
 import { useWork } from "../../lib/worklog.jsx";
 import { realDfs } from "./indexcheck.jsx";
 import {
@@ -298,6 +299,14 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
               <Labeled label="Primary keyword (one intent per page)"><input value={seo.primaryKw || ""} onChange={(e) => setSeo({ primaryKw: e.target.value })} className={inputCls} /></Labeled>
               <Labeled label="Secondary keywords (comma-separated)"><input value={seo.secondaryKws || ""} onChange={(e) => setSeo({ secondaryKws: e.target.value })} placeholder="long-tail, related terms" className={inputCls} /></Labeled>
             </div>
+            {/* researched keywords (Keyword Finder → project bank): first pick
+               becomes the primary, the rest join the secondaries — they then
+               drive the content structure + writer below */}
+            <KwBankPicker project={project} accent={accent}
+              used={[seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean)}
+              onPick={(k) => setSeo((cur) => cur.primaryKw?.trim()
+                ? { secondaryKws: [...new Set([...String(cur.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean), k.keyword])].join(", ") }
+                : { primaryKw: k.keyword })} />
           </Card>
 
           <Card className="space-y-3 p-4">

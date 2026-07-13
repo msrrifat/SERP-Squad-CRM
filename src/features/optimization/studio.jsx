@@ -20,6 +20,7 @@ import { escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.j
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { AiWriteButton } from "../../lib/aiwrite.jsx";
+import { KwBankPicker } from "../tools/kwbank.jsx";
 import { WorkCtx, useWork } from "../../lib/worklog.jsx";
 import { mkOpt } from "../../data/seed.js";
 import { projectLocations } from "../../data/gen.js";
@@ -1366,6 +1367,24 @@ export function LivePageEditor({ page, onPatch, accent, slugsEnabled, siteHost, 
                 placeholder="Meta description — shown under the title in Google" className="mt-0.5 w-full resize-none border-0 bg-transparent text-[12.5px] leading-snug text-gray-600 outline-none" />
               <div className="flex justify-end gap-2"><CharCount value={page.metaTitle} max={60} /><CharCount value={page.metaDesc} max={160} /></div>
             </div>)}
+            {/* target keywords from the project's researched bank (Keyword Finder) */}
+            {((page.keywords || []).length > 0 || (project?.keywordBank || []).length > 0) && (
+              <div className="mt-3 space-y-1.5">
+                {(page.keywords || []).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Target keywords:</span>
+                    {(page.keywords || []).map((k) => (
+                      <span key={k} className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10.5px] font-semibold" style={{ background: accent + "12", color: accent }}>
+                        {k}
+                        <button onClick={() => onPatch((cur) => ({ keywords: (cur.keywords || []).filter((x) => x !== k) }))} className="opacity-60 hover:opacity-100"><X size={10} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <KwBankPicker project={project} accent={accent} used={page.keywords || []}
+                  onPick={(k) => onPatch((cur) => ({ keywords: [...new Set([...(cur.keywords || []), k.keyword])] }))} />
+              </div>
+            )}
           </div>
 
           {/* the rendered page */}
@@ -1616,6 +1635,25 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
                 ? <input value={p.slug} onChange={(e) => set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") })} placeholder={autoSlug || "url-slug"} className="min-w-0 flex-1 border-0 bg-transparent outline-none" style={{ color: accent }} />
                 : <span>{autoSlug || "url-slug"}</span>}
             </div>
+
+            {/* researched target keywords (project keyword bank → this post) */}
+            {((p.keywords || []).length > 0 || (project?.keywordBank || []).length > 0) && (
+              <div className="mt-3 space-y-1.5">
+                {(p.keywords || []).length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Target keywords:</span>
+                    {(p.keywords || []).map((k) => (
+                      <span key={k} className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10.5px] font-semibold" style={{ background: accent + "12", color: accent }}>
+                        {k}
+                        <button onClick={() => set({ keywords: (p.keywords || []).filter((x) => x !== k) })} className="opacity-60 hover:opacity-100"><X size={10} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <KwBankPicker project={project} accent={accent} used={p.keywords || []}
+                  onPick={(k) => set({ keywords: [...new Set([...(p.keywords || []), k.keyword])] })} />
+              </div>
+            )}
 
             <div className="mt-5 space-y-3">
               {p.content.map((b) => (

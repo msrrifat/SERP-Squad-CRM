@@ -998,6 +998,67 @@ async function handleGuestMetrics(body) {
   return [200, { live: true, metrics: out, notes }];
 }
 
+/* ================= Keyword Research (KWFinder-style) =================
+   DataForSEO Labs: keyword_suggestions (seed keyword mode) and
+   ranked_keywords (domain mode). Rows carry volume, CPC, competition,
+   keyword difficulty and 12-month trend. Local mode passes a city-level
+   location_name; national mode passes just the country. ---- */
+const kwRow = (kw, info, props, extra = {}) => ({
+  keyword: kw,
+  volume: info?.search_volume ?? null,
+  cpc: info?.cpc != null ? Math.round(info.cpc * 100) / 100 : null,
+  competition: info?.competition != null ? Math.round(info.competition * 100) : null,
+  kd: props?.keyword_difficulty ?? null,
+  monthly: (info?.monthly_searches || []).slice(-12).map((m) => ({ y: m.year, m: m.month, v: m.search_volume ?? 0 })),
+  ...extra,
+});
+async function dfsLabs(creds, endpoint, task) {
+  const res = await fetch(`${DFS_BASE}/dataforseo_labs/google/${endpoint}/live`, {
+    method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(90000),
+    body: JSON.stringify([task]),
+  });
+  if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 240)}`);
+  const data = await res.json();
+  const t = data.tasks?.[0];
+  if (!t || t.status_code !== 20000) throw new Error(`DataForSEO: ${t?.status_message || "task error"}`);
+  return t.result?.[0] || {};
+}
+async function handleKwResearch(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "Keyword research runs on DataForSEO Labs — add the credentials in Company Settings → API settings." }];
+  const keyword = String(body?.keyword || "").trim().toLowerCase();
+  if (!keyword) return [400, { error: "bad_request", detail: "A seed keyword is required." }];
+  const location_name = String(body?.locationName || "United States");
+  const language_code = String(body?.languageCode || "en");
+  const limit = Math.min(Math.max(+body?.limit || 200, 20), 400);
+  try {
+    const r = await dfsLabs(creds, "keyword_suggestions", { keyword, location_name, language_code, limit, include_seed_keyword: true, include_serp_info: false });
+    const rows = [];
+    if (r.seed_keyword_data) rows.push(kwRow(r.seed_keyword || keyword, r.seed_keyword_data.keyword_info, r.seed_keyword_data.keyword_properties, { seed: true }));
+    (r.items || []).forEach((it) => { if ((it.keyword || "") !== (r.seed_keyword || keyword) || !rows.length) rows.push(kwRow(it.keyword, it.keyword_info, it.keyword_properties)); });
+    rows.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || (b.volume ?? -1) - (a.volume ?? -1));
+    return [200, { live: true, mode: "keyword", keyword, locationName: location_name, total: rows.length, rows }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
+}
+async function handleKwDomain(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "Keyword research runs on DataForSEO Labs — add the credentials in Company Settings → API settings." }];
+  let target = String(body?.domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  if (!target || !target.includes(".")) return [400, { error: "bad_request", detail: "A valid domain is required (e.g. competitor.com)." }];
+  const location_name = String(body?.locationName || "United States");
+  const language_code = String(body?.languageCode || "en");
+  const limit = Math.min(Math.max(+body?.limit || 200, 20), 400);
+  try {
+    const r = await dfsLabs(creds, "ranked_keywords", { target, location_name, language_code, limit,
+      order_by: ["keyword_data.keyword_info.search_volume,desc"] });
+    const rows = (r.items || []).map((it) => kwRow(
+      it.keyword_data?.keyword, it.keyword_data?.keyword_info, it.keyword_data?.keyword_properties,
+      { rank: it.ranked_serp_element?.serp_item?.rank_absolute ?? null, url: it.ranked_serp_element?.serp_item?.url || "" }));
+    return [200, { live: true, mode: "domain", domain: target, locationName: location_name, total: r.total_count ?? rows.length, rows }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
+}
+
 /* ---- the pixel, for real: this server SERVES px.js and records hits, so
    verification is genuine. Host the CRM+API on your domain (e.g.
    app.serpsquad.com) and the snippet works on any client site. ---- */
@@ -1309,7 +1370,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1348,6 +1409,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/mail/test" ? await handleMailTest(body)
         : req.url === "/api/mail/inbox" ? await handleMailInbox(body)
         : req.url === "/api/track/stats" ? handleTrackStats(body)
+        : req.url === "/api/kw/research" ? await handleKwResearch(body)
+        : req.url === "/api/kw/domain" ? await handleKwDomain(body)
         : await handleRerun(body);
       return send(code, payload);
     }

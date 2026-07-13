@@ -3,12 +3,13 @@
    tool GROUPS; the selected group's subsections appear as a top-bar tab
    strip inside the window. */
 import React, { useState } from "react";
-import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target } from "lucide-react";
+import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
 import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
 import { GuestListView, GuestPostFinder } from "../growth/guestpost.jsx";
 import { OutreachSuite } from "../growth/outreach.jsx";
+import { KeywordFinderView } from "./kwfinder.jsx";
 
 const GROUPS = [
   {
@@ -30,6 +31,13 @@ const GROUPS = [
     ],
   },
   {
+    key: "kw", label: "Keyword Research", icon: TrendingUp, area: "kw",
+    sub: "Local & national keywords, KD, volume, SERP",
+    items: [
+      { key: "kwfinder", label: "Keyword Finder", icon: TrendingUp },
+    ],
+  },
+  {
     key: "research", label: "Research & Audit", icon: Search, area: "research",
     sub: "Audit profiles, sites & listings; build proposals",
     items: [
@@ -42,11 +50,23 @@ const GROUPS = [
   },
 ];
 
-export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs, onBack, dark, setDark }) {
+export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs, clients = [], onUpdateProjectById = null, onBack, dark, setDark }) {
   const [groupKey, setGroupKey] = useState("growth");
   const group = GROUPS.find((g) => g.key === groupKey) || GROUPS[0];
   /* the active subsection is tracked per group so switching back restores it */
-  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", research: "profile" });
+  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", research: "profile" });
+
+  /* Keyword Finder → project keyword bank: merged, deduped, and kept sorted
+     by search volume high → low (the order every studio picker shows) */
+  const addKeywordsToProject = (clientId, projectId, rows, meta) => onUpdateProjectById?.(clientId, projectId, (p) => {
+    const cur = p.keywordBank || [];
+    const seen = new Set(cur.map((k) => `${k.keyword}|${k.locationName || ""}`.toLowerCase()));
+    const fresh = rows.filter((r) => !seen.has(`${r.keyword}|${meta.locationName}`.toLowerCase())).map((r, i) => ({
+      id: "kb" + Date.now().toString(36) + i, keyword: r.keyword, volume: r.volume, cpc: r.cpc, kd: r.kd,
+      location: meta.location, locationName: meta.locationName, demo: !!meta.demo, addedAt: Date.now(),
+    }));
+    return { keywordBank: [...cur, ...fresh].sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1)) };
+  });
   const sel = selByGroup[group.key];
   const setSel = (k) => setSelByGroup((cur) => ({ ...cur, [group.key]: k }));
 
@@ -107,6 +127,13 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
         {group.area === "research" ? (
           <ResearchToolsView tab={sel} setTab={setSel} showTabs={false}
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
+        ) : group.area === "kw" ? (
+          <div className="mx-auto max-w-6xl p-5">
+            <KeywordFinderView company={company} accent={accent}
+              clients={clients.filter((c) => c.projects.some((p) => !p.archived))
+                .map((c) => ({ ...c, projects: c.projects.filter((p) => !p.archived) }))}
+              onAddToProject={addKeywordsToProject} />
+          </div>
         ) : group.area === "guest" ? (
           <div className="mx-auto max-w-5xl p-5">
             {sel === "guestposts" && <GuestPostFinder company={company} onUpdateCompany={onChange} accent={accent} dfs={dfs}
