@@ -190,7 +190,10 @@ const loadDevices = () => { try { return JSON.parse(readFileSync(DEVICES_FILE, "
 const saveDevices = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(DEVICES_FILE, JSON.stringify(d)); };
 
 /* minimal SMTP-over-TLS client (implicit TLS, port 465) — node builtins only */
-function sendMail(cfg, to, subject, text) {
+/* Minimal SMTP-over-TLS client. opts: { html } sends multipart/alternative
+   (used when a campaign enables open/click tracking); verifyOnly stops after
+   AUTH — a real credential check that never emails anyone. */
+function sendMail(cfg, to, subject, text, opts = {}) {
   return new Promise((resolve, reject) => {
     const sock = tlsConnect({ host: cfg.host, port: +(cfg.port || 465), servername: cfg.host });
     const lines = []; let waiter = null; let done = false;
@@ -206,21 +209,161 @@ function sendMail(cfg, to, subject, text) {
     });
     const send = (x) => sock.write(x + "\r\n");
     const expect = async (code) => { const l = await read(); if (!l.startsWith(String(code))) throw new Error("SMTP " + l.slice(0, 120)); };
+    /* SMTP dot-stuffing: a leading "." on any body line would end DATA early */
+    const stuff = (s) => String(s).split(/\r?\n/).map((l) => (l.startsWith(".") ? "." + l : l)).join("\r\n");
     (async () => {
       await expect(220);
       send("EHLO serpsquad.local"); await expect(250);
       send("AUTH LOGIN"); await expect(334);
       send(Buffer.from(String(cfg.user)).toString("base64")); await expect(334);
       send(Buffer.from(String(cfg.pass)).toString("base64")); await expect(235);
-      send(`MAIL FROM:<${cfg.from || cfg.user}>`); await expect(250);
+      if (opts.verifyOnly) { send("QUIT"); sock.end(); if (!done) { done = true; resolve(); } return; }
+      send(`MAIL FROM:<${cfg.fromAddr || cfg.user}>`); await expect(250);
       send(`RCPT TO:<${to}>`); await expect(250);
       send("DATA"); await expect(354);
-      send(`From: ${cfg.from || cfg.user}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}\r\n.`);
+      const head = `From: ${cfg.from || cfg.user}\r\nTo: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nDate: ${new Date().toUTCString()}`;
+      const body = opts.html
+        ? `Content-Type: multipart/alternative; boundary="ssb0"\r\n\r\n--ssb0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${stuff(text)}\r\n--ssb0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${stuff(opts.html)}\r\n--ssb0--`
+        : `Content-Type: text/plain; charset=utf-8\r\n\r\n${stuff(text)}`;
+      send(`${head}\r\n${body}\r\n.`);
       await expect(250);
       send("QUIT"); sock.end();
       if (!done) { done = true; resolve(); }
     })().catch(fail);
   });
+}
+
+/* ---- minimal IMAP-over-TLS client: enough to read the inbox ----
+   LOGIN → SELECT INBOX → FETCH the newest messages with header fields +
+   the first MIME part (usually text/plain). Handles IMAP literals
+   ({N}\r\n + N raw bytes), RFC2047 headers and QP/base64 bodies. */
+function imapConnect(cfg) {
+  return new Promise((resolve, reject) => {
+    const sock = tlsConnect({ host: cfg.host, port: +(cfg.port || 993), servername: cfg.host });
+    let buf = Buffer.alloc(0); let waiter = null; let done = false; let tagN = 0;
+    const fail = (e) => { if (!done) { done = true; sock.destroy(); reject(e instanceof Error ? e : new Error(String(e))); } };
+    sock.setTimeout(25000, () => fail(new Error("IMAP timeout")));
+    sock.on("error", fail);
+    sock.on("data", (d) => { buf = Buffer.concat([buf, d]); waiter?.(); });
+    const waitFor = (tag) => new Promise((res2, rej2) => {
+      const check = () => {
+        const s = buf.toString("latin1");
+        const m = s.match(new RegExp(`(?:^|\\r\\n)${tag} (OK|NO|BAD)([^\\r\\n]*)`));
+        if (m) { const out = buf; buf = Buffer.alloc(0); if (m[1] !== "OK") return rej2(new Error(`IMAP ${m[1]}${m[2]}`.slice(0, 160))); return res2(out); }
+        waiter = check;
+      };
+      sock.once("close", () => rej2(new Error("IMAP connection closed")));
+      check();
+    });
+    const cmd = async (c) => { const tag = "a" + (++tagN); sock.write(`${tag} ${c}\r\n`); return waitFor(tag); };
+    sock.once("secureConnect", async () => {
+      try {
+        await new Promise((r) => { const chk = () => (buf.toString("latin1").includes("\r\n") ? r() : (waiter = chk)); chk(); }); // greeting
+        buf = Buffer.alloc(0);
+        resolve({ cmd, end: () => { done = true; try { sock.write("a99 LOGOUT\r\n"); } catch { /* closing */ } sock.end(); } });
+      } catch (e) { fail(e); }
+    });
+  });
+}
+const qEsc = (s) => String(s).replace(/[\\"]/g, "\\$&");
+const rfc2047 = (s) => String(s).replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_, cs, enc, data) => {
+  try {
+    return enc.toUpperCase() === "B"
+      ? Buffer.from(data, "base64").toString("utf8")
+      : data.replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, (__, h) => String.fromCharCode(parseInt(h, 16)));
+  } catch { return data; }
+});
+const decodeBody = (raw) => {
+  let s = raw;
+  if (/=\r?\n|=[0-9A-F]{2}/i.test(s) && !/[<>]/.test(s.slice(0, 200))) // quoted-printable
+    s = s.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  else if (/^[A-Za-z0-9+/=\r\n]+$/.test(s.trim()) && s.trim().length > 40) {
+    try { const dec = Buffer.from(s.replace(/\s/g, ""), "base64").toString("utf8"); if (/[ a-z]/i.test(dec)) s = dec; } catch { /* keep raw */ }
+  }
+  return s.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/[ \t]+/g, " ").trim();
+};
+/* parse FETCH responses: header-fields literal + first-part literal per message */
+function parseImapFetch(raw) {
+  const s = raw.toString("latin1");
+  const msgs = [];
+  const re = /\* (\d+) FETCH \(/g;
+  const starts = []; let m;
+  while ((m = re.exec(s))) starts.push({ seq: +m[1], at: m.index });
+  starts.forEach((st, i) => {
+    const seg = s.slice(st.at, starts[i + 1]?.at ?? s.length);
+    const flags = (seg.match(/FLAGS \(([^)]*)\)/) || [])[1] || "";
+    const lits = [];
+    const lre = /\{(\d+)\}\r\n/g; let lm;
+    while ((lm = lre.exec(seg))) { lits.push(seg.slice(lm.index + lm[0].length, lm.index + lm[0].length + +lm[1])); lre.lastIndex = lm.index + lm[0].length + +lm[1]; }
+    const header = lits[0] || "", body = lits[1] || "";
+    const h = (name) => rfc2047(((header.match(new RegExp(`^${name}:[ \\t]*([^\\r\\n]*(?:\\r\\n[ \\t][^\\r\\n]*)*)`, "im")) || [])[1] || "").replace(/\r\n[ \t]/g, " ").trim());
+    const from = h("From");
+    msgs.push({
+      seq: st.seq, seen: /\\Seen/.test(flags),
+      from, fromEmail: ((from.match(/<([^>]+)>/) || [])[1] || from).toLowerCase().trim(),
+      subject: h("Subject"), date: h("Date"),
+      text: decodeBody(Buffer.from(body, "latin1").toString("utf8")).slice(0, 1200),
+    });
+  });
+  return msgs.reverse(); // newest first
+}
+async function handleMailInbox(body) {
+  const imap = body?.imap;
+  if (!imap?.host || !imap?.user || !imap?.pass) return [503, { error: "not_configured", detail: "This email account has no IMAP settings — edit it and add IMAP host/username/password (Gmail preset fills them automatically)." }];
+  let conn;
+  try {
+    conn = await imapConnect(imap);
+    await conn.cmd(`LOGIN "${qEsc(imap.user)}" "${qEsc(imap.pass)}"`);
+    const sel = await conn.cmd("SELECT INBOX");
+    const exists = +((sel.toString("latin1").match(/\* (\d+) EXISTS/) || [])[1] || 0);
+    if (!exists) { conn.end(); return [200, { live: true, total: 0, messages: [] }]; }
+    const count = Math.min(exists, Math.min(Math.max(+body?.limit || 20, 5), 40));
+    const raw = await conn.cmd(`FETCH ${exists - count + 1}:${exists} (FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] BODY.PEEK[1]<0.2048>)`);
+    conn.end();
+    return [200, { live: true, total: exists, messages: parseImapFetch(raw) }];
+  } catch (e) {
+    try { conn?.end(); } catch { /* closed */ }
+    return [502, { error: "provider_error", detail: "IMAP: " + String(e?.message || e).slice(0, 160) }];
+  }
+}
+async function handleMailTest(body) {
+  const out = { smtp: null, imap: null };
+  const smtp = body?.smtp;
+  if (smtp?.host && smtp?.user) {
+    try { await sendMail(smtp, "", "", "", { verifyOnly: true }); out.smtp = { ok: true }; }
+    catch (e) { out.smtp = { ok: false, detail: String(e?.message || e).slice(0, 140) }; }
+  } else out.smtp = { ok: false, detail: "SMTP host/username missing." };
+  const imap = body?.imap;
+  if (imap?.host && imap?.user) {
+    let conn;
+    try { conn = await imapConnect(imap); await conn.cmd(`LOGIN "${qEsc(imap.user)}" "${qEsc(imap.pass)}"`); conn.end(); out.imap = { ok: true }; }
+    catch (e) { try { conn?.end(); } catch { /* closed */ } out.imap = { ok: false, detail: String(e?.message || e).slice(0, 140) }; }
+  } else out.imap = { ok: false, detail: "IMAP not configured (optional — needed for the Inbox)." };
+  return [200, { live: true, ...out }];
+}
+
+/* ---- open/click tracking: 1px gif + redirect, events in a JSON file.
+   token = campaignId.contactId — generated by the client at send time. ---- */
+const TRACK_FILE = new URL("./data/outreach-track.json", import.meta.url);
+const loadTrack = () => { try { return JSON.parse(readFileSync(TRACK_FILE, "utf8")); } catch { return {}; } };
+const saveTrack = (d) => { mkdirSync(new URL("./data/", import.meta.url), { recursive: true }); writeFileSync(TRACK_FILE, JSON.stringify(d)); };
+const GIF_1PX = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+const trackHit = (token, type) => {
+  if (!/^[\w.-]{3,120}$/.test(token)) return false;
+  const d = loadTrack();
+  (d[token] = d[token] || { o: [], c: [] })[type].push(Date.now());
+  saveTrack(d);
+  return true;
+};
+function handleTrackStats(body) {
+  const prefix = String(body?.prefix || "");
+  if (!prefix) return [400, { error: "bad_request", detail: "prefix (campaign id) required" }];
+  const d = loadTrack();
+  const out = {};
+  Object.entries(d).forEach(([token, ev]) => {
+    if (token.startsWith(prefix + ".")) out[token.slice(prefix.length + 1)] = { opens: ev.o.length, clicks: ev.c.length, lastOpen: ev.o[ev.o.length - 1] || null };
+  });
+  return [200, { live: true, stats: out }];
 }
 
 async function handle2faStart(body) {
@@ -765,8 +908,9 @@ async function handleOutreachSend(body) {
   const subject = String(body?.subject || "").slice(0, 180);
   const text = String(body?.text || "").slice(0, 20_000);
   if (!subject || !text) return [400, { error: "bad_request", detail: "Subject and body are required." }];
+  const html = body?.html ? String(body.html).slice(0, 60_000) : null;
   try {
-    await sendMail({ ...smtp, from: body?.fromName ? `${String(body.fromName).replace(/[<>"\r\n]/g, "")} <${smtp.from || smtp.user}>` : (smtp.from || smtp.user) }, to, subject, text);
+    await sendMail({ ...smtp, from: body?.fromName ? `${String(body.fromName).replace(/[<>"\r\n]/g, "")} <${smtp.from || smtp.user}>` : (smtp.from || smtp.user) }, to, subject, text, { html });
     return [200, { live: true, sent: true, to }];
   } catch (e) { return [502, { error: "provider_error", detail: "SMTP: " + String(e?.message || e).slice(0, 160) }]; }
 }
@@ -1151,7 +1295,21 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics"].includes(req.url)) {
+    /* tracking pixel + click redirect — must answer any origin (they load from recipients' mail clients) */
+    if (req.method === "GET" && req.url.startsWith("/api/t/o/")) {
+      trackHit(decodeURIComponent(req.url.slice(9).replace(/\.gif.*$/, "")), "o");
+      res.writeHead(200, { "Content-Type": "image/gif", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" });
+      return res.end(GIF_1PX);
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/t/c/")) {
+      const u = new URL(req.url, "http://x");
+      trackHit(decodeURIComponent(u.pathname.slice(9)), "c");
+      const dest = u.searchParams.get("u") || "";
+      if (!/^https?:\/\//i.test(dest)) return send(400, { error: "bad_request" });
+      res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
+      return res.end();
+    }
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1187,6 +1345,9 @@ http.createServer(async (req, res) => {
         : req.url === "/api/outreach/send" ? await handleOutreachSend(body)
         : req.url === "/api/guestpost/search" ? await handleGuestSearch(body)
         : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
+        : req.url === "/api/mail/test" ? await handleMailTest(body)
+        : req.url === "/api/mail/inbox" ? await handleMailInbox(body)
+        : req.url === "/api/track/stats" ? handleTrackStats(body)
         : await handleRerun(body);
       return send(code, payload);
     }

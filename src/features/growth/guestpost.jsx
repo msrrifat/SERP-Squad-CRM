@@ -16,6 +16,16 @@ import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { csvDownload } from "../research/tools.jsx";
+import { ProspectList } from "./prospects.jsx";
+
+/* the saved-sites list for the guest scope — same UI, separate data */
+export function GuestListView({ company, onUpdateCompany, accent }) {
+  const store = company.guest || { contacts: [], campaigns: [] };
+  const ref = useRef(store); ref.current = store;
+  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...patch } });
+  return <ProspectList accent={accent} growth={store} commit={commit}
+    emptyHint={<>Run the <b>Guest Post Finder</b> and save sites — folders are created automatically per niche.</>} />;
+}
 
 const gid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -59,9 +69,11 @@ function demoSites(niche) {
 }
 
 export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, oprKey }) {
-  const growth = company.growth || { contacts: [], campaigns: [] };
+  /* guest-post prospects live in their OWN store (company.guest) — fully
+     separated from client-prospecting data, shareable with the team later */
+  const growth = company.guest || { contacts: [], campaigns: [] };
   const ref = useRef(growth); ref.current = growth;
-  const commit = (patch) => onUpdateCompany({ growth: { ...ref.current, ...patch } });
+  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...patch } });
 
   const [niche, setNiche] = useState("");
   const [location, setLocation] = useState("");
@@ -291,7 +303,7 @@ export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, op
               Save {selected.size} selected to folder
             </button>
             <button onClick={() => { setSelected(new Set(rows.map((x) => x.domain))); }} className="text-[11px] font-semibold" style={{ color: accent }}>Select all {rows.length}</button>
-            <span className="ml-auto flex items-center gap-1 text-[10.5px] text-gray-400"><Send size={10} /> Saved sites land in <b>Prospect List</b> — pitch them from <b>Outreach Campaigns</b> (guest-post AI pitch built in).</span>
+            <span className="ml-auto flex items-center gap-1 text-[10.5px] text-gray-400"><Send size={10} /> Saved sites land in <b>Guest Post List</b> — pitch them from <b>Guest Outreach</b> (separate from your prospect campaigns).</span>
           </div>
           <div className="text-[10.5px] text-gray-400">
             Authority = Open PageRank (0–10, free). Sites scoring 3+ with a public email are your warmest targets. "none public" means their pages expose no address — use their contact form.

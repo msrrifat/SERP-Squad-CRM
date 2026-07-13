@@ -6,7 +6,8 @@ import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, PenLine, Sea
 import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
-import { GuestPostFinder } from "../growth/guestpost.jsx";
+import { GuestListView, GuestPostFinder } from "../growth/guestpost.jsx";
+import { OutreachSuite } from "../growth/outreach.jsx";
 
 const GROUPS = [
   {
@@ -21,6 +22,8 @@ const GROUPS = [
     label: "Guest Post Finder",
     items: [
       { key: "guestposts", area: "guest", label: "Guest Post Finder", icon: PenLine, sub: "Niche sites · authority · emails" },
+      { key: "guestlist", area: "guest", label: "Guest Post List", icon: FolderOpen, sub: "Saved sites, per-niche folders" },
+      { key: "guestoutreach", area: "guest", label: "Guest Outreach", icon: Send, sub: "Campaigns · mailbox · analytics" },
     ],
   },
   {
@@ -92,8 +95,10 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
         ) : active.area === "guest" ? (
           <div className="mx-auto max-w-5xl p-5">
-            <GuestPostFinder company={company} onUpdateCompany={onChange} accent={accent} dfs={dfs}
-              cse={company.apis?.googleCse?.values} oprKey={company.apis?.openPageRank?.values?.apiKey} />
+            {sel === "guestposts" && <GuestPostFinder company={company} onUpdateCompany={onChange} accent={accent} dfs={dfs}
+              cse={company.apis?.googleCse?.values} oprKey={company.apis?.openPageRank?.values?.apiKey} />}
+            {sel === "guestlist" && <GuestListView company={company} onUpdateCompany={onChange} accent={accent} />}
+            {sel === "guestoutreach" && <OutreachSuite company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} scope="guest" />}
           </div>
         ) : (
           <GrowthView tab={sel} setTab={setSel} showTabs={false}

@@ -14,11 +14,11 @@ import {
   AtSign, CheckCircle2, ChevronRight, Download, Folder, FolderOpen, Mail,
   Plus, RefreshCw, Search, Send, Sparkles, Target, Trash2, X,
 } from "lucide-react";
-import { Card, Labeled, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { GBP_CATEGORIES } from "../../data/gbpCategories.js";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
-import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { csvDownload } from "../research/tools.jsx";
+import { OutreachSuite } from "./outreach.jsx";
 
 const gid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const folderKeyOf = (category, city) => `${category} — ${city}`;
@@ -173,7 +173,7 @@ function LeadFinder({ accent, placesKey, growth, commit }) {
 }
 
 /* =================== 2 · Prospect List =================== */
-function ProspectList({ accent, growth, commit }) {
+export function ProspectList({ accent, growth, commit, emptyHint = null }) {
   const contacts = growth.contacts || [];
   const folders = useMemo(() => {
     const map = {};
@@ -202,7 +202,7 @@ function ProspectList({ accent, growth, commit }) {
     <Card className="p-10 text-center">
       <FolderOpen size={26} className="mx-auto text-gray-300" />
       <div className="ll-display mt-2 text-[15px] font-semibold">No prospects yet</div>
-      <p className="mx-auto mt-1 max-w-md text-[12px] text-gray-400">Run the <b>Lead Finder</b> and click "+ Prospect" on interesting businesses — folders are created automatically per category + city.</p>
+      <p className="mx-auto mt-1 max-w-md text-[12px] text-gray-400">{emptyHint || <>Run the <b>Lead Finder</b> and click "+ Prospect" on interesting businesses — folders are created automatically per category + city.</>}</p>
     </Card>
   );
   const [folderName, list] = active || ["", []];
@@ -269,268 +269,6 @@ function ProspectList({ accent, growth, commit }) {
   );
 }
 
-/* =================== 3 · Outreach Campaigns =================== */
-const personalize = (tpl, c) => String(tpl || "")
-  .replaceAll("{{name}}", c.name || "there")
-  .replaceAll("{{website}}", c.website || "your website")
-  .replaceAll("{{city}}", cityOf(c.folder) || "your area")
-  .replaceAll("{{niche}}", c.niche || (c.folder.split(" — ")[0] || "your niche").toLowerCase())
-  .replaceAll("{{category}}", (c.folder.split(" — ")[0] || "business").toLowerCase());
-
-function Outreach({ accent, company, growth, commit, aiConfig }) {
-  const smtp = company.apis?.smtp?.values;
-  const smtpReady = !!(smtp?.host && smtp?.user);
-  const contacts = growth.contacts || [];
-  const campaigns = growth.campaigns || [];
-  const folders = [...new Set(contacts.map((c) => c.folder))];
-  /* a folder is "guest-post" outreach when its saved sites came from the
-     Guest Post Finder — the pitch, subject and merge tags all adapt */
-  const folderIsGuest = (folder) => contacts.some((c) => c.folder === folder && c.kind === "guestpost");
-  const [openId, setOpenId] = useState(null);
-  const [fromName, setFromName] = useState(growth.fromName || company.name || "");
-  const [testTo, setTestTo] = useState("");
-  const [sending, setSending] = useState(null); // { done, total, fails }
-  const [err, setErr] = useState(null);
-  const [aiBusy, setAiBusy] = useState(false);
-  const camp = campaigns.find((c) => c.id === openId);
-
-  const patchCamp = (id, patch) => commit({ campaigns: campaigns.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)) });
-  const newCampaign = () => {
-    const folder = folders[0] || "";
-    const guest = folderIsGuest(folder);
-    const c = guest ? {
-      id: gid("cp"), name: "Guest post outreach", folder, status: "draft", createdAt: Date.now(), guest: true,
-      subject: "Guest post for {{name}}?",
-      body: `Hi,\n\nI'm a big fan of {{website}} — your recent {{niche}} posts are exactly the depth I look for.\n\nI'd love to contribute a original, well-researched guest article your readers would genuinely find useful (no fluff, no thin content). I can send a few headline ideas tailored to your audience — would that be welcome?\n\nEither way, keep up the great work.\n\n${fromName || company.name}`,
-      followUps: [{ afterDays: 3, body: "Hi again — just bumping this in case it slipped by. Happy to send 2–3 {{niche}} topic ideas for {{name}} so you can see the angle before committing. Worth a look?" }],
-      sends: [],
-    } : {
-      id: gid("cp"), name: "New campaign", folder, status: "draft", createdAt: Date.now(),
-      subject: "Quick question about {{name}}",
-      body: `Hi {{name}} team,\n\nI was looking at local {{category}} results in {{city}} and noticed a few quick wins on {{website}} that competitors are already using.\n\nMind if I send over a free 2-minute audit? No strings — if it's useful, great.\n\n${fromName || company.name}`,
-      followUps: [{ afterDays: 3, body: "Hi again — just floating my last note to the top. Want that free audit for {{name}}? Takes me 10 minutes, could be worth a lot to you." }],
-      sends: [],
-    };
-    commit({ campaigns: [c, ...campaigns], fromName });
-    setOpenId(c.id);
-  };
-
-  const aiPitch = async () => {
-    if (!camp) return;
-    setAiBusy(true); setErr(null);
-    const guest = camp.guest || folderIsGuest(camp.folder);
-    try {
-      const text = await aiGenerate(aiConfig, guest ? {
-        system: `You are an expert blogger-outreach / guest-post pitch writer (Pitchbox/Respona school). Write ONE plain-text email that gets a "yes, pitch me topics":
-- under 110 words, warm and specific, first line a genuine compliment about their site, then offer an ORIGINAL high-quality guest article for their audience, then ONE soft CTA (offer to send topic ideas — a question)
-- no links, no attachments, no payment talk, no "I'll add 3 links", no spam words, no "hope this finds you well"
-- use merge tags exactly: {{name}} (site/domain), {{website}}, {{niche}}
-- Output format: first line "Subject: ..." then a blank line then the body. Nothing else.`,
-        maxTokens: 400,
-        prompt: `Sender: ${fromName || company.name}. Audience: ${camp.folder || "niche blogs"} — blogs that accept guest posts in the "${(camp.folder.split(" — ")[0] || "").trim()}" niche. Goal: land a guest post. Write the email.`,
-      } : {
-        system: `You are a cold-email expert (Instantly/Lemlist school). Write ONE plain-text cold email:
-- under 110 words, first line personal, one concrete observation, ONE soft CTA (a question), no links, no images, no spam words (free!!!, guarantee, act now), no "hope this finds you well"
-- use merge tags exactly: {{name}} (business name), {{city}}, {{category}}, {{website}}
-- Output format: first line "Subject: ..." then a blank line then the body. Nothing else.`,
-        maxTokens: 400,
-        prompt: `Sender: ${fromName || company.name}, a local-SEO & web agency. Audience: ${camp.folder || "local businesses"}. Offer: a free mini SEO/website audit that leads to a proposal. Write the email.`,
-      });
-      const m = text.match(/^Subject:\s*(.+)\n+([\s\S]+)$/i);
-      patchCamp(camp.id, m ? { subject: m[1].trim(), body: m[2].trim() } : { body: text.trim() });
-    } catch (e) { setErr(e.code === 503 ? "No AI provider connected — add a key in API settings, or write the pitch manually." : "AI error: " + e.message); }
-    setAiBusy(false);
-  };
-
-  const targets = camp ? contacts.filter((c) => c.folder === camp.folder) : [];
-  const emailable = targets.filter((c) => c.email && !c.replied);
-  const sentIds = new Set((camp?.sends || []).filter((s) => s.step === 0 && s.ok).map((s) => s.contactId));
-  const toSend = emailable.filter((c) => !sentIds.has(c.id));
-  /* follow-ups that are due: initial send ok, N days elapsed, not replied, step not yet sent */
-  const dueFollowUps = camp ? (camp.followUps || []).flatMap((fu, fi) =>
-    (camp.sends || []).filter((s) => s.step === 0 && s.ok
-      && Date.now() - s.at >= fu.afterDays * 864e5
-      && !(camp.sends || []).some((x) => x.contactId === s.contactId && x.step === fi + 1)
-      && !contacts.find((c) => c.id === s.contactId)?.replied
-      && contacts.find((c) => c.id === s.contactId))
-      .map((s) => ({ contact: contacts.find((c) => c.id === s.contactId), fu, step: fi + 1 }))) : [];
-
-  const sendBatch = async (batch) => { // batch: [{contact, subject, body, step}]
-    setSending({ done: 0, total: batch.length, fails: 0 }); setErr(null);
-    const results = [];
-    for (let i = 0; i < batch.length; i++) {
-      const { contact, subject, body, step } = batch[i];
-      try {
-        const r = await fetch("/api/outreach/send", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({ smtp, fromName, to: contact.email, subject: personalize(subject, contact), text: personalize(body, contact) }) });
-        const d = await r.json();
-        results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step, at: Date.now(), ok: r.ok, error: r.ok ? null : (d.detail || d.error) });
-        if (!r.ok && r.status === 503) { setErr(d.detail); break; }
-      } catch (e) { results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step, at: Date.now(), ok: false, error: String(e?.message || e) }); }
-      setSending({ done: i + 1, total: batch.length, fails: results.filter((x) => !x.ok).length });
-      if (i < batch.length - 1) await new Promise((res) => setTimeout(res, 1300)); // spacing protects the sender score
-    }
-    patchCamp(camp.id, (c) => ({ sends: [...(c.sends || []), ...results], status: "running", launchedAt: c.launchedAt || Date.now() }));
-    setSending(null);
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* sender */}
-      <Card className="space-y-3 p-5">
-        <div className="ll-display text-[15px] font-semibold">Sending account</div>
-        <div className="grid items-end gap-3 sm:grid-cols-[1fr,1fr,auto]">
-          <Labeled label="From name"><input value={fromName} onChange={(e) => setFromName(e.target.value)} onBlur={() => commit({ fromName })} className={inputCls} /></Labeled>
-          <Labeled label="SMTP (Company Settings → API settings)">
-            <div className={"flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] " + (smtpReady ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700")}>
-              {smtpReady ? <><CheckCircle2 size={12} /> {smtp.user} via {smtp.host}</> : "Not configured — add the SMTP credentials (same as sign-in emails)."}
-            </div>
-          </Labeled>
-          <div className="flex gap-2">
-            <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@agency.com" className={inputCls + " w-44"} />
-            <button disabled={!smtpReady || !testTo.trim()}
-              onClick={() => sendBatch([{ contact: { id: "test", name: "Test", email: testTo.trim(), folder: folders[0] || "Test — City", website: "example.com" }, subject: "SERP Squad outreach test", body: "This is a deliverability test from your outreach tool. Plain text, sent through your own SMTP — check the spam folder too.", step: -1 }])}
-              className="whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 text-[11.5px] font-semibold text-gray-600 disabled:opacity-40">Send test</button>
-          </div>
-        </div>
-        <div className="rounded-xl bg-gray-50 p-3 text-[10.5px] leading-relaxed text-gray-500">
-          <b className="text-gray-700">Deliverability rules baked in:</b> plain-text only (no HTML/images/links in the AI pitch) · 1.3s spacing between sends ·
-          server-enforced 60/hour cap · follow-ups stop the moment you mark a contact <b>Replied</b>. Before real volume: set up <b>SPF, DKIM & DMARC</b> on the
-          sending domain, warm the inbox 2–3 weeks, and stay under ~40 cold emails/day per inbox.
-        </div>
-      </Card>
-
-      {/* campaign list / editor */}
-      {!camp ? (
-        <Card className="space-y-2 p-5">
-          <div className="flex items-center justify-between">
-            <div className="ll-display text-[15px] font-semibold">Campaigns</div>
-            <button onClick={newCampaign} disabled={!folders.length}
-              className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-              <Plus size={13} /> New campaign
-            </button>
-          </div>
-          {!folders.length && <div className="text-[11.5px] text-gray-400">Add prospects first — campaigns target a prospect folder.</div>}
-          {campaigns.map((c) => {
-            const ok = (c.sends || []).filter((s) => s.ok).length;
-            return (
-              <button key={c.id} onClick={() => setOpenId(c.id)} className="flex w-full items-center gap-3 rounded-xl border border-gray-100 p-3 text-left hover:border-gray-200">
-                <Send size={14} style={{ color: accent }} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-semibold text-gray-800">{c.name}</span>
-                  <span className="block text-[10.5px] text-gray-400">{c.folder} · {(c.followUps || []).length} follow-up step(s)</span>
-                </span>
-                <span className={"rounded-full px-2 py-0.5 text-[9px] font-bold uppercase " + (c.status === "running" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500")}>{c.status}</span>
-                <span className="ll-mono text-[10.5px] text-gray-400">{ok} sent</span>
-                <ChevronRight size={14} className="text-gray-300" />
-              </button>
-            );
-          })}
-          {campaigns.length === 0 && folders.length > 0 && <div className="py-3 text-center text-[11.5px] text-gray-300">No campaigns yet.</div>}
-        </Card>
-      ) : (
-        <Card className="space-y-4 p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => setOpenId(null)} className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-gray-500">← Campaigns</button>
-            <input value={camp.name} onChange={(e) => patchCamp(camp.id, { name: e.target.value })} className="ll-display min-w-0 flex-1 border-b border-transparent bg-transparent text-[15px] font-semibold outline-none focus:border-gray-300" />
-            <button onClick={() => { commit({ campaigns: campaigns.filter((x) => x.id !== camp.id) }); setOpenId(null); }} className="rounded-md p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label={<span className="flex items-center gap-1.5">Prospect folder ({targets.length} contacts · {emailable.length} emailable)
-              {(camp.guest || folderIsGuest(camp.folder)) && <span className="rounded bg-violet-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-violet-600">guest post</span>}</span>}>
-              <select value={camp.folder} onChange={(e) => patchCamp(camp.id, { folder: e.target.value, guest: folderIsGuest(e.target.value) })} className={inputCls + " bg-white"}>
-                {folders.map((f) => <option key={f}>{f}</option>)}
-              </select>
-            </Labeled>
-            <Labeled label={`Subject (merge tags: {{name}} {{website}} ${camp.guest || folderIsGuest(camp.folder) ? "{{niche}}" : "{{city}} {{category}}"})`}>
-              <input value={camp.subject} onChange={(e) => patchCamp(camp.id, { subject: e.target.value })} className={inputCls} />
-            </Labeled>
-          </div>
-          <Labeled label={<span className="flex items-center justify-between">Pitch — plain text, personalized per contact
-            <button onClick={aiPitch} disabled={aiBusy} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-bold disabled:opacity-50" style={{ background: accent + "14", color: accent }}>
-              {aiBusy ? <RefreshCw size={10} className="animate-spin" /> : <Sparkles size={10} />} AI write the pitch
-            </button></span>}>
-            <textarea value={camp.body} onChange={(e) => patchCamp(camp.id, { body: e.target.value })} rows={7} className={"ll-mono " + inputCls + " resize-y text-[12px]"} />
-          </Labeled>
-          {targets[0] && (
-            <div className="rounded-xl bg-gray-50 p-3 text-[11px] text-gray-500">
-              <b className="text-gray-600">Preview for {targets[0].name}:</b> <i>{personalize(camp.subject, targets[0])}</i><br />
-              <span className="whitespace-pre-wrap">{personalize(camp.body, targets[0]).slice(0, 320)}…</span>
-            </div>
-          )}
-          {/* follow-ups */}
-          <div className="space-y-2">
-            <div className="text-[12.5px] font-bold text-gray-700">Follow-up sequence</div>
-            {(camp.followUps || []).map((fu, i) => (
-              <div key={i} className="rounded-xl border border-gray-100 p-3">
-                <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-gray-500">
-                  <span className="rounded-full px-2 py-0.5 text-[9px] font-bold text-white" style={{ background: accent }}>Step {i + 2}</span>
-                  send <input type="number" min={1} value={fu.afterDays} onChange={(e) => patchCamp(camp.id, (c) => ({ followUps: c.followUps.map((x, j) => j === i ? { ...x, afterDays: Math.max(1, +e.target.value || 1) } : x) }))} className={inputCls + " w-14"} /> day(s) after the previous step · same thread ("Re:")
-                  <button onClick={() => patchCamp(camp.id, (c) => ({ followUps: c.followUps.filter((_, j) => j !== i) }))} className="ml-auto text-gray-300 hover:text-red-500"><X size={13} /></button>
-                </div>
-                <textarea value={fu.body} onChange={(e) => patchCamp(camp.id, (c) => ({ followUps: c.followUps.map((x, j) => j === i ? { ...x, body: e.target.value } : x) }))} rows={3} className={"ll-mono " + inputCls + " resize-y text-[12px]"} />
-              </div>
-            ))}
-            {(camp.followUps || []).length < 3 && (
-              <button onClick={() => patchCamp(camp.id, (c) => ({ followUps: [...(c.followUps || []), { afterDays: 4, body: (camp.guest || folderIsGuest(camp.folder))
-                ? "Last one from me — if guest posts aren't a fit for {{name}} right now, no worries at all. If they are, my best {{niche}} topic ideas are one reply away."
-                : "Last note from me — should I close the file on {{name}}, or is a free audit worth 10 minutes?" }] }))}
-                className="flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[11.5px] font-medium text-gray-500"><Plus size={12} /> Add follow-up step</button>
-            )}
-          </div>
-          {err && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{err}</div>}
-          {sending && (
-            <div className="rounded-xl border border-gray-200 p-3">
-              <div className="mb-1 text-[11.5px] font-semibold text-gray-600">Sending {sending.done}/{sending.total}{sending.fails ? ` · ${sending.fails} failed` : ""}…</div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full transition-all" style={{ width: `${(sending.done / sending.total) * 100}%`, background: accent }} /></div>
-            </div>
-          )}
-          {/* launch + follow-up queue */}
-          <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
-            <button disabled={!smtpReady || !toSend.length || !!sending}
-              onClick={() => sendBatch(toSend.slice(0, 40).map((contact) => ({ contact, subject: camp.subject, body: camp.body, step: 0 })))}
-              className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-[13px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
-              <Send size={13} /> {toSend.length ? `Launch — email ${Math.min(toSend.length, 40)} prospect(s) now` : "All emailable prospects contacted"}
-            </button>
-            {dueFollowUps.length > 0 && (
-              <button disabled={!smtpReady || !!sending}
-                onClick={() => sendBatch(dueFollowUps.slice(0, 40).map(({ contact, fu, step }) => ({ contact, subject: "Re: " + camp.subject, body: fu.body, step })))}
-                className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-[12.5px] font-bold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
-                Send {dueFollowUps.length} due follow-up(s)
-              </button>
-            )}
-            <span className="text-[10px] text-gray-400">Max 40 per launch · real sends via your SMTP{smtpReady ? "" : " (configure it above first)"} · reply detection needs IMAP — mark replies below to stop sequences.</span>
-          </div>
-          {/* per-contact log */}
-          {(camp.sends || []).length > 0 && (
-            <div className="space-y-1">
-              <div className="text-[12px] font-bold text-gray-700">Send log</div>
-              {targets.filter((c) => (camp.sends || []).some((s) => s.contactId === c.id)).map((c) => {
-                const steps = (camp.sends || []).filter((s) => s.contactId === c.id).sort((a, b) => a.at - b.at);
-                return (
-                  <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-1.5 text-[11px]">
-                    <span className="font-semibold text-gray-700">{c.name}</span>
-                    <span className="ll-mono text-gray-400">{c.email}</span>
-                    {steps.map((s) => (
-                      <span key={s.id} title={s.error || ""} className={"rounded px-1.5 py-px text-[9px] font-bold " + (s.ok ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
-                        {s.step === 0 ? "initial" : `follow-up ${s.step}`} {s.ok ? "✓" : "✕"}
-                      </span>
-                    ))}
-                    <label className="ml-auto flex items-center gap-1 text-[10px] font-semibold text-gray-500">
-                      <input type="checkbox" checked={!!c.replied} onChange={(e) => commit({ contacts: contacts.map((x) => (x.id === c.id ? { ...x, replied: e.target.checked } : x)) })} />
-                      Replied (stop sequence)
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      )}
-    </div>
-  );
-}
-
 /* =================== the view =================== */
 export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiConfig, placesKey, showTabs = true }) {
   const growth = company.growth || { contacts: [], campaigns: [] };
@@ -554,7 +292,7 @@ export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiCo
       )}
       {tab === "finder" && <LeadFinder accent={accent} placesKey={placesKey} growth={growth} commit={commit} />}
       {tab === "prospects" && <ProspectList accent={accent} growth={growth} commit={commit} />}
-      {tab === "outreach" && <Outreach accent={accent} company={company} growth={growth} commit={commit} aiConfig={aiConfig} />}
+      {tab === "outreach" && <OutreachSuite company={company} onUpdateCompany={onUpdateCompany} accent={accent} aiConfig={aiConfig} scope="growth" />}
     </div>
   );
 }
