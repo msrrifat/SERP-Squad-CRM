@@ -56,16 +56,41 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
   /* the active subsection is tracked per group so switching back restores it */
   const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", research: "profile" });
 
-  /* Keyword Finder → project keyword bank: merged, deduped, and kept sorted
-     by search volume high → low (the order every studio picker shows) */
-  const addKeywordsToProject = (clientId, projectId, rows, meta) => onUpdateProjectById?.(clientId, projectId, (p) => {
+  /* Keyword Finder → project. Always records to the keyword bank (deduped,
+     kept sorted by volume high→low). When a specific page/post/mapping node
+     is chosen, ALSO attaches the keywords there as its target keywords. */
+  const addKeywordsToProject = (clientId, projectId, rows, meta, target = { kind: "bank" }) => onUpdateProjectById?.(clientId, projectId, (p) => {
     const cur = p.keywordBank || [];
     const seen = new Set(cur.map((k) => `${k.keyword}|${k.locationName || ""}`.toLowerCase()));
     const fresh = rows.filter((r) => !seen.has(`${r.keyword}|${meta.locationName}`.toLowerCase())).map((r, i) => ({
       id: "kb" + Date.now().toString(36) + i, keyword: r.keyword, volume: r.volume, cpc: r.cpc, kd: r.kd,
       location: meta.location, locationName: meta.locationName, demo: !!meta.demo, addedAt: Date.now(),
     }));
-    return { keywordBank: [...cur, ...fresh].sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1)) };
+    const patch = { keywordBank: [...cur, ...fresh].sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1)) };
+    if (target.kind === "bank") return patch;
+
+    /* rows arrive volume-sorted (high → low) from the finder */
+    const kws = rows.map((r) => r.keyword);
+    const w = p.opt?.website || {};
+    if (target.kind === "map") {
+      const setNode = (nodes) => (nodes || []).map((n) => {
+        if (n.id !== target.id) return { ...n, children: setNode(n.children) };
+        const seo = n.seo || {};
+        const existingSec = String(seo.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean);
+        const primary = seo.primaryKw?.trim() || kws[0];
+        const rest = kws.filter((k) => k !== primary);
+        const secondary = [...new Set([...existingSec, ...rest])];
+        return { ...n, seo: { ...seo, primaryKw: primary, secondaryKws: secondary.join(", ") } };
+      });
+      return { ...patch, opt: { ...p.opt, website: { ...w, architecture: { ...(w.architecture || {}), tree: setNode(w.architecture?.tree) } } } };
+    }
+    if (target.kind === "page") {
+      return { ...patch, opt: { ...p.opt, website: { ...w, pages: (w.pages || []).map((pg) => pg.id === target.id ? { ...pg, keywords: [...new Set([...(pg.keywords || []), ...kws])] } : pg) } } };
+    }
+    if (target.kind === "post") {
+      return { ...patch, opt: { ...p.opt, website: { ...w, blogs: (w.blogs || []).map((b) => b.id === target.id ? { ...b, keywords: [...new Set([...(b.keywords || []), ...kws])] } : b) } } };
+    }
+    return patch;
   });
   const sel = selByGroup[group.key];
   const setSel = (k) => setSelByGroup((cur) => ({ ...cur, [group.key]: k }));

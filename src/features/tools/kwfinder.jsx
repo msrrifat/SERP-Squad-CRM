@@ -278,7 +278,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
                 <span className="text-[11px] text-gray-400">{selected.size} selected</span>
                 <button onClick={() => setAddModal(true)} disabled={!selected.size || !clients.length}
                   className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
-                  <FolderPlus size={13} /> Add {selected.size || ""} keyword{selected.size === 1 ? "" : "s"} to a project
+                  <FolderPlus size={13} /> Add {selected.size || ""} keyword{selected.size === 1 ? "" : "s"} to a page
                 </button>
               </span>
             </div>
@@ -346,9 +346,9 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
       {addModal && (
         <AddToProjectModal accent={accent} clients={clients} count={selected.size}
           onClose={() => setAddModal(false)}
-          onAdd={(clientId, projectId) => {
-            const picked = rows.filter((r) => selected.has(r.keyword));
-            onAddToProject(clientId, projectId, picked, { location: loc.label, locationName: loc.locationName, demo: !res.live });
+          onAdd={(clientId, projectId, target) => {
+            const picked = rows.filter((r) => selected.has(r.keyword)).sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1));
+            onAddToProject(clientId, projectId, picked, { location: loc.label, locationName: loc.locationName, demo: !res.live }, target);
             setAddModal(false); setSelected(new Set());
           }} />
       )}
@@ -356,35 +356,67 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
   );
 }
 
+/* flatten a project's assignable targets: the shared bank + every website-
+   mapping node, synced page and post — so keywords can attach to one page */
+function projectTargets(proj) {
+  const w = proj?.opt?.website || {};
+  const groups = [{ label: "", options: [{ value: "bank", label: "📥 Keyword bank (available to every page)" }] }];
+  const mapOpts = [];
+  const walkTree = (nodes, depth) => (nodes || []).forEach((n) => {
+    mapOpts.push({ value: "map:" + n.id, label: `${"— ".repeat(depth)}${n.title || n.url}  ·  ${n.url}` });
+    walkTree(n.children, depth + 1);
+  });
+  walkTree(w.architecture?.tree, 0);
+  if (mapOpts.length) groups.push({ label: "Website Mapping & Content", options: mapOpts });
+  if ((w.pages || []).length) groups.push({ label: "Synced website pages", options: w.pages.map((p) => ({ value: "page:" + p.id, label: `${p.name || p.url}  ·  ${p.url}` })) });
+  if ((w.blogs || []).length) groups.push({ label: "Posts", options: w.blogs.map((b) => ({ value: "post:" + b.id, label: b.title || b.slug || "post" })) });
+  return groups;
+}
+
 function AddToProjectModal({ accent, clients, count, onClose, onAdd }) {
   const [clientId, setClientId] = useState(clients[0]?.id || "");
   const client = clients.find((c) => c.id === clientId) || clients[0];
   const [projectId, setProjectId] = useState(client?.projects[0]?.id || "");
   const proj = client?.projects.find((p) => p.id === projectId) || client?.projects[0];
+  const [target, setTarget] = useState("bank");
   const [done, setDone] = useState(false);
+  const groups = useMemo(() => projectTargets(proj), [proj]);
+  /* keep the target valid when the project changes */
+  const validTargets = new Set(groups.flatMap((g) => g.options.map((o) => o.value)));
+  const tgt = validTargets.has(target) ? target : "bank";
+  const tgtLabel = groups.flatMap((g) => g.options).find((o) => o.value === tgt)?.label || "Keyword bank";
+  const parseTarget = (t) => t === "bank" ? { kind: "bank" } : { kind: t.split(":")[0], id: t.split(":")[1] };
   return (
-    <Modal title={`Add ${count} keyword${count === 1 ? "" : "s"} to a project`} sub="They land in the project's keyword bank, sorted by search volume (high → low) — usable in Website Mapping & Content, Pages and Posts." onClose={onClose}>
+    <Modal title={`Add ${count} keyword${count === 1 ? "" : "s"} to a page`} sub="Attach to a specific page/post (target keywords) or to the shared bank — always sorted by search volume, high → low." onClose={onClose}>
       <div className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
           <Labeled label="Client">
-            <select value={clientId} onChange={(e) => { setClientId(e.target.value); const c = clients.find((x) => x.id === e.target.value); setProjectId(c?.projects[0]?.id || ""); }} className={inputCls + " bg-white"}>
+            <select value={clientId} onChange={(e) => { setClientId(e.target.value); const c = clients.find((x) => x.id === e.target.value); setProjectId(c?.projects[0]?.id || ""); setTarget("bank"); }} className={inputCls + " bg-white"}>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Labeled>
           <Labeled label="Project">
-            <select value={proj?.id || ""} onChange={(e) => setProjectId(e.target.value)} className={inputCls + " bg-white"}>
+            <select value={proj?.id || ""} onChange={(e) => { setProjectId(e.target.value); setTarget("bank"); }} className={inputCls + " bg-white"}>
               {(client?.projects || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </Labeled>
         </div>
+        <Labeled label="Add to">
+          <select value={tgt} onChange={(e) => setTarget(e.target.value)} className={inputCls + " bg-white"}>
+            {groups.map((g, i) => (g.label
+              ? <optgroup key={i} label={g.label}>{g.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</optgroup>
+              : g.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)))}
+          </select>
+        </Labeled>
         <div className="rounded-xl bg-gray-50 p-3 text-[11px] leading-relaxed text-gray-500">
-          Next step: open the project → <b>Optimization Studio → Business Website</b> → Website Mapping &amp; Content, Pages or Posts —
-          every editor has an <b>"Add from keyword bank"</b> picker with these keywords ready.
+          {tgt === "bank"
+            ? <>They go to the project's shared keyword bank. Every editor in <b>Optimization Studio → Business Website</b> then has an <b>"Add from keyword bank"</b> picker with them ready.</>
+            : <>They attach directly to <b>{tgtLabel.replace(/^—\s*/, "").split("  ·")[0]}</b> as its target keywords{tgt.startsWith("map:") ? " (highest-volume becomes the primary keyword, the rest secondary — driving its structure & the writer)" : ""}. A copy also lands in the keyword bank.</>}
         </div>
-        {done && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11.5px] font-semibold text-emerald-700">✓ Added to {proj?.name} — keyword bank updated.</div>}
+        {done && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11.5px] font-semibold text-emerald-700">✓ Added to {proj?.name} → {tgtLabel.replace(/^—\s*/, "").split("  ·")[0]}.</div>}
         <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
           <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-[12px] font-medium text-gray-600">Close</button>
-          <button disabled={!proj || done} onClick={() => { onAdd(client.id, proj.id); setDone(true); setTimeout(onClose, 900); }}
+          <button disabled={!proj || done} onClick={() => { onAdd(client.id, proj.id, parseTarget(tgt)); setDone(true); setTimeout(onClose, 1000); }}
             className="flex items-center gap-1.5 rounded-lg px-5 py-2 text-[12px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
             <CheckCircle2 size={13} /> Add keywords
           </button>
