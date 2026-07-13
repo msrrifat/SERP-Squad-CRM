@@ -443,7 +443,7 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
 }
 
 /* =================== the view =================== */
-export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, placesKey, dfs }) {
+export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, placesKey, dfs, showTabs = true }) {
   /* results are lifted so the Audit Report tab can compile everything */
   const [profileRes, setProfileRes] = useState(null);
   const [profileManual, setProfileManual] = useState({ services: "", products: "", posts: "" });
@@ -462,14 +462,16 @@ export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, plac
   ];
   return (
     <div className="ll-fade mx-auto max-w-5xl space-y-4 p-5">
-      <div className="flex flex-wrap gap-1.5">
-        {TABS.map(([k, l, Icon]) => (
-          <button key={k} onClick={() => setTab(k)} className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
-            style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
-            <Icon size={13} /> {l}
-          </button>
-        ))}
-      </div>
+      {showTabs && (
+        <div className="flex flex-wrap gap-1.5">
+          {TABS.map(([k, l, Icon]) => (
+            <button key={k} onClick={() => setTab(k)} className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
+              style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
+              <Icon size={13} /> {l}
+            </button>
+          ))}
+        </div>
+      )}
       {tab === "profile" && <ProfileAuditTool accent={accent} placesKey={placesKey} res={profileRes} setRes={setProfileRes} manual={profileManual} setManual={setProfileManual} />}
       {tab === "website" && <WebsiteAuditTool accent={accent} res={webRes} setRes={setWebRes} />}
       {tab === "listings" && (

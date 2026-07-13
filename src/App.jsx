@@ -11,7 +11,7 @@ import {
   Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
   LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
-  Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare, User, ClipboardList, Megaphone,
+  Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare, User, ClipboardList, Megaphone, Wrench,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
@@ -42,8 +42,7 @@ const AdsView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsView");
 const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsPerformanceView");
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
-const ResearchToolsView = lazyOf(() => import("./features/research/tools.jsx"), "ResearchToolsView");
-const GrowthView = lazyOf(() => import("./features/growth/prospects.jsx"), "GrowthView");
+const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
 const AgentLauncher = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentLauncher");
@@ -65,7 +64,6 @@ export default function App() {
   const [modal, setModal] = useState(null); // {type:"addClient"|"addProject"|"clientSettings"|"companySettings", clientId?}
   const [screen, setScreen] = useState("app");      // "app" | "login"
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
-  const [toolView, setToolView] = useState(null); // { area: "research"|"growth", tab } — agency-level tool screens
   const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
   const [session, setSession] = useState(null);     // { clientId } when a client is signed in
@@ -157,7 +155,7 @@ export default function App() {
   const activateProject = (cid, pid, name) => {
     setProjectFlag(cid, pid, { archived: false, archivedAt: null });
     logActivity("Activated project from archive", name);
-    setActiveClientId(cid); setActiveProjectId(pid); setToolView(null); setAccountView(null);
+    setActiveClientId(cid); setActiveProjectId(pid); setAccountView(null);
   };
   const deleteProjectHard = (cid, pid, name) => {
     setClients((cs) => cs.map((c) => (c.id !== cid ? c : { ...c, projects: c.projects.filter((p) => p.id !== pid) })));
@@ -521,7 +519,7 @@ export default function App() {
   };
   const toggleExpand = (cid) => setExpanded((s) => { const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n; });
   const selectProject = (cid, pid) => {
-    setActiveClientId(cid); setActiveProjectId(pid); setView("overview"); setSection("performance"); setAccountView(null); setToolView(null);
+    setActiveClientId(cid); setActiveProjectId(pid); setView("overview"); setSection("performance"); setAccountView(null);
     const cl = clients.find((c) => c.id === cid); const pr = cl?.projects.find((p) => p.id === pid);
     if (pr) logActivity("Viewed project", `${pr.name} (${cl.name})`);
   };
@@ -539,6 +537,11 @@ export default function App() {
   }
   if (screen === "company") {
     return <Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
+  }
+  if (screen === "tools") {
+    return <Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}
+      placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs}
+      onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
   }
   if (screen === "login") {
     return <Lazy><LoginScreen company={company} clients={clients} dark={dark}
@@ -653,6 +656,14 @@ export default function App() {
                 </button>
               );
             })}
+            {isAdmin && (
+              <button onClick={() => { setScreen("tools"); logActivity("Opened the Tools dashboard"); }}
+                title="Research & Audit tools + Growth & Prospects"
+                className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium"
+                style={{ color: sbCustom ? sbVars.soft : "#4B5563" }}>
+                <Wrench size={14} className="text-gray-400" /> Tools
+              </button>
+            )}
           </div>
           <div className="mx-4 mb-2 border-t border-gray-100" />
           <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Client projects</div>
@@ -731,31 +742,6 @@ export default function App() {
               </div>
             )}
 
-            {/* ---- agency-level tool areas ---- */}
-            {isAdmin && (
-              <>
-                <div className="mt-2 border-t border-gray-100 pt-2">
-                  <div className="px-1.5 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Research &amp; Audit Tools</div>
-                  {[["profile", "Business Profile Audit", Building2], ["website", "Website Audit", Globe], ["listings", "Business Listings Checker", MapPin], ["index", "Index Checker", Search], ["report", "Audit Report", FileTextIcon]].map(([key, label, Icon]) => (
-                    <button key={key} onClick={() => { setToolView({ area: "research", tab: key }); setAccountView(null); }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] font-medium hover:bg-gray-50"
-                      style={toolView?.area === "research" && toolView?.tab === key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #4B5563)" }}>
-                      <Icon size={13} className="shrink-0" /> {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="mb-2 mt-2 border-t border-gray-100 pt-2">
-                  <div className="px-1.5 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Growth &amp; Prospects</div>
-                  {[["finder", "Lead Finder", Target], ["prospects", "Prospect List", FolderOpen], ["outreach", "Outreach Campaigns", Send]].map(([key, label, Icon]) => (
-                    <button key={key} onClick={() => { setToolView({ area: "growth", tab: key }); setAccountView(null); }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] font-medium hover:bg-gray-50"
-                      style={toolView?.area === "growth" && toolView?.tab === key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #4B5563)" }}>
-                      <Icon size={13} className="shrink-0" /> {label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
           </div>
           {canClients && (
             <div className="grid grid-cols-2 gap-2 p-3">
@@ -819,32 +805,6 @@ export default function App() {
               {accountView === "team" && isAdmin && (
                 <TeamView team={company.team || []} clients={clients} activity={company.activity || []} dms={company.dms || {}}
                   accent={accent} onOpenTask={openAssignedTask} />
-              )}
-            </Lazy>
-          </>
-        ) : toolView && !clientView ? (
-          <>
-            <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
-              <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {toolView.area === "research" ? "Research & Audit Tools" : "Growth & Prospects"}
-              </div>
-              <div className="flex items-center gap-2">
-                <DarkToggle dark={dark} setDark={setDark} />
-                <button onClick={() => setAccountView("settings")} title="Account settings" className="rounded-full ring-2 ring-transparent hover:ring-gray-300">
-                  <Ava name={meName} img={currentUser?.avatar} size={32} />
-                </button>
-              </div>
-            </div>
-            <Lazy>
-              {toolView.area === "research" && (
-                <ResearchToolsView tab={toolView.tab} setTab={(t) => setToolView({ area: "research", tab: t })}
-                  company={company} accent={accent} aiConfig={aiConfig}
-                  placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs} />
-              )}
-              {toolView.area === "growth" && (
-                <GrowthView tab={toolView.tab} setTab={(t) => setToolView({ area: "growth", tab: t })}
-                  company={company} onUpdateCompany={updateCompany} accent={accent} aiConfig={aiConfig}
-                  placesKey={company.apis?.googlePlaces?.values?.apiKey} />
               )}
             </Lazy>
           </>

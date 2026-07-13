@@ -508,7 +508,7 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
 }
 
 /* =================== the view =================== */
-export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiConfig, placesKey }) {
+export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiConfig, placesKey, showTabs = true }) {
   const growth = company.growth || { contacts: [], campaigns: [] };
   const ref = useRef(growth); ref.current = growth;
   /* commit against the freshest state so async loops (scrape-all, send batches) never clobber */
@@ -517,15 +517,17 @@ export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiCo
   const TABS = [["finder", "Lead Finder", Target], ["prospects", `Prospect List`, FolderOpen], ["outreach", "Outreach Campaigns", Send]];
   return (
     <div className="ll-fade mx-auto max-w-5xl space-y-4 p-5">
-      <div className="flex flex-wrap gap-1.5">
-        {TABS.map(([k, l, Icon]) => (
-          <button key={k} onClick={() => setTab(k)} className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
-            style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
-            <Icon size={13} /> {l}
-            {k === "prospects" && (growth.contacts || []).length > 0 && <span className="ll-mono rounded-full bg-white/20 px-1.5 text-[9.5px] font-bold" style={tab === k ? {} : { background: "#F3F4F6", color: "#6B7280" }}>{growth.contacts.length}</span>}
-          </button>
-        ))}
-      </div>
+      {showTabs && (
+        <div className="flex flex-wrap gap-1.5">
+          {TABS.map(([k, l, Icon]) => (
+            <button key={k} onClick={() => setTab(k)} className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
+              style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
+              <Icon size={13} /> {l}
+              {k === "prospects" && (growth.contacts || []).length > 0 && <span className="ll-mono rounded-full bg-white/20 px-1.5 text-[9.5px] font-bold" style={tab === k ? {} : { background: "#F3F4F6", color: "#6B7280" }}>{growth.contacts.length}</span>}
+            </button>
+          ))}
+        </div>
+      )}
       {tab === "finder" && <LeadFinder accent={accent} placesKey={placesKey} growth={growth} commit={commit} />}
       {tab === "prospects" && <ProspectList accent={accent} growth={growth} commit={commit} />}
       {tab === "outreach" && <Outreach accent={accent} company={company} growth={growth} commit={commit} aiConfig={aiConfig} />}
