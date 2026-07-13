@@ -1059,6 +1059,107 @@ async function handleKwDomain(body) {
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
 }
 
+/* ================= Insightful-campaign audit =================
+   ONE call builds a prospect's full audit with minimal spend:
+   - GBP data via Google Places (the user's own key — no DFS cost)
+   - website mini-crawl by this server (free, max 8 pages)
+   - 6 organic keyword ranks (6 × google/organic live @ ~$0.003)
+   - 2 local map ranks   (2 × google/maps live    @ ~$0.0035)
+   Competitors come from THOSE SAME SERPs — zero extra requests.
+   Total ≈ $0.025 in DataForSEO credits per audit. */
+const INSIGHT_DIRS = ["yelp.com", "angi.com", "homeadvisor.com", "thumbtack.com", "facebook.com", "houzz.com", "bbb.org",
+  "yellowpages.com", "mapquest.com", "expertise.com", "porch.com", "nextdoor.com", "instagram.com", "wikipedia.org",
+  "reddit.com", "quora.com", "indeed.com", "glassdoor.com", "google.com", "youtube.com", "tripadvisor.com", "groupon.com"];
+const normHost = (u) => { try { return new URL(/^https?:/i.test(u) ? u : "https://" + u).hostname.replace(/^www\./, ""); } catch { return String(u || "").replace(/^www\./, ""); } };
+async function handleInsightAudit(body) {
+  const biz = body?.business || {};
+  const category = String(body?.category || "").trim().toLowerCase();
+  const city = String(body?.city || "").trim();
+  if (!biz.name || !category || !city) return [400, { error: "bad_request", detail: "business.name, category and city are required." }];
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "Rank sections need DataForSEO credentials (API settings) — audits are never sent with fabricated rankings." }];
+  const site = biz.website ? normHost(biz.website) : "";
+  const cityShort = city.split(",")[0].trim();
+  const organicKws = [category, `${category} near me`, `${category} ${cityShort}`, `${category} service`, `${category} contractor`, `${category} company`];
+  const mapKws = [`${category} near me`, `${category} ${cityShort}`];
+  const locName = /,/.test(city) ? city : `${city},United States`;
+  const nameToken = String(biz.name).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).slice(0, 3).join(" ");
+
+  const out = { live: true, business: { name: biz.name, city, website: site }, category };
+  const errors = [];
+
+  /* run the three data sources in parallel */
+  const [gbpRes, webRes, serps] = await Promise.all([
+    /* GBP via Places (optional — needs the Places key) */
+    (async () => {
+      if (!body?.placesKey) return { note: "Google Places key not configured — GBP section omitted." };
+      try { const [c, p] = await handleAuditProfile({ query: `${biz.name} ${city}`, placesKey: body.placesKey }); return c === 200 && p.found ? p.place : { note: p.detail || "listing not found" }; }
+      catch (e) { return { note: String(e?.message || e).slice(0, 120) }; }
+    })(),
+    /* website mini-crawl (free) */
+    (async () => {
+      if (!site) return { note: "No website on file — a huge opportunity in itself." };
+      try {
+        let pages = [];
+        try {
+          const sm = await fetchText(`https://${site}/sitemap.xml`, 8000);
+          const locs = [...sm.text.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1])
+            .filter((u) => { try { return new URL(u).hostname.replace(/^www\./, "") === site; } catch { return false; } }).slice(0, 8);
+          if (locs.length) pages = await Promise.all(locs.map(async (u) => { const t0 = Date.now(); const r = await fetchText(u, 9000); return analyzePage(u, r.text, r.status, Date.now() - t0, site); }));
+        } catch { /* no sitemap — homepage only */ }
+        if (!pages.length) { const t0 = Date.now(); const r = await fetchText(`https://${site}`, 10000); pages = [analyzePage(r.finalUrl, r.text, r.status, Date.now() - t0, site)]; }
+        pages.forEach((p) => { p.internalIn = 0; p.internalOutCount = (p.internalOut || []).length; delete p.internalOut; });
+        return { crawled: pages.length, pages: pages.map((p) => ({ path: p.path, title: p.title, titleLen: p.titleLen, metaDescLen: p.metaDescLen, h1Count: p.h1Count, words: p.words, imagesNoAlt: p.imagesNoAlt, schemaTypes: p.schemaTypes, https: p.https })) };
+      } catch (e) { return { note: "Site unreachable: " + String(e?.message || e).slice(0, 80) }; }
+    })(),
+    /* 6 organic + 2 maps SERPs — the only DFS spend */
+    (async () => {
+      const org = await pool(organicKws, async (kw) => {
+        const task = await dfsLive(creds, "google/organic", { keyword: kw, location_name: locName, language_code: "en", depth: 30 });
+        const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
+        const hit = site ? items.find((it) => (it.domain || "").replace(/^www\./, "").endsWith(site)) : null;
+        return { keyword: kw, position: hit ? hit.rank_group : null,
+          top: items.slice(0, 10).map((it) => ({ domain: (it.domain || "").replace(/^www\./, ""), rank: it.rank_group, title: (it.title || "").slice(0, 80) })) };
+      }, 3);
+      const maps = await pool(mapKws, async (kw) => {
+        const task = await dfsLive(creds, "google/maps", { keyword: kw, location_name: locName, language_code: "en", depth: 20 });
+        const items = (task.result?.[0]?.items || []).filter((it) => it.type === "maps_search");
+        const hit = items.find((it) => String(it.title || "").toLowerCase().includes(nameToken.split(" ")[0]) &&
+          (nameToken.split(" ").length < 2 || String(it.title || "").toLowerCase().includes(nameToken.split(" ")[1] || "")));
+        return { keyword: kw, position: hit ? hit.rank_group : null,
+          top: items.slice(0, 10).map((it) => ({ name: (it.title || "").slice(0, 60), rank: it.rank_group, rating: it.rating?.value ?? null, reviews: it.rating?.votes_count ?? null })) };
+      }, 2);
+      return { org, maps };
+    })(),
+  ]);
+
+  out.gbp = gbpRes;
+  out.website = webRes;
+  out.organic = (serps.org || []).map((r, i) => (r?.error ? { keyword: organicKws[i], error: r.error, top: [] } : r));
+  out.maps = (serps.maps || []).map((r, i) => (r?.error ? { keyword: mapKws[i], error: r.error, top: [] } : r));
+  out.organic.filter((r) => r.error).forEach((r) => errors.push(`organic "${r.keyword}": ${r.error}`));
+  out.maps.filter((r) => r.error).forEach((r) => errors.push(`maps "${r.keyword}": ${r.error}`));
+  if (errors.length === out.organic.length + out.maps.length) return [502, { error: "provider_error", detail: errors[0] || "all rank scans failed" }];
+
+  /* competitors: aggregated from the SERPs already paid for — no extra calls */
+  const compMap = {};
+  out.organic.forEach((r) => (r.top || []).forEach((t) => {
+    if (!t.domain || t.domain === site || INSIGHT_DIRS.some((d) => t.domain === d || t.domain.endsWith("." + d))) return;
+    const c = (compMap[t.domain] = compMap[t.domain] || { domain: t.domain, appearances: 0, bestRank: 99 });
+    c.appearances++; c.bestRank = Math.min(c.bestRank, t.rank);
+  }));
+  out.maps.forEach((r) => (r.top || []).forEach((t) => {
+    if (!t.name || String(t.name).toLowerCase().includes(nameToken.split(" ")[0])) return;
+    const key = "📍 " + t.name;
+    const c = (compMap[key] = compMap[key] || { domain: t.name, local: true, appearances: 0, bestRank: 99, rating: t.rating, reviews: t.reviews });
+    c.appearances++; c.bestRank = Math.min(c.bestRank, t.rank);
+  }));
+  out.competitors = Object.values(compMap).sort((a, b) => b.appearances - a.appearances || a.bestRank - b.bestRank).slice(0, 10);
+  out.requestsUsed = organicKws.length + mapKws.length;
+  if (errors.length) out.partialErrors = errors;
+  return [200, out];
+}
+
 /* ---- the pixel, for real: this server SERVES px.js and records hits, so
    verification is genuine. Host the CRM+API on your domain (e.g.
    app.serpsquad.com) and the snippet works on any client site. ---- */
@@ -1370,7 +1471,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1411,6 +1512,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/track/stats" ? handleTrackStats(body)
         : req.url === "/api/kw/research" ? await handleKwResearch(body)
         : req.url === "/api/kw/domain" ? await handleKwDomain(body)
+        : req.url === "/api/insight/audit" ? await handleInsightAudit(body)
         : await handleRerun(body);
       return send(code, payload);
     }

@@ -20,6 +20,9 @@ import {
 import { Card, Labeled, Modal, Toggle, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { appOrigin } from "../../lib/appOrigin.js";
+import { hashStr } from "../../lib/rng.js";
+import { DfsCostChip } from "../../lib/dfsCost.jsx";
+import { buildAuditEmailHtml, buildAuditEmailText, demoInsightAudit, generateInsightAudit } from "./insight.jsx";
 
 const gid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const cityOf = (folder) => ((folder || "").split(" — ")[1] || "").trim();
@@ -229,6 +232,17 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
   const [aiBusy, setAiBusy] = useState(false);
   const camp = campaigns.find((c) => c.id === openId);
   const folderIsGuest = (folder) => guestScope || contacts.some((c) => c.folder === folder && c.kind === "guestpost");
+  /* insightful campaigns: live data sources for audit generation */
+  const dfs = company.dfs;
+  const dfsReady = !!(dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad"));
+  const placesKey = company.apis?.googlePlaces?.values?.apiKey;
+  const [preview, setPreview] = useState(null);   // audit email html for the preview modal
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [abStats, setAbStats] = useState(null);   // { A:{...}, B:{...} }
+  const [insightNote, setInsightNote] = useState(null);
+  const vidList = (camp?.videos || "").split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+  /* deterministic 50/50 split; "first"/"engaged" force one variant for all */
+  const variantOf = (c) => (camp?.abSplit === "first" ? "A" : camp?.abSplit === "engaged" ? "B" : (hashStr(c.id) % 2 ? "B" : "A"));
 
   const patchCamp = (id, patch) => commit({ campaigns: campaigns.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)) });
   const acctOf = (c) => accounts.find((a) => a.id === c?.accountId) || accounts[0] || null;
@@ -257,6 +271,137 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
     };
     commit({ campaigns: [c, ...campaigns], fromName });
     setOpenId(c.id);
+  };
+
+  /* INSIGHTFUL campaign: auto-generated branded audit emails + A/B test.
+     A = audit embedded in the FIRST email. B = plain teaser first; the
+     audit goes out in email #2 only to prospects who engage (open/click/
+     reply). abSplit "ab" runs both on a deterministic 50/50 split. */
+  const newInsightCampaign = () => {
+    const folder = folders[0] || "";
+    const [catPart, cityPart] = folder.split(" — ").map((s) => (s || "").trim());
+    const c = {
+      id: gid("cp"), name: "Insightful audit campaign", insight: true, abSplit: "ab",
+      category: (catPart || "").toLowerCase(), city: cityPart || "", videos: "",
+      folder, status: "draft", createdAt: Date.now(), accountId: accounts[0]?.id || null, tracking: true,
+      subject: "We ran the numbers on {{name}} — quick look?",
+      body: `Hi {{name}} team,\n\nWe pulled live Google data for ${(catPart || "local").toLowerCase()} businesses in ${cityPart || "your city"} this week — where each one ranks on Maps and Search, and who's winning the searches everyone else is missing.\n\nYour numbers are worth 60 seconds. If any of it is useful, just hit reply.\n\n${fromName}`,
+      followUps: [{ afterDays: 3, body: "Hi again — {{name}}'s visibility numbers were genuinely interesting (a few easy wins in there). Want me to send the full audit over? Just reply." }],
+      sends: [],
+    };
+    commit({ campaigns: [c, ...campaigns], fromName });
+    setOpenId(c.id);
+  };
+
+  const auditFor = async (contact, demo = false) => {
+    const business = { name: contact.name, city: camp.city, website: contact.website || "" };
+    return demo ? demoInsightAudit(business, camp.category, camp.city)
+      : generateInsightAudit({ business, category: camp.category, city: camp.city, dfs, placesKey });
+  };
+  const auditHtmlFor = (audit, contact, token) =>
+    buildAuditEmailHtml(audit, { company, accent, videos: vidList, pitch: personalize(camp.body, contact) }) +
+    `<img src="${appOrigin()}/api/t/o/${encodeURIComponent(token)}.gif" width="1" height="1" alt="" style="display:none">`;
+
+  const previewAudit = async () => {
+    const contact = targets[0] || { id: "px", name: "Sample Business", website: "sample-business.com" };
+    setPreviewBusy(true); setInsightNote(null);
+    try {
+      const audit = await auditFor(contact, !dfsReady);
+      setPreview(buildAuditEmailHtml(audit, { company, accent, videos: vidList, pitch: personalize(camp.body, contact) }));
+      if (!dfsReady) setInsightNote("Preview uses labeled DEMO data — connect DataForSEO to generate real audits.");
+    } catch (e) { setInsightNote("Audit failed: " + (e?.message || e)); }
+    setPreviewBusy(false);
+  };
+
+  const launchInsight = async () => {
+    const cfg = smtpOf(camp);
+    if (!cfg) { setErr("No sending account — add one in the Email accounts tab."); return; }
+    if (!dfsReady) { setErr("Insightful campaigns only send with LIVE data — connect DataForSEO in API settings. Demo audits are preview-only and never reach a prospect."); return; }
+    if (!camp.category.trim() || !camp.city.trim()) { setErr("Set the main category and city first — the 8 audit keywords are built from them."); return; }
+    const batch = toSend.slice(0, 20);
+    setSending({ done: 0, total: batch.length, fails: 0 }); setErr(null); setInsightNote(null);
+    const results = [];
+    for (let i = 0; i < batch.length; i++) {
+      const contact = batch[i];
+      const variant = variantOf(contact);
+      const token = `${camp.id}.${contact.id}`;
+      try {
+        let html, text;
+        const pitchP = personalize(camp.body, contact);
+        if (variant === "A") {
+          const audit = await auditFor(contact);
+          html = auditHtmlFor(audit, contact, token);
+          text = buildAuditEmailText(audit, { company, pitch: pitchP });
+        } else { text = pitchP; html = trackedHtml(pitchP, token); }
+        const r = await fetch("/api/outreach/send", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({ smtp: cfg.smtp, fromName: cfg.fromName, to: contact.email, subject: personalize(camp.subject, contact), text, html }) });
+        const d = await r.json();
+        results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step: 0, variant, audit: variant === "A", at: Date.now(), ok: r.ok, error: r.ok ? null : (d.detail || d.error) });
+        if (!r.ok && r.status === 503) { setErr(d.detail); break; }
+      } catch (e) { results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step: 0, variant, at: Date.now(), ok: false, error: String(e?.message || e).slice(0, 140) }); }
+      setSending({ done: i + 1, total: batch.length, fails: results.filter((x) => !x.ok).length });
+      if (i < batch.length - 1) await new Promise((res) => setTimeout(res, 1300));
+    }
+    patchCamp(camp.id, (c) => ({ sends: [...(c.sends || []), ...results], status: "running", launchedAt: c.launchedAt || Date.now() }));
+    setSending(null);
+  };
+
+  /* B-variant step 2: pull engagement (opens/clicks via tracking + replies
+     via contacts) and send the audit ONLY to engaged prospects */
+  const engagementOf = async () => {
+    let track = {};
+    try {
+      const r = await fetch("/api/track/stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefix: camp.id }) });
+      const d = await r.json(); if (r.ok) track = d.stats || {};
+    } catch { /* tracking unreachable — replies still count */ }
+    return track;
+  };
+  const sendAuditsToEngaged = async () => {
+    if (!dfsReady) { setErr("Live DataForSEO required to generate the audits."); return; }
+    setInsightNote("Checking opens, clicks & replies…"); setErr(null);
+    const track = await engagementOf();
+    const bSent = (camp.sends || []).filter((s) => s.step === 0 && s.ok && s.variant === "B");
+    const already = new Set((camp.sends || []).filter((s) => s.audit && s.ok).map((s) => s.contactId));
+    const engaged = bSent.map((s) => contacts.find((c) => c.id === s.contactId)).filter(Boolean)
+      .filter((c) => !already.has(c.id) && (c.replied || (track[c.id]?.opens || 0) > 0 || (track[c.id]?.clicks || 0) > 0));
+    if (!engaged.length) { setInsightNote(`No newly-engaged B prospects yet (${bSent.length} teaser(s) out) — opens, clicks and replies all count.`); return; }
+    setInsightNote(`${engaged.length} engaged prospect(s) found — generating & sending their audits…`);
+    const cfg = smtpOf(camp);
+    setSending({ done: 0, total: engaged.length, fails: 0 });
+    const results = [];
+    for (let i = 0; i < engaged.length; i++) {
+      const contact = engaged[i];
+      const token = `${camp.id}.${contact.id}`;
+      try {
+        const audit = await auditFor(contact);
+        const html = auditHtmlFor(audit, contact, token);
+        const intro = `As promised — here's the full visibility audit for ${contact.name}. 60 seconds, real Google data:`;
+        const r = await fetch("/api/outreach/send", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({ smtp: cfg.smtp, fromName: cfg.fromName, to: contact.email,
+            subject: "Re: " + personalize(camp.subject, contact),
+            text: buildAuditEmailText(audit, { company, pitch: intro }), html }) });
+        const d = await r.json();
+        results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step: 1, variant: "B", audit: true, at: Date.now(), ok: r.ok, error: r.ok ? null : (d.detail || d.error) });
+      } catch (e) { results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step: 1, variant: "B", audit: true, at: Date.now(), ok: false, error: String(e?.message || e).slice(0, 140) }); }
+      setSending({ done: i + 1, total: engaged.length, fails: results.filter((x) => !x.ok).length });
+      if (i < engaged.length - 1) await new Promise((res) => setTimeout(res, 1300));
+    }
+    patchCamp(camp.id, (c) => ({ sends: [...(c.sends || []), ...results] }));
+    setSending(null);
+  };
+
+  const refreshAbStats = async () => {
+    const track = await engagementOf();
+    const rows = { A: { sent: 0, opened: 0, clicked: 0, replied: 0, audits: 0 }, B: { sent: 0, opened: 0, clicked: 0, replied: 0, audits: 0 } };
+    (camp.sends || []).filter((s) => s.step === 0 && s.ok && s.variant).forEach((s) => {
+      const v = rows[s.variant]; if (!v) return;
+      v.sent++;
+      if ((track[s.contactId]?.opens || 0) > 0) v.opened++;
+      if ((track[s.contactId]?.clicks || 0) > 0) v.clicked++;
+      if (contacts.find((c) => c.id === s.contactId)?.replied) v.replied++;
+    });
+    (camp.sends || []).filter((s) => s.audit && s.ok && s.variant).forEach((s) => { if (rows[s.variant]) rows[s.variant].audits++; });
+    setAbStats(rows);
   };
 
   const aiPitch = async () => {
@@ -357,12 +502,21 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
 
   if (!camp) return (
     <Card className="space-y-2 p-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="ll-display text-[15px] font-semibold">{guestScope ? "Guest post campaigns" : "Campaigns"}</div>
-        <button onClick={newCampaign} disabled={!folders.length}
-          className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-          <Plus size={13} /> New campaign
-        </button>
+        <span className="flex gap-2">
+          <button onClick={newCampaign} disabled={!folders.length}
+            className="flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-[12px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
+            <Plus size={13} /> General campaign
+          </button>
+          {!guestScope && (
+            <button onClick={newInsightCampaign} disabled={!folders.length}
+              title="Auto-generates a branded visibility audit per prospect (GBP + website + 6 search ranks + 2 map ranks + competitors) with A/B testing"
+              className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
+              <Sparkles size={13} /> Insightful campaign
+            </button>
+          )}
+        </span>
       </div>
       {!folders.length && <div className="text-[11.5px] text-gray-400">{guestScope ? "Save sites from the Guest Post Finder first — campaigns target a folder." : "Add prospects first — campaigns target a prospect folder."}</div>}
       {campaigns.map((c) => {
@@ -371,7 +525,9 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
           <button key={c.id} onClick={() => setOpenId(c.id)} className="flex w-full items-center gap-3 rounded-xl border border-gray-100 p-3 text-left hover:border-gray-200">
             <Send size={14} style={{ color: accent }} />
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-semibold text-gray-800">{c.name}</span>
+              <span className="flex items-center gap-1.5 text-[13px] font-semibold text-gray-800">{c.name}
+                {c.insight && <span className="rounded bg-indigo-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-indigo-700">insight · A/B</span>}
+              </span>
               <span className="block text-[10.5px] text-gray-400">{c.folder} · {(c.followUps || []).length} follow-up step(s){c.tracking ? " · tracking on" : ""}</span>
             </span>
             <span className={"rounded-full px-2 py-0.5 text-[9px] font-bold uppercase " + (c.status === "running" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500")}>{c.status}</span>
@@ -413,6 +569,39 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
             desc="Adds an HTML twin with a pixel + link redirects. Plain-text-only (off) deliverability is slightly better." />
         </div>
       </div>
+      {camp.insight && (
+        <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12.5px] font-bold text-indigo-800">✦ Insightful audit settings</span>
+            <span className="text-[10.5px] text-indigo-500">8 rank scans per audit ≈ <b>$0.025</b> DataForSEO + your Places key — GBP, website crawl & competitors ride along free.</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Labeled label="Main category (drives the 8 keywords)"><input value={camp.category} onChange={(e) => patchCamp(camp.id, { category: e.target.value })} placeholder="roofing" className={inputCls} /></Labeled>
+            <Labeled label="City"><input value={camp.city} onChange={(e) => patchCamp(camp.id, { city: e.target.value })} placeholder="Austin, TX" className={inputCls} /></Labeled>
+            <Labeled label="A/B mode">
+              <select value={camp.abSplit} onChange={(e) => patchCamp(camp.id, { abSplit: e.target.value })} className={inputCls + " bg-white"}>
+                <option value="ab">A/B test — 50/50 split</option>
+                <option value="first">All A — audit in the first email</option>
+                <option value="engaged">All B — audit after engagement</option>
+              </select>
+            </Labeled>
+            <Labeled label="YouTube videos (portfolio/reviews, one per line)">
+              <textarea value={camp.videos || ""} onChange={(e) => patchCamp(camp.id, { videos: e.target.value })} rows={1} placeholder="https://youtu.be/…" className={inputCls + " resize-y"} />
+            </Labeled>
+          </div>
+          <div className="rounded-lg bg-white/70 px-3 py-2 text-[10.5px] leading-relaxed text-indigo-900">
+            Audit keywords: <span className="ll-mono">{camp.category || "category"}</span> · <span className="ll-mono">{camp.category || "category"} near me</span> · <span className="ll-mono">{camp.category || "category"} {(camp.city || "city").split(",")[0]}</span> · + service / contractor / company —
+            plus Maps rankings for the two local ones. <b>Variant A</b> gets the branded audit in email #1; <b>variant B</b> gets a teaser, and the audit ships automatically to whoever <b>opens, clicks or replies</b>.
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={previewAudit} disabled={previewBusy}
+              className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold disabled:opacity-50" style={{ borderColor: accent, color: accent }}>
+              {previewBusy ? <RefreshCw size={11} className="animate-spin" /> : <Mail size={11} />} Preview the audit email {dfsReady && <DfsCostChip requests={8} kind="organic" />}
+            </button>
+            {!dfsReady && <span className="text-[10.5px] font-semibold text-amber-700">DataForSEO not connected — preview runs on labeled demo data; live sending is disabled (audits are never sent with fabricated numbers).</span>}
+          </div>
+        </div>
+      )}
       <Labeled label={<span className="flex items-center justify-between">Pitch — personalized per contact
         <button onClick={aiPitch} disabled={aiBusy} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-bold disabled:opacity-50" style={{ background: accent + "14", color: accent }}>
           {aiBusy ? <RefreshCw size={10} className="animate-spin" /> : <Sparkles size={10} />} AI write the pitch
@@ -446,6 +635,7 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
       </div>
       {err && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{err}</div>}
       {replyCheck && <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11.5px] font-medium text-violet-700">{replyCheck}</div>}
+      {insightNote && <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11.5px] font-medium text-indigo-700">{insightNote}</div>}
       {sending && (
         <div className="rounded-xl border border-gray-200 p-3">
           <div className="mb-1 text-[11.5px] font-semibold text-gray-600">Sending {sending.done}/{sending.total}{sending.fails ? ` · ${sending.fails} failed` : ""}…</div>
@@ -453,11 +643,20 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
-        <button disabled={!acct?.smtpOk && !company.apis?.smtp?.values?.host || !toSend.length || !!sending}
-          onClick={() => sendBatch(toSend.slice(0, 40).map((contact) => ({ contact, subject: camp.subject, body: camp.body, step: 0 })))}
+        <button disabled={!acct?.smtpOk && !company.apis?.smtp?.values?.host || !toSend.length || !!sending || (camp.insight && !dfsReady)}
+          onClick={() => camp.insight
+            ? launchInsight()
+            : sendBatch(toSend.slice(0, 40).map((contact) => ({ contact, subject: camp.subject, body: camp.body, step: 0 })))}
           className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-[13px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
-          <Send size={13} /> {toSend.length ? `Launch — email ${Math.min(toSend.length, 40)} prospect(s) now` : "All emailable prospects contacted"}
+          <Send size={13} /> {toSend.length ? (camp.insight ? `Launch insight — audit & email ${Math.min(toSend.length, 20)} prospect(s)` : `Launch — email ${Math.min(toSend.length, 40)} prospect(s) now`) : "All emailable prospects contacted"}
+          {camp.insight && dfsReady && toSend.length > 0 && <DfsCostChip requests={Math.min(toSend.length, 20) * 8} kind="organic" />}
         </button>
+        {camp.insight && (camp.sends || []).some((s) => s.variant === "B" && s.step === 0 && s.ok) && (
+          <button disabled={!!sending} onClick={sendAuditsToEngaged}
+            className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-[12.5px] font-bold disabled:opacity-40" style={{ borderColor: "#6366F1", color: "#4F46E5" }}>
+            ✦ Send audits to engaged B prospects
+          </button>
+        )}
         {dueFollowUps.length > 0 && (
           <button disabled={!!sending} onClick={sendDueFollowUps}
             className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-[12.5px] font-bold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
@@ -466,6 +665,34 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
         )}
         <span className="text-[10px] text-gray-400">Max 40 per launch · sends from {acct ? acct.email : "your SMTP"} · before follow-ups go out the inbox is checked over IMAP and <b>anyone who replied is skipped automatically</b>.</span>
       </div>
+      {camp.insight && (camp.sends || []).length > 0 && (
+        <div className="rounded-xl border border-gray-100 p-3">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="text-[12px] font-bold text-gray-700">A/B results</span>
+            <button onClick={refreshAbStats} className="rounded-md px-2 py-0.5 text-[10.5px] font-bold" style={{ background: accent + "14", color: accent }}>Refresh</button>
+            <span className="text-[10px] text-gray-400">opens/clicks from the tracking pixel · replies from IMAP/manual marks</span>
+          </div>
+          {abStats ? (
+            <table className="w-full text-left text-[11.5px]">
+              <thead><tr className="text-[9px] uppercase tracking-wide text-gray-400">
+                <th className="py-1 pr-2 font-semibold">Variant</th><th className="py-1 pr-2 font-semibold">Sent</th><th className="py-1 pr-2 font-semibold">Opened</th><th className="py-1 pr-2 font-semibold">Clicked</th><th className="py-1 pr-2 font-semibold">Replied</th><th className="py-1 font-semibold">Audits delivered</th>
+              </tr></thead>
+              <tbody>
+                {["A", "B"].map((v) => (
+                  <tr key={v} className="border-t border-gray-50">
+                    <td className="py-1.5 pr-2 font-bold" style={{ color: v === "A" ? accent : "#4F46E5" }}>{v} — {v === "A" ? "audit first" : "audit on engagement"}</td>
+                    <td className="ll-mono py-1.5 pr-2">{abStats[v].sent}</td>
+                    <td className="ll-mono py-1.5 pr-2">{abStats[v].opened}</td>
+                    <td className="ll-mono py-1.5 pr-2">{abStats[v].clicked}</td>
+                    <td className="ll-mono py-1.5 pr-2 font-bold text-emerald-600">{abStats[v].replied}</td>
+                    <td className="ll-mono py-1.5">{abStats[v].audits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <div className="text-[11px] text-gray-400">Hit Refresh to pull the split.</div>}
+        </div>
+      )}
       {(camp.sends || []).length > 0 && (
         <div className="space-y-1">
           <div className="text-[12px] font-bold text-gray-700">Send log</div>
@@ -477,7 +704,7 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
                 <span className="ll-mono text-gray-400">{c.email}</span>
                 {steps.map((s) => (
                   <span key={s.id} title={s.error || ""} className={"rounded px-1.5 py-px text-[9px] font-bold " + (s.ok ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
-                    {s.step === 0 ? "initial" : `follow-up ${s.step}`} {s.ok ? "✓" : "✕"}
+                    {s.variant ? s.variant + " · " : ""}{s.step === 0 ? "initial" : s.audit ? "audit" : `follow-up ${s.step}`}{s.audit && s.step === 0 ? " +audit" : ""} {s.ok ? "✓" : "✕"}
                   </span>
                 ))}
                 <label className="ml-auto flex items-center gap-1 text-[10px] font-semibold text-gray-500">
@@ -488,6 +715,12 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
             );
           })}
         </div>
+      )}
+
+      {preview && (
+        <Modal title="Audit email preview" sub="Exactly what the prospect receives — branded HTML, no PDF" onClose={() => setPreview(null)} wide>
+          <iframe title="audit preview" srcDoc={preview} className="h-[70vh] w-full rounded-xl border border-gray-200 bg-white" />
+        </Modal>
       )}
     </Card>
   );
