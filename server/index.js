@@ -1081,22 +1081,26 @@ async function handleInsightAudit(body) {
   const site = biz.website ? normHost(biz.website) : "";
   const cityShort = city.split(",")[0].trim();
   const organicKws = [category, `${category} near me`, `${category} ${cityShort}`, `${category} service`, `${category} contractor`, `${category} company`];
-  const mapKws = [`${category} near me`, `${category} ${cityShort}`];
+  const geoKeyword = `${category} ${cityShort}`; // the local keyword scanned across the geo grid
   const locName = /,/.test(city) ? city : `${city},United States`;
   const nameToken = String(biz.name).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).slice(0, 3).join(" ");
 
   const out = { live: true, business: { name: biz.name, city, website: site }, category };
   const errors = [];
 
-  /* run the three data sources in parallel */
-  const [gbpRes, webRes, serps] = await Promise.all([
-    /* GBP via Places (optional — needs the Places key) */
+  /* first, in parallel: GBP + business location (Places) + website crawl + 6 organic ranks */
+  const [placeLoc, gbpRes, webRes, orgRaw] = await Promise.all([
+    /* exact location for the geo grid (Places — agency key, no DFS cost) */
+    (async () => {
+      if (!body?.placesKey) return null;
+      try { const [c, d] = await handlePlacesLocate({ query: `${biz.name} ${city}`, placesKey: body.placesKey }); return c === 200 && d.found ? d : null; }
+      catch { return null; }
+    })(),
     (async () => {
       if (!body?.placesKey) return { note: "Google Places key not configured — GBP section omitted." };
       try { const [c, p] = await handleAuditProfile({ query: `${biz.name} ${city}`, placesKey: body.placesKey }); return c === 200 && p.found ? p.place : { note: p.detail || "listing not found" }; }
       catch (e) { return { note: String(e?.message || e).slice(0, 120) }; }
     })(),
-    /* website mini-crawl (free) */
     (async () => {
       if (!site) return { note: "No website on file — a huge opportunity in itself." };
       try {
@@ -1112,50 +1116,69 @@ async function handleInsightAudit(body) {
         return { crawled: pages.length, pages: pages.map((p) => ({ path: p.path, title: p.title, titleLen: p.titleLen, metaDescLen: p.metaDescLen, h1Count: p.h1Count, words: p.words, imagesNoAlt: p.imagesNoAlt, schemaTypes: p.schemaTypes, https: p.https })) };
       } catch (e) { return { note: "Site unreachable: " + String(e?.message || e).slice(0, 80) }; }
     })(),
-    /* 6 organic + 2 maps SERPs — the only DFS spend */
-    (async () => {
-      const org = await pool(organicKws, async (kw) => {
-        const task = await dfsLive(creds, "google/organic", { keyword: kw, location_name: locName, language_code: "en", depth: 30 });
-        const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
-        const hit = site ? items.find((it) => (it.domain || "").replace(/^www\./, "").endsWith(site)) : null;
-        return { keyword: kw, position: hit ? hit.rank_group : null,
-          top: items.slice(0, 10).map((it) => ({ domain: (it.domain || "").replace(/^www\./, ""), rank: it.rank_group, title: (it.title || "").slice(0, 80) })) };
-      }, 3);
-      const maps = await pool(mapKws, async (kw) => {
-        const task = await dfsLive(creds, "google/maps", { keyword: kw, location_name: locName, language_code: "en", depth: 20 });
-        const items = (task.result?.[0]?.items || []).filter((it) => it.type === "maps_search");
-        const hit = items.find((it) => String(it.title || "").toLowerCase().includes(nameToken.split(" ")[0]) &&
-          (nameToken.split(" ").length < 2 || String(it.title || "").toLowerCase().includes(nameToken.split(" ")[1] || "")));
-        return { keyword: kw, position: hit ? hit.rank_group : null,
-          top: items.slice(0, 10).map((it) => ({ name: (it.title || "").slice(0, 60), rank: it.rank_group, rating: it.rating?.value ?? null, reviews: it.rating?.votes_count ?? null })) };
-      }, 2);
-      return { org, maps };
-    })(),
+    pool(organicKws, async (kw) => {
+      const task = await dfsLive(creds, "google/organic", { keyword: kw, location_name: locName, language_code: "en", depth: 30 });
+      const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
+      const hit = site ? items.find((it) => (it.domain || "").replace(/^www\./, "").endsWith(site)) : null;
+      return { keyword: kw, position: hit ? hit.rank_group : null,
+        top: items.slice(0, 10).map((it) => ({ domain: (it.domain || "").replace(/^www\./, ""), rank: it.rank_group, title: (it.title || "").slice(0, 80) })) };
+    }, 3),
   ]);
 
   out.gbp = gbpRes;
   out.website = webRes;
-  out.organic = (serps.org || []).map((r, i) => (r?.error ? { keyword: organicKws[i], error: r.error, top: [] } : r));
-  out.maps = (serps.maps || []).map((r, i) => (r?.error ? { keyword: mapKws[i], error: r.error, top: [] } : r));
+  out.organic = (orgRaw || []).map((r, i) => (r?.error ? { keyword: organicKws[i], error: r.error, top: [] } : r));
   out.organic.filter((r) => r.error).forEach((r) => errors.push(`organic "${r.keyword}": ${r.error}`));
-  out.maps.filter((r) => r.error).forEach((r) => errors.push(`maps "${r.keyword}": ${r.error}`));
-  if (errors.length === out.organic.length + out.maps.length) return [502, { error: "provider_error", detail: errors[0] || "all rank scans failed" }];
 
-  /* competitors: aggregated from the SERPs already paid for — no extra calls */
+  /* 5×5 geo grid @ 2km on the main local keyword — needs a resolved center.
+     Reuses the exact geo-grid engine (25 coordinate-targeted Maps scans);
+     competitor grid rides on the SAME responses at zero extra cost. */
+  const center = placeLoc && isFinite(placeLoc.lat) ? { lat: placeLoc.lat, lng: placeLoc.lng } : null;
+  const gridBiz = { name: biz.name, placeId: placeLoc?.placeId, cid: biz.cid };
+  let gridResults = null;
+  if (center) {
+    const pts = gridPoints(center, 5, 2, "square");
+    gridResults = await pool(pts, (pt) => scanGridPoint(creds, geoKeyword, pt, gridBiz).catch((e) => ({ ...pt, rank: null, error: String(e?.message || e).slice(0, 80), results: [] })), 5);
+  }
+  if (gridResults) {
+    const scanned = gridResults.filter((p) => !p.skipped);
+    const found = scanned.filter((p) => p.rank != null);
+    const top3 = scanned.filter((p) => p.rank != null && p.rank <= 3);
+    const ranks = found.map((p) => p.rank);
+    out.geoGrid = {
+      keyword: geoKeyword, size: 5, spacingKm: 2,
+      points: gridResults.map((p) => ({ row: p.row, col: p.col, rank: p.skipped ? null : p.rank, skipped: !!p.skipped })),
+      centerRank: (gridResults.find((p) => p.row === 2 && p.col === 2) || {}).rank ?? null,
+      found: found.length, total: scanned.length, top3: top3.length,
+      arp: ranks.length ? Math.round((ranks.reduce((a, b) => a + b, 0) / ranks.length) * 10) / 10 : null,
+      solv: scanned.length ? Math.round((top3.length / scanned.length) * 100) : 0,
+    };
+    if (gridResults.every((p) => p.error)) errors.push(`geo grid "${geoKeyword}": ${gridResults[0].error}`);
+  } else out.geoGrid = { note: body?.placesKey ? "Business location couldn't be resolved on Google — map grid skipped." : "Google Places key needed for the map geo-grid — section skipped." };
+
+  /* nothing usable came back (all organic failed AND the grid has no points) → honest 502 */
+  const organicAllFailed = out.organic.every((r) => r.error);
+  if (organicAllFailed && !out.geoGrid.points) return [502, { error: "provider_error", detail: (out.organic.find((r) => r.error) || {}).error || "all rank scans failed" }];
+
+  /* competitors: from organic tops + the geo-grid center point's local results
+     — all from SERPs already paid for, no extra requests */
   const compMap = {};
   out.organic.forEach((r) => (r.top || []).forEach((t) => {
     if (!t.domain || t.domain === site || INSIGHT_DIRS.some((d) => t.domain === d || t.domain.endsWith("." + d))) return;
     const c = (compMap[t.domain] = compMap[t.domain] || { domain: t.domain, appearances: 0, bestRank: 99 });
     c.appearances++; c.bestRank = Math.min(c.bestRank, t.rank);
   }));
-  out.maps.forEach((r) => (r.top || []).forEach((t) => {
-    if (!t.name || String(t.name).toLowerCase().includes(nameToken.split(" ")[0])) return;
-    const key = "📍 " + t.name;
-    const c = (compMap[key] = compMap[key] || { domain: t.name, local: true, appearances: 0, bestRank: 99, rating: t.rating, reviews: t.reviews });
-    c.appearances++; c.bestRank = Math.min(c.bestRank, t.rank);
-  }));
+  if (gridResults) {
+    const center2 = gridResults.find((p) => p.row === 2 && p.col === 2) || {};
+    (center2.results || []).forEach((t) => {
+      if (!t.title || normName(t.title).includes(nameToken.split(" ")[0])) return;
+      const key = "📍 " + t.title;
+      const c = (compMap[key] = compMap[key] || { domain: t.title, local: true, appearances: 0, bestRank: 99, rating: t.rating, reviews: t.reviews });
+      c.appearances++; c.bestRank = Math.min(c.bestRank, t.rank);
+    });
+  }
   out.competitors = Object.values(compMap).sort((a, b) => b.appearances - a.appearances || a.bestRank - b.bestRank).slice(0, 10);
-  out.requestsUsed = organicKws.length + mapKws.length;
+  out.requestsUsed = organicKws.length + (gridResults ? gridResults.filter((p) => !p.skipped).length : 0);
   if (errors.length) out.partialErrors = errors;
   return [200, out];
 }

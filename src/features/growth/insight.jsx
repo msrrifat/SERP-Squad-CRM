@@ -41,8 +41,17 @@ export function demoInsightAudit(business, category, city) {
       description: r() > 0.5 ? "" : "Short description under 100 chars.", hours: r() > 0.4 ? ["set"] : [], categories: [category], website: business.website || "" },
     website: business.website ? { crawled: 5, pages: Array.from({ length: 5 }, (_, i) => ({ path: i ? `/page-${i}` : "/", title: r() > 0.3 ? "Page title" : "", titleLen: 20 + Math.floor(r() * 40), metaDescLen: r() > 0.5 ? 0 : 120, h1Count: r() > 0.7 ? 0 : 1, words: 120 + Math.floor(r() * 600), imagesNoAlt: Math.floor(r() * 6), schemaTypes: r() > 0.75 ? ["LocalBusiness"] : [], https: true })) } : { note: "No website on file — a huge opportunity in itself." },
     organic: kws.map((k) => ({ keyword: k, position: r() < 0.3 ? 1 + Math.floor(r() * 10) : r() < 0.55 ? 11 + Math.floor(r() * 19) : null, top: topFor() })),
-    maps: kws.slice(1, 3).map((k) => ({ keyword: k, position: r() < 0.35 ? 1 + Math.floor(r() * 3) : r() < 0.6 ? 4 + Math.floor(r() * 16) : null,
-      top: comps.slice(0, 10).map((d, i) => ({ name: d.split(".")[0] + " " + category, rank: i + 1, rating: Math.round((3.8 + r() * 1.2) * 10) / 10, reviews: 20 + Math.floor(r() * 300) })) })),
+    geoGrid: (() => {
+      const points = []; let found = 0, top3 = 0, sum = 0;
+      for (let row = 0; row < 5; row++) for (let col = 0; col < 5; col++) {
+        const roll = r();
+        const rank = roll < 0.4 ? 1 + Math.floor(r() * 3) : roll < 0.65 ? 4 + Math.floor(r() * 16) : null;
+        if (rank != null) { found++; sum += rank; if (rank <= 3) top3++; }
+        points.push({ row, col, rank, skipped: false });
+      }
+      return { keyword: `${category} ${cityShort}`, size: 5, spacingKm: 2, points, total: 25, found, top3,
+        centerRank: points[12].rank, arp: found ? Math.round((sum / found) * 10) / 10 : null, solv: Math.round((top3 / 25) * 100) };
+    })(),
     competitors: comps.slice(0, 10).map((d, i) => ({ domain: d, appearances: 8 - Math.floor(i / 2), bestRank: i + 1 })),
     requestsUsed: 0,
   };
@@ -58,11 +67,13 @@ export function auditSummaries(a) {
     loss: orgMiss.length ? `Missing from Google's top 10 for ${orgMiss.length} of ${a.organic.length} money keywords${topComp ? ` — searches ${topComp.domain.replace("📍 ", "")} is capturing right now` : ""}.` : "Strong visibility across the money keywords.",
     win: orgMiss.length ? `Ranking for even ${Math.min(2, orgMiss.length)} more of these puts ${a.business.name} in front of every customer typing them — these are bottom-of-funnel, ready-to-buy searches.` : `Defend the lead: ${orgTop3.length} top-3 spots are worth protecting with fresh content.`,
   };
-  const mapMiss = a.maps.filter((k) => !k.position || k.position > 3);
-  s.maps = {
-    loss: mapMiss.length ? `Outside the Google Maps 3-pack for ${mapMiss.length === a.maps.length ? "both" : mapMiss.length} local searches — the 3-pack takes ~44% of all clicks on local results.` : "In the 3-pack for both local searches — excellent.",
-    win: mapMiss.length ? "Profile optimization + review velocity + citations typically move a business into the pack in 60–90 days." : "Keep review velocity up to hold the pack position.",
-  };
+  const gg = a.geoGrid && a.geoGrid.points ? a.geoGrid : null;
+  s.maps = gg ? {
+    loss: gg.solv < 60
+      ? `In the Google Maps 3-pack at only ${gg.top3} of ${gg.total} points around ${a.business.city.split(",")[0]} (${gg.solv}% coverage)${topComp ? ` — ${topComp.domain.replace("📍 ", "")} owns the map where you don't` : ""}. Every grey/red square is a neighbourhood handing its calls to a competitor.`
+      : `Strong map coverage — top-3 at ${gg.top3} of ${gg.total} grid points (${gg.solv}%).`,
+    win: gg.solv < 60 ? "Profile optimization + review velocity + geo-relevant citations typically expand the green zone across 60–90 days — that's more of the map showing YOUR business first." : "Hold it: keep reviews and posts flowing so the coverage doesn't slip.",
+  } : { loss: a.geoGrid?.note || "Map grid unavailable.", win: "" };
   if (a.gbp && !a.gbp.note) {
     const g = a.gbp; const issues = [];
     if ((g.rating || 0) < 4.4) issues.push(`rating ${g.rating}★ (buyers filter at 4.4+)`);
@@ -100,10 +111,26 @@ const summaryBox = (s) => `
   ${s.win ? `<div style="border-left:4px solid #16A34A;background:#F0FDF4;padding:8px 12px;border-radius:0 8px 8px 0;margin:4px 0 10px;font-size:13px;color:#14532D"><b>Your chance to win:</b> ${esc(s.win)}</div>` : ""}`;
 const h2 = (t, accent) => `<h2 style="font-size:17px;margin:26px 0 6px;color:#111827;border-bottom:2px solid ${accent};padding-bottom:5px">${t}</h2>`;
 
-export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [], pitch = "" }) {
+/* 5×5 geo-grid → an email-safe heatmap (nested table with bgcolor cells,
+   which every mail client renders — no images, no SVG, no hosting) */
+const gridCell = (rank) => {
+  const [bg, fg] = rank == null ? ["#FCA5A5", "#7F1D1D"] : rank <= 3 ? ["#22C55E", "#fff"] : rank <= 10 ? ["#FCD34D", "#78350F"] : ["#FDBA74", "#7C2D12"];
+  return `<td width="20%" bgcolor="${bg}" style="background:${bg};color:${fg};text-align:center;font-weight:700;font-size:13px;padding:10px 0;border:2px solid #fff;border-radius:6px">${rank == null ? "20+" : rank}</td>`;
+};
+const geoGridTable = (gg) => `
+  <table cellpadding="0" cellspacing="0" width="100%" style="max-width:340px;margin:6px auto">
+    ${[0, 1, 2, 3, 4].map((row) => `<tr>${[0, 1, 2, 3, 4].map((col) => {
+      const p = gg.points.find((x) => x.row === row && x.col === col) || {};
+      return gridCell(p.rank);
+    }).join("")}</tr>`).join("")}
+  </table>
+  <div style="text-align:center;font-size:11px;color:#6B7280;margin-top:4px">5×5 grid · 2 km spacing · your business sits at the centre · <span style="color:#16A34A;font-weight:700">green = top 3</span>, <span style="color:#B45309;font-weight:700">amber = 4-10</span>, <span style="color:#B91C1C;font-weight:700">red = not ranking</span></div>`;
+
+export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [], pitch = "", bookingUrl = "", repName = "" }) {
   const s = auditSummaries(a);
   const vids = videos.map(ytId).filter(Boolean).slice(0, 3);
   const g = a.gbp && !a.gbp.note ? a.gbp : null;
+  const gg = a.geoGrid && a.geoGrid.points ? a.geoGrid : null;
   return `<div style="margin:0;padding:0;background:#F3F4F6"><div style="max-width:640px;margin:0 auto;padding:18px;font-family:Arial,Helvetica,sans-serif;color:#1F2937">
   ${a.demo ? `<div style="background:#F59E0B;color:#111;font-weight:800;text-align:center;padding:6px;border-radius:8px;margin-bottom:10px;font-size:12px">DEMO DATA — preview only, never send this to a prospect</div>` : ""}
   <div style="background:#fff;border-radius:14px;overflow:hidden;border:1px solid #E5E7EB">
@@ -114,11 +141,8 @@ export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [
     <div style="padding:20px 24px">
       ${pitch ? `<p style="font-size:14px;line-height:1.6;white-space:pre-line;margin:0 0 6px">${esc(pitch)}</p>` : ""}
 
-      ${h2("📍 Google Maps rankings", accent)}
-      <table cellpadding="0" cellspacing="0" style="width:100%;font-size:13.5px">${a.maps.map((k) => `
-        <tr><td style="padding:6px 0;border-bottom:1px solid #F3F4F6">${esc(k.keyword)}</td>
-        <td style="padding:6px 0;border-bottom:1px solid #F3F4F6;text-align:right">${chip(k.position, "not in top 20")}</td></tr>`).join("")}
-      </table>
+      ${h2("📍 Google Maps coverage — where you show up", accent)}
+      ${gg ? `<p style="font-size:13px;color:#4B5563;margin:2px 0 6px">Live geo-grid for <b>"${esc(gg.keyword)}"</b> — in the top 3 at <b>${gg.top3} of ${gg.total}</b> points (${gg.solv}% of the map), average rank ${gg.arp ?? "—"} where you appear.</p>${geoGridTable(gg)}` : `<p style="font-size:13px;color:#6B7280">${esc(a.geoGrid?.note || "")}</p>`}
       ${summaryBox(s.maps)}
 
       ${h2("🔎 Google search rankings — 6 money keywords", accent)}
@@ -154,9 +178,17 @@ export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [
           <div style="text-align:center;font-size:12px;color:${accent};font-weight:700;padding-top:4px">▶ Watch on YouTube</div></a></td>`).join("")}
       </tr></table>` : ""}
 
-      <div style="margin-top:24px;padding:16px;border-radius:12px;background:${accent}14;border:1px solid ${accent}40">
-        <div style="font-size:15px;font-weight:800;color:#111827">Want the full plan to fix all of this?</div>
-        <p style="font-size:13px;color:#374151;margin:6px 0 0">Just reply to this email — ${esc(company.name)} will walk you through exactly what we'd do, in plain language, no obligation.</p>
+      <div style="margin-top:24px;padding:20px;border-radius:14px;background:${accent};text-align:center">
+        <div style="font-size:17px;font-weight:800;color:#fff">Let's turn this map green together</div>
+        <p style="font-size:13.5px;color:#fff;opacity:.92;margin:8px 0 14px;line-height:1.55">
+          Schedule a one-on-one live video meeting with ${repName ? esc(repName) : "me"} and I'll show you, screen-to-screen, exactly how we'll fix your website &amp; business profiles, outrank the businesses above, and keep your calendar full of ${esc(a.category)} work — day after day.
+        </p>
+        ${bookingUrl ? `<a href="${esc(bookingUrl)}" style="display:inline-block;background:#fff;color:${accent};font-weight:800;font-size:14px;text-decoration:none;padding:12px 26px;border-radius:10px">📅 Book my free strategy call</a>` : `<div style="background:#fff;color:${accent};font-weight:800;font-size:14px;padding:12px 26px;border-radius:10px;display:inline-block">📅 Reply "CALL" to book your free strategy session</div>`}
+      </div>
+
+      <div style="margin-top:14px;padding:14px 16px;border-radius:12px;background:${accent}14;border:1px solid ${accent}40">
+        <div style="font-size:14px;font-weight:800;color:#111827">Prefer to just reply?</div>
+        <p style="font-size:13px;color:#374151;margin:5px 0 0">Hit reply and ${esc(company.name)} will walk you through the whole plan in plain language — no obligation, no pressure.</p>
       </div>
     </div>
     <div style="padding:12px 24px;background:#F9FAFB;border-top:1px solid #E5E7EB;font-size:11px;color:#9CA3AF">
@@ -166,15 +198,27 @@ export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [
 </div></div>`;
 }
 
+/* top-2 competitor display names — for the subject/intro merge tags.
+   Domains lose their TLD; local (Maps) names pass through cleaned. */
+export function topCompetitorNames(a, n = 2) {
+  return (a.competitors || []).slice(0, n).map((c) => {
+    const raw = String(c.domain || "").replace("📍 ", "");
+    return c.local ? raw : raw.replace(/\.(com|net|org|co|io|us|biz|info)(\.[a-z]{2})?$/i, "").replace(/[-_]/g, " ")
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  });
+}
+
 /* plain-text twin (multipart fallback — deliverability) */
 export function buildAuditEmailText(a, { company, pitch = "" }) {
   const s = auditSummaries(a);
+  const gg = a.geoGrid && a.geoGrid.points ? a.geoGrid : null;
   const line = (k, cap) => `  ${k.keyword}: ${k.position ? "#" + k.position : cap}`;
   return [pitch, "",
     `--- LOCAL VISIBILITY AUDIT: ${a.business.name}, ${a.business.city} ---`, "",
-    "GOOGLE MAPS:", ...a.maps.map((k) => line(k, "not in top 20")), `Losing: ${s.maps.loss}`, `Win: ${s.maps.win}`, "",
+    gg ? `GOOGLE MAPS COVERAGE ("${gg.keyword}"): top-3 at ${gg.top3}/${gg.total} grid points (${gg.solv}%).` : "",
+    `  ${s.maps.loss}`, `  Win: ${s.maps.win}`, "",
     "GOOGLE SEARCH (money keywords):", ...a.organic.map((k) => line(k, "not in top 30")), `Losing: ${s.organic.loss}`, `Win: ${s.organic.win}`, "",
     `TOP COMPETITORS: ${a.competitors.slice(0, 5).map((c) => c.domain.replace("📍 ", "")).join(", ")}`, "",
-    `Reply to this email and ${company.name} will walk you through the fix — no obligation.`,
-  ].join("\n");
+    `Reply to this email (or click the link) to book a free strategy call — ${company.name} will show you the exact fix.`,
+  ].filter((l) => l !== "").join("\n");
 }

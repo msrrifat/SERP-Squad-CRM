@@ -14,7 +14,7 @@
    ===================================================================== */
 import React, { useMemo, useRef, useState } from "react";
 import {
-  AtSign, BarChart3, CheckCircle2, ChevronRight, Inbox, Mail, MailOpen,
+  AtSign, BarChart3, CalendarClock, CheckCircle2, ChevronRight, Inbox, Mail, MailOpen,
   MousePointerClick, Plus, RefreshCw, Reply, Send, Sparkles, Trash2, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, Toggle, inputCls } from "../../ui/primitives.jsx";
@@ -22,16 +22,19 @@ import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { appOrigin } from "../../lib/appOrigin.js";
 import { hashStr } from "../../lib/rng.js";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
-import { buildAuditEmailHtml, buildAuditEmailText, demoInsightAudit, generateInsightAudit } from "./insight.jsx";
+import { buildAuditEmailHtml, buildAuditEmailText, demoInsightAudit, generateInsightAudit, topCompetitorNames } from "./insight.jsx";
+import { BookingsTab } from "./booking.jsx";
 
 const gid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const cityOf = (folder) => ((folder || "").split(" — ")[1] || "").trim();
-export const personalize = (tpl, c) => String(tpl || "")
+export const personalize = (tpl, c, extras = {}) => String(tpl || "")
   .replaceAll("{{name}}", c.name || "there")
   .replaceAll("{{website}}", c.website || "your website")
-  .replaceAll("{{city}}", cityOf(c.folder) || "your area")
+  .replaceAll("{{city}}", extras.city || cityOf(c.folder) || "your area")
   .replaceAll("{{niche}}", c.niche || ((c.folder || "").split(" — ")[0] || "your niche").toLowerCase())
-  .replaceAll("{{category}}", ((c.folder || "").split(" — ")[0] || "business").toLowerCase());
+  .replaceAll("{{category}}", extras.category || ((c.folder || "").split(" — ")[0] || "business").toLowerCase())
+  .replaceAll("{{competitor1}}", extras.competitor1 || "the top-ranked business")
+  .replaceAll("{{competitor2}}", extras.competitor2 || "your closest rival");
 
 /* text pitch → tracked HTML twin: paragraphs, links via the click redirect,
    1px open pixel. Only used when the campaign's tracking toggle is ON. */
@@ -284,9 +287,9 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
       id: gid("cp"), name: "Insightful audit campaign", insight: true, abSplit: "ab",
       category: (catPart || "").toLowerCase(), city: cityPart || "", videos: "",
       folder, status: "draft", createdAt: Date.now(), accountId: accounts[0]?.id || null, tracking: true,
-      subject: "We ran the numbers on {{name}} — quick look?",
-      body: `Hi {{name}} team,\n\nWe pulled live Google data for ${(catPart || "local").toLowerCase()} businesses in ${cityPart || "your city"} this week — where each one ranks on Maps and Search, and who's winning the searches everyone else is missing.\n\nYour numbers are worth 60 seconds. If any of it is useful, just hit reply.\n\n${fromName}`,
-      followUps: [{ afterDays: 3, body: "Hi again — {{name}}'s visibility numbers were genuinely interesting (a few easy wins in there). Want me to send the full audit over? Just reply." }],
+      subject: `Outrank {{competitor1}} & {{competitor2}} and win the ${(catPart || "local").toLowerCase()} leads in {{city}}`,
+      body: `Hi {{name}} team,\n\n{{competitor1}} and {{competitor2}} are winning most of the ${(catPart || "local").toLowerCase()} leads in {{city}} right now.\n\nFix your website and business profiles to outrank them and win those leads back. Here's exactly what's pulling {{name}} behind — and where you're losing jobs to them:`,
+      followUps: [{ afterDays: 3, body: "Hi again — {{name}}'s visibility numbers vs {{competitor1}} were genuinely eye-opening (a few quick wins in there). Want me to send the full audit over? Just reply." }],
       sends: [],
     };
     commit({ campaigns: [c, ...campaigns], fromName });
@@ -298,8 +301,16 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
     return demo ? demoInsightAudit(business, camp.category, camp.city)
       : generateInsightAudit({ business, category: camp.category, city: camp.city, dfs, placesKey });
   };
+  /* competitor merge tags: from THIS prospect's audit when we have it, else
+     the campaign-level primed pair (competitors are city-level anyway) */
+  const extrasFrom = (audit) => {
+    const names = audit ? topCompetitorNames(audit, 2) : (camp?.topCompetitors || []);
+    return { city: camp.city, category: camp.category, competitor1: names[0], competitor2: names[1] };
+  };
+  const bookingUrlFor = (contact) => `${appOrigin()}/book/${camp.id}.${contact.id}`;
   const auditHtmlFor = (audit, contact, token) =>
-    buildAuditEmailHtml(audit, { company, accent, videos: vidList, pitch: personalize(camp.body, contact) }) +
+    buildAuditEmailHtml(audit, { company, accent, videos: vidList, repName: acctOf(camp)?.name || fromName,
+      bookingUrl: bookingUrlFor(contact), pitch: personalize(camp.body, contact, extrasFrom(audit)) }) +
     `<img src="${appOrigin()}/api/t/o/${encodeURIComponent(token)}.gif" width="1" height="1" alt="" style="display:none">`;
 
   const previewAudit = async () => {
@@ -307,7 +318,9 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
     setPreviewBusy(true); setInsightNote(null);
     try {
       const audit = await auditFor(contact, !dfsReady);
-      setPreview(buildAuditEmailHtml(audit, { company, accent, videos: vidList, pitch: personalize(camp.body, contact) }));
+      if (audit) patchCamp(camp.id, { topCompetitors: topCompetitorNames(audit, 2) });
+      setPreview(buildAuditEmailHtml(audit, { company, accent, videos: vidList, repName: acctOf(camp)?.name || fromName,
+        bookingUrl: bookingUrlFor(contact), pitch: personalize(camp.body, contact, extrasFrom(audit)) }));
       if (!dfsReady) setInsightNote("Preview uses labeled DEMO data — connect DataForSEO to generate real audits.");
     } catch (e) { setInsightNote("Audit failed: " + (e?.message || e)); }
     setPreviewBusy(false);
@@ -319,6 +332,12 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
     if (!dfsReady) { setErr("Insightful campaigns only send with LIVE data — connect DataForSEO in API settings. Demo audits are preview-only and never reach a prospect."); return; }
     if (!camp.category.trim() || !camp.city.trim()) { setErr("Set the main category and city first — the 8 audit keywords are built from them."); return; }
     const batch = toSend.slice(0, 20);
+    /* prime the city's top-2 competitors once (for B-teaser subjects) if a
+       B variant will send and we don't have them yet */
+    let primed = camp.topCompetitors || [];
+    if (!primed.length && camp.abSplit !== "first") {
+      try { const pa = await auditFor(batch[0]); primed = topCompetitorNames(pa, 2); patchCamp(camp.id, { topCompetitors: primed }); } catch { /* non-fatal */ }
+    }
     setSending({ done: 0, total: batch.length, fails: 0 }); setErr(null); setInsightNote(null);
     const results = [];
     for (let i = 0; i < batch.length; i++) {
@@ -326,15 +345,18 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
       const variant = variantOf(contact);
       const token = `${camp.id}.${contact.id}`;
       try {
-        let html, text;
-        const pitchP = personalize(camp.body, contact);
+        let html, text, extras;
         if (variant === "A") {
           const audit = await auditFor(contact);
+          extras = extrasFrom(audit);
           html = auditHtmlFor(audit, contact, token);
-          text = buildAuditEmailText(audit, { company, pitch: pitchP });
-        } else { text = pitchP; html = trackedHtml(pitchP, token); }
+          text = buildAuditEmailText(audit, { company, pitch: personalize(camp.body, contact, extras) });
+        } else {
+          extras = { city: camp.city, category: camp.category, competitor1: primed[0], competitor2: primed[1] };
+          const pitchP = personalize(camp.body, contact, extras); text = pitchP; html = trackedHtml(pitchP, token);
+        }
         const r = await fetch("/api/outreach/send", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({ smtp: cfg.smtp, fromName: cfg.fromName, to: contact.email, subject: personalize(camp.subject, contact), text, html }) });
+          body: JSON.stringify({ smtp: cfg.smtp, fromName: cfg.fromName, to: contact.email, subject: personalize(camp.subject, contact, extras), text, html }) });
         const d = await r.json();
         results.push({ id: gid("sd"), contactId: contact.id, email: contact.email, step: 0, variant, audit: variant === "A", at: Date.now(), ok: r.ok, error: r.ok ? null : (d.detail || d.error) });
         if (!r.ok && r.status === 503) { setErr(d.detail); break; }
@@ -992,6 +1014,7 @@ export function OutreachSuite({ company, onUpdateCompany, accent, aiConfig, scop
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-1.5">
         <TabBtn active={tab === "campaigns"} onClick={() => setTab("campaigns")} icon={Send} label="Campaigns" accent={accent} badge={(store.campaigns || []).length} />
+        <TabBtn active={tab === "bookings"} onClick={() => setTab("bookings")} icon={CalendarClock} label="Booked Prospects" accent={accent} badge={(store.bookings || []).length} />
         <TabBtn active={tab === "mailbox"} onClick={() => setTab("mailbox")} icon={Inbox} label="Mailbox" accent={accent} badge={unsent} />
         <TabBtn active={tab === "analytics"} onClick={() => setTab("analytics")} icon={BarChart3} label="Analytics" accent={accent} />
         <TabBtn active={tab === "accounts"} onClick={() => setTab("accounts")} icon={AtSign} label="Email accounts" accent={accent} badge={(company.emailAccounts || []).length} />
@@ -1000,6 +1023,7 @@ export function OutreachSuite({ company, onUpdateCompany, accent, aiConfig, scop
         </span>
       </div>
       {tab === "campaigns" && <CampaignsTab accent={accent} company={company} store={store} commit={commit} aiConfig={aiConfig} scope={scope} openId={openId} setOpenId={setOpenId} />}
+      {tab === "bookings" && <BookingsTab accent={accent} company={company} store={store} commit={commit} />}
       {tab === "mailbox" && <MailboxTab accent={accent} company={company} store={store} commit={commit} setSuiteTab={setTab} setOpenId={setOpenId} />}
       {tab === "analytics" && <AnalyticsTab accent={accent} store={store} />}
       {tab === "accounts" && <AccountsTab company={company} onUpdateCompany={onUpdateCompany} accent={accent} />}
