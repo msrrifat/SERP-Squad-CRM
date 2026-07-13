@@ -69,8 +69,8 @@ export const API_REGISTRY = [
       },
       {
         id: "googlePlaces", name: "Google Places API",
-        desc: "Powers the geo-grid rank tracker's business location lookup (exact pin + place_id for accurate matching). The Maps rank scans themselves run through DataForSEO.",
-        docs: "console.cloud.google.com \u2192 APIs \u2192 Places API",
+        desc: "Powers business location lookups (geo-grid tracker, profile audits, lead finder) and the real map snapshots in insight audit emails. Enable BOTH the Places API and the Static Maps API on this key. Rank scans themselves run through DataForSEO.",
+        docs: "console.cloud.google.com \u2192 APIs \u2192 enable Places API + Static Maps API",
         fields: [
           { key: "apiKey", label: "API key", secret: true, placeholder: "AIza\u2026" },
         ],

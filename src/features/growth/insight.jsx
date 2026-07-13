@@ -8,8 +8,12 @@
    (zero AI cost) showing losses and the chance of winning.
    ===================================================================== */
 import { hashStr, mulberry32 } from "../../lib/rng.js";
+import { appOrigin } from "../../lib/appOrigin.js";
 
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/* the snapshot/booking base: in local dev the vite proxy serves /api, so the
+   in-app preview works; hosted, everything resolves to the app domain */
+export const apiBase = () => (typeof window !== "undefined" && /localhost|127\.0\.0\.1/.test(window.location.hostname) ? window.location.origin : appOrigin());
 
 /* youtube url → video id (watch?v=, youtu.be/, shorts/, embed/) */
 export const ytId = (url) => {
@@ -142,7 +146,12 @@ export function buildAuditEmailHtml(a, { company, accent = "#0E7C66", videos = [
       ${pitch ? `<p style="font-size:14px;line-height:1.6;white-space:pre-line;margin:0 0 6px">${esc(pitch)}</p>` : ""}
 
       ${h2("📍 Google Maps coverage — where you show up", accent)}
-      ${gg ? `<p style="font-size:13px;color:#4B5563;margin:2px 0 6px">Live geo-grid for <b>"${esc(gg.keyword)}"</b> — in the top 3 at <b>${gg.top3} of ${gg.total}</b> points (${gg.solv}% of the map), average rank ${gg.arp ?? "—"} where you appear.</p>${geoGridTable(gg)}` : `<p style="font-size:13px;color:#6B7280">${esc(a.geoGrid?.note || "")}</p>`}
+      ${gg ? `<p style="font-size:13px;color:#4B5563;margin:2px 0 6px">Live geo-grid scan for <b>"${esc(gg.keyword)}"</b> — in the top 3 at <b>${gg.top3} of ${gg.total}</b> points (${gg.solv}% of the map), average rank ${gg.arp ?? "—"} where you appear.</p>
+      ${gg.snapshotId
+        ? `<a href="https://www.google.com/maps/search/${encodeURIComponent(gg.keyword)}" style="text-decoration:none">
+             <img src="${apiBase()}/api/geo/snapshot/${esc(gg.snapshotId)}.png" width="100%" alt="Map rank grid for ${esc(gg.keyword)}: top-3 at ${gg.top3}/${gg.total} points" style="display:block;border-radius:12px;border:1px solid #E5E7EB"></a>
+           <div style="text-align:center;font-size:11px;color:#6B7280;margin-top:4px">Real scan · "${esc(gg.keyword)}" · 5×5 grid, 2 km spacing · <span style="color:#16A34A;font-weight:700">green = top 3</span>, <span style="color:#B45309;font-weight:700">orange = 4-9</span>, <span style="color:#B91C1C;font-weight:700">red = 10+ / not found</span></div>`
+        : geoGridTable(gg)}` : `<p style="font-size:13px;color:#6B7280">${esc(a.geoGrid?.note || "")}</p>`}
       ${summaryBox(s.maps)}
 
       ${h2("🔎 Google search rankings — 6 money keywords", accent)}

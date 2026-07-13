@@ -595,7 +595,7 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
         <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3.5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[12.5px] font-bold text-indigo-800">✦ Insightful audit settings</span>
-            <span className="text-[10.5px] text-indigo-500">8 rank scans per audit ≈ <b>$0.025</b> DataForSEO + your Places key — GBP, website crawl & competitors ride along free.</span>
+            <span className="text-[10.5px] text-indigo-500">6 search scans + 25-point map grid per audit ≈ <b>$0.09</b> DataForSEO; the real map snapshot uses your Google key (enable the <b>Static Maps API</b> on it) — GBP, website crawl & competitors ride along free.</span>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Labeled label="Main category (drives the 8 keywords)"><input value={camp.category} onChange={(e) => patchCamp(camp.id, { category: e.target.value })} placeholder="roofing" className={inputCls} /></Labeled>

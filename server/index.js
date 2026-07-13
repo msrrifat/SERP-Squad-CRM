@@ -1070,6 +1070,40 @@ async function handleKwDomain(body) {
 const INSIGHT_DIRS = ["yelp.com", "angi.com", "homeadvisor.com", "thumbtack.com", "facebook.com", "houzz.com", "bbb.org",
   "yellowpages.com", "mapquest.com", "expertise.com", "porch.com", "nextdoor.com", "instagram.com", "wikipedia.org",
   "reddit.com", "quora.com", "indeed.com", "glassdoor.com", "google.com", "youtube.com", "tripadvisor.com", "groupon.com"];
+
+/* ---- geo-grid map snapshot: a REAL street-map image of the grid (like the
+   rank tracker's map view) for the audit email. Fetched ONCE from Google
+   Static Maps at audit time (the only moment the key is in hand), cached as
+   a PNG on disk, and served key-free at GET /api/geo/snapshot/<id>.png so
+   the email never leaks the API key. ~$0.002 per audit. ---- */
+const SNAP_DIR = new URL("./data/geo-snapshots/", import.meta.url);
+async function makeGeoSnapshot(points, center, placesKey) {
+  if (!placesKey) return null;
+  try {
+    /* markers: green numbered pins for top-3, orange numbered 4-9, red for 10+/not found */
+    const groups = { green: [], orange: [], red: [] };
+    points.filter((p) => !p.skipped).forEach((p) => {
+      const g = p.rank != null && p.rank <= 3 ? "green" : p.rank != null && p.rank <= 9 ? "orange" : "red";
+      groups[g].push({ ...p });
+    });
+    const marker = (color, label, pts2) => pts2.length
+      ? `markers=size:mid%7Ccolor:${color}${label ? `%7Clabel:${label}` : ""}%7C` + pts2.map((p) => `${p.lat},${p.lng}`).join("%7C") : null;
+    const params = [];
+    /* numbered labels need one markers= group per rank digit */
+    [1, 2, 3].forEach((n) => params.push(marker("0x22C55E", n, groups.green.filter((p) => p.rank === n))));
+    [4, 5, 6, 7, 8, 9].forEach((n) => params.push(marker("0xF59E0B", n, groups.orange.filter((p) => p.rank === n))));
+    params.push(marker("0xEF4444", null, groups.red));
+    const url = `https://maps.googleapis.com/maps/api/staticmap?center=${center.lat},${center.lng}&zoom=12&size=620x460&scale=2&maptype=roadmap&` +
+      params.filter(Boolean).join("&") + `&key=${placesKey}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok || !String(res.headers.get("content-type")).includes("image")) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    mkdirSync(SNAP_DIR, { recursive: true });
+    const id = randomBytes(12).toString("hex");
+    writeFileSync(new URL(id + ".png", SNAP_DIR), buf);
+    return id;
+  } catch { return null; }
+}
 const normHost = (u) => { try { return new URL(/^https?:/i.test(u) ? u : "https://" + u).hostname.replace(/^www\./, ""); } catch { return String(u || "").replace(/^www\./, ""); } };
 async function handleInsightAudit(body) {
   const biz = body?.business || {};
@@ -1154,6 +1188,8 @@ async function handleInsightAudit(body) {
       solv: scanned.length ? Math.round((top3.length / scanned.length) * 100) : 0,
     };
     if (gridResults.every((p) => p.error)) errors.push(`geo grid "${geoKeyword}": ${gridResults[0].error}`);
+    /* real map snapshot (rank pins on the street map, like the tracker UI) */
+    else out.geoGrid.snapshotId = await makeGeoSnapshot(gridResults, center, body.placesKey);
   } else out.geoGrid = { note: body?.placesKey ? "Business location couldn't be resolved on Google — map grid skipped." : "Google Places key needed for the map geo-grid — section skipped." };
 
   /* nothing usable came back (all organic failed AND the grid has no points) → honest 502 */
@@ -1480,6 +1516,14 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
+    /* geo-grid snapshot image for audit emails — key-free, loads from any mail client */
+    if (req.method === "GET" && /^\/api\/geo\/snapshot\/[a-f0-9]{24}\.png$/.test(req.url)) {
+      try {
+        const png = readFileSync(new URL(req.url.split("/").pop(), SNAP_DIR));
+        res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800", "Access-Control-Allow-Origin": "*" });
+        return res.end(png);
+      } catch { return send(404, { error: "not_found" }); }
+    }
     /* tracking pixel + click redirect — must answer any origin (they load from recipients' mail clients) */
     if (req.method === "GET" && req.url.startsWith("/api/t/o/")) {
       trackHit(decodeURIComponent(req.url.slice(9).replace(/\.gif.*$/, "")), "o");
