@@ -771,6 +771,89 @@ async function handleOutreachSend(body) {
   } catch (e) { return [502, { error: "provider_error", detail: "SMTP: " + String(e?.message || e).slice(0, 160) }]; }
 }
 
+/* ================= Guest Post Finder =================
+   Footprint prospecting the way Pitchbox/Respona do it — '"niche" +
+   "write for us"' style queries. Engines, in order of preference:
+   Google Custom Search JSON API (FREE — 100 queries/day) → DataForSEO
+   SERP (paid, cost-chipped in the UI) → honest 503. Metrics: Open
+   PageRank (free authority score) + optional DataForSEO Labs traffic. */
+const GP_BLOCKLIST = [
+  "facebook.com", "youtube.com", "twitter.com", "x.com", "linkedin.com", "pinterest.com", "instagram.com",
+  "reddit.com", "quora.com", "wikipedia.org", "amazon.com", "medium.com", "yelp.com", "tripadvisor.com",
+  "indeed.com", "glassdoor.com", "fiverr.com", "upwork.com", "google.com", "apple.com", "microsoft.com",
+  "bing.com", "threads.net", "tiktok.com", "etsy.com", "ebay.com", "craigslist.org", "blogspot.com", "wordpress.com",
+];
+async function handleGuestSearch(body) {
+  const niche = String(body?.niche || "").trim();
+  if (!niche) return [400, { error: "bad_request", detail: "A niche is required." }];
+  const footprints = (Array.isArray(body?.footprints) ? body.footprints : []).map(String).slice(0, 10);
+  if (!footprints.length) return [400, { error: "bad_request", detail: "Pick at least one search footprint." }];
+  const loc = String(body?.location || "").trim();
+  const country = String(body?.country || "").trim();
+  const gl = String(body?.gl || "").trim().toLowerCase();
+  const cse = body?.cse;
+  const creds = resolveCreds(body);
+  const engine = cse?.key && cse?.cx ? "cse" : creds ? "dfs" : null;
+  if (!engine) return [503, { error: "not_configured", detail: "Add a Google Custom Search key + engine ID (free — 100 searches/day) or DataForSEO credentials in Company Settings → API settings." }];
+  const byDomain = new Map();
+  try {
+    for (const fp of footprints) {
+      const q = [niche, loc, fp].filter(Boolean).join(" ");
+      let items = [];
+      if (engine === "cse") {
+        const u = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(cse.key)}&cx=${encodeURIComponent(cse.cx)}&q=${encodeURIComponent(q)}&num=10${gl ? `&gl=${gl}` : ""}`;
+        const r = await fetch(u, { signal: AbortSignal.timeout(15000) });
+        const d = await r.json();
+        if (d.error) return [502, { error: "provider_error", detail: `Google Custom Search: ${d.error.message || d.error.status}` }];
+        items = (d.items || []).map((it) => ({ url: it.link, title: it.title || "", snippet: it.snippet || "" }));
+      } else {
+        const task = await dfsLive(creds, "google/organic", { keyword: q, location_name: country || "United States", language_code: "en", depth: 20 });
+        items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic").map((it) => ({ url: it.url, title: it.title || "", snippet: it.description || "" }));
+      }
+      for (const it of items) {
+        let host; try { host = new URL(it.url).hostname.replace(/^www\./, ""); } catch { continue; }
+        if (GP_BLOCKLIST.some((b) => host === b || host.endsWith("." + b))) continue;
+        if (!byDomain.has(host)) byDomain.set(host, { domain: host, url: it.url, title: it.title.slice(0, 140), snippet: it.snippet.slice(0, 220), footprint: fp });
+      }
+    }
+    return [200, { live: true, engine, niche, queries: footprints.length, results: [...byDomain.values()] }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 200) }]; }
+}
+
+/* authority (Open PageRank, free) + optional organic-traffic estimate
+   (DataForSEO Labs) — anything unavailable stays null, never guessed */
+async function handleGuestMetrics(body) {
+  const domains = [...new Set((Array.isArray(body?.domains) ? body.domains : []).map((d) => String(d).replace(/^www\./, "")))].slice(0, 100);
+  if (!domains.length) return [400, { error: "bad_request", detail: "domains[] required" }];
+  const out = Object.fromEntries(domains.map((d) => [d, { authority: null, traffic: null }]));
+  let any = false; const notes = [];
+  if (body?.oprKey) {
+    try {
+      /* Open PageRank batches 100 domains per call */
+      const qs = domains.map((d) => `domains[]=${encodeURIComponent(d)}`).join("&");
+      const r = await fetch(`https://openpagerank.com/api/v1.0/getPageRank?${qs}`, { headers: { "API-OPR": body.oprKey }, signal: AbortSignal.timeout(15000) });
+      const d = await r.json();
+      if (r.ok) { (d.response || []).forEach((x) => { const k = String(x.domain || "").replace(/^www\./, ""); if (out[k] && x.status_code === 200) out[k].authority = x.page_rank_decimal ?? null; }); any = true; }
+      else notes.push(`Open PageRank HTTP ${r.status}`);
+    } catch (e) { notes.push("Open PageRank: " + String(e?.message || e).slice(0, 80)); }
+  } else notes.push("Authority needs a FREE Open PageRank key (openpagerank.com → API settings).");
+  const creds = body?.withTraffic ? resolveCreds(body) : null;
+  if (creds) {
+    try {
+      const r = await fetch(`${DFS_BASE}/dataforseo_labs/google/bulk_traffic_estimation/live`, {
+        method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify([{ targets: domains, location_code: 2840, language_code: "en" }]),
+      });
+      const d = await r.json(); const t = d.tasks?.[0];
+      if (t?.status_code === 20000) { (t.result?.[0]?.items || []).forEach((x) => { const k = String(x.target || "").replace(/^www\./, ""); if (out[k]) out[k].traffic = x.metrics?.organic?.etv != null ? Math.round(x.metrics.organic.etv) : null; }); any = true; }
+      else notes.push(`DataForSEO Labs: ${t?.status_message || "error"}`);
+    } catch (e) { notes.push("DataForSEO: " + String(e?.message || e).slice(0, 80)); }
+  } else if (body?.withTraffic) notes.push("Traffic estimates need DataForSEO credentials.");
+  if (!any) return [503, { error: "not_configured", detail: notes.join(" · ") }];
+  return [200, { live: true, metrics: out, notes }];
+}
+
 /* ---- the pixel, for real: this server SERVES px.js and records hits, so
    verification is genuine. Host the CRM+API on your domain (e.g.
    app.serpsquad.com) and the snippet works on any client site. ---- */
@@ -1068,7 +1151,7 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1102,6 +1185,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/leads/search" ? await handleLeadsSearch(body)
         : req.url === "/api/scrape-email" ? await handleScrapeEmail(body)
         : req.url === "/api/outreach/send" ? await handleOutreachSend(body)
+        : req.url === "/api/guestpost/search" ? await handleGuestSearch(body)
+        : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
         : await handleRerun(body);
       return send(code, payload);
     }

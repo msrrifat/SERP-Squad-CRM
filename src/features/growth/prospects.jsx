@@ -274,6 +274,7 @@ const personalize = (tpl, c) => String(tpl || "")
   .replaceAll("{{name}}", c.name || "there")
   .replaceAll("{{website}}", c.website || "your website")
   .replaceAll("{{city}}", cityOf(c.folder) || "your area")
+  .replaceAll("{{niche}}", c.niche || (c.folder.split(" — ")[0] || "your niche").toLowerCase())
   .replaceAll("{{category}}", (c.folder.split(" — ")[0] || "business").toLowerCase());
 
 function Outreach({ accent, company, growth, commit, aiConfig }) {
@@ -282,6 +283,9 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
   const contacts = growth.contacts || [];
   const campaigns = growth.campaigns || [];
   const folders = [...new Set(contacts.map((c) => c.folder))];
+  /* a folder is "guest-post" outreach when its saved sites came from the
+     Guest Post Finder — the pitch, subject and merge tags all adapt */
+  const folderIsGuest = (folder) => contacts.some((c) => c.folder === folder && c.kind === "guestpost");
   const [openId, setOpenId] = useState(null);
   const [fromName, setFromName] = useState(growth.fromName || company.name || "");
   const [testTo, setTestTo] = useState("");
@@ -292,8 +296,16 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
 
   const patchCamp = (id, patch) => commit({ campaigns: campaigns.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)) });
   const newCampaign = () => {
-    const c = {
-      id: gid("cp"), name: "New campaign", folder: folders[0] || "", status: "draft", createdAt: Date.now(),
+    const folder = folders[0] || "";
+    const guest = folderIsGuest(folder);
+    const c = guest ? {
+      id: gid("cp"), name: "Guest post outreach", folder, status: "draft", createdAt: Date.now(), guest: true,
+      subject: "Guest post for {{name}}?",
+      body: `Hi,\n\nI'm a big fan of {{website}} — your recent {{niche}} posts are exactly the depth I look for.\n\nI'd love to contribute a original, well-researched guest article your readers would genuinely find useful (no fluff, no thin content). I can send a few headline ideas tailored to your audience — would that be welcome?\n\nEither way, keep up the great work.\n\n${fromName || company.name}`,
+      followUps: [{ afterDays: 3, body: "Hi again — just bumping this in case it slipped by. Happy to send 2–3 {{niche}} topic ideas for {{name}} so you can see the angle before committing. Worth a look?" }],
+      sends: [],
+    } : {
+      id: gid("cp"), name: "New campaign", folder, status: "draft", createdAt: Date.now(),
       subject: "Quick question about {{name}}",
       body: `Hi {{name}} team,\n\nI was looking at local {{category}} results in {{city}} and noticed a few quick wins on {{website}} that competitors are already using.\n\nMind if I send over a free 2-minute audit? No strings — if it's useful, great.\n\n${fromName || company.name}`,
       followUps: [{ afterDays: 3, body: "Hi again — just floating my last note to the top. Want that free audit for {{name}}? Takes me 10 minutes, could be worth a lot to you." }],
@@ -306,8 +318,17 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
   const aiPitch = async () => {
     if (!camp) return;
     setAiBusy(true); setErr(null);
+    const guest = camp.guest || folderIsGuest(camp.folder);
     try {
-      const text = await aiGenerate(aiConfig, {
+      const text = await aiGenerate(aiConfig, guest ? {
+        system: `You are an expert blogger-outreach / guest-post pitch writer (Pitchbox/Respona school). Write ONE plain-text email that gets a "yes, pitch me topics":
+- under 110 words, warm and specific, first line a genuine compliment about their site, then offer an ORIGINAL high-quality guest article for their audience, then ONE soft CTA (offer to send topic ideas — a question)
+- no links, no attachments, no payment talk, no "I'll add 3 links", no spam words, no "hope this finds you well"
+- use merge tags exactly: {{name}} (site/domain), {{website}}, {{niche}}
+- Output format: first line "Subject: ..." then a blank line then the body. Nothing else.`,
+        maxTokens: 400,
+        prompt: `Sender: ${fromName || company.name}. Audience: ${camp.folder || "niche blogs"} — blogs that accept guest posts in the "${(camp.folder.split(" — ")[0] || "").trim()}" niche. Goal: land a guest post. Write the email.`,
+      } : {
         system: `You are a cold-email expert (Instantly/Lemlist school). Write ONE plain-text cold email:
 - under 110 words, first line personal, one concrete observation, ONE soft CTA (a question), no links, no images, no spam words (free!!!, guarantee, act now), no "hope this finds you well"
 - use merge tags exactly: {{name}} (business name), {{city}}, {{category}}, {{website}}
@@ -415,12 +436,13 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
             <button onClick={() => { commit({ campaigns: campaigns.filter((x) => x.id !== camp.id) }); setOpenId(null); }} className="rounded-md p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label={`Prospect folder (${targets.length} contacts · ${emailable.length} emailable)`}>
-              <select value={camp.folder} onChange={(e) => patchCamp(camp.id, { folder: e.target.value })} className={inputCls + " bg-white"}>
+            <Labeled label={<span className="flex items-center gap-1.5">Prospect folder ({targets.length} contacts · {emailable.length} emailable)
+              {(camp.guest || folderIsGuest(camp.folder)) && <span className="rounded bg-violet-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-violet-600">guest post</span>}</span>}>
+              <select value={camp.folder} onChange={(e) => patchCamp(camp.id, { folder: e.target.value, guest: folderIsGuest(e.target.value) })} className={inputCls + " bg-white"}>
                 {folders.map((f) => <option key={f}>{f}</option>)}
               </select>
             </Labeled>
-            <Labeled label="Subject (merge tags: {{name}} {{city}} {{category}} {{website}})">
+            <Labeled label={`Subject (merge tags: {{name}} {{website}} ${camp.guest || folderIsGuest(camp.folder) ? "{{niche}}" : "{{city}} {{category}}"})`}>
               <input value={camp.subject} onChange={(e) => patchCamp(camp.id, { subject: e.target.value })} className={inputCls} />
             </Labeled>
           </div>

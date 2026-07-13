@@ -33,6 +33,14 @@ export const API_REGISTRY = [
           { key: "password", label: "API password", secret: true, placeholder: "••••••••" },
         ],
       },
+      {
+        id: "openPageRank", name: "Open PageRank (free)",
+        desc: "FREE domain-authority scores (0–10, PageRank-based) for the Guest Post Finder's site metrics — 1,000 requests/day at no cost.",
+        docs: "openpagerank.com → sign up → API key",
+        fields: [
+          { key: "apiKey", label: "API key", secret: true, placeholder: "k0…" },
+        ],
+      },
     ],
   },
   {
@@ -48,6 +56,15 @@ export const API_REGISTRY = [
           { key: "clientId", label: "OAuth Client ID", placeholder: "xxxxx.apps.googleusercontent.com" },
           { key: "clientSecret", label: "OAuth Client Secret", secret: true, placeholder: "GOCSPX-…" },
           { key: "redirectUri", label: "Authorized redirect URI", placeholder: "https://app.serpsquad.com/oauth/google/callback" },
+        ],
+      },
+      {
+        id: "googleCse", name: "Google Custom Search (free)",
+        desc: "Powers the Guest Post Finder's footprint searches — 100 queries/day FREE. Create a Programmable Search Engine set to search the entire web, then paste its API key + engine ID.",
+        docs: "programmablesearchengine.google.com → create engine (search entire web); key at developers.google.com/custom-search",
+        fields: [
+          { key: "apiKey", label: "API key", secret: true, placeholder: "AIza…" },
+          { key: "cx", label: "Search engine ID (cx)", placeholder: "a1b2c3d4e5…" },
         ],
       },
       {

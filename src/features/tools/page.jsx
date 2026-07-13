@@ -2,12 +2,27 @@
    with its own sidebar exactly like Company settings. Hosts the agency-level
    Research & Audit tools and the Growth & Prospects suite. */
 import React, { useState } from "react";
-import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, Search, Send, Target } from "lucide-react";
+import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target } from "lucide-react";
 import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
+import { GuestPostFinder } from "../growth/guestpost.jsx";
 
 const GROUPS = [
+  {
+    label: "Growth & Prospects",
+    items: [
+      { key: "finder", area: "growth", label: "Lead Finder", icon: Target, sub: "Every business in a city" },
+      { key: "prospects", area: "growth", label: "Prospect List", icon: FolderOpen, sub: "Folders, NAP & scraped emails" },
+      { key: "outreach", area: "growth", label: "Outreach Campaigns", icon: Send, sub: "Cold email + follow-ups" },
+    ],
+  },
+  {
+    label: "Guest Post Finder",
+    items: [
+      { key: "guestposts", area: "guest", label: "Guest Post Finder", icon: PenLine, sub: "Niche sites · authority · emails" },
+    ],
+  },
   {
     label: "Research & Audit",
     items: [
@@ -18,19 +33,11 @@ const GROUPS = [
       { key: "report", area: "research", label: "Audit Report", icon: FileText, sub: "Branded PDF proposal builder" },
     ],
   },
-  {
-    label: "Growth & Prospects",
-    items: [
-      { key: "finder", area: "growth", label: "Lead Finder", icon: Target, sub: "Every business in a city" },
-      { key: "prospects", area: "growth", label: "Prospect List", icon: FolderOpen, sub: "Folders, NAP & scraped emails" },
-      { key: "outreach", area: "growth", label: "Outreach Campaigns", icon: Send, sub: "Cold email + follow-ups" },
-    ],
-  },
 ];
 const ALL = GROUPS.flatMap((g) => g.items);
 
 export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs, onBack, dark, setDark }) {
-  const [sel, setSel] = useState("profile");
+  const [sel, setSel] = useState("finder");
   const active = ALL.find((t) => t.key === sel) || ALL[0];
   return (
     <div className={`ll-root ${dark ? "ll-dark" : ""} flex min-h-screen items-stretch bg-[#F5F6F8]`}>
@@ -83,6 +90,11 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
         {active.area === "research" ? (
           <ResearchToolsView tab={sel} setTab={setSel} showTabs={false}
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
+        ) : active.area === "guest" ? (
+          <div className="mx-auto max-w-5xl p-5">
+            <GuestPostFinder company={company} onUpdateCompany={onChange} accent={accent} dfs={dfs}
+              cse={company.apis?.googleCse?.values} oprKey={company.apis?.openPageRank?.values?.apiKey} />
+          </div>
         ) : (
           <GrowthView tab={sel} setTab={setSel} showTabs={false}
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} />
