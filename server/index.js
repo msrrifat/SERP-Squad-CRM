@@ -608,13 +608,15 @@ async function handleAuditWebsite(body) {
   let sm = String(body?.sitemapUrl || "").trim();
   if (!sm) return [400, { error: "bad_request", detail: "A sitemap URL is required." }];
   if (!/^https?:\/\//i.test(sm)) sm = "https://" + sm;
-  const limit = Math.min(Math.max(+body?.limit || 25, 3), 40);
+  /* crawls the FULL sitemap; 400 pages is the runaway-safety ceiling
+     (the response reports totalInSitemap so truncation is never silent) */
+  const limit = 400;
   try {
     let { text, finalUrl } = await fetchText(sm);
     let locs = [...text.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
     /* sitemap index → dive one level into child sitemaps until we have URLs */
     if (/<sitemapindex/i.test(text)) {
-      const kids = locs.slice(0, 5); locs = [];
+      const kids = locs.slice(0, 10); locs = [];
       for (const k of kids) {
         try { const r = await fetchText(k); locs.push(...[...r.text.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1])); } catch { /* skip child */ }
         if (locs.length >= limit * 2) break;
@@ -624,8 +626,8 @@ async function handleAuditWebsite(body) {
     const host = new URL(locs[0]).hostname.replace(/^www\./, "");
     const urls = [...new Set(locs)].filter((u) => { try { return new URL(u).hostname.replace(/^www\./, "") === host; } catch { return false; } }).slice(0, limit);
     const pages = [];
-    for (let i = 0; i < urls.length; i += 5) {
-      const chunk = await Promise.all(urls.slice(i, i + 5).map(async (u) => {
+    for (let i = 0; i < urls.length; i += 8) {
+      const chunk = await Promise.all(urls.slice(i, i + 8).map(async (u) => {
         const t0 = Date.now();
         try { const r = await fetchText(u); return analyzePage(u, r.text, r.status, Date.now() - t0, host); }
         catch (e) { return { url: u, path: normPath(u), status: 0, error: String(e?.message || e).slice(0, 80) }; }

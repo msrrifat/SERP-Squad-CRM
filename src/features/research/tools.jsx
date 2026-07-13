@@ -11,8 +11,8 @@
    ===================================================================== */
 import React, { useMemo, useState } from "react";
 import {
-  AlertTriangle, Building2, CheckCircle2, Download, FileText, Globe, Link2,
-  MapPin, Printer, RefreshCw, Search, Sparkles, Star, X,
+  AlertTriangle, Bookmark, Building2, CheckCircle2, Download, FileText, Globe, Link2,
+  MapPin, Printer, RefreshCw, Search, Sparkles, Star, Trash2, X,
 } from "lucide-react";
 import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { escHtml } from "../../lib/text.jsx";
@@ -29,6 +29,19 @@ export const csvDownload = (filename, headers, rows) => {
   a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 };
+
+/* "Save this audit" — saved audits accumulate in company.savedAudits so past
+   checks survive re-runs and reports can be built from any of them */
+function SaveBtn({ onSave, accent, label = "Save this audit" }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button onClick={() => { onSave(); setDone(true); setTimeout(() => setDone(false), 2500); }}
+      className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11.5px] font-semibold"
+      style={done ? { borderColor: "#16A34A", color: "#16A34A", background: "#F0FDF4" } : { borderColor: accent, color: accent }}>
+      {done ? <><CheckCircle2 size={12} /> Saved</> : <><Bookmark size={12} /> {label}</>}
+    </button>
+  );
+}
 
 const CheckRow = ({ ok, warn = false, label, note }) => (
   <div className="flex items-start gap-2 rounded-lg px-2.5 py-1.5" style={{ background: ok ? "#F0FDF4" : warn ? "#FFFBEB" : "#FEF2F2" }}>
@@ -73,6 +86,20 @@ export function profileChecks(p, manual = {}) {
   return { checks, score };
 }
 
+/* Bing/Apple guided-manual audit checks → score (shared with the report) */
+export function manualProfileChecks(man) {
+  const checks = [
+    { ok: (man.description || "").length >= 200, warn: (man.description || "").length > 0, label: man.description ? `Description — ${man.description.length} chars` : "No description entered" },
+    { ok: +man.categories >= 2, warn: +man.categories >= 1, label: `${man.categories || 0} categories` },
+    { ok: +man.photos >= 10, warn: +man.photos >= 3, label: `${man.photos || 0} photos` },
+    { ok: !!man.website, label: man.website ? "Website linked" : "No website" },
+    { ok: !!man.hoursSet, label: man.hoursSet ? "Hours set" : "No business hours" },
+    { ok: +man.rating >= 4.4, warn: +man.rating >= 3.8, label: `Rating ${man.rating || "—"}★ · ${man.reviews || 0} reviews` },
+  ];
+  const score = Math.round((checks.filter((x) => x.ok).length + checks.filter((x) => !x.ok && x.warn).length * 0.5) / checks.length * 100);
+  return { checks, score };
+}
+
 /* website page → issue list */
 export const pageIssues = (pg) => {
   const iss = [];
@@ -95,7 +122,7 @@ export function websiteScore(pages) {
 }
 
 /* =================== 1 · Business Profile Audit =================== */
-function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual }) {
+function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual, onSave }) {
   const [provider, setProvider] = useState("google");
   const [link, setLink] = useState("");
   const [query, setQuery] = useState("");
@@ -119,15 +146,7 @@ function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual })
   const audit = p ? profileChecks(p, manual) : null;
 
   /* Bing / Apple: no public read API — a guided manual audit that scores what you observe */
-  const manChecks = [
-    { ok: man.description.length >= 200, warn: man.description.length > 0, label: man.description ? `Description — ${man.description.length} chars` : "No description entered" },
-    { ok: +man.categories >= 2, warn: +man.categories >= 1, label: `${man.categories || 0} categories` },
-    { ok: +man.photos >= 10, warn: +man.photos >= 3, label: `${man.photos || 0} photos` },
-    { ok: !!man.website, label: man.website ? "Website linked" : "No website" },
-    { ok: man.hoursSet, label: man.hoursSet ? "Hours set" : "No business hours" },
-    { ok: +man.rating >= 4.4, warn: +man.rating >= 3.8, label: `Rating ${man.rating || "—"}★ · ${man.reviews || 0} reviews` },
-  ];
-  const manScore = Math.round((manChecks.filter((x) => x.ok).length + manChecks.filter((x) => !x.ok && x.warn).length * 0.5) / manChecks.length * 100);
+  const { checks: manChecks, score: manScore } = manualProfileChecks(man);
 
   return (
     <div className="space-y-4">
@@ -171,6 +190,7 @@ function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual })
                     <span className="rounded bg-emerald-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">live · Places API</span>
                   </div>
                 </div>
+                <SaveBtn accent={accent} onSave={() => onSave({ type: "profile", label: p.name, data: { place: p, manual } })} />
               </div>
               {p.description && (
                 <div className="rounded-xl bg-gray-50 p-3 text-[12px] leading-relaxed text-gray-600">
@@ -228,6 +248,7 @@ function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual })
             <div className="flex items-center gap-4 rounded-xl border border-gray-100 p-3">
               <ScoreRing score={manScore} accent={accent} size={56} />
               <div className="grid flex-1 gap-1.5 sm:grid-cols-2">{manChecks.map((c, i) => <CheckRow key={i} {...c} />)}</div>
+              <SaveBtn accent={accent} onSave={() => onSave({ type: "profile-manual", label: `${man.name || "Manual audit"} (${provider === "bing" ? "Bing" : "Apple"})`, data: { provider, man } })} />
             </div>
           )}
         </Card>
@@ -237,17 +258,16 @@ function ProfileAuditTool({ accent, placesKey, res, setRes, manual, setManual })
 }
 
 /* =================== 2 · Website Audit =================== */
-function WebsiteAuditTool({ accent, res, setRes }) {
+function WebsiteAuditTool({ accent, res, setRes, onSave }) {
   const [sitemap, setSitemap] = useState("");
-  const [limit, setLimit] = useState(25);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
   const run = async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch("/api/audit/website", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
-        body: JSON.stringify({ sitemapUrl: sitemap.trim(), limit }) });
+      const r = await fetch("/api/audit/website", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(360000),
+        body: JSON.stringify({ sitemapUrl: sitemap.trim() }) });
       const d = await r.json();
       if (!r.ok) setErr(d.detail || d.error || `HTTP ${r.status}`);
       else setRes(d);
@@ -264,19 +284,16 @@ function WebsiteAuditTool({ accent, res, setRes }) {
       <Card className="space-y-3 p-5">
         <div className="ll-display text-[15px] font-semibold">Website Audit — real crawl from the sitemap</div>
         <div className="text-[11.5px] text-gray-400">
-          The API server fetches the sitemap (sitemap indexes supported) and crawls each page for meta, headings, content length, images & alt text,
-          incoming/outgoing internal links, schema, HTTPS and speed. 100% real — no third-party API, no cost.
+          The API server fetches the sitemap (sitemap indexes supported) and crawls <b>every page in it</b> for meta, headings, content length, images & alt text,
+          incoming/outgoing internal links, schema, HTTPS and speed. 100% real — no third-party API, no cost. (Runaway-safety ceiling: 400 pages — huge sites are never truncated silently.)
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <Labeled label="Sitemap URL" className="flex-1">
             <input value={sitemap} onChange={(e) => setSitemap(e.target.value)} placeholder="https://example.com/sitemap.xml" className={"ll-mono w-full " + inputCls} />
           </Labeled>
-          <Labeled label="Pages to crawl">
-            <select value={limit} onChange={(e) => setLimit(+e.target.value)} className={inputCls + " bg-white"}>{[10, 25, 40].map((n) => <option key={n} value={n}>{n}</option>)}</select>
-          </Labeled>
           <button onClick={run} disabled={busy || !sitemap.trim()}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-            {busy ? <><RefreshCw size={13} className="animate-spin" /> Crawling…</> : <><Globe size={13} /> Crawl & audit</>}
+            {busy ? <><RefreshCw size={13} className="animate-spin" /> Crawling every page…</> : <><Globe size={13} /> Crawl & audit all pages</>}
           </button>
         </div>
         {err && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{err}</div>}
@@ -290,6 +307,7 @@ function WebsiteAuditTool({ accent, res, setRes }) {
               <div className="ll-display text-[15px] font-semibold">{res.host} <span className="rounded bg-emerald-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">live crawl</span></div>
               <div className="text-[11.5px] text-gray-400">{res.crawled} of {res.totalInSitemap} sitemap URLs crawled</div>
             </div>
+            <SaveBtn accent={accent} onSave={() => onSave({ type: "website", label: res.host, data: res })} />
             <button onClick={() => csvDownload(`${res.host}-audit.csv`,
               ["URL", "Status", "Title", "Title len", "Meta desc len", "H1s", "Words", "Images", "No-alt", "Internal in", "Internal out", "External out", "Schema", "Issues"],
               pages.map((p) => [p.url, p.status, p.title, p.titleLen, p.metaDescLen, p.h1Count, p.words, p.images, p.imagesNoAlt, p.internalIn, p.internalOutCount, p.externalOut, (p.schemaTypes || []).join(" | "), pageIssues(p).map(([, t]) => t).join("; ")]))}
@@ -340,16 +358,37 @@ function WebsiteAuditTool({ accent, res, setRes }) {
 }
 
 /* =================== 5 · Branded Audit Report =================== */
-function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual, webRes, toolOpt }) {
+function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual, webRes, toolOpt, saved = [], onDeleteSaved }) {
   const [biz, setBiz] = useState("");
   const [notes, setNotes] = useState("");
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const listing = toolOpt.branding?.listingScan || null;
-  const index = toolOpt.indexChecker || null;
-  const audit = profileRes ? profileChecks(profileRes, profileManual) : null;
-  const wScore = webRes?.pages?.length ? websiteScore(webRes.pages) : null;
+  /* each section picks its source: the latest run this session, or ANY saved
+     audit — so old checks are never lost and reports mix & match freely */
+  const [pick, setPick] = useState({ profile: "latest", website: "latest", listings: "latest", index: "latest" });
+  const latest = {
+    profile: profileRes ? { kind: "google", place: profileRes, manual: profileManual } : null,
+    website: webRes || null,
+    listings: toolOpt.branding?.listingScan || null,
+    index: (toolOpt.indexChecker?.results || []).length ? toolOpt.indexChecker : null,
+  };
+  const TYPE_OF = { profile: ["profile", "profile-manual"], website: ["website"], listings: ["listings"], index: ["index"] };
+  const resolve = (key) => {
+    if (pick[key] === "none") return null;
+    if (pick[key] === "latest") return latest[key];
+    const s = saved.find((x) => x.id === pick[key]);
+    if (!s) return null;
+    if (key === "profile") return s.type === "profile" ? { kind: "google", ...s.data } : { kind: "manual", ...s.data };
+    return s.data;
+  };
+  const prof = resolve("profile");
+  const web = resolve("website");
+  const listing = resolve("listings");
+  const index = resolve("index");
+  const audit = prof?.kind === "google" ? profileChecks(prof.place, prof.manual || {})
+    : prof?.kind === "manual" ? manualProfileChecks(prof.man) : null;
+  const wScore = web?.pages?.length ? websiteScore(web.pages) : null;
 
   const aiSummary = async () => {
     setBusy(true); setErr(null);
@@ -357,9 +396,9 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
       const text = await aiGenerate(aiConfig, {
         system: "You write executive summaries for local-SEO audit reports that win clients. Plain text, 3 short paragraphs max: current state, biggest opportunities, what working together delivers. Confident, concrete, zero fluff.",
         maxTokens: 700,
-        prompt: `Business: ${biz || profileRes?.name || webRes?.host || "the business"}.\n` +
-          (audit ? `Google profile score ${audit.score}/100. Failing checks: ${audit.checks.filter((c) => !c.ok).map((c) => c.label).join("; ") || "none"}.\n` : "") +
-          (wScore != null ? `Website score ${wScore}/100 over ${webRes.pages.length} pages: ${webRes.pages.filter((p) => !p.metaDesc).length} missing descriptions, ${webRes.pages.filter((p) => (p.words || 0) < 300).length} thin pages, ${webRes.pages.filter((p) => !(p.schemaTypes || []).length).length} without schema.\n` : "") +
+        prompt: `Business: ${biz || prof?.place?.name || prof?.man?.name || web?.host || "the business"}.\n` +
+          (audit ? `Business profile score ${audit.score}/100. Failing checks: ${audit.checks.filter((c) => !c.ok).map((c) => c.label).join("; ") || "none"}.\n` : "") +
+          (wScore != null ? `Website score ${wScore}/100 over ${web.pages.length} pages: ${web.pages.filter((p) => !p.metaDesc).length} missing descriptions, ${web.pages.filter((p) => (p.words || 0) < 300).length} thin pages, ${web.pages.filter((p) => !(p.schemaTypes || []).length).length} without schema.\n` : "") +
           (listing ? `Citations: ${listing.found} directories found, ${listing.napIssues} NAP issues, score ${listing.score}/100.\n` : "") +
           (index ? `Indexation: ${(index.results || []).filter((r) => r.indexed).length}/${(index.results || []).length} URLs indexed.\n` : "") +
           `Agency: ${company.name}. Write the executive summary now.`,
@@ -381,15 +420,17 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
       table{width:100%;border-collapse:collapse;font-size:10.5px}th,td{border-bottom:1px solid #E5E7EB;padding:5px 6px;text-align:left}th{color:#6B7280;text-transform:uppercase;font-size:9px}
       .cta{margin-top:30px;padding:18px;border-radius:12px;background:${accent}12;border:1px solid ${accent}40}
       @media print {.noprint{display:none}} </style></head><body>
-      <div class="head"><div><h1>${escHtml(biz || profileRes?.name || webRes?.host || "SEO Audit")}</h1><div class="muted">Website & Local SEO Audit · ${new Date().toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" })}</div></div>
+      <div class="head"><div><h1>${escHtml(biz || prof?.place?.name || prof?.man?.name || web?.host || "SEO Audit")}</h1><div class="muted">Website & Local SEO Audit · ${new Date().toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" })}</div></div>
       <div style="text-align:right"><div class="brand">${escHtml(company.name)}</div><div class="muted">Prepared by ${escHtml(company.name)}</div></div></div>
       ${summary ? `<h2>Executive summary</h2><p>${escHtml(summary).replace(/\n+/g, "</p><p>")}</p>` : ""}
-      ${audit ? `<h2>Google Business Profile — <span class="score">${audit.score}/100</span></h2>
-        <p class="muted">${escHtml(profileRes.name)} · ${escHtml(profileRes.address)} · ${profileRes.rating ?? "—"}★ (${profileRes.reviews} reviews) · live via Google Places API</p>${rows(audit.checks)}` : ""}
-      ${webRes?.pages?.length ? `<h2>Website audit — <span class="score">${wScore}/100</span></h2>
-        <p class="muted">${webRes.crawled} of ${webRes.totalInSitemap} sitemap URLs crawled live.</p>
+      ${audit && prof?.kind === "google" ? `<h2>Google Business Profile — <span class="score">${audit.score}/100</span></h2>
+        <p class="muted">${escHtml(prof.place.name)} · ${escHtml(prof.place.address)} · ${prof.place.rating ?? "—"}★ (${prof.place.reviews} reviews) · live via Google Places API</p>${rows(audit.checks)}` : ""}
+      ${audit && prof?.kind === "manual" ? `<h2>${prof.provider === "bing" ? "Bing Places" : "Apple Maps"} listing — <span class="score">${audit.score}/100</span></h2>
+        <p class="muted">${escHtml(prof.man.name || "")} · guided manual audit (no public read API on this network)</p>${rows(audit.checks)}` : ""}
+      ${web?.pages?.length ? `<h2>Website audit — <span class="score">${wScore}/100</span></h2>
+        <p class="muted">${web.crawled} of ${web.totalInSitemap} sitemap URLs crawled live.</p>
         <table><tr><th>Page</th><th>Title</th><th>Desc</th><th>H1</th><th>Words</th><th>Imgs(no alt)</th><th>Links in/out</th><th>Schema</th><th>Issues</th></tr>
-        ${webRes.pages.map((p) => `<tr><td>${escHtml(p.path || p.url)}</td><td>${p.titleLen}</td><td>${p.metaDescLen}</td><td>${p.h1Count}</td><td>${p.words}</td><td>${p.images}(${p.imagesNoAlt})</td><td>${p.internalIn}/${p.internalOutCount}</td><td>${escHtml((p.schemaTypes || []).join(", ") || "—")}</td><td>${escHtml(pageIssues(p).map(([, t]) => t).join("; ") || "clean")}</td></tr>`).join("")}</table>` : ""}
+        ${web.pages.map((p) => `<tr><td>${escHtml(p.path || p.url)}</td><td>${p.titleLen}</td><td>${p.metaDescLen}</td><td>${p.h1Count}</td><td>${p.words}</td><td>${p.images}(${p.imagesNoAlt})</td><td>${p.internalIn}/${p.internalOutCount}</td><td>${escHtml((p.schemaTypes || []).join(", ") || "—")}</td><td>${escHtml(pageIssues(p).map(([, t]) => t).join("; ") || "clean")}</td></tr>`).join("")}</table>` : ""}
       ${listing ? `<h2>Business listings — <span class="score">${listing.score}/100</span></h2>
         <p>${listing.found} directories list the business · ${listing.missing} missing · ${listing.napIssues} NAP consistency issue(s).${listing.live ? "" : " <span class='muted'>(demo scan)</span>"}</p>` : ""}
       ${index ? `<h2>Google indexation</h2><p>${(index.results || []).filter((r) => r.indexed).length} of ${(index.results || []).length} checked URLs are indexed.</p>
@@ -402,27 +443,58 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
     setTimeout(() => win.print(), 400);
   };
 
-  const ready = audit || webRes || listing || index;
+  const ready = audit || web || listing || index;
+  const summaryOf = (key, v) => {
+    if (!v) return null;
+    if (key === "profile") return v.kind === "google" ? `${profileChecks(v.place, v.manual || {}).score}/100 · ${v.place.name}` : `${manualProfileChecks(v.man).score}/100 · ${v.man.name || "manual"}`;
+    if (key === "website") return `${websiteScore(v.pages || [])}/100 · ${v.crawled} pages`;
+    if (key === "listings") return `${v.score}/100 · ${v.found} found`;
+    return `${(v.results || []).filter((r) => r.indexed).length}/${(v.results || []).length} indexed`;
+  };
   return (
     <div className="space-y-4">
       <Card className="space-y-3 p-5">
         <div className="ll-display text-[15px] font-semibold">Branded Audit Report — the proposal builder</div>
         <div className="text-[11.5px] leading-relaxed text-gray-400">
-          Pulls together whatever you've run in the other tabs — profile audit, website crawl, listings scan, index check — into one
-          <b> {company.name}</b>-branded report. Run the tools first, then generate here and download as PDF (print dialog → Save as PDF).
+          Each section pulls from the <b>latest run</b> or any <b>saved audit</b> — save checks in the other tabs (the bookmark button) and mix
+          & match here. Generates one <b>{company.name}</b>-branded report, downloadable as PDF (print dialog → Save as PDF).
         </div>
-        <div className="grid gap-2 sm:grid-cols-4">
-          {[["Profile audit", audit ? `${audit.score}/100 · ${profileRes.name}` : null],
-            ["Website audit", webRes ? `${wScore}/100 · ${webRes.crawled} pages` : null],
-            ["Listings scan", listing ? `${listing.score}/100 · ${listing.found} found` : null],
-            ["Index check", index ? `${(index.results || []).filter((r) => r.indexed).length}/${(index.results || []).length} indexed` : null]].map(([l, v]) => (
-            <div key={l} className={"rounded-xl border p-2.5 " + (v ? "border-emerald-200 bg-emerald-50/50" : "border-dashed border-gray-200")}>
-              <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{l}</div>
-              <div className={"text-[11.5px] font-semibold " + (v ? "text-emerald-700" : "text-gray-300")}>{v || "not run yet"}</div>
+        {/* per-section sources */}
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {[["profile", "Profile audit"], ["website", "Website audit"], ["listings", "Listings scan"], ["index", "Index check"]].map(([key, label]) => {
+            const options = saved.filter((s) => TYPE_OF[key].includes(s.type));
+            const val = resolve(key);
+            return (
+              <div key={key} className={"rounded-xl border p-2.5 " + (val ? "border-emerald-200 bg-emerald-50/40" : "border-dashed border-gray-200")}>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</div>
+                <select value={pick[key]} onChange={(e) => setPick({ ...pick, [key]: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-1.5 py-1 text-[11px] font-medium text-gray-700">
+                  <option value="latest">{latest[key] ? "Latest run (this session)" : "Latest run — none yet"}</option>
+                  {options.map((s) => <option key={s.id} value={s.id}>{s.label} · {new Date(s.at).toLocaleDateString("en", { month: "short", day: "numeric" })}</option>)}
+                  <option value="none">— exclude from report —</option>
+                </select>
+                <div className={"mt-1 text-[10.5px] font-semibold " + (val ? "text-emerald-700" : "text-gray-300")}>{summaryOf(key, val) || "nothing selected"}</div>
+              </div>
+            );
+          })}
+        </div>
+        {/* saved audit library */}
+        {saved.length > 0 && (
+          <div className="rounded-xl border border-gray-100 p-3">
+            <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-gray-400">Saved audits ({saved.length})</div>
+            <div className="max-h-40 space-y-1 overflow-y-auto">
+              {saved.map((s) => (
+                <div key={s.id} className="flex items-center gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[11px]">
+                  <span className="rounded bg-gray-200 px-1.5 py-px text-[8.5px] font-bold uppercase text-gray-600">{{ profile: "GBP", "profile-manual": "Manual", website: "Web", listings: "Listings", index: "Index" }[s.type]}</span>
+                  <span className="min-w-0 flex-1 truncate font-semibold text-gray-700">{s.label}</span>
+                  <span className="ll-mono text-gray-400">{new Date(s.at).toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+                  <button onClick={() => onDeleteSaved?.(s.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <Labeled label="Business / prospect name on the report"><input value={biz} onChange={(e) => setBiz(e.target.value)} placeholder={profileRes?.name || webRes?.host || "Acme Dental"} className={inputCls} /></Labeled>
+          </div>
+        )}
+        <Labeled label="Business / prospect name on the report"><input value={biz} onChange={(e) => setBiz(e.target.value)} placeholder={prof?.place?.name || prof?.man?.name || web?.host || "Acme Dental"} className={inputCls} /></Labeled>
         <Labeled label={<span className="flex items-center justify-between">Executive summary
           <button onClick={aiSummary} disabled={busy || !ready} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-bold disabled:opacity-40" style={{ background: accent + "14", color: accent }}>
             {busy ? <RefreshCw size={10} className="animate-spin" /> : <Sparkles size={10} />} AI write from the findings
@@ -443,7 +515,7 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
 }
 
 /* =================== the view =================== */
-export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, placesKey, dfs, showTabs = true }) {
+export function ResearchToolsView({ tab, setTab, company, onUpdateCompany = null, accent, aiConfig, placesKey, dfs, showTabs = true }) {
   /* results are lifted so the Audit Report tab can compile everything */
   const [profileRes, setProfileRes] = useState(null);
   const [profileManual, setProfileManual] = useState({ services: "", products: "", posts: "" });
@@ -452,6 +524,12 @@ export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, plac
   const [toolOpt, setToolOptState] = useState({});
   const setToolOpt = (key, patch) => setToolOptState((cur) => ({ ...cur, [key]: { ...(cur[key] || {}), ...(typeof patch === "function" ? patch(cur[key] || {}) : patch) } }));
   const pseudoProject = useMemo(() => ({ id: "research", name: "Research target", website: "", tracking: [], integrations: {} }), []);
+
+  /* saved audits persist in company state — re-running a tool never destroys
+     an old result once it's saved, and reports can pick any saved audit */
+  const saved = company.savedAudits || [];
+  const saveAudit = (entry) => onUpdateCompany?.({ savedAudits: [{ id: "sa" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at: Date.now(), ...entry }, ...(company.savedAudits || [])] });
+  const deleteAudit = (id) => onUpdateCompany?.({ savedAudits: (company.savedAudits || []).filter((x) => x.id !== id) });
 
   const TABS = [
     ["profile", "Business Profile Audit", Building2],
@@ -472,26 +550,35 @@ export function ResearchToolsView({ tab, setTab, company, accent, aiConfig, plac
           ))}
         </div>
       )}
-      {tab === "profile" && <ProfileAuditTool accent={accent} placesKey={placesKey} res={profileRes} setRes={setProfileRes} manual={profileManual} setManual={setProfileManual} />}
-      {tab === "website" && <WebsiteAuditTool accent={accent} res={webRes} setRes={setWebRes} />}
+      {tab === "profile" && <ProfileAuditTool accent={accent} placesKey={placesKey} res={profileRes} setRes={setProfileRes} manual={profileManual} setManual={setProfileManual} onSave={saveAudit} />}
+      {tab === "website" && <WebsiteAuditTool accent={accent} res={webRes} setRes={setWebRes} onSave={saveAudit} />}
       {tab === "listings" && (
         <div className="space-y-3">
-          <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
-            Standalone citation scanner — enter any business's NAP below (no project needed). Results feed the <b>Audit Report</b> tab.
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
+            <span className="min-w-0 flex-1">Standalone citation scanner — enter any business's NAP below (no project needed). Results feed the <b>Audit Report</b> tab.</span>
+            {toolOpt.branding?.listingScan && (
+              <SaveBtn accent={accent} label="Save this scan"
+                onSave={() => saveAudit({ type: "listings", label: `Listings · ${toolOpt.branding.listingScan.found}/${toolOpt.branding.listingScan.found + toolOpt.branding.listingScan.missing} found`, data: toolOpt.branding.listingScan })} />
+            )}
           </div>
           <ListingsScannerTab opt={toolOpt} setOpt={setToolOpt} accent={accent} log={null} project={pseudoProject} dfs={dfs} />
         </div>
       )}
       {tab === "index" && (
         <div className="space-y-3">
-          <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
-            Standalone index checker — paste any URLs (e.g. from the website audit). Results feed the <b>Audit Report</b> tab.
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
+            <span className="min-w-0 flex-1">Standalone index checker — paste any URLs (e.g. from the website audit). Results feed the <b>Audit Report</b> tab.</span>
+            {(toolOpt.indexChecker?.results || []).length > 0 && (
+              <SaveBtn accent={accent} label="Save this check"
+                onSave={() => saveAudit({ type: "index", label: `Index · ${toolOpt.indexChecker.results.filter((r) => r.indexed).length}/${toolOpt.indexChecker.results.length} indexed`, data: toolOpt.indexChecker })} />
+            )}
           </div>
           <IndexCheckerTab opt={toolOpt} setOpt={setToolOpt} accent={accent} log={null} project={pseudoProject} dfs={dfs} />
         </div>
       )}
       {tab === "report" && <AuditReportTool accent={accent} company={company} aiConfig={aiConfig}
-        profileRes={profileRes} profileManual={profileManual} webRes={webRes} toolOpt={toolOpt} />}
+        profileRes={profileRes} profileManual={profileManual} webRes={webRes} toolOpt={toolOpt}
+        saved={saved} onDeleteSaved={deleteAudit} />}
     </div>
   );
 }

@@ -82,7 +82,7 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
         </div>
         {active.area === "research" ? (
           <ResearchToolsView tab={sel} setTab={setSel} showTabs={false}
-            company={company} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
+            company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
         ) : (
           <GrowthView tab={sel} setTab={setSel} showTabs={false}
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} />
