@@ -3,13 +3,14 @@
    tool GROUPS; the selected group's subsections appear as a top-bar tab
    strip inside the window. */
 import React, { useState } from "react";
-import { ArrowLeft, Building2, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
+import { ArrowLeft, Building2, Crosshair, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
 import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
 import { GuestListView, GuestPostFinder } from "../growth/guestpost.jsx";
 import { OutreachSuite } from "../growth/outreach.jsx";
 import { KeywordFinderView } from "./kwfinder.jsx";
+import { MapRankCheck, WebsiteRankCheck } from "./rankcheck.jsx";
 
 const GROUPS = [
   {
@@ -38,6 +39,14 @@ const GROUPS = [
     ],
   },
   {
+    key: "rank", label: "Rank Checker", icon: Crosshair, area: "rank",
+    sub: "One-time website & map ranks, any business",
+    items: [
+      { key: "rankweb", label: "Website Rank Check", icon: TrendingUp },
+      { key: "rankmap", label: "Map Rank Check (geo grid)", icon: MapPin },
+    ],
+  },
+  {
     key: "research", label: "Research & Audit", icon: Search, area: "research",
     sub: "Audit profiles, sites & listings; build proposals",
     items: [
@@ -54,7 +63,7 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
   const [groupKey, setGroupKey] = useState("growth");
   const group = GROUPS.find((g) => g.key === groupKey) || GROUPS[0];
   /* the active subsection is tracked per group so switching back restores it */
-  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", research: "profile" });
+  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", rank: "rankweb", research: "profile" });
 
   /* Keyword Finder → project. Always records to the keyword bank (deduped,
      kept sorted by volume high→low). When a specific page/post/mapping node
@@ -158,6 +167,11 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
               clients={clients.filter((c) => c.projects.some((p) => !p.archived))
                 .map((c) => ({ ...c, projects: c.projects.filter((p) => !p.archived) }))}
               onAddToProject={addKeywordsToProject} />
+          </div>
+        ) : group.area === "rank" ? (
+          <div className="mx-auto max-w-5xl p-5">
+            {sel === "rankweb" && <WebsiteRankCheck company={company} accent={accent} />}
+            {sel === "rankmap" && <MapRankCheck accent={accent} dfs={dfs} placesKey={placesKey} />}
           </div>
         ) : group.area === "guest" ? (
           <div className="mx-auto max-w-5xl p-5">

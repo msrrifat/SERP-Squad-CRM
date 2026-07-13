@@ -290,13 +290,46 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
   const emailable = targets.filter((c) => c.email && !c.replied);
   const sentIds = new Set((camp?.sends || []).filter((s) => s.step === 0 && s.ok).map((s) => s.contactId));
   const toSend = emailable.filter((c) => !sentIds.has(c.id));
-  const dueFollowUps = camp ? (camp.followUps || []).flatMap((fu, fi) =>
+  /* follow-ups due, computed from any contact list (so the pre-send reply
+     check can recompute against freshly-detected replies) */
+  const duesFrom = (list) => camp ? (camp.followUps || []).flatMap((fu, fi) =>
     (camp.sends || []).filter((s) => s.step === 0 && s.ok
       && Date.now() - s.at >= fu.afterDays * 864e5
       && !(camp.sends || []).some((x) => x.contactId === s.contactId && x.step === fi + 1)
-      && !contacts.find((c) => c.id === s.contactId)?.replied
-      && contacts.find((c) => c.id === s.contactId))
-      .map((s) => ({ contact: contacts.find((c) => c.id === s.contactId), fu, step: fi + 1 }))) : [];
+      && !list.find((c) => c.id === s.contactId)?.replied
+      && list.find((c) => c.id === s.contactId))
+      .map((s) => ({ contact: list.find((c) => c.id === s.contactId), fu, step: fi + 1 }))) : [];
+  const dueFollowUps = duesFrom(contacts);
+
+  /* HARD STOP on reply: before any follow-ups go out, the sending account's
+     inbox is pulled over IMAP and every reply marks its contact Replied —
+     those sequences end right here, automatically. */
+  const [replyCheck, setReplyCheck] = useState(null);
+  const sendDueFollowUps = async () => {
+    let list = contacts;
+    const a = acctOf(camp);
+    if (a?.imap?.host) {
+      setReplyCheck("Checking the inbox for replies first…");
+      try {
+        const r = await fetch("/api/mail/inbox", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(45000),
+          body: JSON.stringify({ imap: a.imap, limit: 40 }) });
+        const d = await r.json();
+        if (r.ok) {
+          const repliers = new Set((d.messages || []).map((m) => m.fromEmail));
+          const hits = list.filter((c) => c.email && repliers.has(c.email.toLowerCase()) && !c.replied);
+          if (hits.length) {
+            const ids = new Set(hits.map((c) => c.id));
+            list = list.map((c) => (ids.has(c.id) ? { ...c, replied: true, repliedAt: Date.now() } : c));
+            commit({ contacts: list });
+            setReplyCheck(`✓ ${hits.length} repl${hits.length === 1 ? "y" : "ies"} detected — their sequences are stopped, follow-ups skip them.`);
+          } else setReplyCheck("✓ Inbox checked — no new replies.");
+        } else setReplyCheck("Inbox check failed (" + (d.detail || d.error) + ") — sending only to contacts not marked Replied.");
+      } catch { setReplyCheck("Inbox unreachable — sending only to contacts not marked Replied."); }
+    } else setReplyCheck("No IMAP on the sending account — replies can't be auto-detected; only manual Replied marks stop sequences.");
+    const dues = duesFrom(list);
+    if (!dues.length) { setReplyCheck((n) => (n ? n + " Nothing left to send." : "No follow-ups due.")); return; }
+    await sendBatch(dues.slice(0, 40).map(({ contact, fu, step }) => ({ contact, subject: "Re: " + camp.subject, body: fu.body, step })));
+  };
 
   const sendBatch = async (batch) => {
     const cfg = smtpOf(camp);
@@ -412,6 +445,7 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
         )}
       </div>
       {err && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{err}</div>}
+      {replyCheck && <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11.5px] font-medium text-violet-700">{replyCheck}</div>}
       {sending && (
         <div className="rounded-xl border border-gray-200 p-3">
           <div className="mb-1 text-[11.5px] font-semibold text-gray-600">Sending {sending.done}/{sending.total}{sending.fails ? ` · ${sending.fails} failed` : ""}…</div>
@@ -425,13 +459,12 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
           <Send size={13} /> {toSend.length ? `Launch — email ${Math.min(toSend.length, 40)} prospect(s) now` : "All emailable prospects contacted"}
         </button>
         {dueFollowUps.length > 0 && (
-          <button disabled={!!sending}
-            onClick={() => sendBatch(dueFollowUps.slice(0, 40).map(({ contact, fu, step }) => ({ contact, subject: "Re: " + camp.subject, body: fu.body, step })))}
+          <button disabled={!!sending} onClick={sendDueFollowUps}
             className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-[12.5px] font-bold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
             Send {dueFollowUps.length} due follow-up(s)
           </button>
         )}
-        <span className="text-[10px] text-gray-400">Max 40 per launch · sends from {acct ? acct.email : "your SMTP"} · replies auto-detected in the Mailbox (IMAP) or mark below.</span>
+        <span className="text-[10px] text-gray-400">Max 40 per launch · sends from {acct ? acct.email : "your SMTP"} · before follow-ups go out the inbox is checked over IMAP and <b>anyone who replied is skipped automatically</b>.</span>
       </div>
       {(camp.sends || []).length > 0 && (
         <div className="space-y-1">
