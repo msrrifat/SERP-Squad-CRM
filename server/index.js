@@ -547,6 +547,228 @@ async function handleWebflowPublish(body) {
   } catch (e) { return [502, { error: "provider_error", detail: "Webflow: " + (e?.message || e) }]; }
 }
 
+/* ================= Research & Audit + Growth tools =================
+   All REAL, zero third-party cost beyond the user's own Google Places key:
+   - website audit: this server fetches the sitemap and crawls the pages
+   - profile audit / lead finder: Google Places API (key from API settings)
+   - email scrape: fetches the site's own pages and extracts addresses
+   - outreach: sends through the agency's SMTP (same client as 2FA mail)
+   Endpoints refuse to fabricate: 503 unconfigured, 502 provider error. */
+
+const FETCH_UA = { "User-Agent": "Mozilla/5.0 (compatible; SERPSquadAudit/1.0; +https://serpsquad.com)" };
+async function fetchText(url, ms = 12000, cap = 900_000) {
+  const res = await fetch(url, { headers: FETCH_UA, redirect: "follow", signal: AbortSignal.timeout(ms) });
+  const buf = await res.arrayBuffer();
+  return { status: res.status, finalUrl: res.url, text: Buffer.from(buf.slice(0, cap)).toString("utf8") };
+}
+const stripTags = (html) => html
+  .replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+  .replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
+const metaContent = (html, name) => {
+  const re = new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]*>`, "i");
+  const tag = (html.match(re) || [])[0] || "";
+  return ((tag.match(/content=["']([^"']*)["']/i) || [])[1] || "").trim();
+};
+const normPath = (u) => { try { const x = new URL(u); return (x.pathname.replace(/\/+$/, "") || "/"); } catch { return null; } };
+
+/* one page → its SEO factors */
+function analyzePage(url, html, status, ms, host) {
+  const title = ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "").replace(/\s+/g, " ").trim();
+  const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map((m) => stripTags(m[1]));
+  const imgs = [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
+  const links = [...html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["']/gi)].map((m) => m[1])
+    .filter((h) => !/^(mailto:|tel:|javascript:)/i.test(h));
+  const abs = links.map((h) => { try { return new URL(h, url).href; } catch { return null; } }).filter(Boolean);
+  const internal = abs.filter((h) => { try { return new URL(h).hostname.replace(/^www\./, "") === host; } catch { return false; } });
+  const ld = [...html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((m) => { try { const j = JSON.parse(m[1]); return [].concat(j["@graph"] || j).map((x) => x["@type"]).flat(); } catch { return []; } }).flat().filter(Boolean);
+  const desc = metaContent(html, "description");
+  const text = stripTags(html);
+  return {
+    url, path: normPath(url), status, ms,
+    title, titleLen: title.length,
+    metaDesc: desc, metaDescLen: desc.length,
+    canonical: ((html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i) || [])[1] || ""),
+    noindex: /<meta[^>]+robots[^>]+noindex/i.test(html),
+    ogTitle: !!metaContent(html, "og:title"),
+    h1Count: h1s.length, h1: h1s[0] || "",
+    h2Count: (html.match(/<h2[\s>]/gi) || []).length,
+    words: text ? text.split(/\s+/).length : 0,
+    images: imgs.length,
+    imagesNoAlt: imgs.filter((t) => !/alt=["'][^"']+["']/i.test(t)).length,
+    internalOut: [...new Set(internal.map(normPath).filter(Boolean))],
+    externalOut: abs.length - internal.length,
+    schemaTypes: [...new Set(ld)].slice(0, 8),
+    https: url.startsWith("https://"),
+    sizeKb: Math.round(html.length / 1024),
+  };
+}
+
+async function handleAuditWebsite(body) {
+  let sm = String(body?.sitemapUrl || "").trim();
+  if (!sm) return [400, { error: "bad_request", detail: "A sitemap URL is required." }];
+  if (!/^https?:\/\//i.test(sm)) sm = "https://" + sm;
+  const limit = Math.min(Math.max(+body?.limit || 25, 3), 40);
+  try {
+    let { text, finalUrl } = await fetchText(sm);
+    let locs = [...text.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
+    /* sitemap index → dive one level into child sitemaps until we have URLs */
+    if (/<sitemapindex/i.test(text)) {
+      const kids = locs.slice(0, 5); locs = [];
+      for (const k of kids) {
+        try { const r = await fetchText(k); locs.push(...[...r.text.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1])); } catch { /* skip child */ }
+        if (locs.length >= limit * 2) break;
+      }
+    }
+    if (!locs.length) return [502, { error: "provider_error", detail: `No <loc> URLs found at ${finalUrl} — is that the sitemap.xml?` }];
+    const host = new URL(locs[0]).hostname.replace(/^www\./, "");
+    const urls = [...new Set(locs)].filter((u) => { try { return new URL(u).hostname.replace(/^www\./, "") === host; } catch { return false; } }).slice(0, limit);
+    const pages = [];
+    for (let i = 0; i < urls.length; i += 5) {
+      const chunk = await Promise.all(urls.slice(i, i + 5).map(async (u) => {
+        const t0 = Date.now();
+        try { const r = await fetchText(u); return analyzePage(u, r.text, r.status, Date.now() - t0, host); }
+        catch (e) { return { url: u, path: normPath(u), status: 0, error: String(e?.message || e).slice(0, 80) }; }
+      }));
+      pages.push(...chunk);
+    }
+    /* incoming internal links, computed across the crawled set */
+    const inbound = {};
+    pages.forEach((p) => (p.internalOut || []).forEach((toPath) => { if (toPath !== p.path) inbound[toPath] = (inbound[toPath] || 0) + 1; }));
+    pages.forEach((p) => { p.internalIn = inbound[p.path] || 0; p.internalOutCount = (p.internalOut || []).length; delete p.internalOut; });
+    return [200, { live: true, host, totalInSitemap: locs.length, crawled: pages.length, pages }];
+  } catch (e) { return [502, { error: "provider_error", detail: "Crawl failed: " + String(e?.message || e).slice(0, 160) }]; }
+}
+
+/* Google Maps profile audit — everything the Places API truly exposes.
+   Services/products/posts counts are NOT public API data; they're returned
+   as unavailable so the UI never fabricates them. */
+async function handleAuditProfile(body) {
+  const key = body?.placesKey;
+  if (!key) return [503, { error: "places_not_configured", detail: "Add a Google Places API key in Company Settings → API settings — the audit pulls live listing data through it." }];
+  let query = String(body?.query || "").trim();
+  const link = String(body?.url || "").trim();
+  try {
+    if (!query && link) {
+      const { finalUrl } = await fetchText(link, 10000, 50_000).catch(() => ({ finalUrl: link }));
+      const m = decodeURIComponent(finalUrl).match(/\/place\/([^/@]+)/);
+      query = m ? m[1].replace(/\+/g, " ") : "";
+      if (!query) return [400, { error: "bad_request", detail: "Couldn't extract a business name from that link — paste the business name + city instead." }];
+    }
+    if (!query) return [400, { error: "bad_request", detail: "A profile link or business name is required." }];
+    const f = await (await fetch(`https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(query)}&inputtype=textquery&fields=place_id&key=${key}`)).json();
+    if (f.status === "REQUEST_DENIED") return [502, { error: "provider_error", detail: f.error_message || f.status }];
+    const pid = f.candidates?.[0]?.place_id;
+    if (!pid) return [200, { live: true, found: false, detail: `No Google listing found for "${query}".` }];
+    const fields = "name,formatted_address,formatted_phone_number,international_phone_number,website,url,rating,user_ratings_total,opening_hours,photos,types,business_status,editorial_summary,reviews,price_level";
+    const d = await (await fetch(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${pid}&fields=${fields}&key=${key}`)).json();
+    if (d.status !== "OK") return [502, { error: "provider_error", detail: d.error_message || d.status }];
+    const r = d.result;
+    return [200, {
+      live: true, found: true,
+      place: {
+        placeId: pid, name: r.name, address: r.formatted_address, phone: r.formatted_phone_number || r.international_phone_number || "",
+        website: r.website || "", mapsUrl: r.url || "", rating: r.rating || null, reviews: r.user_ratings_total || 0,
+        hours: r.opening_hours?.weekday_text || [], openNow: r.opening_hours?.open_now ?? null,
+        photosVisible: (r.photos || []).length, photosCapped: (r.photos || []).length >= 10,
+        categories: (r.types || []).filter((t) => !["point_of_interest", "establishment"].includes(t)),
+        status: r.business_status || "", description: r.editorial_summary?.overview || "",
+        latestReviews: (r.reviews || []).slice(0, 3).map((x) => ({ author: x.author_name, rating: x.rating, when: x.relative_time_description, text: (x.text || "").slice(0, 220) })),
+        priceLevel: r.price_level ?? null,
+      },
+      unavailable: ["services", "products", "posts", "full photo count"], // Google only exposes these to the profile owner, never via the public API
+    }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 160) }]; }
+}
+
+/* Growth: find every business for a category in a city (Places Text Search,
+   up to 60 results over 3 token pages, + details for contact data) */
+async function handleLeadsSearch(body) {
+  const key = body?.placesKey;
+  if (!key) return [503, { error: "places_not_configured", detail: "Add a Google Places API key in Company Settings → API settings — the lead finder searches Google Maps through it (no DataForSEO cost)." }];
+  const city = String(body?.city || "").trim(), category = String(body?.category || "").trim();
+  if (!city || !category) return [400, { error: "bad_request", detail: "City and category are required." }];
+  const detailsCap = Math.min(Math.max(+body?.detailsCap || 20, 0), 60);
+  try {
+    const results = []; let token = null;
+    for (let page = 0; page < 3; page++) {
+      const qs = token
+        ? `pagetoken=${token}&key=${key}`
+        : `query=${encodeURIComponent(category + " in " + city)}&key=${key}`;
+      const d = await (await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${qs}`)).json();
+      if (d.status === "REQUEST_DENIED") return [502, { error: "provider_error", detail: d.error_message || d.status }];
+      results.push(...(d.results || []));
+      token = d.next_page_token;
+      if (!token) break;
+      await new Promise((r) => setTimeout(r, 2100)); // next_page_token needs ~2s to activate
+    }
+    const rows = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const row = {
+        placeId: r.place_id, name: r.name, address: r.formatted_address || "",
+        rating: r.rating || null, reviews: r.user_ratings_total || 0,
+        categories: (r.types || []).filter((t) => !["point_of_interest", "establishment"].includes(t)),
+        status: r.business_status || "", phone: "", website: "", hours: null,
+      };
+      if (i < detailsCap) {
+        try {
+          const d2 = await (await fetch(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${r.place_id}&fields=formatted_phone_number,website,opening_hours&key=${key}`)).json();
+          if (d2.status === "OK") {
+            row.phone = d2.result.formatted_phone_number || "";
+            row.website = d2.result.website || "";
+            row.hours = d2.result.opening_hours?.weekday_text || null;
+          }
+        } catch { /* row stays without contact data */ }
+      }
+      rows.push(row);
+    }
+    return [200, { live: true, city, category, total: rows.length, detailsCap, rows }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 160) }]; }
+}
+
+/* scrape a business site for contact emails + socials — its own public pages only */
+async function handleScrapeEmail(body) {
+  let site = String(body?.website || "").trim();
+  if (!site) return [400, { error: "bad_request", detail: "A website URL is required." }];
+  if (!/^https?:\/\//i.test(site)) site = "https://" + site;
+  const found = new Set(), socials = new Set();
+  const grab = (html) => {
+    (html.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [])
+      .filter((e) => !/\.(png|jpe?g|gif|svg|webp|css|js)$/i.test(e) && !/(sentry|wixpress|example\.|schema\.org)/i.test(e))
+      .forEach((e) => found.add(e.toLowerCase()));
+    (html.match(/https?:\/\/(?:www\.)?(facebook|instagram|linkedin|x|twitter|youtube)\.com\/[a-z0-9._\-/]+/gi) || []).slice(0, 6).forEach((s) => socials.add(s));
+  };
+  try {
+    const home = await fetchText(site, 10000);
+    grab(home.text);
+    /* follow the site's own contact/about links (same host, max 2) */
+    const host = new URL(home.finalUrl).hostname;
+    const extra = [...new Set([...home.text.matchAll(/<a\b[^>]*href=["']([^"'#]+)["']/gi)].map((m) => m[1])
+      .filter((h) => /contact|about|impressum/i.test(h))
+      .map((h) => { try { const u = new URL(h, home.finalUrl); return u.hostname === host ? u.href : null; } catch { return null; } })
+      .filter(Boolean))].slice(0, 2);
+    for (const u of extra) { try { grab((await fetchText(u, 8000)).text); } catch { /* skip */ } }
+    return [200, { live: true, emails: [...found].slice(0, 5), socials: [...socials] }];
+  } catch (e) { return [502, { error: "provider_error", detail: "Couldn't reach the site: " + String(e?.message || e).slice(0, 120) }]; }
+}
+
+/* cold outreach send — plain text on purpose (best deliverability), through
+   the agency's own SMTP (same credentials the 2FA mail uses) */
+async function handleOutreachSend(body) {
+  const smtp = body?.smtp;
+  if (!smtp?.host || !smtp?.user) return [503, { error: "smtp_not_configured", detail: "Add SMTP credentials in Company Settings → API settings (the same ones used for sign-in emails)." }];
+  const to = String(body?.to || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return [400, { error: "bad_request", detail: "A valid recipient email is required." }];
+  const subject = String(body?.subject || "").slice(0, 180);
+  const text = String(body?.text || "").slice(0, 20_000);
+  if (!subject || !text) return [400, { error: "bad_request", detail: "Subject and body are required." }];
+  try {
+    await sendMail({ ...smtp, from: body?.fromName ? `${String(body.fromName).replace(/[<>"\r\n]/g, "")} <${smtp.from || smtp.user}>` : (smtp.from || smtp.user) }, to, subject, text);
+    return [200, { live: true, sent: true, to }];
+  } catch (e) { return [502, { error: "provider_error", detail: "SMTP: " + String(e?.message || e).slice(0, 160) }]; }
+}
+
 /* ---- the pixel, for real: this server SERVES px.js and records hits, so
    verification is genuine. Host the CRM+API on your domain (e.g.
    app.serpsquad.com) and the snippet works on any client site. ---- */
@@ -836,6 +1058,7 @@ http.createServer(async (req, res) => {
   if (rateLimited(ip, "all", 240, 60e3)) return send(429, { error: "rate_limited", detail: "Too many requests — slow down." });
   if (req.url.startsWith("/api/auth/") && rateLimited(ip, "auth", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many authentication attempts — try again later." });
   if (req.url.startsWith("/api/pixel/verify") && rateLimited(ip, "pixel", 30, 60e3)) return send(429, { error: "rate_limited" });
+  if (req.url.startsWith("/api/outreach/") && rateLimited(ip, "outreach", 60, 60 * 60e3)) return send(429, { error: "rate_limited", detail: "Outreach send limit reached (60/hour) — protects your sender reputation." });
   try {
     if (req.method === "GET" && req.url === "/api/health") return send(200, { ok: true, dfsConfigured: !!fileCreds() });
     if (req.method === "GET" && req.url.startsWith("/px.js")) {
@@ -843,7 +1066,7 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -872,6 +1095,11 @@ http.createServer(async (req, res) => {
         : req.url === "/api/webflow/publish" ? await handleWebflowPublish(body)
         : req.url === "/api/pixel/verify" ? handlePixelVerify(body, req)
         : req.url === "/api/pixel/status" ? handlePixelStatus(body)
+        : req.url === "/api/audit/website" ? await handleAuditWebsite(body)
+        : req.url === "/api/audit/profile" ? await handleAuditProfile(body)
+        : req.url === "/api/leads/search" ? await handleLeadsSearch(body)
+        : req.url === "/api/scrape-email" ? await handleScrapeEmail(body)
+        : req.url === "/api/outreach/send" ? await handleOutreachSend(body)
         : await handleRerun(body);
       return send(code, payload);
     }

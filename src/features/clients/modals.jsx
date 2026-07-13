@@ -336,8 +336,9 @@ function ConnectProfileModal({ provider, client, project, loc, accent, onConnect
   );
 }
 
-export function ProjectSettingsModal({ client, project, company, onUpdate, dfsConnected, accent, onClose }) {
+export function ProjectSettingsModal({ client, project, company, onUpdate, dfsConnected, accent, onClose, onArchive = null, onActivate = null, onDelete = null }) {
   const [tab, setTab] = useState("sources");
+  const [confirmDel, setConfirmDel] = useState(false);
   const [openMember, setOpenMember] = useState(null);
   const [newLocName, setNewLocName] = useState("");
   const locs = project.locations && project.locations.length
@@ -577,6 +578,43 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
             setWidget={(group, key, val) => onUpdate((p) => ({ widgets: { ...p.widgets, [group]: { ...(p.widgets[group] || {}), [key]: val } } }))} />
         </div>
       )}
+
+      {/* ---- archive controls: archive an active project; activate or
+             permanently delete an archived one ---- */}
+      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-4">
+        {!project.archived && onArchive && (
+          <>
+            <button onClick={onArchive}
+              className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2 text-[12px] font-semibold text-amber-700 hover:border-amber-300">
+              Move project to archive
+            </button>
+            <span className="text-[10.5px] text-gray-400">Paused work? Archiving hides the project from the sidebar & all views — data stays intact and it can be activated any time.</span>
+          </>
+        )}
+        {project.archived && (
+          <>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-gray-500">Archived{project.archivedAt ? ` · ${new Date(project.archivedAt).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })}` : ""}</span>
+            {onActivate && (
+              <button onClick={onActivate}
+                className="rounded-lg px-3.5 py-2 text-[12px] font-semibold text-white" style={{ background: accent }}>
+                Activate project
+              </button>
+            )}
+            {onDelete && (confirmDel ? (
+              <span className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5">
+                <span className="text-[11px] font-semibold text-red-700">Delete "{project.name}" and ALL its data permanently?</span>
+                <button onClick={onDelete} className="rounded-md bg-red-600 px-2.5 py-1 text-[11px] font-bold text-white">Yes, delete</button>
+                <button onClick={() => setConfirmDel(false)} className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600">Cancel</button>
+              </span>
+            ) : (
+              <button onClick={() => setConfirmDel(true)}
+                className="rounded-lg border border-red-200 px-3.5 py-2 text-[12px] font-semibold text-red-600 hover:bg-red-50">
+                Delete project
+              </button>
+            ))}
+          </>
+        )}
+      </div>
     </Modal>
   );
 }

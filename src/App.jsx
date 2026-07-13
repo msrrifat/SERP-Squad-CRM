@@ -42,6 +42,8 @@ const AdsView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsView");
 const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsPerformanceView");
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
+const ResearchToolsView = lazyOf(() => import("./features/research/tools.jsx"), "ResearchToolsView");
+const GrowthView = lazyOf(() => import("./features/growth/prospects.jsx"), "GrowthView");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
 const AgentLauncher = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentLauncher");
@@ -63,6 +65,8 @@ export default function App() {
   const [modal, setModal] = useState(null); // {type:"addClient"|"addProject"|"clientSettings"|"companySettings", clientId?}
   const [screen, setScreen] = useState("app");      // "app" | "login"
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
+  const [toolView, setToolView] = useState(null); // { area: "research"|"growth", tab } — agency-level tool screens
+  const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
   const [session, setSession] = useState(null);     // { clientId } when a client is signed in
   const [teamSession, setTeamSession] = useState(null); // { memberId } when a team member (not the owner) is signed in
@@ -118,7 +122,9 @@ export default function App() {
   /* a signed-in member only sees projects they're assigned to AND have at least
      one granted section on (Project settings → Team); admins see everything */
   const visibleClients = useMemo(() => {
-    if (isAdmin) return clients;
+    /* archived projects never appear in the working sidebar/nav — they live
+       in the collapsible "Archived projects" section until reactivated */
+    if (isAdmin) return clients.map((c) => ({ ...c, projects: c.projects.filter((p) => !p.archived) }));
     const assignedAll = currentUser?.projects === "all";
     const ids = new Set(Array.isArray(currentUser?.projects) ? currentUser.projects : []);
     const autoKeys = ROLE_AUTO_SECTIONS[currentUser?.role] || [];
@@ -127,6 +133,7 @@ export default function App() {
       /* privacy: non-admins see the client alias (if set), never the real name */
       name: c.alias?.trim() ? c.alias.trim() : c.name,
       projects: c.projects.filter((p) => {
+        if (p.archived) return false;
         if (!(assignedAll || ids.has(p.id))) return false;
         /* at least one EFFECTIVE section (role autos can be revoked per project) */
         const manual = (p.teamAccess || {})[currentUser?.id] || {};
@@ -136,6 +143,26 @@ export default function App() {
       }),
     })).filter((c) => c.projects.length > 0);
   }, [clients, isAdmin, currentUser]);
+
+  /* archived projects, flat — admin-managed from the sidebar section */
+  const archivedProjects = useMemo(
+    () => clients.flatMap((c) => c.projects.filter((p) => p.archived).map((p) => ({ client: c, project: p }))),
+    [clients]);
+  const setProjectFlag = (cid, pid, patch) =>
+    setClients((cs) => cs.map((c) => c.id !== cid ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...patch } : p)) }));
+  const archiveProject = (cid, pid, name) => {
+    setProjectFlag(cid, pid, { archived: true, archivedAt: Date.now() });
+    logActivity("Archived project", name);
+  };
+  const activateProject = (cid, pid, name) => {
+    setProjectFlag(cid, pid, { archived: false, archivedAt: null });
+    logActivity("Activated project from archive", name);
+    setActiveClientId(cid); setActiveProjectId(pid); setToolView(null); setAccountView(null);
+  };
+  const deleteProjectHard = (cid, pid, name) => {
+    setClients((cs) => cs.map((c) => (c.id !== cid ? c : { ...c, projects: c.projects.filter((p) => p.id !== pid) })));
+    logActivity("Deleted archived project permanently", name);
+  };
 
   const activeClient = visibleClients.find((c) => c.id === activeClientId) || visibleClients[0];
   const project = activeClient?.projects.find((p) => p.id === activeProjectId) || activeClient?.projects[0];
@@ -494,7 +521,7 @@ export default function App() {
   };
   const toggleExpand = (cid) => setExpanded((s) => { const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n; });
   const selectProject = (cid, pid) => {
-    setActiveClientId(cid); setActiveProjectId(pid); setView("overview"); setSection("performance"); setAccountView(null);
+    setActiveClientId(cid); setActiveProjectId(pid); setView("overview"); setSection("performance"); setAccountView(null); setToolView(null);
     const cl = clients.find((c) => c.id === cid); const pr = cl?.projects.find((p) => p.id === pid);
     if (pr) logActivity("Viewed project", `${pr.name} (${cl.name})`);
   };
@@ -672,6 +699,63 @@ export default function App() {
                 </div>
               );
             })}
+
+            {/* ---- Archived projects: parked work, reactivate any time ---- */}
+            {canClients && (
+              <div className="mt-2 border-t border-gray-100 pt-2">
+                <button onClick={() => setArchOpen((v) => !v)} className="flex w-full items-center gap-1.5 rounded-xl px-1.5 py-1.5 text-left hover:bg-gray-50">
+                  {archOpen ? <ChevronDown size={13} className="shrink-0 text-gray-400" /> : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+                  <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Archived projects</span>
+                  <span className="ll-mono ml-auto rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] font-bold text-gray-400">{archivedProjects.length}</span>
+                </button>
+                {archOpen && (
+                  <div className="ml-4 border-l border-gray-100 pl-2">
+                    {archivedProjects.length === 0 && <div className="px-2 py-1.5 text-[11px] text-gray-300">Nothing archived — use "Move to archive" in a project's settings.</div>}
+                    {archivedProjects.map(({ client: c, project: p }) => (
+                      <div key={p.id} className="group flex items-center gap-0.5 rounded-lg hover:bg-gray-50">
+                        <span className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 opacity-60">
+                          <ProjectMark project={p} />
+                          <span className="min-w-0">
+                            <span className="block truncate text-[12px] font-medium text-gray-500">{p.name}</span>
+                            <span className="block truncate text-[9.5px] text-gray-400">{c.name}</span>
+                          </span>
+                        </span>
+                        <button onClick={() => setModal({ type: "projectSettings", clientId: c.id, projectId: p.id })} title="Archived project settings — activate or delete"
+                          className="mr-1 rounded-md p-1 text-gray-300 opacity-0 hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100">
+                          <Settings size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ---- agency-level tool areas ---- */}
+            {isAdmin && (
+              <>
+                <div className="mt-2 border-t border-gray-100 pt-2">
+                  <div className="px-1.5 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Research &amp; Audit Tools</div>
+                  {[["profile", "Business Profile Audit", Building2], ["website", "Website Audit", Globe], ["listings", "Business Listings Checker", MapPin], ["index", "Index Checker", Search], ["report", "Audit Report", FileTextIcon]].map(([key, label, Icon]) => (
+                    <button key={key} onClick={() => { setToolView({ area: "research", tab: key }); setAccountView(null); }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] font-medium hover:bg-gray-50"
+                      style={toolView?.area === "research" && toolView?.tab === key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #4B5563)" }}>
+                      <Icon size={13} className="shrink-0" /> {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mb-2 mt-2 border-t border-gray-100 pt-2">
+                  <div className="px-1.5 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Growth &amp; Prospects</div>
+                  {[["finder", "Lead Finder", Target], ["prospects", "Prospect List", FolderOpen], ["outreach", "Outreach Campaigns", Send]].map(([key, label, Icon]) => (
+                    <button key={key} onClick={() => { setToolView({ area: "growth", tab: key }); setAccountView(null); }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] font-medium hover:bg-gray-50"
+                      style={toolView?.area === "growth" && toolView?.tab === key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #4B5563)" }}>
+                      <Icon size={13} className="shrink-0" /> {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
           {canClients && (
             <div className="grid grid-cols-2 gap-2 p-3">
@@ -735,6 +819,32 @@ export default function App() {
               {accountView === "team" && isAdmin && (
                 <TeamView team={company.team || []} clients={clients} activity={company.activity || []} dms={company.dms || {}}
                   accent={accent} onOpenTask={openAssignedTask} />
+              )}
+            </Lazy>
+          </>
+        ) : toolView && !clientView ? (
+          <>
+            <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
+              <div className="ll-display text-[14px] font-semibold text-gray-700">
+                {toolView.area === "research" ? "Research & Audit Tools" : "Growth & Prospects"}
+              </div>
+              <div className="flex items-center gap-2">
+                <DarkToggle dark={dark} setDark={setDark} />
+                <button onClick={() => setAccountView("settings")} title="Account settings" className="rounded-full ring-2 ring-transparent hover:ring-gray-300">
+                  <Ava name={meName} img={currentUser?.avatar} size={32} />
+                </button>
+              </div>
+            </div>
+            <Lazy>
+              {toolView.area === "research" && (
+                <ResearchToolsView tab={toolView.tab} setTab={(t) => setToolView({ area: "research", tab: t })}
+                  company={company} accent={accent} aiConfig={aiConfig}
+                  placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs} />
+              )}
+              {toolView.area === "growth" && (
+                <GrowthView tab={toolView.tab} setTab={(t) => setToolView({ area: "growth", tab: t })}
+                  company={company} onUpdateCompany={updateCompany} accent={accent} aiConfig={aiConfig}
+                  placesKey={company.apis?.googlePlaces?.values?.apiKey} />
               )}
             </Lazy>
           </>
@@ -878,6 +988,9 @@ export default function App() {
             onUpdate={(patch) => setClients((cs) => cs.map((c) => c.id !== mc.id ? c : {
               ...c, projects: c.projects.map((p) => (p.id === mp.id ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
             }))}
+            onArchive={() => { archiveProject(mc.id, mp.id, mp.name); setModal(null); }}
+            onActivate={() => { activateProject(mc.id, mp.id, mp.name); setModal(null); }}
+            onDelete={() => { deleteProjectHard(mc.id, mp.id, mp.name); setModal(null); }}
             onClose={() => setModal(null)} />
         );
       })()}
