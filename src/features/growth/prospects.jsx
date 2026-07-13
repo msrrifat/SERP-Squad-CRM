@@ -472,7 +472,9 @@ function Outreach({ accent, company, growth, commit, aiConfig }) {
               </div>
             ))}
             {(camp.followUps || []).length < 3 && (
-              <button onClick={() => patchCamp(camp.id, (c) => ({ followUps: [...(c.followUps || []), { afterDays: 4, body: "Last note from me — should I close the file on {{name}}, or is a free audit worth 10 minutes?" }] }))}
+              <button onClick={() => patchCamp(camp.id, (c) => ({ followUps: [...(c.followUps || []), { afterDays: 4, body: (camp.guest || folderIsGuest(camp.folder))
+                ? "Last one from me — if guest posts aren't a fit for {{name}} right now, no worries at all. If they are, my best {{niche}} topic ideas are one reply away."
+                : "Last note from me — should I close the file on {{name}}, or is a free audit worth 10 minutes?" }] }))}
                 className="flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[11.5px] font-medium text-gray-500"><Plus size={12} /> Add follow-up step</button>
             )}
           </div>
