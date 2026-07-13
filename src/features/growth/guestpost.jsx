@@ -56,16 +56,22 @@ function demoSites(niche) {
   const words = niche.toLowerCase().split(/\s+/).filter(Boolean);
   const w = words[0] || "niche";
   const pre = ["the", "daily", "modern", "smart", "pro", "all", "best", "my"], suf = ["blog", "hub", "times", "weekly", "insider", "journal", "digest", "world"];
-  return Array.from({ length: 12 + Math.floor(r() * 5) }, (_, i) => {
+  const seen = new Set(), rows = [];
+  const target = 12 + Math.floor(r() * 5);
+  let guard = 0;
+  while (rows.length < target && guard++ < 200) {
     const domain = `${pre[Math.floor(r() * pre.length)]}${w}${suf[Math.floor(r() * suf.length)]}.com`;
-    return {
+    if (seen.has(domain)) continue; // dedupe by domain, like the live search
+    seen.add(domain);
+    rows.push({
       domain, url: `https://${domain}/write-for-us`, demo: true,
       title: `Write for Us — ${domain.split(".")[0]}`, snippet: `We accept high-quality ${niche} guest posts. Read the guidelines and pitch your topic…`,
       footprint: FOOTPRINTS[Math.floor(r() * 5)].q,
       authority: Math.round((2 + r() * 5) * 10) / 10, traffic: Math.floor(r() * 40000),
       email: "", socials: [],
-    };
-  });
+    });
+  }
+  return rows;
 }
 
 export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, oprKey }) {
