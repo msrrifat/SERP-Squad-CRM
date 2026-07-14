@@ -159,9 +159,11 @@ export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBa
   };
   const submit = () => {
     const eml = email.trim().toLowerCase();
-    // team members and clients share this door; blank passwords never match either way
-    const m = (company.team || []).find((m) => m.password && m.email.trim().toLowerCase() === eml && m.password === password);
-    if (m) { start2fa({ kind: "team", id: m.id, email: eml }); return; }
+    // team members (incl. the owner) and clients share this door; email OR
+    // username works for team accounts; blank passwords never match
+    const m = (company.team || []).find((m) => m.password && m.password === password
+      && (m.email.trim().toLowerCase() === eml || (m.username || "").trim().toLowerCase() === eml));
+    if (m) { start2fa({ kind: "team", id: m.id, email: m.email.trim().toLowerCase() }); return; }
     const c = clients.find((c) =>
       c.login?.enabled &&
       c.login.password &&
@@ -205,7 +207,7 @@ export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBa
         </Card>
         ) : (
         <Card className="space-y-3 p-5">
-          <Labeled label="Email">
+          <Labeled label="Email or username">
             <input value={email} onChange={(e) => { setEmail(e.target.value); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="you@company.com" className={inputCls} />
           </Labeled>
@@ -230,7 +232,7 @@ export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBa
             Demo team account ({demoTeam.role}): <span className="ll-mono">{demoTeam.email}</span> / <span className="ll-mono">{demoTeam.password}</span>
           </div>
         )}
-        <button onClick={onBack} className="mt-4 w-full text-center text-[12px] text-gray-400 hover:text-gray-600">← Back to agency dashboard</button>
+        {onBack && <button onClick={onBack} className="mt-4 w-full text-center text-[12px] text-gray-400 hover:text-gray-600">← Back to agency dashboard</button>}
       </div>
     </div>
   );

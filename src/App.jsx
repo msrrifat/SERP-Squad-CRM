@@ -62,12 +62,14 @@ export default function App() {
   const [cmp, setCmp] = useState(3);
   const [clientView, setClientView] = useState(false);
   const [modal, setModal] = useState(null); // {type:"addClient"|"addProject"|"clientSettings"|"companySettings", clientId?}
-  const [screen, setScreen] = useState("app");      // "app" | "login"
+  /* LOGIN-FIRST: nobody (owner included) sees the dashboard without signing
+     in. A signed-in session persists in this browser via ss_auth. */
+  const [screen, setScreen] = useState(() => (localStorage.getItem("ss_auth") ? "app" : "login")); // "app" | "login"
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
   const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
   const [session, setSession] = useState(null);     // { clientId } when a client is signed in
-  const [teamSession, setTeamSession] = useState(null); // { memberId } when a team member (not the owner) is signed in
+  const [teamSession, setTeamSession] = useState(null); // { memberId } when a team member OR the owner is signed in
   useEffect(() => { setAccountView(null); setPmJump(null); }, [teamSession?.memberId]); // personal screens never leak across user switches
   useEffect(() => { setAppOrigin(company.appDomain); }, [company.appDomain]); // pixel & public URLs follow the configured/hosted domain
   const [showReport, setShowReport] = useState(null); // null | "performance" | "work"
@@ -78,8 +80,7 @@ export default function App() {
   const [reportAi, setReportAi] = useState(null);   // { summary, run } — written by the agent
   const reportRun = useRef(0);
 
-  /* the sign-in screen has no dashboard button (it lives on the agency's website
-     in production) — it's reachable via yourapp.com/#login for clients & team */
+  /* the sign-in screen is the front door — also reachable any time via #login */
   const [shareView, setShareView] = useState(null); // public read-only geo-grid report id
   useEffect(() => {
     const onHash = () => {
@@ -90,6 +91,21 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  /* restore the signed-in session on load; anything stale falls back to login */
+  useEffect(() => {
+    try {
+      const a = JSON.parse(localStorage.getItem("ss_auth") || "null");
+      if (a?.kind === "team" && (company.team || []).some((m) => m.id === a.id)) { setTeamSession({ memberId: a.id }); return; }
+      if (a?.kind === "client" && clients.some((c) => c.id === a.id && c.login?.enabled)) { setSession({ clientId: a.id }); return; }
+      if (a) { localStorage.removeItem("ss_auth"); setScreen("login"); }
+    } catch { localStorage.removeItem("ss_auth"); setScreen("login"); }
+  }, []); // eslint-disable-line
+  const persistAuth = (kind, id) => localStorage.setItem("ss_auth", JSON.stringify({ kind, id, at: Date.now() }));
+  const signOut = () => {
+    localStorage.removeItem("ss_auth");
+    setTeamSession(null); setSession(null); setAccountView(null); setScreen("login");
+  };
 
   const logActivity = (action, target = "") =>
     setCompany((c) => {
@@ -533,7 +549,7 @@ export default function App() {
     if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark}
       onUpdateClient={(patch) => setClients((cs) => cs.map((c) => (c.id !== sc.id ? c : { ...c, ...(typeof patch === "function" ? patch(c) : patch) })))}
       onUpdateProject={(pid, patch) => setClients((cs) => cs.map((c) => c.id !== sc.id ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)) }))}
-      onLogout={() => { setSession(null); setScreen("app"); }} /></Lazy>;
+      onLogout={signOut} /></Lazy>;
   }
   if (screen === "company") {
     return <Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
@@ -549,8 +565,9 @@ export default function App() {
   }
   if (screen === "login") {
     return <Lazy><LoginScreen company={company} clients={clients} dark={dark}
-      onLogin={(clientId) => { setSession({ clientId }); setScreen("app"); }}
+      onLogin={(clientId) => { persistAuth("client", clientId); setSession({ clientId }); setScreen("app"); }}
       onTeamLogin={(memberId) => {
+        persistAuth("team", memberId);
         setTeamSession({ memberId }); setScreen("app");
         setSection("performance"); setView("overview");
         const m = (company.team || []).find((x) => x.id === memberId);
@@ -561,8 +578,7 @@ export default function App() {
             if (p) { setActiveClientId(c.id); setActiveProjectId(p.id); break; }
           }
         }
-      }}
-      onBack={() => setScreen("app")} /></Lazy>;
+      }} /></Lazy>;
   }
   if (showReport && project && data) {
     const rwl = activeClient?.whiteLabel;
@@ -765,7 +781,7 @@ export default function App() {
                 <div className="truncate text-[12px] font-semibold text-gray-700">{currentUser?.name}</div>
                 <div className="text-[10.5px] text-gray-400">{currentUser?.role} · {visibleClients.reduce((n, c) => n + c.projects.length, 0)} project(s)</div>
               </div>
-              <button onClick={() => setTeamSession(null)} title="Sign out"
+              <button onClick={signOut} title="Sign out"
                 className="shrink-0 rounded-lg border border-gray-200 p-1.5 text-gray-400 hover:border-gray-300 hover:text-gray-600">
                 <LogOut size={13} />
               </button>

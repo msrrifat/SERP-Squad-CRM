@@ -109,7 +109,7 @@ export const SEED_COMPANY = {
   // Claude ships connected in the demo so editor AI suggestions work out of the box
   apis: { claude: { values: { apiKey: "sk-ant-demo-key", model: "claude-sonnet-5" }, connected: true } },
   team: [
-    { id: "u1", name: "You (Owner)", email: "owner@serpsquad.io", password: "", role: "Admin", projects: "all", perms: { ...ROLE_PRESETS.Admin }, isOwner: true, title: "Founder & SEO Lead", phone: "+1 212 555 0100", avatar: null },
+    { id: "u1", name: "You (Owner)", username: "SERP_Squad", email: "serpsquad@gmail.com", password: "SERPapp$login164418", role: "Admin", projects: "all", perms: { ...ROLE_PRESETS.Admin }, isOwner: true, title: "Founder & SEO Lead", phone: "+1 212 555 0100", avatar: null },
     { id: "u2", name: "Rifat Hasan", email: "rifat@serpsquad.io", password: "squad123", role: "Manager", projects: ["p1", "p2"], perms: { ...ROLE_PRESETS.Manager }, title: "SEO Manager", phone: "+880 17 5550 1122", avatar: null },
     { id: "u3", name: "Sara Lim", email: "sara@serpsquad.io", password: "squad123", role: "Content Developer", projects: ["p4"], perms: { ...ROLE_PRESETS["Content Developer"] }, title: "Content & Reporting", phone: "+65 8555 0177", avatar: null },
   ],
