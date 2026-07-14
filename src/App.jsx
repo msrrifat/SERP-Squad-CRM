@@ -63,8 +63,10 @@ export default function App() {
   const [clientView, setClientView] = useState(false);
   const [modal, setModal] = useState(null); // {type:"addClient"|"addProject"|"clientSettings"|"companySettings", clientId?}
   /* LOGIN-FIRST: nobody (owner included) sees the dashboard without signing
-     in. A signed-in session persists in this browser via ss_auth. */
-  const [screen, setScreen] = useState(() => (localStorage.getItem("ss_auth") ? "app" : "login")); // "app" | "login"
+     in. The session token (ss_token) gates the server data API; app data is
+     loaded from and saved to the server so it survives reloads. */
+  const [screen, setScreen] = useState(() => (localStorage.getItem("ss_token") ? "app" : "login")); // "app" | "login"
+  const [hydrated, setHydrated] = useState(false); // true once state is loaded from the server (or first-run decided)
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
   const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
@@ -94,20 +96,67 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  /* restore the signed-in session on load; anything stale falls back to login */
+  /* on load with a token: pull the persisted workspace from the server and
+     restore the signed-in identity. A stale/invalid token → back to login. */
   useEffect(() => {
-    try {
-      const a = JSON.parse(localStorage.getItem("ss_auth") || "null");
-      if (a?.kind === "team" && (company.team || []).some((m) => m.id === a.id)) { setTeamSession({ memberId: a.id }); setAccountView("assignments"); return; }
-      if (a?.kind === "client" && clients.some((c) => c.id === a.id && c.login?.enabled)) { setSession({ clientId: a.id }); return; }
-      if (a) { localStorage.removeItem("ss_auth"); setScreen("login"); }
-    } catch { localStorage.removeItem("ss_auth"); setScreen("login"); }
+    const token = localStorage.getItem("ss_token");
+    if (!token) { setHydrated(true); return; }
+    (async () => {
+      try {
+        const r = await fetch("/api/state", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(20000) });
+        if (r.status === 401) { localStorage.removeItem("ss_token"); setScreen("login"); setHydrated(true); return; }
+        const d = await r.json();
+        if (d.state?.company) setCompany(d.state.company);
+        if (d.state?.clients) setClients(d.state.clients);
+        const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
+        if (idn?.kind === "team") { setTeamSession({ memberId: idn.id }); setAccountView("assignments"); }
+        else if (idn?.kind === "client") setSession({ clientId: idn.id });
+        else { localStorage.removeItem("ss_token"); setScreen("login"); }
+      } catch { /* server unreachable — keep the login gate, data will sync once reachable */ setScreen("login"); }
+      finally { setHydrated(true); }
+    })();
   }, []); // eslint-disable-line
-  const persistAuth = (kind, id) => localStorage.setItem("ss_auth", JSON.stringify({ kind, id, at: Date.now() }));
+
+  /* the signed-in identity from the server login */
+  const onAuthed = (token, identity) => {
+    localStorage.setItem("ss_token", token);
+    localStorage.setItem("ss_identity", JSON.stringify(identity));
+    setHydrated(true);
+    /* pull the latest server state so a second browser sees shared data */
+    fetch("/api/state", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
+      if (d?.state?.company) setCompany(d.state.company);
+      if (d?.state?.clients) setClients(d.state.clients);
+    }).catch(() => {});
+    if (identity.kind === "team") {
+      setTeamSession({ memberId: identity.id }); setScreen("app");
+      setSection("performance"); setView("overview"); setAccountView("assignments");
+      const m = (company.team || []).find((x) => x.id === identity.id);
+      if (m && m.projects !== "all") {
+        for (const c of clients) { const p = c.projects.find((pp) => (m.projects || []).includes(pp.id)); if (p) { setActiveClientId(c.id); setActiveProjectId(p.id); break; } }
+      }
+    } else { setSession({ clientId: identity.id }); setScreen("app"); }
+  };
   const signOut = () => {
-    localStorage.removeItem("ss_auth");
+    const token = localStorage.getItem("ss_token");
+    if (token) fetch("/api/app/logout", { method: "POST", headers: { "X-SS-Token": token } }).catch(() => {});
+    localStorage.removeItem("ss_token"); localStorage.removeItem("ss_identity");
     setTeamSession(null); setSession(null); setAccountView(null); setScreen("login");
   };
+
+  /* persist the workspace to the server whenever it changes (debounced).
+     Only team accounts write; the token gates the API server-side too. */
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    if (!hydrated || !teamSession) return;
+    const token = localStorage.getItem("ss_token");
+    if (!token) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
+        body: JSON.stringify({ state: { company, clients } }) }).catch(() => {});
+    }, 1200);
+    return () => clearTimeout(saveTimer.current);
+  }, [company, clients, hydrated, teamSession]);
 
   const logActivity = (action, target = "") =>
     setCompany((c) => {
@@ -566,22 +615,7 @@ export default function App() {
       onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
   }
   if (screen === "login") {
-    return <Lazy><LoginScreen company={company} clients={clients} dark={dark}
-      onLogin={(clientId) => { persistAuth("client", clientId); setSession({ clientId }); setScreen("app"); }}
-      onTeamLogin={(memberId) => {
-        persistAuth("team", memberId);
-        setTeamSession({ memberId }); setScreen("app");
-        setSection("performance"); setView("overview");
-        setAccountView("assignments"); // first window after sign-in = personal Assignments
-        const m = (company.team || []).find((x) => x.id === memberId);
-        if (m && m.projects !== "all") {
-          // land the member on their first assigned project
-          for (const c of clients) {
-            const p = c.projects.find((pp) => (m.projects || []).includes(pp.id));
-            if (p) { setActiveClientId(c.id); setActiveProjectId(p.id); break; }
-          }
-        }
-      }} /></Lazy>;
+    return <Lazy><LoginScreen company={company} dark={dark} onAuthed={onAuthed} /></Lazy>;
   }
   if (showReport && project && data) {
     const rwl = activeClient?.whiteLabel;

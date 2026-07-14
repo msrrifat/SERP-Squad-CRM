@@ -25,7 +25,7 @@
    per directory through the SERP API, then NAP checks against the result's
    title/snippet. Cost: one live SERP request per directory scanned. */
 import http from "node:http";
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
@@ -188,6 +188,109 @@ const sha = (x) => createHash("sha256").update(String(x)).digest("hex");
 const pending2fa = new Map(); // email → { codeHash, exp, tries }
 const loadDevices = () => { try { return JSON.parse(readFileSync(DEVICES_FILE, "utf8")); } catch { return {}; } };
 const saveDevices = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(DEVICES_FILE, JSON.stringify(d)); };
+
+/* ================= PERSISTENCE + SERVER-SIDE AUTH =================
+   The app's data (company, clients, projects, campaigns, …) now lives in a
+   JSON document on the server — it survives reloads and is shared across
+   every browser. The data API is SESSION-GATED (it contains credentials),
+   so passwords are verified server-side and a token is required to read or
+   write state. Atomic writes (temp + rename) avoid partial files. ---- */
+const STATE_FILE = new URL("./data/app-state.json", import.meta.url);
+const loadState = () => { try { return JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch { return null; } };
+const saveState = (state) => {
+  mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+  const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
+  writeFileSync(tmp, JSON.stringify(state));
+  renameSync(tmp, STATE_FILE); // atomic swap
+};
+/* bootstrap owner — lets the owner sign in on a brand-new server before any
+   state exists; overridable via env so the seeded password isn't the only key */
+const BOOT_OWNER = {
+  username: (process.env.OWNER_USERNAME || "SERP_Squad").toLowerCase(),
+  email: (process.env.OWNER_EMAIL || "serpsquad@gmail.com").toLowerCase(),
+  password: process.env.OWNER_PASSWORD || "SERPapp$login164418",
+};
+/* find a matching account (team member incl. owner, by email OR username; or a
+   client login) against the persisted state, falling back to the boot owner */
+function matchAccount(login, password) {
+  const id = String(login || "").trim().toLowerCase();
+  const pw = String(password || "");
+  if (!id || !pw) return null;
+  const st = loadState();
+  if (st?.company?.team) {
+    const m = st.company.team.find((x) => x.password && x.password === pw
+      && (String(x.email || "").toLowerCase() === id || String(x.username || "").toLowerCase() === id));
+    if (m) return { kind: "team", id: m.id, email: String(m.email || "").toLowerCase() };
+    const c = (st.clients || []).find((c) => c.login?.enabled && c.login.password && c.login.password === pw
+      && String(c.login.email || "").toLowerCase() === id);
+    if (c) return { kind: "client", id: c.id, email: String(c.login.email).toLowerCase() };
+    return null; // state exists but no match — don't fall through to boot owner
+  }
+  /* no state yet → only the bootstrap owner can sign in (to seed the workspace) */
+  if ((id === BOOT_OWNER.username || id === BOOT_OWNER.email) && pw === BOOT_OWNER.password)
+    return { kind: "team", id: "u1", email: BOOT_OWNER.email, boot: true };
+  return null;
+}
+const appSessions = new Map(); // tokenHash → { kind, id, email, exp }
+const pendingLogin = new Map(); // email → { kind, id, exp } (password ok, awaiting 2FA)
+const SESSIONS_FILE = new URL("./data/auth/sessions.json", import.meta.url);
+const loadSessions = () => { try { return JSON.parse(readFileSync(SESSIONS_FILE, "utf8")); } catch { return {}; } };
+const saveSessions = () => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(appSessions))); };
+(function hydrateSessions() { const s = loadSessions(); const now = Date.now(); for (const [th, v] of Object.entries(s)) if (v.exp > now) appSessions.set(th, v); })();
+function mintSession(identity) {
+  const token = randomBytes(32).toString("hex");
+  appSessions.set(sha(token), { kind: identity.kind, id: identity.id, email: identity.email, exp: Date.now() + 30 * 864e5 });
+  saveSessions();
+  return token;
+}
+const sessionFromReq = (req) => {
+  const th = sha(String(req.headers["x-ss-token"] || ""));
+  const s = appSessions.get(th);
+  if (!s) return null;
+  if (Date.now() > s.exp) { appSessions.delete(th); saveSessions(); return null; }
+  return s;
+};
+
+async function handleAppLogin(body) {
+  const acct = matchAccount(body?.login, body?.password);
+  if (!acct) return [401, { error: "bad_credentials", detail: "Email/username or password doesn't match an active account." }];
+  /* trusted device → straight in; new device → email a code first */
+  const dtok = String(body?.deviceToken || "");
+  const trusted = dtok && (loadDevices()[acct.email] || []).some((d) => d.th === sha(dtok) && Date.now() - d.at < 90 * 864e5);
+  if (trusted) return [200, { ok: true, token: mintSession(acct), identity: acct }];
+  pendingLogin.set(acct.email, { kind: acct.kind, id: acct.id, exp: Date.now() + 10 * 60e3 });
+  const [code, payload] = await handle2faStart({ email: acct.email, smtp: body?.smtp });
+  return [code, { ...payload, needs2fa: true, email: acct.email }];
+}
+function handleAppTwofa(body) {
+  const email = String(body?.email || "").trim().toLowerCase();
+  const pend = pendingLogin.get(email);
+  if (!pend || Date.now() > pend.exp) return [401, { error: "no_pending", detail: "Sign in again — the login attempt expired." }];
+  const [code, payload] = handle2faVerify(body); // verifies the emailed code + registers the device
+  if (code !== 200) return [code, payload];
+  pendingLogin.delete(email);
+  const identity = { kind: pend.kind, id: pend.id, email };
+  return [200, { ok: true, token: mintSession(identity), deviceToken: payload.deviceToken, identity }];
+}
+function handleStateGet(req) {
+  if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  return [200, { live: true, state: loadState() }]; // null on first run → client seeds it
+}
+function handleStateSave(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
+  if (sess.kind !== "team") return [403, { error: "forbidden", detail: "Only team accounts can write app state." }];
+  if (!body?.state || typeof body.state !== "object") return [400, { error: "bad_request", detail: "state object required." }];
+  const raw = JSON.stringify(body.state);
+  if (raw.length > 60_000_000) return [413, { error: "too_large", detail: "State exceeds 60 MB — trim large embedded images." }];
+  try { saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now() }]; }
+  catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+}
+function handleAppLogout(req) {
+  const th = sha(String(req.headers["x-ss-token"] || ""));
+  if (appSessions.delete(th)) saveSessions();
+  return [200, { ok: true }];
+}
 
 /* minimal SMTP-over-TLS client (implicit TLS, port 465) — node builtins only */
 /* Minimal SMTP-over-TLS client. opts: { html } sends multipart/alternative
@@ -1507,6 +1610,7 @@ http.createServer(async (req, res) => {
   const ip = req.socket.remoteAddress || "?";
   if (rateLimited(ip, "all", 240, 60e3)) return send(429, { error: "rate_limited", detail: "Too many requests — slow down." });
   if (req.url.startsWith("/api/auth/") && rateLimited(ip, "auth", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many authentication attempts — try again later." });
+  if ((req.url === "/api/app/login" || req.url === "/api/app/2fa") && rateLimited(ip, "applogin", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many sign-in attempts — try again in a few minutes." });
   if (req.url.startsWith("/api/pixel/verify") && rateLimited(ip, "pixel", 30, 60e3)) return send(429, { error: "rate_limited" });
   if (req.url.startsWith("/api/outreach/") && rateLimited(ip, "outreach", 60, 60 * 60e3)) return send(429, { error: "rate_limited", detail: "Outreach send limit reached (60/hour) — protects your sender reputation." });
   try {
@@ -1516,6 +1620,7 @@ http.createServer(async (req, res) => {
       return res.end(PX_JS);
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
+    if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
     /* geo-grid snapshot image for audit emails — key-free, loads from any mail client */
     if (req.method === "GET" && /^\/api\/geo\/snapshot\/[a-f0-9]{24}\.png$/.test(req.url)) {
       try {
@@ -1538,7 +1643,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1580,6 +1685,10 @@ http.createServer(async (req, res) => {
         : req.url === "/api/kw/research" ? await handleKwResearch(body)
         : req.url === "/api/kw/domain" ? await handleKwDomain(body)
         : req.url === "/api/insight/audit" ? await handleInsightAudit(body)
+        : req.url === "/api/app/login" ? await handleAppLogin(body)
+        : req.url === "/api/app/2fa" ? handleAppTwofa(body)
+        : req.url === "/api/app/logout" ? handleAppLogout(req)
+        : req.url === "/api/state" ? handleStateSave(req, body)
         : await handleRerun(body);
       return send(code, payload);
     }

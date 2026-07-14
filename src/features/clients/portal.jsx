@@ -105,72 +105,52 @@ function MessagesPane({ client, brand, accent, maskName, onSend, onReact, onRead
 import { AgentLauncher, AgentPanel } from "../agent/AgentPanel.jsx";
 import { genSiteData, hydrate } from "../../data/gen.js";
 
-export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBack }) {
+export function LoginScreen({ company, dark, onAuthed }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [step, setStep] = useState("creds");     // creds | code — 2FA for new devices
-  const [pendingAuth, setPendingAuth] = useState(null);
+  const [pendEmail, setPendEmail] = useState("");
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
-  const demo = clients.find((c) => c.login?.enabled && c.login.password);
-  const demoTeam = (company.team || []).find((m) => !m.isOwner && m.password);
-  const devKey = (eml) => "ss_trusted_" + eml;
-  const finish = (auth) => (auth.kind === "team" ? onTeamLogin(auth.id) : onLogin(auth.id));
-  /* new device / new browser / cleared storage → server-side email verification */
-  const start2fa = async (auth) => {
-    setBusy(true); setError("");
+  /* password is verified SERVER-SIDE (/api/app/login) against the persisted
+     workspace; a session token is minted only after auth (+2FA on new devices) */
+  const submit = async () => {
+    setBusy(true); setError(""); setNotice(null);
     try {
-      const tok = localStorage.getItem(devKey(auth.email)) || "";
-      const chk = await fetch("/api/auth/device-check", {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(10000),
-        body: JSON.stringify({ email: auth.email, deviceToken: tok }),
-      }).then((r) => r.json());
-      if (chk.trusted) { finish(auth); return; }
-      const r2 = await fetch("/api/auth/2fa/start", {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({ email: auth.email, smtp: company.apis?.smtp?.values }),
+      const r = await fetch("/api/app/login", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000),
+        body: JSON.stringify({ login: email.trim(), password, deviceToken: localStorage.getItem("ss_dev_token") || "", smtp: company.apis?.smtp?.values }),
       });
-      const d2 = await r2.json().catch(() => ({}));
-      if (!r2.ok) { setError(d2.detail || "Could not send the verification code."); return; }
-      setPendingAuth(auth); setStep("code"); setCode("");
-      setNotice(d2.demo
-        ? { kind: "demo", text: `New device detected. Email service isn't configured — DEMO code (local testing only): ${d2.devCode}` }
-        : { kind: "info", text: `New device or browser detected — we emailed a 6-digit code to ${auth.email}. It expires in 10 minutes.` });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 401) { setError(d.detail || "Email/username or password doesn't match an active account."); return; }
+      if (d.token) { onAuthed(d.token, d.identity); return; }         // trusted device — straight in
+      if (r.ok && d.needs2fa) {
+        setPendEmail(d.email); setStep("code"); setCode("");
+        setNotice(d.demo
+          ? { kind: "demo", text: `New device detected. Email service isn't configured — DEMO code (local testing only): ${d.devCode}` }
+          : { kind: "info", text: `New device or browser detected — we emailed a 6-digit code to ${d.email}. It expires in 10 minutes.` });
+        return;
+      }
+      setError(d.detail || "Sign-in failed.");
     } catch {
-      /* fail CLOSED: without the security server nobody signs in */
-      setError("Security server unreachable — start the API server (npm run api). New-device verification is required to sign in.");
+      setError("Sign-in server unreachable — start the API server (npm run api). Sign-in is required.");
     } finally { setBusy(false); }
   };
   const verify = async () => {
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/auth/2fa/verify", {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(10000),
-        body: JSON.stringify({ email: pendingAuth.email, code: code.trim(), ua: navigator.userAgent }),
+      const r = await fetch("/api/app/2fa", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({ email: pendEmail, code: code.trim(), ua: navigator.userAgent }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setError(d.detail || "Wrong code."); return; }
-      localStorage.setItem(devKey(pendingAuth.email), d.deviceToken); // this browser is now a trusted device
-      finish(pendingAuth);
-    } catch { setError("Security server unreachable — try again."); }
+      if (d.deviceToken) localStorage.setItem("ss_dev_token", d.deviceToken); // this browser is now trusted
+      onAuthed(d.token, d.identity);
+    } catch { setError("Verification server unreachable — try again."); }
     finally { setBusy(false); }
-  };
-  const submit = () => {
-    const eml = email.trim().toLowerCase();
-    // team members (incl. the owner) and clients share this door; email OR
-    // username works for team accounts; blank passwords never match
-    const m = (company.team || []).find((m) => m.password && m.password === password
-      && (m.email.trim().toLowerCase() === eml || (m.username || "").trim().toLowerCase() === eml));
-    if (m) { start2fa({ kind: "team", id: m.id, email: m.email.trim().toLowerCase() }); return; }
-    const c = clients.find((c) =>
-      c.login?.enabled &&
-      c.login.password &&
-      c.login.email.trim().toLowerCase() === eml &&
-      c.login.password === password
-    );
-    if (c) { start2fa({ kind: "client", id: c.id, email: eml }); } else { setError("Email or password doesn't match an active client or team account."); }
   };
   return (
     <div className={`ll-root ${dark ? "ll-dark" : ""} flex min-h-screen items-center justify-center bg-[#F5F6F8] p-4`}>
@@ -200,7 +180,7 @@ export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBa
             {busy ? "Verifying…" : "Verify & sign in"}
           </button>
           <div className="flex items-center justify-between text-[11.5px]">
-            <button onClick={() => start2fa(pendingAuth)} disabled={busy} className="font-semibold" style={{ color: company.accent }}>Resend code</button>
+            <button onClick={submit} disabled={busy} className="font-semibold" style={{ color: company.accent }}>Resend code</button>
             <button onClick={() => { setStep("creds"); setError(""); setNotice(null); }} className="text-gray-400 hover:text-gray-600">← Back</button>
           </div>
           <div className="text-[10px] leading-relaxed text-gray-400">This device will be remembered for 90 days. Clearing your browser data or using a new browser asks for a fresh code.</div>
@@ -222,17 +202,7 @@ export function LoginScreen({ company, clients, dark, onLogin, onTeamLogin, onBa
           </button>
         </Card>
         )}
-        {step === "creds" && demo && (
-          <div className="mt-3 rounded-xl border border-dashed border-gray-300 p-3 text-center text-[11.5px] text-gray-400">
-            Demo client account: <span className="ll-mono">{demo.login.email}</span> / <span className="ll-mono">{demo.login.password}</span>
-          </div>
-        )}
-        {step === "creds" && demoTeam && (
-          <div className="mt-2 rounded-xl border border-dashed border-gray-300 p-3 text-center text-[11.5px] text-gray-400">
-            Demo team account ({demoTeam.role}): <span className="ll-mono">{demoTeam.email}</span> / <span className="ll-mono">{demoTeam.password}</span>
-          </div>
-        )}
-        {onBack && <button onClick={onBack} className="mt-4 w-full text-center text-[12px] text-gray-400 hover:text-gray-600">← Back to agency dashboard</button>}
+        <div className="mt-3 text-center text-[10.5px] text-gray-400">Data is stored on your server — you stay signed in on this device for 30 days.</div>
       </div>
     </div>
   );
