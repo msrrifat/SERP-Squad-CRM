@@ -55,8 +55,8 @@ const Lazy = ({ children }) => <React.Suspense fallback={<ScreenLoader />}>{chil
 export default function App() {
   const [company, setCompany] = useState(SEED_COMPANY);
   const [clients, setClients] = useState(SEED_CLIENTS);
-  const [activeClientId, setActiveClientId] = useState(SEED_CLIENTS[0].id);
-  const [activeProjectId, setActiveProjectId] = useState(SEED_CLIENTS[0].projects[0].id);
+  const [activeClientId, setActiveClientId] = useState(SEED_CLIENTS[0]?.id || null);
+  const [activeProjectId, setActiveProjectId] = useState(SEED_CLIENTS[0]?.projects[0]?.id || null);
   const [expanded, setExpanded] = useState(() => new Set(SEED_CLIENTS.map((c) => c.id)));
   const [view, setView] = useState("overview");
   const [cmp, setCmp] = useState(3);
@@ -931,6 +931,22 @@ export default function App() {
         </div>
 
         <div className="mx-auto max-w-6xl p-5">
+          {!project && (
+            <div className="ll-fade mx-auto mt-10 max-w-lg rounded-2xl border border-gray-200 bg-white p-8 text-center">
+              <div className="ll-display text-[18px] font-bold">Welcome to {company.name}</div>
+              <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-gray-500">
+                Your workspace is empty and ready to go. Add your first client to create their projects, then connect your
+                API keys in <b>Company settings → API settings</b> to pull real rank, GBP and website data.
+              </p>
+              {canClients && (
+                <button onClick={() => setModal({ type: "addClient" })}
+                  className="mt-5 inline-flex items-center gap-1.5 rounded-xl px-5 py-2.5 text-[13.5px] font-semibold text-white" style={{ background: accent }}>
+                  <Plus size={15} /> Add your first client
+                </button>
+              )}
+              <div className="mt-4 text-[11px] text-gray-400">Or open the agency <b>Tools</b> in the sidebar — Keyword Finder, audits and outreach work without a project.</div>
+            </div>
+          )}
           {project && activeSection === "optimization" && (
             <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} work={logWork} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} /></Lazy>
           )}
