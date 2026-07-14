@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
@@ -1283,6 +1283,8 @@ export function GoogleSourcesCard({ project, onToggle, dfsConnected, accent }) {
 }
 
 export function ProjectDetailsCard({ project, update, accent, picker }) {
+  /* edits stay local until Save is clicked */
+  const { draft, set, dirty, reset } = useDraft(project, ["name", "website", "logo", "accent"]);
   return (
     <Card className="p-5">
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -1290,30 +1292,31 @@ export function ProjectDetailsCard({ project, update, accent, picker }) {
         {picker}
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        <Labeled label="Project name"><input value={project.name} onChange={(e) => update({ name: e.target.value })} className={inputCls} placeholder="e.g. Bright Smile — Manhattan" /></Labeled>
-        <Labeled label="Website"><input value={project.website} onChange={(e) => update({ website: e.target.value })} className={inputCls} placeholder="example.com" /></Labeled>
+        <Labeled label="Project name"><input value={draft.name} onChange={(e) => set({ name: e.target.value })} className={inputCls} placeholder="e.g. Bright Smile — Manhattan" /></Labeled>
+        <Labeled label="Website"><input value={draft.website} onChange={(e) => set({ website: e.target.value })} className={inputCls} placeholder="example.com" /></Labeled>
       </div>
       <div className="mt-3">
         <Labeled label="Project logo — shows beside the project name">
-          <LogoUpload value={project.logo} onChange={(logo) => update({ logo })} label="Upload project logo" />
+          <LogoUpload value={draft.logo} onChange={(logo) => set({ logo })} label="Upload project logo" />
         </Labeled>
       </div>
       <div className="mt-5 mb-1 flex items-center gap-2"><Palette size={16} style={{ color: accent }} /><span className="ll-display text-[15px] font-semibold">Report color</span></div>
       <p className="mb-3 text-[12px] text-gray-400">Accent used across this project's charts, buttons and highlights.</p>
       <div className="mb-3 flex flex-wrap gap-2">
         {ACCENTS.map((a) => (
-          <button key={a.hex} onClick={() => update({ accent: a.hex })}
+          <button key={a.hex} onClick={() => set({ accent: a.hex })}
             className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-medium"
-            style={{ borderColor: project.accent === a.hex ? a.hex : "#E5E7EB", color: project.accent === a.hex ? a.hex : "#4B5563" }}>
+            style={{ borderColor: draft.accent === a.hex ? a.hex : "#E5E7EB", color: draft.accent === a.hex ? a.hex : "#4B5563" }}>
             <span className="h-3.5 w-3.5 rounded-full" style={{ background: a.hex }} /> {a.name}
           </button>
         ))}
       </div>
       <div className="flex items-center gap-2">
         <label className="text-[12px] text-gray-500">Custom:</label>
-        <input type="color" value={project.accent} onChange={(e) => update({ accent: e.target.value })} className="h-8 w-12 cursor-pointer rounded border border-gray-200" />
-        <span className="ll-mono text-[12px] text-gray-500">{project.accent}</span>
+        <input type="color" value={draft.accent} onChange={(e) => set({ accent: e.target.value })} className="h-8 w-12 cursor-pointer rounded border border-gray-200" />
+        <span className="ll-mono text-[12px] text-gray-500">{draft.accent}</span>
       </div>
+      <SaveBar dirty={dirty} onSave={() => update(draft)} onReset={reset} accent={draft.accent} saveLabel="Save project details" />
     </Card>
   );
 }

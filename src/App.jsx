@@ -70,7 +70,9 @@ export default function App() {
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
   const [session, setSession] = useState(null);     // { clientId } when a client is signed in
   const [teamSession, setTeamSession] = useState(null); // { memberId } when a team member OR the owner is signed in
-  useEffect(() => { setAccountView(null); setPmJump(null); }, [teamSession?.memberId]); // personal screens never leak across user switches
+  // personal screens never leak across user switches; a team member/owner
+  // lands on their Assignments as the first window after signing in
+  useEffect(() => { setAccountView(teamSession ? "assignments" : null); setPmJump(null); }, [teamSession?.memberId]);
   useEffect(() => { setAppOrigin(company.appDomain); }, [company.appDomain]); // pixel & public URLs follow the configured/hosted domain
   const [showReport, setShowReport] = useState(null); // null | "performance" | "work"
   const [range, setRange] = useState(DEFAULT_RANGE);
@@ -96,7 +98,7 @@ export default function App() {
   useEffect(() => {
     try {
       const a = JSON.parse(localStorage.getItem("ss_auth") || "null");
-      if (a?.kind === "team" && (company.team || []).some((m) => m.id === a.id)) { setTeamSession({ memberId: a.id }); return; }
+      if (a?.kind === "team" && (company.team || []).some((m) => m.id === a.id)) { setTeamSession({ memberId: a.id }); setAccountView("assignments"); return; }
       if (a?.kind === "client" && clients.some((c) => c.id === a.id && c.login?.enabled)) { setSession({ clientId: a.id }); return; }
       if (a) { localStorage.removeItem("ss_auth"); setScreen("login"); }
     } catch { localStorage.removeItem("ss_auth"); setScreen("login"); }
@@ -570,6 +572,7 @@ export default function App() {
         persistAuth("team", memberId);
         setTeamSession({ memberId }); setScreen("app");
         setSection("performance"); setView("overview");
+        setAccountView("assignments"); // first window after sign-in = personal Assignments
         const m = (company.team || []).find((x) => x.id === memberId);
         if (m && m.projects !== "all") {
           // land the member on their first assigned project

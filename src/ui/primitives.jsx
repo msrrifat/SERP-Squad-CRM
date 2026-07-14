@@ -250,6 +250,38 @@ export const tooltipStyle = {
   boxShadow: "0 8px 24px rgba(16,24,38,.08)", fontFamily: "Inter, sans-serif",
 };
 export const inputCls = "w-full rounded-lg border border-gray-200 px-3 py-2 text-[13px]";
+
+/* draft-then-save for settings forms: edits stay local until Save is clicked.
+   `keys` are the entity fields this form owns; the draft resyncs when the
+   committed values change externally (e.g. right after a save). */
+export function useDraft(source, keys) {
+  const pick = (o) => Object.fromEntries(keys.map((k) => [k, o?.[k]]));
+  const committed = pick(source);
+  const [draft, setDraft] = useState(committed);
+  const sig = JSON.stringify(committed);
+  useEffect(() => { setDraft(pick(source)); }, [sig]); // eslint-disable-line
+  const set = (patch) => setDraft((d) => ({ ...d, ...(typeof patch === "function" ? patch(d) : patch) }));
+  const dirty = JSON.stringify(draft) !== sig;
+  return { draft, set, dirty, reset: () => setDraft(pick(source)) };
+}
+
+/* sticky action row for settings cards — Save (enabled only when dirty) + Reset */
+export function SaveBar({ dirty, onSave, onReset, accent = "#0E7C66", savedLabel = "Saved", saveLabel = "Save changes" }) {
+  const [flash, setFlash] = useState(false);
+  const save = () => { onSave(); setFlash(true); setTimeout(() => setFlash(false), 1800); };
+  return (
+    <div className="mt-4 flex items-center gap-2 border-t border-gray-100 pt-3">
+      <button onClick={save} disabled={!dirty}
+        className="rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40"
+        style={{ background: flash ? "#16A34A" : accent }}>
+        {flash ? "✓ " + savedLabel : saveLabel}
+      </button>
+      {dirty && <button onClick={onReset} className="rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-medium text-gray-500 hover:border-gray-300">Discard</button>}
+      {dirty && <span className="text-[11px] font-medium text-amber-600">Unsaved changes</span>}
+    </div>
+  );
+}
+
 export function Labeled({ label, children }) {
   return (
     <div>

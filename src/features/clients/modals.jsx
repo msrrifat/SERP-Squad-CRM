@@ -14,29 +14,32 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, ACCENTS, Ava, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { GuideTip, ACCENTS, Ava, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, SaveBar, Toggle, inputCls, useDraft } from "../../ui/primitives.jsx";
 import { GoogleSourcesCard, ProjectDetailsCard, WidgetsCard } from "../performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
 
-export function ClientSettingsBody({ client, onChange }) {
-  const wl = client.whiteLabel;
-  const setWl = (patch) => onChange({ whiteLabel: { ...wl, ...patch } });
-  const lg = client.login;
-  const setLg = (patch) => onChange({ login: { ...lg, ...patch } });
+export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
+  /* every field here stays a local draft until Save is clicked */
+  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "whiteLabel", "login", "dfs"]);
+  const c = draft;
+  const wl = draft.whiteLabel;
+  const setWl = (patch) => set({ whiteLabel: { ...draft.whiteLabel, ...patch } });
+  const lg = draft.login;
+  const setLg = (patch) => set({ login: { ...draft.login, ...patch } });
   return (
       <div className="space-y-5">
         <div>
           <div className="mb-2 flex items-center gap-2"><Users size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Client information</span></div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label="Client name"><input value={client.name} onChange={(e) => onChange({ name: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Contact person"><input value={client.contact} onChange={(e) => onChange({ contact: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Email"><input value={client.email} onChange={(e) => onChange({ email: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Phone"><input value={client.phone} onChange={(e) => onChange({ phone: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Client name"><input value={c.name} onChange={(e) => set({ name: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Contact person"><input value={c.contact} onChange={(e) => set({ contact: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Email"><input value={c.email} onChange={(e) => set({ email: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Phone"><input value={c.phone} onChange={(e) => set({ phone: e.target.value })} className={inputCls} /></Labeled>
           </div>
           <div className="mt-3">
             <Labeled label="Alias shown to team members">
-              <input value={client.alias || ""} onChange={(e) => onChange({ alias: e.target.value })} placeholder="e.g. Dental Client — NYC" className={inputCls} />
+              <input value={c.alias || ""} onChange={(e) => set({ alias: e.target.value })} placeholder="e.g. Dental Client — NYC" className={inputCls} />
             </Labeled>
             <p className="mt-1 text-[10.5px] text-gray-400">
               Non-admin team members see this alias everywhere instead of the real client name — the original client
@@ -48,9 +51,9 @@ export function ClientSettingsBody({ client, onChange }) {
         <div className="border-t border-gray-100 pt-4">
           <div className="mb-2 flex items-center gap-2"><Building2 size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Client company information</span></div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label="Company name"><input value={client.companyName} onChange={(e) => onChange({ companyName: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Company website"><input value={client.companyWebsite} onChange={(e) => onChange({ companyWebsite: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Address"><input value={client.address} onChange={(e) => onChange({ address: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Company name"><input value={c.companyName} onChange={(e) => set({ companyName: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Company website"><input value={c.companyWebsite} onChange={(e) => set({ companyWebsite: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Address"><input value={c.address} onChange={(e) => set({ address: e.target.value })} className={inputCls} /></Labeled>
           </div>
         </div>
 
@@ -62,10 +65,10 @@ export function ClientSettingsBody({ client, onChange }) {
             <div className="ll-fade mt-3 space-y-3 rounded-xl border border-gray-200 p-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Labeled label="White-label brand name">
-                  <input value={wl.name} onChange={(e) => setWl({ name: e.target.value })} placeholder={client.companyName || client.name} className={inputCls} />
+                  <input value={wl.name} onChange={(e) => setWl({ name: e.target.value })} placeholder={c.companyName || c.name} className={inputCls} />
                 </Labeled>
                 <Labeled label="Brand website">
-                  <input value={wl.website} onChange={(e) => setWl({ website: e.target.value })} placeholder={client.companyWebsite} className={inputCls} />
+                  <input value={wl.website} onChange={(e) => setWl({ website: e.target.value })} placeholder={c.companyWebsite} className={inputCls} />
                 </Labeled>
               </div>
               <Labeled label="Brand logo">
@@ -78,15 +81,15 @@ export function ClientSettingsBody({ client, onChange }) {
               </div>
               {/* white-label clients can run on THEIR OWN DataForSEO account */}
               <div className="rounded-xl border border-gray-100 p-3">
-                <Toggle on={!!client.dfs?.useOwn}
-                  onChange={(v) => onChange({ dfs: { login: "", password: "", ...(client.dfs || {}), useOwn: v } })}
+                <Toggle on={!!c.dfs?.useOwn}
+                  onChange={(v) => set({ dfs: { login: "", password: "", ...(c.dfs || {}), useOwn: v } })}
                   label="Client supplies their own DataForSEO API"
                   desc="Disables the agency's DataForSEO credentials for every project of this client. The client adds their own API login in their portal → Settings — until then, scans and rank checks honestly show as not configured (never billed to your account)." />
-                {client.dfs?.useOwn && (
+                {c.dfs?.useOwn && (
                   <div className="mt-2 flex items-center gap-2 text-[11px]">
                     <span className="rounded-full px-2 py-0.5 font-bold uppercase tracking-wide"
-                      style={client.dfs.login && client.dfs.password ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
-                      {client.dfs.login && client.dfs.password ? `● Client API connected (${client.dfs.login})` : "○ Waiting for the client's credentials"}
+                      style={c.dfs.login && c.dfs.password ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
+                      {c.dfs.login && c.dfs.password ? `● Client API connected (${c.dfs.login})` : "○ Waiting for the client's credentials"}
                     </span>
                   </div>
                 )}
@@ -156,6 +159,7 @@ export function ClientSettingsBody({ client, onChange }) {
             </div>
           )}
         </div>
+        <SaveBar dirty={dirty} onSave={() => onChange(draft)} onReset={reset} accent={accent} saveLabel="Save client settings" />
       </div>
   );
 }

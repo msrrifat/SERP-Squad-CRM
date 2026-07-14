@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, Seg, Toggle, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
 import { money, relTime } from "../../lib/format.jsx";
@@ -455,6 +455,8 @@ export function ApiSettingsSection({ company, onChange }) {
 export function CompanyBrandSection({ company, onChange, onGoApis }) {
   const allApis = API_REGISTRY.flatMap((g) => g.items);
   const connectedCount = allApis.filter((a) => apiStatus(company, a)).length;
+  /* edits stay local until Save is clicked */
+  const { draft, set, dirty, reset } = useDraft(company, ["name", "accent", "logo", "appDomain", "sidebarColor", "sidebarText"]);
   return (
     <div className="ll-fade grid gap-5 lg:grid-cols-2">
       <Card className="p-5">
@@ -462,23 +464,23 @@ export function CompanyBrandSection({ company, onChange, onGoApis }) {
         <p className="mb-4 text-[12px] text-gray-400">Your agency identity — shown across the dashboard, client logins and non-white-label reports.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <Labeled label="Company name">
-            <input value={company.name} onChange={(e) => onChange({ name: e.target.value })} className={inputCls} />
+            <input value={draft.name} onChange={(e) => set({ name: e.target.value })} className={inputCls} />
           </Labeled>
           <Labeled label="Brand color">
             <div className="flex items-center gap-2">
-              <input type="color" value={company.accent} onChange={(e) => onChange({ accent: e.target.value })} className="h-9 w-14 cursor-pointer rounded border border-gray-200" />
-              <span className="ll-mono text-[12px] text-gray-500">{company.accent}</span>
+              <input type="color" value={draft.accent} onChange={(e) => set({ accent: e.target.value })} className="h-9 w-14 cursor-pointer rounded border border-gray-200" />
+              <span className="ll-mono text-[12px] text-gray-500">{draft.accent}</span>
             </div>
           </Labeled>
         </div>
         <div className="mt-3">
           <Labeled label="Company logo">
-            <LogoUpload value={company.logo} onChange={(logo) => onChange({ logo })} />
+            <LogoUpload value={draft.logo} onChange={(logo) => set({ logo })} />
           </Labeled>
         </div>
         <div className="mt-3">
           <Labeled label="App domain (pixel & public links)">
-            <input value={company.appDomain || ""} onChange={(e) => onChange({ appDomain: e.target.value })}
+            <input value={draft.appDomain || ""} onChange={(e) => set({ appDomain: e.target.value })}
               placeholder="auto — detected from where the CRM is hosted (e.g. app.serpsquad.com)" className={"ll-mono " + inputCls} />
             <p className="mt-1 text-[10.5px] text-gray-400">
               Leave blank for automatic: when this CRM is served from any real domain or subdomain, pixel snippets and
@@ -490,40 +492,41 @@ export function CompanyBrandSection({ company, onChange, onGoApis }) {
           <Labeled label="Dashboard sidebar background">
             <div className="flex flex-wrap items-center gap-2">
               {["#FFFFFF", "#F8FAFC", "#1F2A44", "#0F172A", "#111827", "#0E7C66", "#312E81", "#3B0764"].map((c) => (
-                <button key={c} onClick={() => onChange({ sidebarColor: c === "#FFFFFF" ? null : c })} title={c}
+                <button key={c} onClick={() => set({ sidebarColor: c === "#FFFFFF" ? null : c })} title={c}
                   className="h-7 w-7 rounded-lg border"
-                  style={{ background: c, borderColor: (company.sidebarColor || "#FFFFFF") === c ? company.accent : "#E5E7EB", borderWidth: (company.sidebarColor || "#FFFFFF") === c ? 2 : 1 }} />
+                  style={{ background: c, borderColor: (draft.sidebarColor || "#FFFFFF") === c ? draft.accent : "#E5E7EB", borderWidth: (draft.sidebarColor || "#FFFFFF") === c ? 2 : 1 }} />
               ))}
-              <input type="color" value={company.sidebarColor || "#FFFFFF"} onChange={(e) => onChange({ sidebarColor: e.target.value })}
+              <input type="color" value={draft.sidebarColor || "#FFFFFF"} onChange={(e) => set({ sidebarColor: e.target.value })}
                 className="h-7 w-12 cursor-pointer rounded border border-gray-200" title="Custom color" />
-              <span className="ll-mono text-[11px] text-gray-500">{company.sidebarColor || "default"}</span>
-              {company.sidebarColor && (
-                <button onClick={() => onChange({ sidebarColor: null })} className="rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-semibold text-gray-500 hover:border-gray-300">Reset</button>
+              <span className="ll-mono text-[11px] text-gray-500">{draft.sidebarColor || "default"}</span>
+              {draft.sidebarColor && (
+                <button onClick={() => set({ sidebarColor: null })} className="rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-semibold text-gray-500 hover:border-gray-300">Reset</button>
               )}
             </div>
-            <p className="mt-1 text-[10.5px] text-gray-400">Sidebar text and icons adapt automatically for readability on the color you pick.</p>
+            <p className="mt-1 text-[10.5px] text-gray-400">Sidebar text and icons adapt automatically for readability on the color you pick. Changes preview after Save.</p>
           </Labeled>
         </div>
         <div className="mt-3">
           <Labeled label="Sidebar text color">
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => onChange({ sidebarText: null })} title="Auto — picked for contrast with the background"
+              <button onClick={() => set({ sidebarText: null })} title="Auto — picked for contrast with the background"
                 className="rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold"
-                style={!company.sidebarText ? { borderColor: company.accent, borderWidth: 2, color: company.accent } : { borderColor: "#E5E7EB", color: "#6B7280" }}>
+                style={!draft.sidebarText ? { borderColor: draft.accent, borderWidth: 2, color: draft.accent } : { borderColor: "#E5E7EB", color: "#6B7280" }}>
                 Auto
               </button>
               {["#F9FAFB", "#E2E8F0", "#FBBF24", "#6EE7B7", "#93C5FD", "#1F2937", "#0F766E"].map((c) => (
-                <button key={c} onClick={() => onChange({ sidebarText: c })} title={c}
+                <button key={c} onClick={() => set({ sidebarText: c })} title={c}
                   className="h-7 w-7 rounded-lg border"
-                  style={{ background: c, borderColor: company.sidebarText === c ? company.accent : "#E5E7EB", borderWidth: company.sidebarText === c ? 2 : 1 }} />
+                  style={{ background: c, borderColor: draft.sidebarText === c ? draft.accent : "#E5E7EB", borderWidth: draft.sidebarText === c ? 2 : 1 }} />
               ))}
-              <input type="color" value={company.sidebarText || "#1F2937"} onChange={(e) => onChange({ sidebarText: e.target.value })}
+              <input type="color" value={draft.sidebarText || "#1F2937"} onChange={(e) => set({ sidebarText: e.target.value })}
                 className="h-7 w-12 cursor-pointer rounded border border-gray-200" title="Custom text color" />
-              <span className="ll-mono text-[11px] text-gray-500">{company.sidebarText || "auto"}</span>
+              <span className="ll-mono text-[11px] text-gray-500">{draft.sidebarText || "auto"}</span>
             </div>
             <p className="mt-1 text-[10.5px] text-gray-400">Auto keeps text readable for any background; pick a custom color to brand it — muted labels and icons derive from it automatically.</p>
           </Labeled>
         </div>
+        <SaveBar dirty={dirty} onSave={() => onChange(draft)} onReset={reset} accent={draft.accent} />
       </Card>
 
       <Card className="p-5">
