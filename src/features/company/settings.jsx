@@ -354,16 +354,21 @@ export function ApiCard({ api, company, onChange }) {
           <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Account balance</span>
           {balance?.busy && <span className="ll-mono text-[11px] text-gray-400">checking…</span>}
           {balance?.err && <span className="min-w-0 flex-1 text-[10.5px] leading-snug text-amber-700">{balance.err}</span>}
-          {balance?.live && (
-            <>
-              <span className="ll-display text-[16px] font-bold" style={{ color: balance.balance > 5 ? "#16A34A" : "#DC2626" }}>
-                ${(balance.balance ?? 0).toFixed(2)}
-              </span>
-              {balance.dayLimit != null && <span className="ll-mono text-[9.5px] text-gray-400">day limit ${balance.dayLimit}</span>}
-              <span className="ll-mono text-[9.5px] text-gray-400">{balance.login}</span>
-              {balance.balance <= 5 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase text-red-600">low — top up</span>}
-            </>
-          )}
+          {balance?.live && (() => {
+            /* DataForSEO can return balance as a string — coerce before formatting */
+            const bal = Number(balance.balance);
+            const hasBal = Number.isFinite(bal);
+            return (
+              <>
+                <span className="ll-display text-[16px] font-bold" style={{ color: hasBal && bal > 5 ? "#16A34A" : "#DC2626" }}>
+                  {hasBal ? "$" + bal.toFixed(2) : "—"}
+                </span>
+                {balance.dayLimit != null && <span className="ll-mono text-[9.5px] text-gray-400">day limit ${balance.dayLimit}</span>}
+                <span className="ll-mono text-[9.5px] text-gray-400">{balance.login}</span>
+                {hasBal && bal <= 5 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase text-red-600">low — top up</span>}
+              </>
+            );
+          })()}
           <button onClick={fetchBalance} disabled={balance?.busy} title="Refresh balance from DataForSEO"
             className="ml-auto rounded-lg border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-500 hover:border-gray-300 disabled:opacity-50">
             ↻ Refresh
