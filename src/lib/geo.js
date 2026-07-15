@@ -120,8 +120,11 @@ export const REGION_ABBR = {
   "South Australia":"SA","Australian Capital Territory":"ACT","Tasmania":"TAS","Northern Territory":"NT",
 };
 export const regionShort = (region) => REGION_ABBR[region] || region;
-export const cityKey = (c) => `${c.city}|${c.region}|${c.country}`;
-export const cityLabel = (c) => `${c.city}, ${regionShort(c.region)}`;
+export const cityKey = (c) => `${c.city}|${c.region || ""}|${c.country}`;
+export const cityLabel = (c) => c.region ? `${c.city}, ${regionShort(c.region)}` : c.city;
+/* the DataForSEO location_name — skips an empty region so custom cities like
+   "York,United Kingdom" resolve correctly against DataForSEO's location list */
+export const cityLocationName = (c) => [c.city, c.region, c.country].filter(Boolean).join(",");
 export const urlSlug = (url) => {
   const noProto = url.includes("//") ? url.slice(url.indexOf("//") + 2) : url;
   const i = noProto.indexOf("/");

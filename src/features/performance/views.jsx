@@ -244,7 +244,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 }
 
 
-export function CitySelect({ value, onChange }) {
+export function CitySelect({ value, onChange, accent = "#0E7C66" }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const boxRef = useRef(null);
@@ -253,13 +253,32 @@ export function CitySelect({ value, onChange }) {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, []);
+  /* infer the country from a typed "City, UK" / "City, England" suffix */
+  const COUNTRIES = Object.keys(COUNTRY_LABEL);
+  const inferCountry = (s) => {
+    const tail = (s.split(",")[1] || "").trim().toLowerCase();
+    if (!tail) return "United States";
+    if (/^uk$|kingdom|england|scotland|wales|britain|gb$/.test(tail)) return "United Kingdom";
+    if (/^us$|usa|states|america/.test(tail)) return "United States";
+    return COUNTRIES.find((c) => c.toLowerCase().includes(tail) || tail.includes(c.toLowerCase())) || "United States";
+  };
+  const [customCountry, setCustomCountry] = useState("United States");
+  useEffect(() => { if (q.includes(",")) setCustomCountry(inferCountry(q)); }, [q]); // eslint-disable-line
+  const cityPart = q.split(",")[0].trim();
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return ALL_CITIES.slice(0, 8);
+    const cp = s.split(",")[0].trim();
     return ALL_CITIES.filter((c) =>
-      c.city.toLowerCase().includes(s) || c.region.toLowerCase().includes(s) || c.country.toLowerCase().includes(s)
+      c.city.toLowerCase().includes(cp) || c.region.toLowerCase().includes(cp) || c.country.toLowerCase().includes(cp)
     ).slice(0, 8);
   }, [q]);
+  const exactMatch = results.some((c) => c.city.toLowerCase() === cityPart.toLowerCase());
+  const addCustom = () => {
+    if (!cityPart) return;
+    onChange({ city: cityPart, region: "", country: customCountry, custom: true });
+    setOpen(false); setQ("");
+  };
 
   return (
     <div ref={boxRef} className="relative">
@@ -268,18 +287,18 @@ export function CitySelect({ value, onChange }) {
         {value ? (
           <span className="flex items-center gap-1.5">
             <MapPin size={13} className="text-gray-400" />
-            {cityLabel(value)} <span className="text-[11px] text-gray-400">· {COUNTRY_LABEL[value.country]}</span>
+            {cityLabel(value)} <span className="text-[11px] text-gray-400">· {COUNTRY_LABEL[value.country] || value.country}</span>
           </span>
-        ) : <span className="text-gray-400">Search & select a city…</span>}
+        ) : <span className="text-gray-400">Search or type any city…</span>}
         <ChevronDown size={14} className="text-gray-400" />
       </button>
       {open && (
         <div className="absolute z-50 mt-1 w-full rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Type a city — USA, Canada, England, Australia"
+            onKeyDown={(e) => { if (e.key === "Enter" && cityPart && !exactMatch) addCustom(); }}
+            placeholder="Type any city — e.g. York, or York, UK"
             className="mb-1.5 w-full rounded-lg border border-gray-200 px-3 py-2 text-[13px]" />
           <div className="max-h-52 overflow-y-auto">
-            {results.length === 0 && <div className="px-3 py-2 text-[12px] text-gray-400">No city found — try another spelling.</div>}
             {results.map((c) => (
               <button key={cityKey(c)} onClick={() => { onChange(c); setOpen(false); setQ(""); }}
                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] hover:bg-gray-50">
@@ -287,6 +306,22 @@ export function CitySelect({ value, onChange }) {
                 <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">{COUNTRY_LABEL[c.country]}</span>
               </button>
             ))}
+            {/* free-text: add ANY city (DataForSEO validates it) — covers every town, not just the presets */}
+            {cityPart && !exactMatch && (
+              <div className="mt-1 rounded-lg border border-dashed border-gray-200 p-2">
+                <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-gray-500">
+                  <MapPin size={11} style={{ color: accent }} /> Add <b className="mx-0.5">"{cityPart}"</b> in
+                  <select value={customCountry} onChange={(e) => setCustomCountry(e.target.value)}
+                    className="ml-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold">
+                    {COUNTRIES.map((c) => <option key={c} value={c}>{COUNTRY_LABEL[c]}</option>)}
+                  </select>
+                </div>
+                <button onClick={addCustom} className="w-full rounded-lg py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
+                  Use "{cityPart}"
+                </button>
+              </div>
+            )}
+            {results.length === 0 && !cityPart && <div className="px-3 py-2 text-[12px] text-gray-400">Type a city name…</div>}
           </div>
         </div>
       )}
@@ -334,7 +369,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
             </Labeled>
           </div>
           <Labeled label="Targeted city">
-            <CitySelect value={city} onChange={setCity} />
+            <CitySelect value={city} onChange={setCity} accent={accent} />
           </Labeled>
           <Labeled label="Reporting type">
             <Seg options={["One time", "Recurring"]} value={reportingType} onChange={setReportingType} accent={accent} />
@@ -361,14 +396,16 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
                     <span className="mt-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2" style={{ borderColor: scrape === opt ? accent : "#D1D5DB" }}>
                       {scrape === opt && <span className="h-2 w-2 rounded-full" style={{ background: accent }} />}
                     </span>
-                    <span>
-                      <span className="block text-[13px] font-medium">{opt}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-[13px] font-medium">{opt}
+                        {opt === "DataForSEO SERP API" && !disabled && kwCount > 0 && <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bing" : "organic"} />}
+                      </span>
                       <span className="block text-[11px] text-gray-400">
                         {opt === "My Own IP"
                           ? "Fetches SERPs from your server's IP — free, but results can be blocked or personalized."
                           : disabled
                             ? "Add your company DataForSEO API in Company Settings → API settings."
-                            : "Uses your company DataForSEO API — geo-precise and never blocked. Recommended."}
+                            : `Uses your company DataForSEO API — geo-precise and never blocked. Recommended. One scan per keyword${reportingType === "Recurring" ? ", then again on every rerun" : ""}.`}
                       </span>
                     </span>
                   </button>
@@ -376,6 +413,13 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
               })}
             </div>
           </Labeled>
+          {scrape === "DataForSEO SERP API" && dfsConnected && kwCount > 0 && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11.5px] text-amber-800">
+              <span>Initial scan of <b>{kwCount}</b> keyword{kwCount === 1 ? "" : "s"} on <b>{engine}</b>:</span>
+              <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bing" : "organic"} />
+              {reportingType === "Recurring" && <span className="text-amber-700">· repeats every {rerunDays} day{rerunDays > 1 ? "s" : ""}</span>}
+            </div>
+          )}
           <button disabled={!valid}
             onClick={() => {
               const list = keywords.split(/\n|,/).map((k) => k.trim()).filter(Boolean);

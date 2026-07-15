@@ -1566,7 +1566,7 @@ async function handleRerun(body) {
     const engine = (e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google";
     const task = await dfsLive(creds, engine + "/organic", {
       keyword: e.keyword,
-      location_name: `${e.city.city},${e.city.region},${e.city.country}`,
+      location_name: [e.city.city, e.city.region, e.city.country].filter(Boolean).join(","),
       language_code: "en",
       device: (e.device || "Desktop").toLowerCase(),
       os: e.device === "Mobile" ? "android" : "windows",
