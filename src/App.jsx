@@ -46,6 +46,7 @@ const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "
    demo/aggregated `data` and never gate on it (live Google now shows inside
    Overview + Website Performance, not as its own view) */
 const SELF_DATA_VIEWS = ["ranks", "geogrid"];
+const GoogleLiveData = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleLiveData");
 const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
@@ -270,6 +271,8 @@ export default function App() {
     return { login: c.dfs.login || "", password: c.dfs.password || "", connected: ok, clientOwned: true };
   };
   const activeDfs = dfsForClient(activeClient);
+  /* a real Google connection with a picked GA4 property and/or Search Console site */
+  const googleConnected = !!(project?.google?.connectionId && (project.google.gscSite || project.google.ga4Property));
   /* AI agent scope: admins/owner see every project; members need the per-client
      "AI Agent" grant AND assignment. The agent brain only ever receives this list. */
   const agentScope = useMemo(() => {
@@ -989,7 +992,13 @@ export default function App() {
               )}
             </>
           )}
-          {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && <NoDataPanel project={project} accent={accent} />}
+          {/* real project (no demo data) with Google connected: Overview + Website
+              Performance show the LIVE GA4 + Search Console data on their own */}
+          {project && !data && activeSection === "performance" && ["overview", "web"].includes(activeView) && googleConnected && (
+            <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
+          )}
+          {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView)
+            && !(["overview", "web"].includes(activeView) && googleConnected) && <NoDataPanel project={project} accent={accent} />}
           {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
             <>
               {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
