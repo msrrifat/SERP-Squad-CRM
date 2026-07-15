@@ -28,20 +28,24 @@ const Stat = ({ label, value, sub }) => (
   </div>
 );
 
-export function GoogleLiveView({ project, company, accent, onUpdate }) {
+/* Reusable Google connector — the real OAuth flow + Search Console site & GA4
+   property pickers. Used in the Live Analytics view AND in Project settings →
+   Data sources, so both connect the same way and stay in sync. Selecting a
+   site/property flips the project's gsc/ga integration flags automatically. */
+export function GoogleSourcesConnector({ project, company, accent, onUpdate, compact = false }) {
   const oauth = company.apis?.googleOauth?.values || {};
   const oauthReady = !!(oauth.clientId && oauth.clientSecret && oauth.redirectUri);
   const conn = project.google || {}; // { connectionId, email, gscSite, ga4Property }
-  const setConn = (patch) => onUpdate({ google: { ...(project.google || {}), ...patch } });
-
+  const setConn = (patch) => onUpdate((p) => {
+    const google = { ...(p.google || {}), ...patch };
+    /* keep the project integration flags true only while a real source is picked */
+    return { google, integrations: { ...p.integrations, gsc: !!google.gscSite, ga: !!google.ga4Property } };
+  });
   const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState(null);
   const [sites, setSites] = useState(null);
   const [props, setProps] = useState(null);
-  const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
-  const [ga4, setGa4] = useState(null);
 
-  /* --- OAuth connect (real Google consent popup) --- */
   const connect = async () => {
     setConnecting(true); setErr(null);
     try {
@@ -56,17 +60,15 @@ export function GoogleLiveView({ project, company, accent, onUpdate }) {
         setConnecting(false);
         if (e.data.googleOAuth === "ok" && e.data.connectionId) {
           setConn({ connectionId: e.data.connectionId, email: e.data.email || "", gscSite: "", ga4Property: "" });
-          setSites(null); setProps(null); setGsc(null); setGa4(null);
+          setSites(null); setProps(null);
         } else setErr("Google connection was cancelled or failed.");
       };
       window.addEventListener("message", onMsg);
-      /* if the popup is closed without finishing, stop the spinner */
       const iv = setInterval(() => { if (popup?.closed) { clearInterval(iv); setConnecting(false); window.removeEventListener("message", onMsg); } }, 800);
     } catch (e) { setErr("API server unreachable — the OAuth flow runs there. " + (e?.message || "")); setConnecting(false); }
   };
-  const disconnect = () => { setConn({ connectionId: null, email: "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null); setGsc(null); setGa4(null); };
+  const disconnect = () => { setConn({ connectionId: null, email: "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null); };
 
-  /* --- once connected, load the account's sites + properties --- */
   useEffect(() => {
     if (!conn.connectionId) return;
     let alive = true;
@@ -85,6 +87,57 @@ export function GoogleLiveView({ project, company, accent, onUpdate }) {
     return () => { alive = false; };
   }, [conn.connectionId]);
 
+  if (!oauthReady) return (
+    <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/60 p-3 text-[11.5px] leading-relaxed text-amber-800">
+      Add your <b>Google OAuth app</b> (Client ID, Secret &amp; redirect URI) in <b>Company Settings → API settings</b> first — then connect a Google account here to pull live GA4 &amp; Search Console for this project.
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {conn.connectionId
+          ? <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"><CheckCircle2 size={12} /> {conn.email || "Connected"}</span>
+          : <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-500">Not connected</span>}
+        <span className="ml-auto flex gap-2">
+          {conn.connectionId
+            ? <button onClick={disconnect} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:text-red-500">Disconnect</button>
+            : <button onClick={connect} disabled={connecting} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
+                {connecting ? <><RefreshCw size={13} className="animate-spin" /> Waiting for Google…</> : <><Link2 size={13} /> Connect Google</>}
+              </button>}
+        </span>
+      </div>
+      {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{err}</div>}
+      {conn.connectionId && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Labeled label="Google Search Console site">
+            {sites?.err ? <div className="text-[11px] text-amber-700">{sites.err}</div>
+            : <select value={conn.gscSite || ""} onChange={(e) => setConn({ gscSite: e.target.value })} className={inputCls + " bg-white"}>
+                <option value="">{sites ? (sites.length ? "Select a site…" : "No sites on this account") : "Loading…"}</option>
+                {Array.isArray(sites) && sites.map((s) => <option key={s.url} value={s.url}>{s.url}</option>)}
+              </select>}
+          </Labeled>
+          <Labeled label="Google Analytics 4 property">
+            {props?.err ? <div className="text-[11px] text-amber-700">{props.err}</div>
+            : <select value={conn.ga4Property || ""} onChange={(e) => setConn({ ga4Property: e.target.value })} className={inputCls + " bg-white"}>
+                <option value="">{props ? (props.length ? "Select a property…" : "No GA4 properties") : "Loading…"}</option>
+                {Array.isArray(props) && props.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.account}</option>)}
+              </select>}
+          </Labeled>
+        </div>
+      )}
+      {compact && conn.connectionId && (conn.gscSite || conn.ga4Property) && (
+        <div className="text-[10.5px] text-gray-400">Live data appears in <b>Performance Studio → Live Analytics (Google)</b>.</div>
+      )}
+    </div>
+  );
+}
+
+export function GoogleLiveView({ project, company, accent, onUpdate }) {
+  const conn = project.google || {}; // { connectionId, email, gscSite, ga4Property }
+  const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
+  const [ga4, setGa4] = useState(null);
+
   const loadGsc = async (site) => {
     setGsc({ busy: true });
     try {
@@ -102,54 +155,12 @@ export function GoogleLiveView({ project, company, accent, onUpdate }) {
   useEffect(() => { if (conn.connectionId && conn.gscSite) loadGsc(conn.gscSite); }, [conn.connectionId, conn.gscSite]); // eslint-disable-line
   useEffect(() => { if (conn.connectionId && conn.ga4Property) loadGa4(conn.ga4Property); }, [conn.connectionId, conn.ga4Property]); // eslint-disable-line
 
-  /* --- states --- */
-  if (!oauthReady) return (
-    <Card className="p-8 text-center">
-      <Activity size={26} className="mx-auto text-gray-300" />
-      <div className="ll-display mt-2 text-[15px] font-semibold">Connect Google Analytics & Search Console</div>
-      <p className="mx-auto mt-1 max-w-md text-[12.5px] text-gray-400">
-        First add your <b>Google OAuth app</b> (Client ID, Secret & redirect URI) in <b>Company Settings → API settings</b>.
-        Then you can connect a Google account here and pull live GA4 and Search Console data for this project.
-      </p>
-    </Card>
-  );
-
   return (
     <div className="space-y-4">
       <Card className="space-y-3 p-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Activity size={15} style={{ color: accent }} /> Live Analytics — Google</div>
-          {conn.connectionId
-            ? <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"><CheckCircle2 size={12} /> {conn.email || "Connected"}</span>
-            : <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-500">Not connected</span>}
-          <span className="ml-auto flex gap-2">
-            {conn.connectionId
-              ? <button onClick={disconnect} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:text-red-500">Disconnect</button>
-              : <button onClick={connect} disabled={connecting} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
-                  {connecting ? <><RefreshCw size={13} className="animate-spin" /> Waiting for Google…</> : <><Link2 size={13} /> Connect Google</>}
-                </button>}
-          </span>
-        </div>
-        <div className="text-[11px] text-gray-400">Pulls real data via the Google Analytics Data API (GA4) and Search Console API. Business Profile connects separately once Google approves its API access.</div>
-        {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{err}</div>}
-        {conn.connectionId && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label="Search Console site">
-              {sites?.err ? <div className="text-[11px] text-amber-700">{sites.err}</div>
-              : <select value={conn.gscSite || ""} onChange={(e) => setConn({ gscSite: e.target.value })} className={inputCls + " bg-white"}>
-                  <option value="">{sites ? (sites.length ? "Select a site…" : "No sites on this account") : "Loading…"}</option>
-                  {Array.isArray(sites) && sites.map((s) => <option key={s.url} value={s.url}>{s.url}</option>)}
-                </select>}
-            </Labeled>
-            <Labeled label="GA4 property">
-              {props?.err ? <div className="text-[11px] text-amber-700">{props.err}</div>
-              : <select value={conn.ga4Property || ""} onChange={(e) => setConn({ ga4Property: e.target.value })} className={inputCls + " bg-white"}>
-                  <option value="">{props ? (props.length ? "Select a property…" : "No GA4 properties") : "Loading…"}</option>
-                  {Array.isArray(props) && props.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.account}</option>)}
-                </select>}
-            </Labeled>
-          </div>
-        )}
+        <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Activity size={15} style={{ color: accent }} /> Live Analytics — Google</div>
+        <div className="text-[11px] text-gray-400">Pulls real data via the Google Analytics Data API (GA4) and Search Console API. You can also connect these from <b>Project settings → Data sources</b>. Business Profile connects separately once Google approves its API access.</div>
+        <GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={onUpdate} />
       </Card>
 
       {/* GA4 */}

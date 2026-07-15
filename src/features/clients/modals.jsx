@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { GuideTip, ACCENTS, Ava, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, SaveBar, Toggle, inputCls, useDraft } from "../../ui/primitives.jsx";
 import { GoogleSourcesCard, ProjectDetailsCard, WidgetsCard } from "../performance/views.jsx";
+import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
 import { ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
 
@@ -477,17 +478,8 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
           </div>
           <div className="border-t border-gray-100 pt-4">
             <div className="mb-1 flex items-center gap-2"><Globe size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Website sources — whole project</span></div>
-            <p className="mb-2 text-[11.5px] text-gray-400">One website serves every location, so Google Analytics and Search Console connect once per project.</p>
-            <div className="grid gap-1.5 sm:grid-cols-2">
-              {[["ga", "Google Analytics 4"], ["gsc", "Google Search Console"]].map(([k, label]) => (
-                <button key={k} onClick={() => onUpdate((p) => ({ integrations: { ...p.integrations, [k]: !p.integrations[k] } }))}
-                  className="flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-[11.5px] font-semibold"
-                  style={project.integrations[k] ? { borderColor: "#86EFAC", background: "#F0FDF4", color: "#166534" } : { borderColor: "#E5E7EB", color: "#6B7280" }}>
-                  <CheckCircle2 size={13} style={{ color: project.integrations[k] ? "#16A34A" : "#D1D5DB" }} />
-                  {label} <span className="ll-mono ml-auto text-[9px] text-gray-400">{project.website}</span>
-                </button>
-              ))}
-            </div>
+            <p className="mb-2 text-[11.5px] text-gray-400">One website serves every location, so Google Analytics 4 and Search Console connect once per project via a real Google sign-in. <span className="ll-mono text-gray-400">{project.website}</span></p>
+            <GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={onUpdate} compact />
           </div>
         </div>
       )}
