@@ -43,6 +43,9 @@ const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), 
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
 const GoogleLiveView = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleLiveView");
+/* performance views that fetch their OWN real data (DataForSEO trackers + live
+   Google) — they render without the demo/aggregated `data` and never gate on it */
+const SELF_DATA_VIEWS = ["ranks", "geogrid", "googlelive"];
 const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
@@ -656,8 +659,9 @@ export default function App() {
     /* live Google view has its own connect gate; ride on the website-data grant */
     if (n.key === "googlelive") return !access || hasAccess("web") || hasAccess("googlelive");
     if (n.key !== "overview" && !hasAccess(n.key)) return false;
-    if (n.key === "gbp") return project?.integrations.gbp || project?.integrations.bing || project?.integrations.apple;
-    if (n.key === "web") return project?.integrations.ga || project?.integrations.gsc;
+    /* Business Profiles + both rank trackers are always available — the rank
+       trackers are third-party (DataForSEO) and need no Google connection, and
+       Business Profiles shows its own connect/empty state until GBP is linked. */
     return true;
   });
   const visibleSections = [
@@ -977,19 +981,24 @@ export default function App() {
           )}
           {/* Live Analytics pulls its OWN real GA4/GSC data — render it regardless
               of whether the demo/aggregated `data` exists for this project */}
-          {project && activeSection === "performance" && activeView === "googlelive" && (
-            <Lazy><GoogleLiveView project={project} company={company} accent={accent} onUpdate={updateProject} /></Lazy>
-          )}
-          {project && !data && activeSection === "performance" && activeView !== "googlelive" && <NoDataPanel project={project} accent={accent} />}
-          {project && data && activeSection === "performance" && activeView !== "googlelive" && (
+          {/* Rank trackers (DataForSEO) + live Google pull their OWN real data —
+              they render regardless of the demo/aggregated `data` and never need
+              a Google connection to work. */}
+          {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
               {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
-              {activeView === "gbp" && (project.integrations.gbp || project.integrations.bing || project.integrations.apple) && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
               )}
+              {activeView === "googlelive" && <Lazy><GoogleLiveView project={project} company={company} accent={accent} onUpdate={updateProject} /></Lazy>}
+            </>
+          )}
+          {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && <NoDataPanel project={project} accent={accent} />}
+          {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
+            <>
+              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
+              {activeView === "gbp" && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
               {activeView === "web" && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
               {activeView === "adsperf" && <Lazy><AdsPerformanceView project={project} accent={accent} /></Lazy>}
             </>
