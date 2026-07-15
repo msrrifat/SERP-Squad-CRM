@@ -133,8 +133,11 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
   );
 }
 
-export function GoogleLiveView({ project, company, accent, onUpdate }) {
-  const conn = project.google || {}; // { connectionId, email, gscSite, ga4Property }
+/* Live GA4 + Search Console data cards for the FIXED site/property already
+   selected in Data sources. Self-fetching; renders nothing until connected.
+   Dropped straight into Overview + Website Performance dashboards. */
+export function GoogleLiveData({ project, accent }) {
+  const conn = project.google || {};
   const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
   const [ga4, setGa4] = useState(null);
 
@@ -155,14 +158,9 @@ export function GoogleLiveView({ project, company, accent, onUpdate }) {
   useEffect(() => { if (conn.connectionId && conn.gscSite) loadGsc(conn.gscSite); }, [conn.connectionId, conn.gscSite]); // eslint-disable-line
   useEffect(() => { if (conn.connectionId && conn.ga4Property) loadGa4(conn.ga4Property); }, [conn.connectionId, conn.ga4Property]); // eslint-disable-line
 
+  if (!conn.connectionId || (!conn.gscSite && !conn.ga4Property)) return null;
   return (
-    <div className="space-y-4">
-      <Card className="space-y-3 p-5">
-        <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Activity size={15} style={{ color: accent }} /> Live Analytics — Google</div>
-        <div className="text-[11px] text-gray-400">Pulls real data via the Google Analytics Data API (GA4) and Search Console API. You can also connect these from <b>Project settings → Data sources</b>. Business Profile connects separately once Google approves its API access.</div>
-        <GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={onUpdate} />
-      </Card>
-
+    <>
       {/* GA4 */}
       {conn.connectionId && conn.ga4Property && (
         <Card className="space-y-3 p-5">
@@ -226,10 +224,21 @@ export function GoogleLiveView({ project, company, accent, onUpdate }) {
           </>)}
         </Card>
       )}
+    </>
+  );
+}
 
-      {conn.connectionId && !conn.gscSite && !conn.ga4Property && (
-        <Card className="p-6 text-center text-[12px] text-gray-400">Pick a Search Console site and/or a GA4 property above to see live data.</Card>
-      )}
+/* kept for compatibility — the connector + live data together (no longer a
+   nav view; Google data now shows inside Overview + Website Performance) */
+export function GoogleLiveView({ project, company, accent, onUpdate }) {
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-3 p-5">
+        <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Activity size={15} style={{ color: accent }} /> Live Analytics — Google</div>
+        <div className="text-[11px] text-gray-400">Pulls real data via the Google Analytics Data API (GA4) and Search Console API. Connect these from <b>Project settings → Data sources</b>.</div>
+        <GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={onUpdate} />
+      </Card>
+      <GoogleLiveData project={project} accent={accent} />
     </div>
   );
 }

@@ -22,6 +22,7 @@ import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../li
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
+import { GoogleLiveData } from "./googlelive.jsx";
 
 export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView }) {
   const [metric, setMetric] = useState("gbpViews");
@@ -98,6 +99,8 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   return (
     <div className="ll-fade space-y-5">
+      {/* live GA4 + Search Console (when connected in Data sources) */}
+      <GoogleLiveData project={project} accent={accent} />
       {/* the comparison picker must always be reachable — standalone when the insight strip is empty */}
       {summary.length === 0 && <div className="flex">{cmpPicker}</div>}
       {/* insight strip */}
@@ -991,6 +994,8 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
 
   return (
     <div className="ll-fade space-y-5">
+      {/* live GA4 + Search Console (when connected in Data sources) */}
+      <GoogleLiveData project={project} accent={accent} />
       <DateRangeBar range={range} setRange={setRange} accent={accent} />
       {I.ga && (
         <>
@@ -1386,7 +1391,6 @@ export const NAV = [
   { key: "overview", label: "Overview", icon: LayoutDashboard },
   { key: "gbp", label: "Business Profiles", icon: Building2 },
   { key: "web", label: "Website Performance & Analytics", icon: BarChart3 },
-  { key: "googlelive", label: "Live Analytics (Google)", icon: Activity },
   { key: "ranks", label: "Website Rank Tracking", icon: Target },
   { key: "geogrid", label: "GBP Rank Tracking", icon: MapPin },
   { key: "adsperf", label: "Ads Performance", icon: Rocket },

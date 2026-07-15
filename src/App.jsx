@@ -42,10 +42,10 @@ const AdsView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsView");
 const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsPerformanceView");
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
-const GoogleLiveView = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleLiveView");
-/* performance views that fetch their OWN real data (DataForSEO trackers + live
-   Google) — they render without the demo/aggregated `data` and never gate on it */
-const SELF_DATA_VIEWS = ["ranks", "geogrid", "googlelive"];
+/* DataForSEO rank-tracking views fetch their OWN data — they render without the
+   demo/aggregated `data` and never gate on it (live Google now shows inside
+   Overview + Website Performance, not as its own view) */
+const SELF_DATA_VIEWS = ["ranks", "geogrid"];
 const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
@@ -657,7 +657,6 @@ export default function App() {
     /* the ads-performance view rides on the Ads & Paid Marketing grant */
     if (n.key === "adsperf") return (!access || !!access.adsperf) && (project?.ads?.campaigns || []).length > 0;
     /* live Google view has its own connect gate; ride on the website-data grant */
-    if (n.key === "googlelive") return !access || hasAccess("web") || hasAccess("googlelive");
     if (n.key !== "overview" && !hasAccess(n.key)) return false;
     /* Business Profiles + both rank trackers are always available — the rank
        trackers are third-party (DataForSEO) and need no Google connection, and
@@ -979,11 +978,8 @@ export default function App() {
               onDeleteReport={(id) => setCompany((c) => ({ ...c, savedReports: (c.savedReports || []).filter((r) => r.id !== id) }))}
               onDeleteTemplate={(id) => setCompany((c) => ({ ...c, reportTemplates: (c.reportTemplates || []).filter((t) => t.id !== id) }))} />
           )}
-          {/* Live Analytics pulls its OWN real GA4/GSC data — render it regardless
-              of whether the demo/aggregated `data` exists for this project */}
-          {/* Rank trackers (DataForSEO) + live Google pull their OWN real data —
-              they render regardless of the demo/aggregated `data` and never need
-              a Google connection to work. */}
+          {/* Rank trackers (DataForSEO) pull their OWN real data — they render
+              regardless of the demo/aggregated `data` and need no connection. */}
           {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
               {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
@@ -991,7 +987,6 @@ export default function App() {
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
               )}
-              {activeView === "googlelive" && <Lazy><GoogleLiveView project={project} company={company} accent={accent} onUpdate={updateProject} /></Lazy>}
             </>
           )}
           {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && <NoDataPanel project={project} accent={accent} />}
