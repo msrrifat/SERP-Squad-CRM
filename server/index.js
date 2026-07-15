@@ -1383,11 +1383,14 @@ async function handleDfsBalance(body) {
       return [502, { error: "provider_error", detail: "DataForSEO: " + (task?.status_message || d.status_message || `HTTP ${r.status}`) }];
     }
     const u = task.result?.[0] || {};
+    /* DataForSEO shapes vary: balance can be a string; money.limits.day can be
+       a number OR a nested object ({..., total: N}). Return plain numbers only. */
+    const num = (v) => { const n = Number(typeof v === "object" && v ? v.total : v); return Number.isFinite(n) ? n : null; };
     return [200, {
       live: true, login: creds.login,
-      balance: u.money?.balance ?? null,
-      spentTotal: u.money?.total ?? null,
-      dayLimit: u.money?.limits?.day ?? null,
+      balance: num(u.money?.balance),
+      spentTotal: num(u.money?.total),
+      dayLimit: num(u.money?.limits?.day),
       backlinksSubscription: !!u.backlinks_subscription_expiry_date,
       checkedAt: Date.now(),
     }];

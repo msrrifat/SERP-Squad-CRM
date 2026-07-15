@@ -300,8 +300,12 @@ export function ApiCard({ api, company, onChange }) {
   const filled = api.fields.filter((f) => !f.optional).every((f) => (draft[f.key] || "").trim());
 
   const save = () => {
-    if (api.useDfs) onChange({ dfs: { login: draft.login || "", password: draft.password || "", connected: filled } });
-    else onChange({ apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: filled } } });
+    if (api.useDfs) {
+      onChange({ dfs: { login: draft.login || "", password: draft.password || "", connected: filled } });
+      /* fetch the balance with the JUST-ENTERED creds directly — avoids a
+         stale read of company.dfs before the save has propagated */
+      if (filled) fetchBalance({ login: draft.login.trim(), password: draft.password.trim() });
+    } else onChange({ apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: filled } } });
   };
   const disconnect = () => {
     if (api.useDfs) onChange({ dfs: { ...company.dfs, connected: false } });
@@ -313,11 +317,12 @@ export function ApiCard({ api, company, onChange }) {
 
   /* live DataForSEO account balance (real appendix/user_data call) */
   const [balance, setBalance] = useState(null); // { busy } | { err } | data
-  const fetchBalance = async () => {
+  const fetchBalance = async (creds) => {
+    const dfs = creds || { login: company.dfs.login, password: company.dfs.password };
     setBalance({ busy: true });
     try {
       const r = await fetch("/api/dfs-balance", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000),
-        body: JSON.stringify({ dfs: { login: company.dfs.login, password: company.dfs.password } }) });
+        body: JSON.stringify({ dfs }) });
       const d = await r.json().catch(() => ({}));
       setBalance(r.ok ? d : { err: d.detail || `HTTP ${r.status}` });
     } catch { setBalance({ err: "API server unreachable (npm run api) — the balance check runs server-side." }); }
@@ -363,8 +368,8 @@ export function ApiCard({ api, company, onChange }) {
                 <span className="ll-display text-[16px] font-bold" style={{ color: hasBal && bal > 5 ? "#16A34A" : "#DC2626" }}>
                   {hasBal ? "$" + bal.toFixed(2) : "—"}
                 </span>
-                {balance.dayLimit != null && <span className="ll-mono text-[9.5px] text-gray-400">day limit ${balance.dayLimit}</span>}
-                <span className="ll-mono text-[9.5px] text-gray-400">{balance.login}</span>
+                {Number.isFinite(Number(balance.dayLimit)) && <span className="ll-mono text-[9.5px] text-gray-400">day limit ${Number(balance.dayLimit)}</span>}
+                <span className="ll-mono text-[9.5px] text-gray-400">{String(balance.login || "")}</span>
                 {hasBal && bal <= 5 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase text-red-600">low — top up</span>}
               </>
             );
