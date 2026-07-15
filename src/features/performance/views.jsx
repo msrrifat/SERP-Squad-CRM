@@ -1386,6 +1386,7 @@ export const NAV = [
   { key: "overview", label: "Overview", icon: LayoutDashboard },
   { key: "gbp", label: "Business Profiles", icon: Building2 },
   { key: "web", label: "Website Performance & Analytics", icon: BarChart3 },
+  { key: "googlelive", label: "Live Analytics (Google)", icon: Activity },
   { key: "ranks", label: "Website Rank Tracking", icon: Target },
   { key: "geogrid", label: "GBP Rank Tracking", icon: MapPin },
   { key: "adsperf", label: "Ads Performance", icon: Rocket },

@@ -49,13 +49,13 @@ export const API_REGISTRY = [
     items: [
       {
         id: "googleOauth", name: "Google Cloud OAuth app",
-        desc: "One OAuth client powers every Google connection: Business Profile (calls, views), Analytics 4 (users, conversions) and Search Console (clicks, queries). Clients then authorize with one click.",
-        docs: "console.cloud.google.com/apis/credentials",
-        scopes: ["business.manage", "analytics.readonly", "webmasters.readonly"],
+        desc: "One OAuth client powers the live Google connections: Analytics 4 (users, sessions, conversions) and Search Console (clicks, impressions, queries), connected per project. Add the redirect URI below to the OAuth client's Authorized redirect URIs in Google Cloud Console.",
+        docs: "console.cloud.google.com → APIs & Services → Credentials → Create OAuth client ID (Web application)",
+        scopes: ["analytics.readonly", "webmasters.readonly"],
         fields: [
           { key: "clientId", label: "OAuth Client ID", placeholder: "xxxxx.apps.googleusercontent.com" },
           { key: "clientSecret", label: "OAuth Client Secret", secret: true, placeholder: "GOCSPX-…" },
-          { key: "redirectUri", label: "Authorized redirect URI", placeholder: "https://app.serpsquad.com/oauth/google/callback" },
+          { key: "redirectUri", label: "Authorized redirect URI", placeholder: "https://app.serpsquad.com/api/oauth/google/callback" },
         ],
       },
       {

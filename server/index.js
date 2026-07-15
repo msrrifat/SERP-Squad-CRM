@@ -237,6 +237,131 @@ const SESSIONS_FILE = new URL("./data/auth/sessions.json", import.meta.url);
 const loadSessions = () => { try { return JSON.parse(readFileSync(SESSIONS_FILE, "utf8")); } catch { return {}; } };
 const saveSessions = () => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(appSessions))); };
 (function hydrateSessions() { const s = loadSessions(); const now = Date.now(); for (const [th, v] of Object.entries(s)) if (v.exp > now) appSessions.set(th, v); })();
+
+/* ================= GOOGLE OAUTH — Analytics 4 + Search Console =================
+   Real authorization-code flow: the app opens Google's consent screen, Google
+   redirects to /api/oauth/google/callback with a code, the server exchanges it
+   for a refresh token (stored server-side, never sent to the browser), and the
+   data endpoints mint fresh access tokens on demand to call GA4 + Search
+   Console. Business Profile is intentionally left out (it needs Google's gated
+   access approval). ---- */
+const GTOKENS_FILE = new URL("./data/auth/google-tokens.json", import.meta.url);
+const loadGTokens = () => { try { return JSON.parse(readFileSync(GTOKENS_FILE, "utf8")); } catch { return {}; } };
+const saveGTokens = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(GTOKENS_FILE, JSON.stringify(d)); };
+const pendingOAuth = new Map(); // state → { clientId, clientSecret, redirectUri, exp }
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/webmasters.readonly",
+  "openid", "email",
+];
+function handleOAuthStart(body) {
+  const clientId = String(body?.clientId || "").trim();
+  const clientSecret = String(body?.clientSecret || "").trim();
+  const redirectUri = String(body?.redirectUri || "").trim();
+  if (!clientId || !clientSecret || !redirectUri) return [503, { error: "not_configured", detail: "Add your Google OAuth Client ID, Client Secret and redirect URI in Company Settings → API settings first." }];
+  const state = randomBytes(16).toString("hex");
+  pendingOAuth.set(state, { clientId, clientSecret, redirectUri, exp: Date.now() + 10 * 60e3 });
+  const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id: clientId, redirect_uri: redirectUri, response_type: "code",
+    scope: GOOGLE_SCOPES.join(" "), access_type: "offline", prompt: "consent", state,
+  });
+  return [200, { authUrl, state }];
+}
+async function googleTokenCall(params) {
+  const r = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(20000), body: new URLSearchParams(params),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error_description || d.error || `token endpoint HTTP ${r.status}`);
+  return d;
+}
+async function handleOAuthCallback(reqUrl) {
+  const u = new URL(reqUrl, "http://x");
+  const code = u.searchParams.get("code"), state = u.searchParams.get("state"), gerr = u.searchParams.get("error");
+  const page = (title, msg, connectionId, email) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<body style="font:15px/1.5 -apple-system,system-ui,sans-serif;color:#1F2937;max-width:420px;margin:60px auto;padding:0 20px;text-align:center">
+<div style="font-size:34px">${connectionId ? "✅" : "⚠️"}</div><h2 style="margin:8px 0">${title}</h2><p style="color:#6B7280">${msg}</p>
+<script>try{if(window.opener){window.opener.postMessage(${JSON.stringify({ googleOAuth: connectionId ? "ok" : "error", connectionId: connectionId || null, email: email || "" })},"*");setTimeout(function(){window.close();},1400);}}catch(e){}</script></body>`;
+  if (gerr) return page("Connection cancelled", "Google returned: " + gerr + ". You can close this window.", null);
+  const pend = state && pendingOAuth.get(state);
+  if (!pend || Date.now() > pend.exp) return page("Link expired", "That connection link expired — start again from the app.", null);
+  pendingOAuth.delete(state);
+  try {
+    const tok = await googleTokenCall({ code, client_id: pend.clientId, client_secret: pend.clientSecret, redirect_uri: pend.redirectUri, grant_type: "authorization_code" });
+    let email = "";
+    try { if (tok.id_token) email = JSON.parse(Buffer.from(tok.id_token.split(".")[1], "base64").toString("utf8")).email || ""; } catch { /* no id_token email */ }
+    if (!tok.refresh_token) return page("Almost there", "Google didn't return a refresh token. Revoke this app at myaccount.google.com/permissions, then reconnect.", null);
+    const connectionId = randomBytes(12).toString("hex");
+    const t = loadGTokens();
+    t[connectionId] = { refreshToken: tok.refresh_token, clientId: pend.clientId, clientSecret: pend.clientSecret, email, scope: tok.scope || "", at: Date.now() };
+    saveGTokens(t);
+    return page("Google connected", `Signed in as <b>${email || "your Google account"}</b>. You can close this window.`, connectionId, email);
+  } catch (e) { return page("Connection failed", String(e?.message || e).slice(0, 180) + " — you can close this window.", null); }
+}
+async function googleAccess(connectionId) {
+  const c = loadGTokens()[connectionId];
+  if (!c) { const e = new Error("This Google connection no longer exists — reconnect from the app."); e.code = 401; throw e; }
+  const d = await googleTokenCall({ client_id: c.clientId, client_secret: c.clientSecret, refresh_token: c.refreshToken, grant_type: "refresh_token" });
+  return { accessToken: d.access_token, email: c.email };
+}
+const gErr = (e) => [e?.code === 401 ? 401 : 502, { error: e?.code === 401 ? "not_connected" : "provider_error", detail: String(e?.message || e).slice(0, 200) }];
+const gGet = async (accessToken, url) => { const r = await fetch(url, { headers: { Authorization: "Bearer " + accessToken }, signal: AbortSignal.timeout(30000) }); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`); return d; };
+const gPost = async (accessToken, url, body) => { const r = await fetch(url, { method: "POST", headers: { Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000), body: JSON.stringify(body) }); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`); return d; };
+
+async function handleGscSites(body) {
+  if (!body?.connectionId) return [503, { error: "not_connected", detail: "Connect a Google account first." }];
+  try { const { accessToken } = await googleAccess(body.connectionId);
+    const d = await gGet(accessToken, "https://searchconsole.googleapis.com/webmasters/v3/sites");
+    return [200, { live: true, sites: (d.siteEntry || []).map((s) => ({ url: s.siteUrl, level: s.permissionLevel })) }];
+  } catch (e) { return gErr(e); }
+}
+async function handleGscQuery(body) {
+  if (!body?.connectionId || !body?.siteUrl) return [400, { error: "bad_request", detail: "connectionId and siteUrl required." }];
+  const days = Math.min(Math.max(+body?.days || 28, 1), 90);
+  const startDate = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const endDate = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
+  const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(body.siteUrl)}/searchAnalytics/query`;
+  try { const { accessToken } = await googleAccess(body.connectionId);
+    const [totals, queries, dates] = await Promise.all([
+      gPost(accessToken, base, { startDate, endDate }),
+      gPost(accessToken, base, { startDate, endDate, dimensions: ["query"], rowLimit: 20 }),
+      gPost(accessToken, base, { startDate, endDate, dimensions: ["date"], rowLimit: 90 }),
+    ]);
+    const t = totals.rows?.[0] || {};
+    return [200, { live: true, range: { startDate, endDate },
+      totals: { clicks: t.clicks || 0, impressions: t.impressions || 0, ctr: t.ctr || 0, position: t.position || 0 },
+      queries: (queries.rows || []).map((r) => ({ query: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position })),
+      byDate: (dates.rows || []).map((r) => ({ date: r.keys[0], clicks: r.clicks, impressions: r.impressions })),
+    }];
+  } catch (e) { return gErr(e); }
+}
+async function handleGa4Properties(body) {
+  if (!body?.connectionId) return [503, { error: "not_connected", detail: "Connect a Google account first." }];
+  try { const { accessToken } = await googleAccess(body.connectionId);
+    const d = await gGet(accessToken, "https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200");
+    const props = [];
+    (d.accountSummaries || []).forEach((a) => (a.propertySummaries || []).forEach((p) => props.push({ id: p.property, name: p.displayName, account: a.displayName })));
+    return [200, { live: true, properties: props }];
+  } catch (e) { return gErr(e); }
+}
+async function handleGa4Report(body) {
+  if (!body?.connectionId || !body?.propertyId) return [400, { error: "bad_request", detail: "connectionId and propertyId required." }];
+  const days = Math.min(Math.max(+body?.days || 28, 1), 365);
+  const pid = String(body.propertyId).replace(/^properties\//, "");
+  try { const { accessToken } = await googleAccess(body.connectionId);
+    const rep = await gPost(accessToken, `https://analyticsdata.googleapis.com/v1beta/properties/${pid}:runReport`, {
+      dateRanges: [{ startDate: `${days}daysAgo`, endDate: "today" }],
+      dimensions: [{ name: "date" }],
+      metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "conversions" }],
+      orderBys: [{ dimension: { dimensionName: "date" } }],
+      limit: 400,
+    });
+    const rows = (rep.rows || []).map((r) => ({ date: r.dimensionValues[0].value, users: +r.metricValues[0].value, sessions: +r.metricValues[1].value, views: +r.metricValues[2].value, conversions: +r.metricValues[3].value }));
+    const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+    return [200, { live: true, totals: { users: sum("users"), sessions: sum("sessions"), views: sum("views"), conversions: sum("conversions") }, byDate: rows }];
+  } catch (e) { return gErr(e); }
+}
 function mintSession(identity) {
   const token = randomBytes(32).toString("hex");
   appSessions.set(sha(token), { kind: identity.kind, id: identity.id, email: identity.email, exp: Date.now() + 30 * 864e5 });
@@ -1624,6 +1749,12 @@ http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
+    /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
+    if (req.method === "GET" && req.url.startsWith("/api/oauth/google/callback")) {
+      const html = await handleOAuthCallback(req.url);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SEC_HEADERS });
+      return res.end(html);
+    }
     /* geo-grid snapshot image for audit emails — key-free, loads from any mail client */
     if (req.method === "GET" && /^\/api\/geo\/snapshot\/[a-f0-9]{24}\.png$/.test(req.url)) {
       try {
@@ -1646,7 +1777,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
@@ -1692,6 +1823,11 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
+        : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
+        : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)
+        : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)
+        : req.url === "/api/google/ga4/properties" ? await handleGa4Properties(body)
+        : req.url === "/api/google/ga4/report" ? await handleGa4Report(body)
         : await handleRerun(body);
       return send(code, payload);
     }
