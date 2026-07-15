@@ -4,29 +4,21 @@
    click Connect → real Google consent popup → the server stores a refresh
    token and this view pulls LIVE data. Pick a Search Console site + a GA4
    property; everything shown here is real (or an honest error). ---- */
-import React, { useEffect, useState } from "react";
-import { Activity, BarChart3, CheckCircle2, ExternalLink, Link2, RefreshCw, Search, TrendingUp, X } from "lucide-react";
-import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
+import React, { useEffect, useMemo, useState } from "react";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Activity, BarChart3, CheckCircle2, Eye, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
+import { Card, Labeled, StatCard, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { fmt, pctDelta } from "../../lib/format.jsx";
 
-const fmt = (n) => (n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(Math.round(n)));
-const pct = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
-
-function MiniTrend({ rows, keyName, accent }) {
-  const vals = (rows || []).map((r) => r[keyName] || 0);
-  const max = Math.max(1, ...vals);
-  return (
-    <div className="flex h-12 items-end gap-px">
-      {vals.map((v, i) => <div key={i} className="flex-1 rounded-t" style={{ height: `${Math.max(3, (v / max) * 100)}%`, background: accent + "99" }} title={rows[i]?.date + ": " + v} />)}
-    </div>
-  );
-}
-const Stat = ({ label, value, sub }) => (
-  <div className="rounded-xl border border-gray-100 p-3">
-    <div className="ll-mono text-[19px] font-bold text-gray-800">{value}</div>
-    <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
-    {sub && <div className="text-[10px] text-gray-400">{sub}</div>}
-  </div>
-);
+const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
+/* period-over-period delta from a daily series: second half vs first half */
+const halfDelta = (series) => {
+  if (!series || series.length < 4) return null;
+  const h = Math.floor(series.length / 2);
+  const a = series.slice(0, h).reduce((s, v) => s + v, 0);
+  const b = series.slice(h).reduce((s, v) => s + v, 0);
+  return pctDelta(b, a);
+};
 
 /* Reusable Google connector — the real OAuth flow + Search Console site & GA4
    property pickers. Used in the Live Analytics view AND in Project settings →
@@ -158,73 +150,135 @@ export function GoogleLiveData({ project, accent }) {
   useEffect(() => { if (conn.connectionId && conn.gscSite) loadGsc(conn.gscSite); }, [conn.connectionId, conn.gscSite]); // eslint-disable-line
   useEffect(() => { if (conn.connectionId && conn.ga4Property) loadGa4(conn.ga4Property); }, [conn.connectionId, conn.ga4Property]); // eslint-disable-line
 
-  if (!conn.connectionId || (!conn.gscSite && !conn.ga4Property)) return null;
+  const hasGa = conn.connectionId && conn.ga4Property;
+  const hasGsc = conn.connectionId && conn.gscSite;
+
+  /* metric toggle for the daily trend — GA4 metrics use ga4.byDate, GSC metrics use gsc.byDate */
+  const metrics = useMemo(() => {
+    const list = [];
+    if (ga4?.live) {
+      list.push(
+        { key: "users", label: "Active users", src: "GA4", rows: ga4.byDate, k: "users" },
+        { key: "sessions", label: "Sessions", src: "GA4", rows: ga4.byDate, k: "sessions" },
+      );
+    }
+    if (gsc?.live) {
+      list.push(
+        { key: "clicks", label: "Clicks", src: "GSC", rows: gsc.byDate, k: "clicks" },
+        { key: "impressions", label: "Impressions", src: "GSC", rows: gsc.byDate, k: "impressions" },
+      );
+    }
+    return list;
+  }, [ga4, gsc]);
+  const [metric, setMetric] = useState("users");
+  const active = metrics.find((m) => m.key === metric) || metrics[0];
+  const chartData = (active?.rows || []).map((r) => ({ date: (r.date || "").slice(5), v: r[active.k] || 0 }));
+
+  if (!conn.connectionId || (!hasGsc && !hasGa)) return null;
+  const busy = ga4?.busy || gsc?.busy;
+  const refresh = () => { if (hasGa) loadGa4(conn.ga4Property); if (hasGsc) loadGsc(conn.gscSite); };
+
   return (
-    <>
-      {/* GA4 */}
-      {conn.connectionId && conn.ga4Property && (
-        <Card className="space-y-3 p-5">
-          <div className="flex items-center gap-2">
-            <div className="ll-display text-[14px] font-semibold"><BarChart3 size={14} className="mr-1 inline" style={{ color: accent }} /> Analytics 4 — last 28 days</div>
-            {ga4?.busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
-            <button onClick={() => loadGa4(conn.ga4Property)} className="ml-auto text-[11px] font-semibold" style={{ color: accent }}>↻ Refresh</button>
-          </div>
-          {ga4?.err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{ga4.err}</div>}
-          {ga4?.live && (<>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Stat label="Active users" value={fmt(ga4.totals.users)} />
-              <Stat label="Sessions" value={fmt(ga4.totals.sessions)} />
-              <Stat label="Page views" value={fmt(ga4.totals.views)} />
-              <Stat label="Conversions" value={fmt(ga4.totals.conversions)} />
+    <div className="space-y-4">
+      {/* header */}
+      <div className="flex items-center gap-2">
+        <div className="ll-display text-[15px] font-semibold text-gray-800">Google — live data</div>
+        <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">Last 28 days</span>
+        {busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
+        <button onClick={refresh} className="ml-auto flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
+          <RefreshCw size={12} /> Refresh
+        </button>
+      </div>
+
+      {(ga4?.err || gsc?.err) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
+          {ga4?.err && <div>Analytics: {ga4.err}</div>}
+          {gsc?.err && <div>Search Console: {gsc.err}</div>}
+        </div>
+      )}
+
+      {/* KPI grid — same StatCard look as the demo dashboard */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {ga4?.live && (<>
+          <StatCard icon={Users} label="Active users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />
+          <StatCard icon={Activity} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />
+          <StatCard icon={Eye} label="Page views" source="GA4" accent={accent} value={fmt(ga4.totals.views)} pct={halfDelta((ga4.byDate || []).map((r) => r.views))} spark={(ga4.byDate || []).map((r) => r.views)} />
+          <StatCard icon={Target} label="Conversions" source="GA4" accent={accent} value={fmt(ga4.totals.conversions)} pct={halfDelta((ga4.byDate || []).map((r) => r.conversions))} spark={(ga4.byDate || []).map((r) => r.conversions)} />
+        </>)}
+        {gsc?.live && (<>
+          <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(gsc.totals.clicks)} pct={halfDelta((gsc.byDate || []).map((r) => r.clicks))} spark={(gsc.byDate || []).map((r) => r.clicks)} />
+          <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(gsc.totals.impressions)} pct={halfDelta((gsc.byDate || []).map((r) => r.impressions))} spark={(gsc.byDate || []).map((r) => r.impressions)} />
+          <StatCard icon={Target} label="Avg CTR" source="GSC" accent={accent} value={pct1(gsc.totals.ctr)} sub="clicks / impressions" />
+          <StatCard icon={Search} label="Avg position" source="GSC" accent={accent} value={gsc.totals.position ? gsc.totals.position.toFixed(1) : "—"} invert sub="lower is better" />
+        </>)}
+        {busy && !ga4?.live && !gsc?.live && Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i} className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
+        ))}
+      </div>
+
+      {/* daily trend — recharts AreaChart with metric toggle, matching the demo */}
+      {active && chartData.length > 0 && (
+        <Card className="p-5">
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <div className="ll-display text-[14px] font-semibold text-gray-800">Daily trend</div>
+            <div className="ml-auto flex flex-wrap gap-1.5">
+              {metrics.map((m) => (
+                <button key={m.key} onClick={() => setMetric(m.key)}
+                  className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition"
+                  style={metric === m.key ? { background: accent, color: "#fff" } : { background: accent + "12", color: accent }}>
+                  {m.label}
+                </button>
+              ))}
             </div>
-            <div><div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">Active users / day</div><MiniTrend rows={ga4.byDate} keyName="users" accent={accent} /></div>
-          </>)}
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+              <defs>
+                <linearGradient id="glvArea" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={accent} stopOpacity={0.28} />
+                  <stop offset="100%" stopColor={accent} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eef0f2" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} minTickGap={18} />
+              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={38} tickFormatter={fmt} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v) => [fmt(v), active.label]} />
+              <Area type="monotone" dataKey="v" stroke={accent} strokeWidth={2} fill="url(#glvArea)" />
+            </AreaChart>
+          </ResponsiveContainer>
         </Card>
       )}
 
-      {/* Search Console */}
-      {conn.connectionId && conn.gscSite && (
-        <Card className="space-y-3 p-5">
-          <div className="flex items-center gap-2">
-            <div className="ll-display text-[14px] font-semibold"><Search size={14} className="mr-1 inline" style={{ color: accent }} /> Search Console — last 28 days</div>
-            {gsc?.busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
-            <button onClick={() => loadGsc(conn.gscSite)} className="ml-auto text-[11px] font-semibold" style={{ color: accent }}>↻ Refresh</button>
+      {/* Search Console top queries */}
+      {gsc?.live && (
+        <Card className="p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <Search size={14} style={{ color: accent }} />
+            <div className="ll-display text-[14px] font-semibold text-gray-800">Top queries</div>
+            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">Search Console</span>
           </div>
-          {gsc?.err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{gsc.err}</div>}
-          {gsc?.live && (<>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Stat label="Clicks" value={fmt(gsc.totals.clicks)} />
-              <Stat label="Impressions" value={fmt(gsc.totals.impressions)} />
-              <Stat label="Avg CTR" value={pct(gsc.totals.ctr)} />
-              <Stat label="Avg position" value={gsc.totals.position ? gsc.totals.position.toFixed(1) : "—"} />
-            </div>
-            <div><div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">Clicks / day</div><MiniTrend rows={gsc.byDate} keyName="clicks" accent={accent} /></div>
-            <div>
-              <div className="mb-1.5 text-[12px] font-bold text-gray-700">Top queries</div>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[440px] text-left text-[11.5px]">
-                  <thead><tr className="border-b border-gray-200 text-[9.5px] uppercase tracking-wide text-gray-400">
-                    <th className="px-2 py-1.5 font-semibold">Query</th><th className="px-2 py-1.5 font-semibold">Clicks</th><th className="px-2 py-1.5 font-semibold">Impr.</th><th className="px-2 py-1.5 font-semibold">CTR</th><th className="px-2 py-1.5 font-semibold">Pos.</th>
-                  </tr></thead>
-                  <tbody>
-                    {gsc.queries.map((q) => (
-                      <tr key={q.query} className="border-b border-gray-50">
-                        <td className="max-w-[240px] truncate px-2 py-1.5 font-medium text-gray-700">{q.query}</td>
-                        <td className="ll-mono px-2 py-1.5 text-gray-600">{q.clicks}</td>
-                        <td className="ll-mono px-2 py-1.5 text-gray-500">{q.impressions}</td>
-                        <td className="ll-mono px-2 py-1.5 text-gray-500">{pct(q.ctr)}</td>
-                        <td className="ll-mono px-2 py-1.5 text-gray-500">{q.position?.toFixed(1)}</td>
-                      </tr>
-                    ))}
-                    {!gsc.queries.length && <tr><td colSpan={5} className="py-3 text-center text-[11px] text-gray-300">No query data in this window.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>)}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[440px] text-left text-[11.5px]">
+              <thead><tr className="border-b border-gray-200 text-[9.5px] uppercase tracking-wide text-gray-400">
+                <th className="px-2 py-1.5 font-semibold">Query</th><th className="px-2 py-1.5 font-semibold">Clicks</th><th className="px-2 py-1.5 font-semibold">Impr.</th><th className="px-2 py-1.5 font-semibold">CTR</th><th className="px-2 py-1.5 font-semibold">Pos.</th>
+              </tr></thead>
+              <tbody>
+                {gsc.queries.map((q) => (
+                  <tr key={q.query} className="border-b border-gray-50">
+                    <td className="max-w-[240px] truncate px-2 py-1.5 font-medium text-gray-700">{q.query}</td>
+                    <td className="ll-mono px-2 py-1.5 text-gray-600">{q.clicks}</td>
+                    <td className="ll-mono px-2 py-1.5 text-gray-500">{q.impressions}</td>
+                    <td className="ll-mono px-2 py-1.5 text-gray-500">{pct1(q.ctr)}</td>
+                    <td className="ll-mono px-2 py-1.5 text-gray-500">{q.position?.toFixed(1)}</td>
+                  </tr>
+                ))}
+                {!gsc.queries.length && <tr><td colSpan={5} className="py-3 text-center text-[11px] text-gray-300">No query data in this window.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
-    </>
+    </div>
   );
 }
 
