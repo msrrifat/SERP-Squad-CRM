@@ -631,45 +631,57 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const runScan = (list) => {
     if (!list.length) return;
     const started = startScanJob(jobKey, `Rank scan · ${project.name} — ${list.length} keyword${list.length > 1 ? "s" : ""}`, async (setProgress) => {
-      setProgress({ done: 0, total: list.length });
-      /* REAL path first: the API server runs one live SERP request per keyword
-         through DataForSEO and parses the true rank (server/index.js). */
+      /* NO keyword limit: any count is scanned in sequential batches of 25
+         (the server's per-request cap, sized to dodge HTTP timeouts). Each
+         batch's positions are applied the moment it returns, so a 150-keyword
+         scan fills the table progressively instead of all-or-nothing. */
       const entries = list.map((e) => ({ id: e.id, keyword: e.keyword, city: e.city, device: e.device, engine: e.engine, domain: e.domain }));
-      let updates = null, failed = [], live = false;
-      try {
-        const res = await fetch("/api/rerun", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(240000), // a batch of live SERP scans can take minutes
-          body: JSON.stringify({ entries, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null })); // 101 = not in top 100
-          failed = data.updated.filter((u) => u.error);
-          live = true;
-        } else if (res.status !== 503) throw new Error(await res.text());
-      } catch (e) {
-        /* real projects surface the actual failure — only demo mode falls through */
-        if (project.demoMode === false) throw new Error("Scan failed — " + String(e?.message || e).slice(0, 180));
-      }
+      const CHUNK = 25;
+      const chunks = [];
+      for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
+      let ok = 0, applied = 0, live = false;
+      const failed = [];
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        setProgress({ done: applied, total: entries.length, note: chunks.length > 1 ? `batch ${ci + 1}/${chunks.length}` : undefined });
+        let updates = null;
+        try {
+          const res = await fetch("/api/rerun", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(240000), // one batch of live SERP scans can take minutes
+            body: JSON.stringify({ entries: chunk, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null })); // 101 = not in top 100
+            failed.push(...data.updated.filter((u) => u.error));
+            live = true;
+          } else if (res.status !== 503) throw new Error(await res.text());
+        } catch (e) {
+          /* real projects surface the actual failure — only demo mode falls through */
+          if (project.demoMode === false) throw new Error(`Scan failed at batch ${ci + 1}/${chunks.length}${applied ? ` — ${applied} of ${entries.length} keywords were already updated` : ""}. ` + String(e?.message || e).slice(0, 150));
+        }
 
-      if (!updates) {
-        /* REAL projects never fabricate positions — surface the failure honestly */
-        if (project.demoMode === false) throw new Error("DataForSEO isn't reachable or configured — no positions were changed. Check Company Settings → API settings and that the API server is running.");
-        /* DEMO fallback: deterministic-ish nudge, clearly labeled in the result toast */
-        await new Promise((r) => setTimeout(r, 800 + Math.random() * 1200));
-        updates = entries.map((e) => {
-          const entry = tracking.find((t) => t.id === e.id);
-          const shift = Math.round((Math.random() - 0.45) * 3);
-          return { id: e.id, newPos: Math.max(1, Math.min(60, (entry?.stats.cur ?? 30) + shift)), url: null };
-        });
+        if (!updates) {
+          /* REAL projects never fabricate positions — surface the failure honestly */
+          if (project.demoMode === false) throw new Error("DataForSEO isn't reachable or configured — " + (applied ? `${applied} of ${entries.length} keywords were updated before the failure.` : "no positions were changed.") + " Check Company Settings → API settings and that the API server is running.");
+          /* DEMO fallback: deterministic-ish nudge, clearly labeled in the result toast */
+          await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
+          updates = chunk.map((e) => {
+            const entry = tracking.find((t) => t.id === e.id);
+            const shift = Math.round((Math.random() - 0.45) * 3);
+            return { id: e.id, newPos: Math.max(1, Math.min(60, (entry?.stats.cur ?? 30) + shift)), url: null };
+          });
+        }
+        if (updates.length) onRerun?.(updates); // partial results land immediately
+        ok += updates.length;
+        applied += chunk.length;
       }
-      if (updates.length) onRerun?.(updates);
       /* never report a scan where nothing landed as a success */
-      if (!updates.length) throw new Error(failed.length
+      if (!ok) throw new Error(failed.length
         ? `All ${failed.length} scan${failed.length > 1 ? "s" : ""} failed — ${String(failed[0].error || "").slice(0, 140)}`
         : "No positions came back from the scan.");
-      return { ok: updates.length, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, live };
+      return { ok, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, live };
     });
     if (started) setSelected(new Set());
   };

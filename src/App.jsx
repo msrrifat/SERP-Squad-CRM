@@ -150,16 +150,22 @@ export default function App() {
   };
 
   /* persist the workspace to the server whenever it changes (debounced).
-     Only team accounts write; the token gates the API server-side too. */
+     Only team accounts write; the token gates the API server-side too.
+     Failed saves are NEVER silent — data that didn't persist shows a banner. */
   const saveTimer = useRef(null);
+  const [saveWarn, setSaveWarn] = useState(null);
   useEffect(() => {
     if (!hydrated || !teamSession) return;
     const token = localStorage.getItem("ss_token");
     if (!token) return;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
-        body: JSON.stringify({ state: { company, clients } }) }).catch(() => {});
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
+          body: JSON.stringify({ state: { company, clients } }) });
+        if (!r.ok && r.status !== 401) setSaveWarn(`Changes are NOT saving to the server (HTTP ${r.status}) — recent work would be lost on reload.`);
+        else setSaveWarn(null);
+      } catch { setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     }, 1200);
     return () => clearTimeout(saveTimer.current);
   }, [company, clients, hydrated, teamSession]);
@@ -1036,6 +1042,11 @@ export default function App() {
         )}
       </main>
 
+      {saveWarn && (
+        <div className="no-print fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-[12px] font-semibold text-red-700 shadow-lg">
+          {saveWarn}
+        </div>
+      )}
       {/* background scans keep running across page changes — this chip stays
           in the bottom-right corner, on every page, until each scan completes */}
       {runningScans.length > 0 && (

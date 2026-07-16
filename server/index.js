@@ -1651,6 +1651,8 @@ async function handleRerun(body) {
     "Italy": "google.it", "Belgium": "google.be", "India": "google.co.in", "Singapore": "google.com.sg",
     "United Arab Emirates": "google.ae", "South Africa": "google.co.za",
   };
+  /* 25 per request is the HTTP-timeout guard, NOT a scan limit — the client
+     batches any keyword count into sequential 25-keyword requests */
   const updated = await pool(entries.slice(0, 25), async (e) => {
     const engine = (e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google";
     const base = {
@@ -1680,7 +1682,7 @@ async function handleRerun(body) {
     if (!task) throw lastErr;
     const { position, url } = parseSerpRank(task, e.domain);
     return { id: e.id, position, url, location: usedLocation };
-  }, 3);
+  }, 5);
   return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, keyword: entries[i].keyword, error: u.error } : u)) }];
 }
 
@@ -1894,7 +1896,10 @@ http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
-      for await (const chunk of req) { raw += chunk; if (raw.length > 2e6) throw new Error("payload too large"); }
+      /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
+         saved keyword searches) — a tight cap here silently loses data */
+      const bodyCap = req.url === "/api/state" ? 32e6 : 4e6;
+      for await (const chunk of req) { raw += chunk; if (raw.length > bodyCap) throw new Error("payload too large"); }
       const body = JSON.parse(raw || "{}");
       const [code, payload] = req.url === "/api/scan-listings" ? await handleScan(body)
         : req.url === "/api/check-index" ? await handleCheckIndex(body)
