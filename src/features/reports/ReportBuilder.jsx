@@ -20,6 +20,7 @@ import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { TASK_COLORS, recordState, taskState } from "../pm/board.jsx";
 import { OPP_STYLE, genPageQueries } from "../../lib/seo.js";
 import { Distribution, ReportGridMap, gridMetrics, distFor } from "../performance/geogrid.jsx";
+import { useLiveSiteData } from "../performance/googlelive.jsx";
 import { AD_PLATFORMS, PfBadge, campaignDaily, sumMetrics } from "../ads/dashboard.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { cityLabel, urlSlug } from "../../lib/geo.js";
@@ -31,7 +32,20 @@ export function parsePasted(raw) {
   return raw.replace(/\r/g, "").split("\n").filter((l) => l.trim().length).map((l) => l.split("\t"));
 }
 
-export function ReportBuilder({ project, data, tracking, clientProjects = [], records = [], template = "performance", agencyBrand, wlBrand, clientInfo, defaultCmp, initialRange = null, dark, setDark, onClose, aiSummary = null, initialBlocks = null, initialTitle = null, onSave = null, onSaveTemplate = null }) {
+/* REAL projects open the builder without demo data — live GA4/GSC (plus real
+   tracking) is pulled and mapped into the same data shape first */
+export function ReportBuilder(props) {
+  const live = useLiveSiteData(props.project, !props.data);
+  if (!props.data && !live) return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-white">
+      <RefreshCw size={22} className="animate-spin text-gray-300" />
+      <div className="text-[13px] font-medium text-gray-500">Pulling live data for this report…</div>
+    </div>
+  );
+  return <ReportBuilderInner {...props} data={props.data || live} />;
+}
+
+function ReportBuilderInner({ project, data, tracking, clientProjects = [], records = [], template = "performance", agencyBrand, wlBrand, clientInfo, defaultCmp, initialRange = null, dark, setDark, onClose, aiSummary = null, initialBlocks = null, initialTitle = null, onSave = null, onSaveTemplate = null }) {
   const today = new Date().toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" });
   const [title, setTitle] = useState(initialTitle || (template === "work" ? `${project.name} — Work Report` : `${project.name} — SEO Performance Report`));
   const [accent, setAccent] = useState(project.accent);

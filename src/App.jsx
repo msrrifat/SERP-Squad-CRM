@@ -643,7 +643,7 @@ export default function App() {
   if (screen === "login") {
     return <Lazy><LoginScreen company={company} dark={dark} onAuthed={onAuthed} /></Lazy>;
   }
-  if (showReport && project && data) {
+  if (showReport && project) {
     const rwl = activeClient?.whiteLabel;
     const agencyBrand = { name: company.name, logo: company.logo, accent: company.accent };
     const wlBrand = rwl?.enabled
@@ -653,7 +653,8 @@ export default function App() {
     const clientProjects = (activeClient?.projects || []).map((p) => {
       const tr = p.tracking.map((t) => hydrate(t, p.demoMode !== false));
       const kws = [...new Set(p.tracking.map((t) => t.keyword))];
-      return { project: p, tracking: tr, data: genSiteData(p, kws, activeClient.companyName) };
+      /* real sibling projects contribute zeros, never generated numbers */
+      return { project: p, tracking: tr, data: p.demoMode !== false ? genSiteData(p, kws, activeClient.companyName) : emptySiteData(p) };
     });
     const saveReport = (rep) => setCompany((c) => {
       const list = c.savedReports || [];

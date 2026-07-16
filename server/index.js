@@ -318,7 +318,7 @@ async function handleGscSites(body) {
 }
 async function handleGscQuery(body) {
   if (!body?.connectionId || !body?.siteUrl) return [400, { error: "bad_request", detail: "connectionId and siteUrl required." }];
-  const days = Math.min(Math.max(+body?.days || 28, 1), 90);
+  const days = Math.min(Math.max(+body?.days || 28, 1), 480); // GSC keeps ~16 months
   const startDate = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   const endDate = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
   const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(body.siteUrl)}/searchAnalytics/query`;
@@ -326,7 +326,7 @@ async function handleGscQuery(body) {
     const [totals, queries, dates] = await Promise.all([
       gPost(accessToken, base, { startDate, endDate }),
       gPost(accessToken, base, { startDate, endDate, dimensions: ["query"], rowLimit: 20 }),
-      gPost(accessToken, base, { startDate, endDate, dimensions: ["date"], rowLimit: 90 }),
+      gPost(accessToken, base, { startDate, endDate, dimensions: ["date"], rowLimit: 500 }),
     ]);
     const t = totals.rows?.[0] || {};
     return [200, { live: true, range: { startDate, endDate },
@@ -1642,6 +1642,15 @@ async function handleRerun(body) {
   if (!creds) return [503, { error: "not_configured" }];
   const { entries } = body; // [{ id, keyword, city:{city,region,country}, device, engine, domain }]
   if (!Array.isArray(entries) || !entries.length) return [400, { error: "entries[] required" }];
+  /* rank checks hit the country's own Google front end — google.co.uk results
+     differ from google.com for the same UK city, so this is a precision must */
+  const SE_DOMAIN = {
+    "United States": "google.com", "United Kingdom": "google.co.uk", "Canada": "google.ca",
+    "Australia": "google.com.au", "Netherlands": "google.nl", "New Zealand": "google.co.nz",
+    "Ireland": "google.ie", "Germany": "google.de", "France": "google.fr", "Spain": "google.es",
+    "Italy": "google.it", "Belgium": "google.be", "India": "google.co.in", "Singapore": "google.com.sg",
+    "United Arab Emirates": "google.ae", "South Africa": "google.co.za",
+  };
   const updated = await pool(entries.slice(0, 25), async (e) => {
     const engine = (e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google";
     const base = {
@@ -1650,6 +1659,7 @@ async function handleRerun(body) {
       device: (e.device || "Desktop").toLowerCase(),
       os: e.device === "Mobile" ? "android" : "windows",
       depth: 100,
+      ...(engine === "google" && SE_DOMAIN[e.city?.country] ? { se_domain: SE_DOMAIN[e.city.country] } : {}),
     };
     /* DataForSEO only accepts location_names from its own database — custom or
        partial cities ("York" with no region) fail on the exact form, so walk
@@ -1698,18 +1708,22 @@ function gridPoints(center, size, spacingKm, shape = "square") {
 async function scanGridPoint(creds, keyword, pt, business, languageCode = "en") {
   if (pt.skipped) return { ...pt, rank: null, results: [] }; // circle-clipped corner — not scanned, not billed
   const task = await dfsLive(creds, "google/maps", {
-    keyword, location_coordinate: `${pt.lat},${pt.lng},15z`, language_code: languageCode, depth: 20,
+    keyword, location_coordinate: `${pt.lat},${pt.lng},15z`, language_code: languageCode, depth: 50, // ranks tracked to 50 — beyond shows 50+
   });
   const items = (task.result?.[0]?.items || []).filter((it) => it.type === "maps_search");
   const target = normName(business.name);
-  const hit = items.find((it) =>
-    (business.cid && String(it.cid) === String(business.cid)) ||
-    (business.placeId && it.place_id === business.placeId) ||
-    normName(it.title).includes(target) || target.includes(normName(it.title)));
+  /* precision matching — strongest identifier first: CID, then place_id, then
+     exact normalized name, then containment. Items arrive in rank order, so
+     the first hit within each tier is the best position. */
+  const hit =
+    (business.cid && items.find((it) => String(it.cid) === String(business.cid))) ||
+    (business.placeId && items.find((it) => it.place_id === business.placeId)) ||
+    items.find((it) => normName(it.title) === target) ||
+    items.find((it) => normName(it.title).includes(target) || target.includes(normName(it.title)));
   return {
     ...pt,
-    rank: hit ? hit.rank_group : null, // rank among local results; null = not in top 20
-    /* FULL top-20 stored per point — competitor grids are derived from this
+    rank: hit ? hit.rank_group : null, // rank among local results; null = not in top 50
+    /* top-20 stored per point — competitor grids are derived from this
        same response later at ZERO extra API cost (token-efficient by design) */
     results: items.slice(0, 20).map((it) => ({
       title: it.title, rank: it.rank_group,
@@ -1726,9 +1740,14 @@ async function handleGeoGrid(body) {
   const size = [3, 5, 7, 9, 11, 13].includes(+grid?.size) ? +grid.size : 5;
   const spacingKm = Math.min(10, Math.max(0.05, +grid?.spacingKm || 1));
   const pts = gridPoints(center, size, spacingKm, grid?.shape === "circle" ? "circle" : "square");
-  const results = await pool(pts, (pt) => scanGridPoint(creds, keyword, pt, business, body.language_code || "en"), 5);
+  /* one automatic retry per point — a transient SERP error must not leave a
+     hole in the grid pretending to be a bad rank */
+  const results = await pool(pts, async (pt) => {
+    try { return await scanGridPoint(creds, keyword, pt, business, body.language_code || "en"); }
+    catch { return await scanGridPoint(creds, keyword, pt, business, body.language_code || "en"); }
+  }, 5);
   const clean = results.map((r, i) => (r.error ? { ...pts[i], rank: null, error: r.error, results: [] } : r));
-  if (clean.every((r) => r.error)) return [502, { error: "provider_error", detail: clean[0].error }];
+  if (clean.every((r) => r.error || r.skipped)) return [502, { error: "provider_error", detail: clean.find((r) => r.error)?.error || "scan failed" }];
   return [200, { live: true, points: clean, size, spacingKm, checkedAt: Date.now() }];
 }
 

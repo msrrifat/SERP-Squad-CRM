@@ -156,7 +156,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
         onWheel={(e) => { e.preventDefault(); setZ((cur) => Math.max(3, Math.min(19, cur + (e.deltaY < 0 ? 1 : -1)))); }}>
         {/* CARTO light basemap — the clean Google-Maps-like style from the reference */}
         {tiles.map((t, i) => (
-          <img key={`${z}-${t.tx}-${t.ty}-${i}`} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/light_all/${z}/${t.tx}/${t.ty}.png`}
+          <img key={`${z}-${t.tx}-${t.ty}-${i}`} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${t.tx}/${t.ty}.png`}
             className="pointer-events-none absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256 }} draggable={false} />
         ))}
         {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
@@ -168,10 +168,10 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
           const top3 = (p.results || []).slice(0, 3);
           return (
             <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={`${p.lat}, ${p.lng}\nRank: ${p.rank ?? "not in top 20"}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+              title={`${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 50"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
               <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
-                style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
-                {p.rank ?? "21+"}
+                style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
+                {p.error ? "!" : p.rank ?? "50+"}
               </div>
               {delta != null && delta !== 0 && (
                 <span className="absolute flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow-md"
@@ -210,9 +210,9 @@ export function AbstractGrid({ points, size, spacingKm, prevPoints }) {
           const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
           if (p.skipped) return <div key={`${p.row}-${p.col}`} className="h-10 w-10" />;
           return (
-            <div key={`${p.row}-${p.col}`} className="relative" title={`Rank: ${p.rank ?? "not in top 20"}`}>
+            <div key={`${p.row}-${p.col}`} className="relative" title={`Rank: ${p.rank ?? "not in top 50"}`}>
               <div className={"flex h-10 w-10 items-center justify-center rounded-full text-[12px] font-bold text-white shadow-sm " + (isCenter ? "ring-2 ring-offset-2 ring-gray-800" : "")} style={{ background: rankColor(p.rank) }}>
-                {p.rank ?? "21+"}
+                {p.rank ?? "50+"}
               </div>
               {delta != null && delta !== 0 && (
                 <span className="absolute -bottom-1 -right-1 rounded-full bg-white px-1 text-[8px] font-bold shadow" style={{ color: delta > 0 ? "#16A34A" : "#DC2626" }}>
@@ -231,7 +231,7 @@ const Legend = ({ size, spacingKm }) => (
   <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-[10px] text-gray-400">
     <span className="ll-mono">{size}×{size} · {spacingKm} km spacing</span>
     <span className="flex items-center gap-1.5">
-      {[["1–3", "#16A34A"], ["4–10", "#F59E0B"], ["11–20", "#EF4444"], ["21+", "#5B6472"]].map(([l, c]) => (
+      {[["1–3", "#16A34A"], ["4–10", "#F59E0B"], ["11–50", "#EF4444"], ["50+", "#5B6472"]].map(([l, c]) => (
         <span key={l} className="flex items-center gap-0.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: c }} /> {l}</span>
       ))}
     </span>
@@ -737,7 +737,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
                 <button onClick={() => setOverlay("snapshot")} disabled={!snap} className="block w-full px-3.5 py-2 text-left text-[12.5px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">⭳  Snapshot report (PDF, all keywords)</button>
                 <button disabled={!snap} onClick={() => {
                   const rows = [["Keyword", "Row", "Col", "Lat", "Lng", "Rank"]];
-                  Object.entries(snap.grids).forEach(([k2, pts]) => pts.filter((p) => !p.skipped).forEach((p) => rows.push([k2, p.row, p.col, p.lat ?? "", p.lng ?? "", p.rank ?? "21+"])));
+                  Object.entries(snap.grids).forEach(([k2, pts]) => pts.filter((p) => !p.skipped).forEach((p) => rows.push([k2, p.row, p.col, p.lat ?? "", p.lng ?? "", p.rank ?? "50+"])));
                   const a = document.createElement("a");
                   a.href = URL.createObjectURL(new Blob([rows.map((r2) => r2.join(",")).join("\n")], { type: "text/csv" }));
                   a.download = `${rp.name} — snapshot ${new Date(snap.at).toISOString().slice(0, 10)}.csv`;
@@ -964,7 +964,7 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
   return (
     <div className="relative mx-auto overflow-hidden rounded-xl border border-gray-200" style={{ width: px, height: px, maxWidth: "100%" }}>
       {tiles.map((t, i) => (
-        <img key={i} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/light_all/${z}/${t.tx}/${t.ty}.png`}
+        <img key={i} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${t.tx}/${t.ty}.png`}
           className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256 }} draggable={false} crossOrigin="anonymous" />
       ))}
       {/* soften the basemap (building blocks read as dark noise behind the grid) —
@@ -980,7 +980,7 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
           <div key={`${p.row}-${p.col}`} className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}>
             <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-2 ring-gray-900 ring-offset-1" : "")}
               style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: rankColor(p.rank) }}>
-              {p.rank ?? "21+"}
+              {p.rank ?? "50+"}
             </div>
             {delta != null && delta !== 0 && (
               <span className="absolute -right-1 -top-1 flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow"
@@ -997,7 +997,7 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
 }
 
 /* ================= report suite: distribution, compare, print, share ================= */
-const DIST_META = [["p3", "Position 1–3", "#16A34A"], ["p10", "Position 4–10", "#F59E0B"], ["p20", "Position 11–20", "#EF4444"], ["none", "No ranking", "#5B6472"]];
+const DIST_META = [["p3", "Position 1–3", "#16A34A"], ["p10", "Position 4–10", "#F59E0B"], ["p20", "Position 11–50", "#EF4444"], ["none", "No ranking", "#5B6472"]];
 export function Distribution({ points, compact = false }) {
   const d = distFor(points);
   const data = DIST_META.map(([k, name, color]) => ({ name, value: d[k], color }));

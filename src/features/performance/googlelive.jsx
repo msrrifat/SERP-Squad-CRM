@@ -9,6 +9,8 @@ import { LineChart, Line, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGr
 import { Activity, BarChart3, CheckCircle2, Eye, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
 import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
+import { emptySiteData } from "../../data/gen.js";
+import { MONTH_DATES } from "../../lib/months.jsx";
 
 const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
 /* period-over-period delta from a daily series: second half vs first half */
@@ -51,6 +53,53 @@ export function useGoogleLive(project, days = 28) {
   const hasGsc = !!(conn.connectionId && conn.gscSite);
   const refresh = () => { if (hasGa) loadGa4(conn.ga4Property, days); if (hasGsc) loadGsc(conn.gscSite, days); };
   return { ga4, gsc, hasGa, hasGsc, connected: hasGa || hasGsc, refresh };
+}
+
+/* Live report data: real GA4 (12 months) + Search Console (16 months capped
+   at our grid) mapped into the genSiteData month-grid shape, so the Report
+   builder works identically for demo and REAL projects. Unconnected sources
+   stay all-zero — nothing is fabricated. */
+export function useLiveSiteData(project, enabled = true) {
+  const [out, setOut] = useState(null);
+  const conn = project?.google || {};
+  useEffect(() => {
+    if (!enabled || !project) return;
+    let alive = true;
+    (async () => {
+      const base = emptySiteData(project);
+      const gaTime = (d) => Date.parse(`${String(d).slice(0, 4)}-${String(d).slice(4, 6)}-${String(d).slice(6, 8)}`);
+      const monthIdx = (t) => { let i = -1; for (let j = 0; j < 13; j++) if (t >= MONTH_DATES[j].getTime()) i = j; return i; };
+      const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json()).catch(() => null);
+      try {
+        const [ga, gsc] = await Promise.all([
+          conn.connectionId && conn.ga4Property ? post("/api/google/ga4/report", { connectionId: conn.connectionId, propertyId: conn.ga4Property, days: 365 }) : null,
+          conn.connectionId && conn.gscSite ? post("/api/google/gsc/query", { connectionId: conn.connectionId, siteUrl: conn.gscSite, days: 480 }) : null,
+        ]);
+        if (ga?.live) {
+          (ga.byDate || []).forEach((r) => {
+            const i = monthIdx(gaTime(r.date));
+            if (i >= 0) { base.months[i].ga.users += r.users; base.months[i].ga.sessions += r.sessions; base.months[i].ga.conversions += r.conversions; }
+          });
+          base.channels = ga.channels || [];
+          base.sources = (ga.sources || []).map((s) => { const ser = Array(13).fill(0); ser[12] = s.value; return { name: s.name, series: ser }; });
+          base.events = (ga.events || []).map((e) => { const ser = Array(13).fill(0); ser[12] = e.value; return { name: e.name, series: ser }; });
+          base.topPages = ga.topPages || [];
+          base.engRate = ga.totals?.engRate || 0;
+        }
+        if (gsc?.live) {
+          (gsc.byDate || []).forEach((r) => {
+            const i = monthIdx(Date.parse(r.date));
+            if (i >= 0) { base.months[i].gsc.clicks += r.clicks; base.months[i].gsc.impressions += r.impressions; }
+          });
+          base.months[12].gsc.position = gsc.totals?.position || 0;
+          base.topQueries = (gsc.queries || []).map((q) => ({ query: q.query, clicks: q.clicks, impressions: q.impressions, position: q.position }));
+        }
+      } catch { /* sources stay zero — never fabricated */ }
+      if (alive) setOut(base);
+    })();
+    return () => { alive = false; };
+  }, [enabled, conn.connectionId, conn.ga4Property, conn.gscSite, project?.id]); // eslint-disable-line
+  return out;
 }
 
 /* Reusable Google connector — the real OAuth flow + Search Console site & GA4
