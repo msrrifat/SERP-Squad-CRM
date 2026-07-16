@@ -59,9 +59,9 @@ export const API_REGISTRY = [
         ],
       },
       {
-        id: "googleCse", name: "Google Custom Search (free)",
-        desc: "Powers the Guest Post Finder's footprint searches — 100 queries/day FREE. Create a Programmable Search Engine set to search the entire web, then paste its API key + engine ID.",
-        docs: "programmablesearchengine.google.com → create engine (search entire web); key at developers.google.com/custom-search",
+        id: "googleCse", name: "Google Custom Search (legacy)",
+        desc: "Google CLOSED this API to new customers (sunset Jan 2027) — leave empty unless you have legacy access. The Guest Post Finder automatically runs its footprint searches through DataForSEO instead (~$0.002/query).",
+        docs: "legacy accounts only: developers.google.com/custom-search — everyone else: connect DataForSEO above",
         fields: [
           { key: "apiKey", label: "API key", secret: true, placeholder: "AIza…" },
           { key: "cx", label: "Search engine ID (cx)", placeholder: "a1b2c3d4e5…" },

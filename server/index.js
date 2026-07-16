@@ -1238,8 +1238,8 @@ async function handleGuestSearch(body) {
   const gl = String(body?.gl || "").trim().toLowerCase();
   const cse = body?.cse;
   const creds = resolveCreds(body);
-  const engine = cse?.key && cse?.cx ? "cse" : creds ? "dfs" : null;
-  if (!engine) return [503, { error: "not_configured", detail: "Add a Google Custom Search key + engine ID (free — 100 searches/day) or DataForSEO credentials in Company Settings → API settings." }];
+  let engine = cse?.key && cse?.cx ? "cse" : creds ? "dfs" : null;
+  if (!engine) return [503, { error: "not_configured", detail: "Connect DataForSEO in Company Settings → API settings (Google closed the Custom Search API to new customers)." }];
   const byDomain = new Map();
   try {
     for (const fp of footprints) {
@@ -1249,9 +1249,16 @@ async function handleGuestSearch(body) {
         const u = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(cse.key)}&cx=${encodeURIComponent(cse.cx)}&q=${encodeURIComponent(q)}&num=10${gl ? `&gl=${gl}` : ""}`;
         const r = await fetch(u, { signal: AbortSignal.timeout(15000) });
         const d = await r.json();
-        if (d.error) return [502, { error: "provider_error", detail: `Google Custom Search: ${d.error.message || d.error.status}` }];
-        items = (d.items || []).map((it) => ({ url: it.link, title: it.title || "", snippet: it.snippet || "" }));
-      } else {
+        if (d.error) {
+          /* Google closed the Custom Search JSON API to new customers (sunset
+             Jan 2027) — fall back to DataForSEO instead of failing the search */
+          if (creds) { engine = "dfs"; }
+          else return [502, { error: "provider_error", detail: `Google Custom Search: ${d.error.message || d.error.status} — Google closed this API to new customers; connect DataForSEO instead.` }];
+        } else {
+          items = (d.items || []).map((it) => ({ url: it.link, title: it.title || "", snippet: it.snippet || "" }));
+        }
+      }
+      if (engine === "dfs" && !items.length) {
         const task = await dfsLive(creds, "google/organic", { keyword: q, location_name: country || "United States", language_code: "en", depth: 20 });
         items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic").map((it) => ({ url: it.url, title: it.title || "", snippet: it.description || "" }));
       }
