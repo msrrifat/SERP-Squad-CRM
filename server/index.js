@@ -1644,18 +1644,34 @@ async function handleRerun(body) {
   if (!Array.isArray(entries) || !entries.length) return [400, { error: "entries[] required" }];
   const updated = await pool(entries.slice(0, 25), async (e) => {
     const engine = (e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google";
-    const task = await dfsLive(creds, engine + "/organic", {
+    const base = {
       keyword: e.keyword,
-      location_name: [e.city.city, e.city.region, e.city.country].filter(Boolean).join(","),
       language_code: "en",
       device: (e.device || "Desktop").toLowerCase(),
       os: e.device === "Mobile" ? "android" : "windows",
       depth: 100,
-    });
+    };
+    /* DataForSEO only accepts location_names from its own database — custom or
+       partial cities ("York" with no region) fail on the exact form, so walk
+       from most to least specific instead of erroring the whole scan */
+    const variants = [...new Set([
+      [e.city.city, e.city.region, e.city.country].filter(Boolean).join(","),
+      [e.city.city, e.city.country].filter(Boolean).join(","),
+      e.city.country,
+    ].filter(Boolean))];
+    let task = null, usedLocation = null, lastErr = null;
+    for (const loc of variants) {
+      try { task = await dfsLive(creds, engine + "/organic", { ...base, location_name: loc }); usedLocation = loc; break; }
+      catch (err) {
+        lastErr = err;
+        if (!/location/i.test(String(err?.message || err))) throw err; // non-location errors are real failures
+      }
+    }
+    if (!task) throw lastErr;
     const { position, url } = parseSerpRank(task, e.domain);
-    return { id: e.id, position, url };
+    return { id: e.id, position, url, location: usedLocation };
   }, 3);
-  return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, error: u.error } : u)) }];
+  return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, keyword: entries[i].keyword, error: u.error } : u)) }];
 }
 
 /* ---- GBP geo-grid rank scan =================================

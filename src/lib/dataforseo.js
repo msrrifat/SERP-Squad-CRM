@@ -45,10 +45,12 @@ export async function rerunNow(entryIds, dfsCredentials) {
 }
 export function parseSerpRank(taskResult, domain) {
   const items = taskResult?.result?.[0]?.items || [];
-  const clean = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
-  const hit = items.find(
-    (it) => it.type === "organic" && (it.domain || "").replace(/^www\./, "") === clean
-  );
+  const clean = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase();
+  const hit = items.find((it) => {
+    if (it.type !== "organic") return false;
+    const hd = (it.domain || "").replace(/^www\./, "").toLowerCase();
+    return hd === clean || hd.endsWith("." + clean); // subdomains rank for the site too
+  });
   return hit
     ? { position: hit.rank_absolute, url: hit.url }   // rank_absolute = true SERP position
     : { position: null, url: null };                  // not in top 100

@@ -591,10 +591,20 @@ export default function App() {
   const addTracking = (entries) => { updateProject({ tracking: [...project.tracking, ...entries] }); logActivity(`Added ${entries.length} keyword${entries.length > 1 ? "s" : ""}`, project?.name); };
   const deleteTracking = (id) => { updateProject({ tracking: project.tracking.filter((t) => t.id !== id) }); logActivity("Removed a tracked keyword", project?.name); };
   const applyRerun = (updates) => {
-    updateProject({ tracking: project.tracking.map((t) => {
+    const ts = Date.now();
+    /* functional update: scans finish long after the click, and keywords may
+       have been added meanwhile — never map a stale tracking array */
+    updateProject((p) => ({ tracking: p.tracking.map((t) => {
       const u = updates.find((x) => x.id === t.id);
-      return u ? { ...t, extraPositions: [...(t.extraPositions || []), u.newPos], ...(u.url ? { rankUrl: u.url } : {}) } : t;
-    }) });
+      if (!u) return t;
+      return {
+        ...t,
+        extraPositions: [...(t.extraPositions || []), u.newPos],
+        /* dated scan log — powers the Ranking history tab */
+        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null }],
+        rankUrl: u.url || t.rankUrl || null,
+      };
+    }) }));
     logActivity(`Re-checked ${updates.length} keyword${updates.length > 1 ? "s" : ""}`, project?.name);
   };
   const toggleExpand = (cid) => setExpanded((s) => { const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n; });

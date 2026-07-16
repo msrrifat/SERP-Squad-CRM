@@ -249,7 +249,7 @@ export function hydrate(entry, demo = true) {
   const r = mulberry32(hashStr(entry.id + entry.keyword + "url"));
   const url = demo
     ? "https://" + entry.domain + PAGE_SLUGS[Math.floor(r() * 3)]
-    : entry.rankUrl || "https://" + entry.domain; // real: the URL DataForSEO actually found ranking
+    : entry.rankUrl || null; // real: ONLY the URL DataForSEO actually found ranking — never a guess
   return { ...entry, positions, url, stats: trackStats(positions) };
 }
 

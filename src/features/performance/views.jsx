@@ -575,6 +575,9 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const [selected, setSelected] = useState(new Set());
   const [rerunning, setRerunning] = useState(false);
   const [rerunResult, setRerunResult] = useState(null); // { ok: number, ts: number } | { error: string }
+  /* Live rankings ↔ Ranking history (dated scans persisted on every rerun) */
+  const [tab, setTab] = useState("live");
+  const [histDay, setHistDay] = useState(null);
 
   const cities = [...new Set(tracking.map((t) => cityLabel(t.city)))];
   /* column sorting — defaults to best current positions on top */
@@ -597,32 +600,48 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     </th>
   );
 
+  /* scan history: every rerun stores { t, p, u } per keyword — the union of
+     scan days feeds the history date picker (newest first) */
+  const scanDays = [...new Set(tracking.flatMap((t) => (t.scans || []).map((s) => new Date(s.t).toISOString().slice(0, 10))))].sort().reverse();
+  const activeDay = histDay && scanDays.includes(histDay) ? histDay : scanDays[0] || null;
+  const dayEnd = activeDay ? new Date(activeDay + "T23:59:59.999").getTime() : 0;
+  const histRows = !activeDay ? [] : rows.map((t) => {
+    const past = (t.scans || []).filter((s) => s.t <= dayEnd).sort((a, b) => a.t - b.t);
+    const cur = past[past.length - 1] || null;
+    const prev = past.length > 1 ? past[past.length - 2] : null;
+    return { ...t, hist: cur, histChange: cur && prev && cur.p != null && prev.p != null ? prev.p - cur.p : null };
+  }).filter((t) => t.hist);
+
   const toggleSelect = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected(rows.length === selected.size && rows.every((r) => selected.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id)));
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
-  const doRerun = async () => {
-    const ids = [...selected];
-    if (!ids.length) return;
+  /* one scan runner for both flows: "Rerun now" on selected keywords AND the
+     automatic initial scan right after keywords are added (real projects) */
+  const runScan = async (list) => {
+    if (!list.length) return;
     setRerunning(true); setRerunResult(null);
     try {
       /* REAL path first: the API server runs one live SERP request per keyword
          through DataForSEO and parses the true rank (server/index.js). */
-      const entries = ids.map((id) => tracking.find((t) => t.id === id)).filter(Boolean)
-        .map((e) => ({ id: e.id, keyword: e.keyword, city: e.city, device: e.device, engine: e.engine, domain: e.domain }));
-      let updates = null, live = false;
+      const entries = list.map((e) => ({ id: e.id, keyword: e.keyword, city: e.city, device: e.device, engine: e.engine, domain: e.domain }));
+      let updates = null, failed = [], live = false;
       try {
         const res = await fetch("/api/rerun", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(90000),
+          signal: AbortSignal.timeout(240000), // a batch of live SERP scans can take minutes
           body: JSON.stringify({ entries, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
         });
         if (res.ok) {
           const data = await res.json();
           updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null })); // 101 = not in top 100
+          failed = data.updated.filter((u) => u.error);
           live = true;
         } else if (res.status !== 503) throw new Error(await res.text());
-      } catch { /* API server down / unconfigured → handled below */ }
+      } catch (e) {
+        /* real projects surface the actual failure — only demo mode falls through */
+        if (project.demoMode === false) throw new Error("Scan failed — " + String(e?.message || e).slice(0, 180));
+      }
 
       if (!updates) {
         /* REAL projects never fabricate positions — surface the failure honestly */
@@ -632,11 +651,15 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         updates = entries.map((e) => {
           const entry = tracking.find((t) => t.id === e.id);
           const shift = Math.round((Math.random() - 0.45) * 3);
-          return { id: e.id, newPos: Math.max(1, Math.min(60, (entry.stats.cur ?? 30) + shift)) };
+          return { id: e.id, newPos: Math.max(1, Math.min(60, (entry?.stats.cur ?? 30) + shift)), url: null };
         });
       }
-      onRerun?.(updates);
-      setRerunResult({ ok: updates.length, ts: Date.now(), live });
+      if (updates.length) onRerun?.(updates);
+      /* never report a scan where nothing landed as a success */
+      if (!updates.length) throw new Error(failed.length
+        ? `All ${failed.length} scan${failed.length > 1 ? "s" : ""} failed — ${String(failed[0].error || "").slice(0, 140)}`
+        : "No positions came back from the scan.");
+      setRerunResult({ ok: updates.length, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, ts: Date.now(), live });
       setSelected(new Set());
     } catch (err) {
       setRerunResult({ error: err.message });
@@ -644,6 +667,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       setRerunning(false);
     }
   };
+  const doRerun = () => runScan([...selected].map((id) => tracking.find((t) => t.id === id)).filter(Boolean));
 
   /* real projects can hold entries that were never scanned (cur == null) —
      stats only average what actually has positions */
@@ -690,13 +714,36 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
 
       {W.table && (
         <Card className="overflow-hidden">
+          {/* tab bar: live table ↔ dated scan history */}
+          <div className="flex items-center gap-1 border-b border-gray-100 px-5 pt-2 no-print">
+            {[["live", "Live rankings"], ["history", "Ranking history"]].map(([k, label]) => (
+              <button key={k} onClick={() => setTab(k)}
+                className="-mb-px px-3.5 py-2.5 text-[12.5px] font-semibold transition-colors"
+                style={tab === k ? { color: accent, boxShadow: `inset 0 -2px 0 ${accent}` } : { color: "#9CA3AF" }}>
+                {label}{k === "history" && scanDays.length > 0 && <span className="ll-mono ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] text-gray-500">{scanDays.length}</span>}
+              </button>
+            ))}
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4">
             <div>
-              <div className="ll-display text-[15px] font-semibold">Keyword rank tracking</div>
+              <div className="ll-display text-[15px] font-semibold">{tab === "history" ? "Ranking history" : "Keyword rank tracking"}</div>
               <div className="text-[11px] text-gray-400">
-                City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}
+                {tab === "history"
+                  ? "Positions exactly as they were scanned on the selected date — every rerun is kept."
+                  : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}</>}
               </div>
             </div>
+            {tab === "history" && (
+              <div className="flex flex-wrap items-center gap-2 no-print">
+                <span className="text-[11px] font-medium text-gray-400">Scan date</span>
+                <select value={histDay || scanDays[0] || ""} onChange={(e) => setHistDay(e.target.value)}
+                  className="ll-mono rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px]">
+                  {scanDays.map((d) => <option key={d} value={d}>{d}</option>)}
+                  {!scanDays.length && <option value="">No scans yet</option>}
+                </select>
+              </div>
+            )}
+            {tab === "live" && (
             <div className="flex flex-wrap items-center gap-2 no-print">
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter keywords…"
                 className="w-36 rounded-lg border border-gray-200 px-3 py-1.5 text-[13px]" />
@@ -723,17 +770,20 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 </>
               )}
             </div>
+            )}
           </div>
           {rerunResult && (
-            <div className={`ll-fade flex items-center justify-between px-5 py-2.5 text-[12.5px] ${rerunResult.error ? "bg-red-50" : "bg-emerald-50"}`}>
-              <span className="flex items-center gap-1.5 font-medium" style={{ color: rerunResult.error ? "#991B1B" : "#166534" }}>
+            <div className={`ll-fade flex items-center justify-between px-5 py-2.5 text-[12.5px] ${rerunResult.error ? "bg-red-50" : rerunResult.failed ? "bg-amber-50" : "bg-emerald-50"}`}>
+              <span className="flex items-center gap-1.5 font-medium" style={{ color: rerunResult.error ? "#991B1B" : rerunResult.failed ? "#92400E" : "#166534" }}>
                 {rerunResult.error
                   ? <><X size={14} /> Rerun failed: {rerunResult.error}</>
-                  : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}. Positions updated.</>}
+                  : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
+                      {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}</>}
               </span>
               <button onClick={() => setRerunResult(null)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
             </div>
           )}
+          {tab === "live" && (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead>
@@ -784,8 +834,10 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     <td className="px-3 py-3"><PosChange value={t.stats.d30} /></td>
                     <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>
                     <td className="px-3 py-3"><Spark values={t.positions.slice(-90)} invert color={accent} /></td>
-                    <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url}>
-                      <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
+                    <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
+                      {t.url
+                        ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
+                        : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
                     </td>
                     <td className="px-3 py-3 no-print">
                       {!readOnly && <button onClick={() => onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
@@ -795,12 +847,63 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               </tbody>
             </table>
           </div>
+          )}
+
+          {/* ranking history: the table exactly as it was on the selected scan date */}
+          {tab === "history" && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[13px]">
+              <thead>
+                <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                  <th className="px-5 py-3 font-semibold">Keyword</th>
+                  <th className="px-3 py-3 font-semibold">Position on {activeDay || "—"}</th>
+                  <th className="px-3 py-3 font-semibold">vs previous scan</th>
+                  <th className="px-3 py-3 font-semibold">Scanned at</th>
+                  <th className="px-3 py-3 font-semibold">Ranking URL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {histRows.length === 0 && (
+                  <tr><td colSpan={5} className="px-5 py-10 text-center text-[13px] text-gray-400">
+                    No scan history yet — every "Rerun now" (and the automatic initial scan) is saved here with its date.
+                  </td></tr>
+                )}
+                {histRows.map((t) => (
+                  <tr key={t.id} className="border-b border-gray-50 align-top hover:bg-gray-50/60">
+                    <td className="px-5 py-3">
+                      <div className="font-medium text-gray-800">{t.keyword}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-gray-400">
+                        <span className="inline-flex items-center gap-1"><MapPin size={11} />{cityLabel(t.city)}</span>
+                        <span className="inline-flex items-center gap-1">{t.device === "Mobile" ? <Smartphone size={11} /> : <Monitor size={11} />}{t.device}</span>
+                        <span className="inline-flex items-center gap-1"><Search size={11} />{t.engine}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3"><RankChip pos={t.hist.p} /></td>
+                    <td className="px-3 py-3"><PosChange value={t.histChange} /></td>
+                    <td className="ll-mono px-3 py-3 text-[11.5px] text-gray-500">{new Date(t.hist.t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.hist.u || ""}>
+                      {t.hist.u
+                        ? <a href={t.hist.u} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.hist.u)}</a>
+                        : <span className="text-[11px] text-gray-300">{t.hist.p != null && t.hist.p <= 100 ? "—" : "not in top 100"}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          )}
         </Card>
       )}
 
       {showModal && (
         <AddKeywordModal project={project} dfsConnected={dfsConnected} accent={accent} onClose={() => setShowModal(false)}
-          onAdd={(entries) => { onAdd(entries); setShowModal(false); }} />
+          onAdd={(entries) => {
+            onAdd(entries); setShowModal(false);
+            /* real projects: run the initial scan right away so positions appear
+               (demo projects already chart deterministic history) */
+            const scanNow = entries.filter((e) => e.scrape === "DataForSEO SERP API");
+            if (project.demoMode === false && dfsConnected && scanNow.length) runScan(scanNow);
+          }} />
       )}
     </div>
   );
