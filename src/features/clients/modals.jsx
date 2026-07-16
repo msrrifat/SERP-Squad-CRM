@@ -677,7 +677,7 @@ export function AddProjectModal({ clients, defaultClientId, onClose, onAdd }) {
             const pr = mkProject("p" + Date.now(), name.trim(), website.trim().replace(/^https?:\/\//, "") || "example.com", accent, []);
             /* fresh projects start unconnected — profiles attach through the
                Connect flow in Project settings → Data sources (no fake data) */
-            pr.integrations = { ...pr.integrations, gbp: false };
+            pr.integrations = { ...pr.integrations, gbp: false, ga: false, gsc: false };
             pr.locations = [{ id: pr.id + "-loc1", name: "Primary location", integrations: { gbp: false, bing: false, apple: false } }];
             pr.demoMode = false; // real projects show credential warnings until sources actually sync — never demo numbers
             onAdd(clientId, pr);

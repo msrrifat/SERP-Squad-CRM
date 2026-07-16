@@ -190,6 +190,29 @@ export function genSiteData(project, trackedKeywords, brandName) {
   };
 }
 
+/* all-zero dataset in the genSiteData shape — used for REAL projects so the
+   designed dashboards keep their layout with "Not connected" states instead
+   of disappearing. Nothing here is fabricated: every series is zero and every
+   list is empty until a real source syncs. */
+export function emptySiteData(project) {
+  const CATS = {
+    gbp: ["searchViews", "mapViews", "views", "searchMobile", "searchDesktop", "mapsMobile", "mapsDesktop", "calls", "directions", "websiteClicks", "totalReviews"],
+    bing: ["impressions", "clicks", "calls", "directions"],
+    apple: ["views", "calls", "directions", "websiteTaps"],
+  };
+  const zeros = (keys) => Object.fromEntries(keys.map((k) => [k, 0]));
+  const months = LABELS.map((label) => ({
+    label,
+    gbp: zeros(CATS.gbp), bing: zeros(CATS.bing), apple: zeros(CATS.apple),
+    ga: { users: 0, sessions: 0, conversions: 0 },
+    gsc: { clicks: 0, impressions: 0, position: 0 },
+  }));
+  return {
+    months, rating: 0, engRate: 0, channels: [], sources: [], events: [], topPages: [], topQueries: [], gbpTerms: [],
+    locations: projectLocations(project).map((loc) => ({ id: loc.id, name: loc.name, integrations: loc.integrations || {}, months, rating: 0, gbpTerms: [] })),
+  };
+}
+
 export function genPositions(entry) {
   const r = mulberry32(hashStr(entry.id + entry.keyword + entry.city.city + entry.device + entry.engine));
   const days = Math.max(1, entry.days);

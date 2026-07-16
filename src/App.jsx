@@ -19,7 +19,7 @@ import { Ava, BrandMark, DarkToggle, FONT_CSS, Modal, ProjectMark } from "./ui/p
 import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
-import { genSiteData, hydrate } from "./data/gen.js";
+import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
 import { setAppOrigin } from "./lib/appOrigin.js";
@@ -260,6 +260,12 @@ export default function App() {
     // name is part of the generator seed; monthKey regenerates after a month rollover;
     // the locations signature re-derives per-location profile data on any group edit
     [project?.id, project?.name, project?.demoMode, trackedKeywords.join("|"), activeClient?.companyName, monthKey, locSig(project)]
+  );
+  /* real projects (no demo data): the Overview keeps its designed layout with
+     all-zero series + "Not connected" placeholders — nothing is fabricated */
+  const liveData = useMemo(
+    () => (project && project.demoMode === false ? emptySiteData(project) : null),
+    [project?.id, project?.demoMode, monthKey, locSig(project)] // eslint-disable-line
   );
   const accent = project?.accent || "#1F2A44";
   /* white-label clients may run on their OWN DataForSEO account: when enabled,
@@ -992,13 +998,17 @@ export default function App() {
               )}
             </>
           )}
-          {/* real project (no demo data) with Google connected: Overview + Website
-              Performance show the LIVE GA4 + Search Console data on their own */}
-          {project && !data && activeSection === "performance" && ["overview", "web"].includes(activeView) && googleConnected && (
+          {/* real project (no demo data): the Overview ALWAYS renders its designed
+              layout — live Google data inside it, "Not connected" cards elsewhere */}
+          {project && !data && activeSection === "performance" && activeView === "overview" && (
+            <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} liveMode />
+          )}
+          {project && !data && activeSection === "performance" && activeView === "web" && googleConnected && (
             <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
           )}
           {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView)
-            && !(["overview", "web"].includes(activeView) && googleConnected) && <NoDataPanel project={project} accent={accent} />}
+            && activeView !== "overview"
+            && !(activeView === "web" && googleConnected) && <NoDataPanel project={project} accent={accent} />}
           {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
             <>
               {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}

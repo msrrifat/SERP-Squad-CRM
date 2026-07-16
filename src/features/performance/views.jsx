@@ -24,14 +24,39 @@ import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { GoogleLiveData } from "./googlelive.jsx";
 
-export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView }) {
+/* KPI-sized placeholder shown when a card's data source isn't connected —
+   the dashboard keeps its designed layout instead of hiding cards */
+function NotConnectedCard({ icon: Icon, label, hint }) {
+  return (
+    <Card className="flex flex-col justify-between gap-2 p-4">
+      <div className="flex items-start justify-between">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-gray-400"><Icon size={15} /></span>
+        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-amber-600">Not connected</span>
+      </div>
+      <div>
+        <div className="text-[12.5px] font-semibold text-gray-500">{label}</div>
+        <div className="mt-0.5 text-[10.5px] leading-snug text-gray-400">{hint}</div>
+      </div>
+    </Card>
+  );
+}
+
+/* liveMode: real project (no demo data) — the layout always renders; connected
+   GA4/GSC numbers live in the GoogleLiveData section, unconnected sources show
+   NotConnectedCard placeholders, rank cards use the real trackers */
+export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView, liveMode = false }) {
   const [metric, setMetric] = useState("gbpViews");
   /* the comparison window lives here now (moved out of the top bar);
      the AI agent still drives it through the cmp prop */
   const [cmp, setCmp] = useState(cmpDefault);
   useEffect(() => { setCmp(cmpDefault); }, [cmpDefault]);
   const cur = data.months[12], prev = data.months[12 - cmp];
-  const W = project.widgets, I = project.integrations;
+  const W = project.widgets;
+  /* liveMode: GA/GSC count as connected only when a real Google source is
+     picked in Data sources — the integration flags alone can predate it */
+  const I = liveMode
+    ? { ...project.integrations, ga: !!project.google?.ga4Property, gsc: !!project.google?.gscSite }
+    : project.integrations;
 
   const avgNow = tracking.length ? avgPosDaysAgo(tracking, 0) : 0;
   const avgPrev = tracking.length ? avgPosDaysAgo(tracking, cmp * 30) : null;
@@ -53,10 +78,13 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   const METRICS = {
     gbpViews: { label: "Profile views", get: (m, i) => profileViewsSeries[i], show: anyProfile, color: accent },
-    gaUsers: { label: "Website users", get: (m) => m.ga.users, show: I.ga, color: "#0EA5E9" },
-    gscClicks: { label: "Search clicks", get: (m) => m.gsc.clicks, show: I.gsc, color: "#8B5CF6" },
+    /* liveMode: the monthly ga/gsc series here are zeros — the live daily charts
+       render in the GoogleLiveData section instead */
+    gaUsers: { label: "Website users", get: (m) => m.ga.users, show: I.ga && !liveMode, color: "#0EA5E9" },
+    gscClicks: { label: "Search clicks", get: (m) => m.gsc.clicks, show: I.gsc && !liveMode, color: "#8B5CF6" },
     avgRank: { label: "Avg. ranking", get: (_, i) => { const v = avgPosDaysAgo(tracking, (12 - i) * 30); return v == null ? null : +v.toFixed(1); }, invert: true, show: tracking.length > 0, color: "#F59E0B" },
   };
+  const anyMetric = Object.values(METRICS).some((m) => m.show);
   const activeMetric = METRICS[metric].show ? metric : Object.keys(METRICS).find((k) => METRICS[k].show) || "gbpViews";
   const mCfg = METRICS[activeMetric];
 
@@ -121,50 +149,60 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         </Card>
       )}
 
-      {/* KPI cards */}
+      {/* KPI cards — the designed grid is always present; unconnected sources
+          render a NotConnectedCard instead of disappearing */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {anyProfile && W.gbp.views && (
+        {W.gbp.views && (anyProfile ? (
           <StatCard icon={Eye} label="Profile views" source={[I.gbp && "GBP", I.bing && "BING", I.apple && "APPLE"].filter(Boolean).join("+")} accent={accent}
             value={fmt(profileViewsSeries[12])} pct={pctDelta(profileViewsSeries[12], profileViewsSeries[12 - cmp])}
             spark={profileViewsSeries} sub="all business profiles" />
-        )}
-        {(anyProfile || I.ga) && W.gbp.calls && (
+        ) : (
+          <NotConnectedCard icon={Eye} label="Profile views" hint="Connect Google Business Profile, Bing Places or Apple Maps in Project settings → Data sources." />
+        ))}
+        {W.gbp.calls && ((anyProfile || (I.ga && !liveMode)) ? (
           <StatCard icon={Phone} label="Phone calls" source={[anyProfile && "PROFILES", I.ga && "GA4"].filter(Boolean).join("+")} accent={accent}
             value={fmt(callsSeries[12])} pct={pctDelta(callsSeries[12], callsSeries[12 - cmp])}
             spark={callsSeries} sub="profiles + call events" />
-        )}
-        {I.ga && W.ga.users && (
+        ) : (
+          <NotConnectedCard icon={Phone} label="Phone calls" hint="Syncs from business profiles and GA4 call events once connected." />
+        ))}
+        {W.ga.users && (I.ga ? (!liveMode && (
           <StatCard icon={Users} label="Website users" source="GA4" accent={accent}
             value={fmt(cur.ga.users)} pct={pctDelta(cur.ga.users, prev.ga.users)}
             spark={data.months.map((m) => m.ga.users)} />
-        )}
-        {I.gsc && W.gsc.clicks && (
+        )) : (
+          <NotConnectedCard icon={Users} label="Website users" hint="Connect Google Analytics 4 in Project settings → Data sources." />
+        ))}
+        {W.gsc.clicks && (I.gsc ? (!liveMode && (
           <StatCard icon={MousePointerClick} label="Search clicks" source="GSC" accent={accent}
             value={fmt(cur.gsc.clicks)} pct={pctDelta(cur.gsc.clicks, prev.gsc.clicks)}
             spark={data.months.map((m) => m.gsc.clicks)} />
-        )}
-        {tracking.length > 0 && W.ranks.insights && (
+        )) : (
+          <NotConnectedCard icon={MousePointerClick} label="Search clicks" hint="Connect Google Search Console in Project settings → Data sources." />
+        ))}
+        {W.ranks.insights && (tracking.length > 0 ? (<>
           <StatCard icon={Target} label="Avg. rank position" source="Ranks" accent={accent}
             value={"#" + avgNow.toFixed(1)} pct={avgPrev != null ? pctDelta(avgNow, avgPrev) : null} invert
             spark={LABELS.map((_, i) => avgPosDaysAgo(tracking, (12 - i) * 30)).filter((v) => v != null)} />
-        )}
-        {tracking.length > 0 && W.ranks.insights && (
           <StatCard icon={Target} label="Keywords in top 3" source="Ranks" accent={accent}
             value={top3} pct={top3 - top3Prev} deltaSuffix="" sub="vs comparison" />
-        )}
-        {I.ga && W.ga.events && (
+        </>) : (
+          <NotConnectedCard icon={Target} label="Keyword rankings" hint="Track keywords in Website Rank Tracking to see ranking insights here." />
+        ))}
+        {!liveMode && I.ga && W.ga.events && (
           <StatCard icon={Zap} label={topEvents[0]?.name || "events"} source="GA4" accent={accent}
             value={fmt(topEvents[0]?.series[12])} pct={pctDelta(topEvents[0]?.series[12], topEvents[0]?.series[12 - cmp])}
             spark={topEvents[0]?.series} sub="top event" />
         )}
-        {I.ga && W.ga.conversions && (
+        {!liveMode && I.ga && W.ga.conversions && (
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
             value={fmt(cur.ga.conversions)} pct={pctDelta(cur.ga.conversions, prev.ga.conversions)}
             spark={data.months.map((m) => m.ga.conversions)} />
         )}
       </div>
 
-      {/* range-aware trend */}
+      {/* range-aware trend — the card is always present; without any connected
+          source it shows an honest empty state instead of a flat zero line */}
       <Card className="p-5">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -183,7 +221,18 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
             ))}
           </div>
         </div>
-        <ResponsiveContainer width="100%" height={260}>
+        {!anyMetric && (
+          <div className="flex h-[260px] flex-col items-center justify-center gap-1.5 text-center">
+            <Activity size={20} className="text-gray-300" />
+            <div className="text-[13px] font-semibold text-gray-400">No monthly trend sources yet</div>
+            <div className="max-w-[380px] text-[11.5px] text-gray-400">
+              {(I.ga || I.gsc)
+                ? "Daily Google trends are in the live section above. Business-profile and keyword trends appear here once those sources sync."
+                : "Connect business profiles, Google Analytics or Search Console in Project settings → Data sources, or track keywords — trends appear here as sources sync."}
+            </div>
+          </div>
+        )}
+        {anyMetric && <ResponsiveContainer width="100%" height={260}>
           <AreaChart data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
             <defs>
               <linearGradient id="ovGrad" x1="0" y1="0" x2="0" y2="1">
@@ -198,14 +247,14 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
             <Tooltip contentStyle={tooltipStyle} formatter={(v) => [mCfg.invert ? "#" + v : fmt(v), mCfg.label]} />
             <Area type="monotone" dataKey="value" name={mCfg.label} stroke={mCfg.color} strokeWidth={2.4} fill="url(#ovGrad)" dot={chartData.length <= 6 ? { r: 3, fill: mCfg.color } : false} activeDot={{ r: 5 }} />
           </AreaChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer>}
       </Card>
 
-      {/* movers + events */}
+      {/* movers + events — frames stay in place with honest empty states */}
       <div className="grid gap-4 lg:grid-cols-2">
-        {tracking.length > 0 && (
-          <Card className="p-5">
-            <div className="ll-display mb-3 text-[15px] font-semibold">Top keyword movers <span className="text-xs font-normal text-gray-400">last 30 days</span></div>
+        <Card className="p-5">
+          <div className="ll-display mb-3 text-[15px] font-semibold">Top keyword movers <span className="text-xs font-normal text-gray-400">last 30 days</span></div>
+          {tracking.length > 0 ? (
             <div className="space-y-2">
               {movers.map((t, i) => (
                 <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
@@ -220,9 +269,15 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
                 </div>
               ))}
             </div>
-          </Card>
-        )}
-        {I.ga && W.ga.events && (
+          ) : (
+            <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
+              <Target size={17} className="text-gray-300" />
+              <div className="text-[12px] font-semibold text-gray-400">No keywords tracked yet</div>
+              <div className="text-[11px] text-gray-400">Add keywords in Website Rank Tracking — the biggest movers appear here.</div>
+            </div>
+          )}
+        </Card>
+        {W.ga.events && (I.ga && !liveMode ? (
           <Card className="p-5">
             <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · this month</span></div>
             <div className="space-y-2">
@@ -237,7 +292,16 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
               ))}
             </div>
           </Card>
-        )}
+        ) : !I.ga ? (
+          <Card className="p-5">
+            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · this month</span></div>
+            <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
+              <Zap size={17} className="text-gray-300" />
+              <div className="text-[12px] font-semibold text-gray-400">Google Analytics not connected</div>
+              <div className="text-[11px] text-gray-400">Connect GA4 in Project settings → Data sources to see key events.</div>
+            </div>
+          </Card>
+        ) : null)}
       </div>
     </div>
   );
