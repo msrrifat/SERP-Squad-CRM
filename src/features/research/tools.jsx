@@ -14,7 +14,7 @@ import {
   AlertTriangle, Bookmark, Building2, CheckCircle2, Download, FileText, Globe, Link2,
   MapPin, Printer, RefreshCw, Search, Sparkles, Star, Trash2, X,
 } from "lucide-react";
-import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { escHtml } from "../../lib/text.jsx";
 import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { ListingsScannerTab } from "../optimization/branding.jsx";
@@ -488,7 +488,7 @@ function AuditReportTool({ accent, company, aiConfig, profileRes, profileManual,
                   <span className="rounded bg-gray-200 px-1.5 py-px text-[8.5px] font-bold uppercase text-gray-600">{{ profile: "GBP", "profile-manual": "Manual", website: "Web", listings: "Listings", index: "Index" }[s.type]}</span>
                   <span className="min-w-0 flex-1 truncate font-semibold text-gray-700">{s.label}</span>
                   <span className="ll-mono text-gray-400">{new Date(s.at).toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-                  <button onClick={() => onDeleteSaved?.(s.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
+                  <button onClick={() => askDelete("this saved audit") && onDeleteSaved?.(s.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
                 </div>
               ))}
             </div>
@@ -529,7 +529,7 @@ export function ResearchToolsView({ tab, setTab, company, onUpdateCompany = null
      an old result once it's saved, and reports can pick any saved audit */
   const saved = company.savedAudits || [];
   const saveAudit = (entry) => onUpdateCompany?.({ savedAudits: [{ id: "sa" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at: Date.now(), ...entry }, ...(company.savedAudits || [])] });
-  const deleteAudit = (id) => onUpdateCompany?.({ savedAudits: (company.savedAudits || []).filter((x) => x.id !== id) });
+  const deleteAudit = (id) => askDelete("this saved audit") && onUpdateCompany?.({ savedAudits: (company.savedAudits || []).filter((x) => x.id !== id) });
 
   const TABS = [
     ["profile", "Business Profile Audit", Building2],

@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import { FileText, Mic, Plus, Trash2, Upload, X } from "lucide-react";
-import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { useWork } from "../../lib/worklog.jsx";
 
@@ -85,7 +85,7 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
               <FileText size={14} className="shrink-0 text-gray-400" />
               <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-gray-700">{f.name}</span>
               <span className="ll-mono shrink-0 text-[10px] text-gray-400">{f.text.split(/\s+/).length} words · {fmtTs2(f.addedAt)}</span>
-              <button onClick={() => set({ files: (bv.files || []).filter((x) => x.id !== f.id) })} className="text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+              <button onClick={() => askDelete(`the file "${f.name || "this file"}"`) && set({ files: (bv.files || []).filter((x) => x.id !== f.id) })} className="text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
             </div>
           ))}
           {(bv.files || []).length === 0 && <div className="py-2 text-center text-[11.5px] text-gray-300">No guideline files yet.</div>}

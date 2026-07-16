@@ -4,7 +4,7 @@ import {
   ArrowLeft, Building2, Calendar, ChevronDown, Crosshair, List, MapPin, Plus,
   RefreshCw, Search, Target, Trash2, TrendingDown, TrendingUp, X,
 } from "lucide-react";
-import { Card, Labeled, Modal, Seg, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, Modal, Seg, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
 import { fmt, fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -107,7 +107,7 @@ const zoomFor = (extentKm, lat, px) => {
 const xToLon = (x, z) => (x / (256 * 2 ** z)) * 360 - 180;
 const yToLat = (y, z) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / (256 * 2 ** z)))) * 180) / Math.PI;
 
-export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, height = 660 }) {
+export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, height = 660, preview = false }) {
   const points = fillCoords(rawPts, center, size, spacingKm);
   const wrapRef = useRef(null);
   const [pxW, setPxW] = useState(900);           // full card width — measured live, no wasted side space
@@ -168,10 +168,12 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
           const top3 = (p.results || []).slice(0, 3);
           return (
             <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={`${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 50"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 50"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
               <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
-                style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
-                {p.error ? "!" : p.rank ?? "50+"}
+                style={preview
+                  ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
+                  : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
+                {preview ? "+" : p.error ? "!" : p.rank ?? "50+"}
               </div>
               {delta != null && delta !== 0 && (
                 <span className="absolute flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow-md"
@@ -396,6 +398,24 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
           <div className="text-[10.5px] text-gray-400">
             Effective spacing: <b className="ll-mono">{effSpacing(r)} km</b> · scan points: <b className="ll-mono">{pts}</b>{r.shape === "circle" ? ` of ${r.size * r.size} (circle clips ${r.size * r.size - pts})` : ""}
           </div>
+
+          {/* live grid preview — the exact points the scan will hit, on the real
+              map; updates instantly with size / radius / spacing / shape */}
+          {isFinite(parseFloat(biz.lat)) && isFinite(parseFloat(biz.lng)) ? (
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-gray-500">Live grid preview — every “+” is one coordinate-targeted scan. Drag / scroll to explore; it follows your settings above.</span>
+                <span className="ll-mono text-[10px] text-gray-400">{pts} points</span>
+              </div>
+              <MapCanvas preview center={{ lat: parseFloat(biz.lat), lng: parseFloat(biz.lng) }}
+                points={buildPoints({ lat: parseFloat(biz.lat), lng: parseFloat(biz.lng) }, r.size, effSpacing(r), r.shape)}
+                size={r.size} spacingKm={effSpacing(r)} height={380} />
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-[11.5px] text-gray-400">
+              Locate the business (or enter coordinates) to see the live grid preview on the map.
+            </div>
+          )}
         </div>
       )}
 
@@ -592,7 +612,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
               {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "maps"))}</span></>}
             </button>
             <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
-            <button onClick={() => patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+            <button onClick={() => askDelete(`the report "${rp.name}" and all its snapshots`) && patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
           </Card>
         );
       })}

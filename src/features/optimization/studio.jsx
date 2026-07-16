@@ -15,7 +15,7 @@ import {
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
   Mic, Network,
 } from "lucide-react";
-import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, inputCls } from "../../ui/primitives.jsx";
+import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.jsx";
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -628,7 +628,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                   {p.coupon && ` · code ${p.coupon}`}
                 </div>
               </div>
-              <button onClick={() => { work?.("gbp", "postDeleted", { detail: p.title || p.body }); set({ posts: g.posts.filter((x) => x.id !== p.id) }); }}
+              <button onClick={() => { if (!askDelete("this post")) return; work?.("gbp", "postDeleted", { detail: p.title || p.body }); set({ posts: g.posts.filter((x) => x.id !== p.id) }); }}
                 className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
             </div>
           ))}
@@ -740,7 +740,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                 <span className="min-w-0 flex-1 truncate text-gray-600">{ph.name}</span>
                 <span className="ll-mono shrink-0 text-gray-400">{fmtTs2(ph.addedAt)}</span>
               </div>
-              <button onClick={() => { work?.("gbp", "photoDeleted", { detail: ph.name }); set({ photos: g.photos.filter((x) => x.id !== ph.id) }); }}
+              <button onClick={() => { if (!askDelete("this photo")) return; work?.("gbp", "photoDeleted", { detail: ph.name }); set({ photos: g.photos.filter((x) => x.id !== ph.id) }); }}
                 className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
             </div>
           ))}
@@ -2406,7 +2406,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             }
             setOpenPost(null);
           }}
-          onDelete={openPost !== "new" ? () => { const t = w.blogs.find((x) => x.id === openPost)?.title || ""; set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); work?.("website", "blogDeleted", { detail: t }); log?.("Deleted blog post from website", t); } : null}
+          onDelete={openPost !== "new" ? () => { const t = w.blogs.find((x) => x.id === openPost)?.title || ""; if (!askDelete(`the post "${t || "this post"}"`)) return; set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); work?.("website", "blogDeleted", { detail: t }); log?.("Deleted blog post from website", t); } : null}
           onClose={() => setOpenPost(null)} />
       )}
       </>)}

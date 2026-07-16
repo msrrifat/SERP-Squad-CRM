@@ -604,6 +604,12 @@ export default function App() {
     updateProject((p) => ({ tracking: p.tracking.filter((t) => !set.has(t.id)) }));
     logActivity(`Removed ${ids.length} tracked keyword${ids.length > 1 ? "s" : ""}`, project?.name);
   };
+  /* cache fetched search volumes on their tracking entries (sv: {v, monthly, t}) */
+  const applyVolumes = (updates) =>
+    updateProject((p) => ({ tracking: p.tracking.map((t) => {
+      const u = updates.find((x) => x.id === t.id);
+      return u ? { ...t, sv: u.sv } : t;
+    }) }));
   const applyRerun = (updates) => {
     const ts = Date.now();
     /* functional update: scans finish long after the click, and keywords may
@@ -1016,7 +1022,7 @@ export default function App() {
               regardless of the demo/aggregated `data` and need no connection. */}
           {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
+              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} readOnly={!canKeywords} dfs={activeDfs} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>

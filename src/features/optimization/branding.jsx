@@ -3,7 +3,7 @@ import {
   Building2, Calendar, CheckCircle2, ChevronRight, Globe, ImagePlus, Link2, Lock,
   MapPin, Plus, RefreshCw, Rocket, Search, Send, Share2, Trash2, Upload, X, Zap,
 } from "lucide-react";
-import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -340,7 +340,7 @@ function CustomLinks({ fam, br, set, accent }) {
             placeholder="Name" className={"w-36 shrink-0 " + inputCls} />
           <input value={row.url} onChange={(e) => save(rows.map((x) => (x.id === row.id ? { ...x, url: e.target.value } : x)))}
             placeholder="https://…" className={"ll-mono flex-1 " + inputCls} />
-          <button onClick={() => save(rows.filter((x) => x.id !== row.id))} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+          <button onClick={() => askDelete("this item") && save(rows.filter((x) => x.id !== row.id))} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
         </div>
       ))}
       <button onClick={() => save([...rows, { id: "cl" + Date.now(), name: "", url: "" }])}
@@ -568,7 +568,7 @@ function MediaTab({ br, set, accent }) {
                 onChange={(e) => set({ media: br.media.map((x) => (x.id === m.id ? { ...x, tag: e.target.value } : x)) })}
                 className="w-full border-0 bg-transparent text-[10.5px] text-gray-500 outline-none" />
             </div>
-            <button onClick={() => set({ media: br.media.filter((x) => x.id !== m.id) })}
+            <button onClick={() => askDelete(`the media file "${m.name || "this file"}"`) && set({ media: br.media.filter((x) => x.id !== m.id) })}
               className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
           </div>
         ))}

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
+import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle, useDraft, askDelete } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
@@ -24,6 +24,7 @@ import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { GoogleLiveData, useGoogleLive, halfDelta, dayLabel } from "./googlelive.jsx";
 import { startScanJob, clearScanJob, useScanJobs } from "../../lib/scanjobs.js";
+import { hashStr, mulberry32 } from "../../lib/rng.js";
 
 /* KPI-sized placeholder shown when a card's data source isn't connected —
    the dashboard keeps its designed layout instead of hiding cards */
@@ -570,7 +571,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
   );
 }
 
-export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, readOnly = false, dfs }) {
+export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, readOnly = false, dfs }) {
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -610,9 +611,46 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     return past ? past.p - t.stats.cur : null;
   };
 
+  /* ---- search volume per keyword (for its city): real projects pull ONE
+     flat-priced Google Ads request per city and cache results ~35 days on
+     each entry; demo projects show deterministic demo volumes ---- */
+  const svOf = (t) => {
+    if (t.sv) return t.sv;
+    if (project.demoMode === false) return null;
+    const r = mulberry32(hashStr("sv|" + t.keyword + cityKey(t.city)));
+    const base = 40 + Math.floor(r() * 2400);
+    return { v: Math.round(base / 10) * 10, monthly: Array.from({ length: 12 }, (_, i) => ({ m: i + 1, v: Math.max(10, Math.round(base * (0.65 + r() * 0.7))) })), demo: true };
+  };
+  const volBusy = useRef(false);
+  useEffect(() => {
+    if (project.demoMode !== false || !dfsConnected || readOnly || !onSetVolumes || volBusy.current) return;
+    const stale = Date.now() - 35 * 864e5;
+    const missing = tracking.filter((t) => !t.sv || (t.sv.t || 0) < stale);
+    if (!missing.length) return;
+    volBusy.current = true;
+    (async () => {
+      try {
+        const byCity = {};
+        missing.forEach((t) => { (byCity[cityKey(t.city)] = byCity[cityKey(t.city)] || []).push(t); });
+        for (const group of Object.values(byCity)) {
+          const res = await fetch("/api/kw/volume", {
+            method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(90000),
+            body: JSON.stringify({ keywords: group.map((t) => t.keyword), city: group[0].city, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
+          });
+          if (!res.ok) continue; // volumes are an enhancement — never block the table
+          const d = await res.json();
+          const ts = Date.now();
+          const updates = group.map((t) => ({ id: t.id, sv: { ...(d.volumes[t.keyword.toLowerCase()] || { v: null, monthly: [] }), t: ts } }));
+          onSetVolumes(updates);
+        }
+      } catch { /* offline / unconfigured — the column shows an em-dash */ }
+      volBusy.current = false;
+    })();
+  }, [project.id, tracking.length, dfsConnected]); // eslint-disable-line
+
   /* column sorting — defaults to best current positions on top */
   const [sort, setSort] = useState({ key: "cur", dir: "asc" });
-  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
+  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key === "volume" ? svOf(t)?.v : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
   const rows = tracking.filter((t) =>
     (cityFilter === "All cities" || cityLabel(t.city) === cityFilter) &&
     (!search.trim() || t.keyword.toLowerCase().includes(search.trim().toLowerCase()))
@@ -872,18 +910,19 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
                   </th>
                   <SortTh k="keyword" className="px-5 py-3">Keyword</SortTh>
+                  <SortTh k="volume" defDir="desc">Volume</SortTh>
+                  <th className="px-3 py-3 font-semibold" title="Monthly search volume over the last 12 months — see when demand peaks">Search trend (12mo)</th>
                   <SortTh k="start">Start</SortTh>
                   <SortTh k="cur">Current</SortTh>
                   {DELTA_DAYS.map((d) => <SortTh key={d} k={"dd" + d} defDir="desc">{d}d</SortTh>)}
                   <SortTh k="life" defDir="desc">Lifetime</SortTh>
-                  <th className="px-3 py-3 font-semibold">Trend</th>
                   <th className="px-3 py-3 font-semibold">Ranking URL</th>
                   <th className="px-3 py-3 no-print"></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={8 + DELTA_DAYS.length} className="px-5 py-10 text-center text-[13px] text-gray-400">
+                  <tr><td colSpan={9 + DELTA_DAYS.length} className="px-5 py-10 text-center text-[13px] text-gray-400">
                     No keywords tracked yet — add your first keywords to start collecting daily positions.
                   </td></tr>
                 )}
@@ -904,18 +943,27 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         </span>
                       </div>
                     </td>
+                    <td className="ll-mono px-3 py-3 font-semibold text-gray-700">
+                      {(() => { const s = svOf(t); return s?.v != null ? <span title={`~${s.v.toLocaleString()} searches/mo in ${cityLabel(t.city)}${s.demo ? " (demo)" : ""}`}>{s.v >= 1000 ? (s.v / 1000).toFixed(s.v >= 10000 ? 0 : 1) + "k" : s.v}</span> : <span className="text-gray-300">—</span>; })()}
+                    </td>
+                    <td className="px-3 py-3">
+                      {(() => { const s = svOf(t); const mo = s?.monthly || []; if (!mo.length) return <span className="text-[11px] text-gray-300">—</span>;
+                        const max = Math.max(1, ...mo.map((m) => m.v));
+                        return <span className="flex h-5 items-end gap-px" title={mo.map((m) => `${m.m}/${m.y || ""}: ${m.v.toLocaleString()}`).join("\n")}>
+                          {mo.map((m, i) => <span key={i} className="w-[4px] rounded-sm" style={{ height: `${Math.max(12, (m.v / max) * 100)}%`, background: accent + "99" }} />)}
+                        </span>; })()}
+                    </td>
                     <td className="px-3 py-3"><RankChip pos={t.stats.start} muted /></td>
                     <td className="px-3 py-3"><RankChip pos={t.stats.cur} /></td>
                     {DELTA_DAYS.map((d) => <td key={d} className="px-3 py-3"><PosChange value={deltaFor(t, d)} /></td>)}
                     <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>
-                    <td className="px-3 py-3"><Spark values={t.positions.slice(-90)} invert color={accent} /></td>
                     <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
                       {t.url
                         ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
                         : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
                     </td>
                     <td className="px-3 py-3 no-print">
-                      {!readOnly && <button onClick={() => onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
+                      {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`) && onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
                     </td>
                   </tr>
                 ))}
@@ -1021,7 +1069,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                               <td className="px-3 py-2 text-[11px] text-gray-500">{t.device}</td>
                               <td className="px-3 py-2 text-[11px] text-gray-500">{t.reportingType === "Recurring" ? `every ${t.rerunDays}d` : "one time"}</td>
                               <td className="px-3 py-2 no-print">
-                                {!readOnly && <button onClick={() => onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>}
+                                {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`) && onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>}
                               </td>
                             </tr>
                           ))}

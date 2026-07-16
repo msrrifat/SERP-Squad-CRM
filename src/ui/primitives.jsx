@@ -106,6 +106,9 @@ export function RankChip({ pos, muted = false }) {
     </span>
   );
 }
+/* every destructive button confirms through this — one consistent dialog */
+export const askDelete = (what) => window.confirm(`Are you sure you want to delete ${what}? This can't be undone.`);
+
 export function Card({ children, className = "", style }) {
   return <div className={`rounded-2xl border border-gray-200 bg-white ${className}`} style={style}>{children}</div>;
 }

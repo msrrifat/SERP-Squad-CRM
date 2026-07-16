@@ -1345,6 +1345,52 @@ async function dfsLabs(creds, endpoint, task) {
   if (!t || t.status_code !== 20000) throw new Error(`DataForSEO: ${t?.status_message || "task error"}`);
   return t.result?.[0] || {};
 }
+/* ---- search volumes for tracked keywords (Google Ads data) ----
+   POST /api/kw/volume { keywords:[...≤700], city:{city,region,country}, dfs }
+   One flat-priced request covers the whole list; the client caches results
+   on each tracking entry for ~35 days, so this is effectively one-time. */
+async function handleKwVolume(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "Connect DataForSEO in Company Settings → API settings." }];
+  const keywords = [...new Set((Array.isArray(body?.keywords) ? body.keywords : []).map((k) => String(k).trim().toLowerCase()).filter(Boolean))].slice(0, 700);
+  if (!keywords.length) return [400, { error: "bad_request", detail: "keywords[] required" }];
+  const c = body.city || {};
+  const variants = [...new Set([
+    [c.city, c.region, c.country].filter(Boolean).join(","),
+    [c.city, c.country].filter(Boolean).join(","),
+    c.country,
+  ].filter(Boolean))];
+  if (!variants.length) variants.push("United States");
+  const call = async (location_name) => {
+    const res = await fetch(`${DFS_BASE}/keywords_data/google_ads/search_volume/live`, {
+      method: "POST",
+      headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify([{ keywords, location_name, language_code: "en" }]),
+    });
+    if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const t = data.tasks?.[0];
+    if (!t || t.status_code !== 20000) throw new Error(`DataForSEO task ${t?.status_code}: ${t?.status_message}`);
+    return t;
+  };
+  try {
+    let task = null, usedLocation = null, lastErr = null;
+    for (const loc of variants) {
+      try { task = await call(loc); usedLocation = loc; break; }
+      catch (err) { lastErr = err; if (!/location/i.test(String(err?.message || err))) throw err; }
+    }
+    if (!task) throw lastErr;
+    const out = {};
+    (task.result || []).forEach((r) => {
+      const monthly = (r.monthly_searches || []).slice(0, 12).reverse()
+        .map((m) => ({ y: m.year, m: m.month, v: m.search_volume ?? 0 }));
+      out[String(r.keyword).toLowerCase()] = { v: r.search_volume ?? null, monthly };
+    });
+    return [200, { live: true, location: usedLocation, volumes: out }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 200) }]; }
+}
+
 async function handleKwResearch(body) {
   const creds = resolveCreds(body);
   if (!creds) return [503, { error: "not_configured", detail: "Keyword research runs on DataForSEO Labs — add the credentials in Company Settings → API settings." }];
@@ -1915,7 +1961,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -1957,6 +2003,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/mail/test" ? await handleMailTest(body)
         : req.url === "/api/mail/inbox" ? await handleMailInbox(body)
         : req.url === "/api/track/stats" ? handleTrackStats(body)
+        : req.url === "/api/kw/volume" ? await handleKwVolume(body)
         : req.url === "/api/kw/research" ? await handleKwResearch(body)
         : req.url === "/api/kw/domain" ? await handleKwDomain(body)
         : req.url === "/api/insight/audit" ? await handleInsightAudit(body)

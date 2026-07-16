@@ -17,7 +17,7 @@ import {
   AtSign, BarChart3, CalendarClock, CheckCircle2, ChevronRight, Inbox, Mail, MailOpen,
   MousePointerClick, Plus, RefreshCw, Reply, Send, Sparkles, Trash2, X,
 } from "lucide-react";
-import { Card, Labeled, Modal, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, Modal, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { appOrigin } from "../../lib/appOrigin.js";
 import { hashStr } from "../../lib/rng.js";
@@ -105,7 +105,7 @@ function AccountsTab({ company, onUpdateCompany, accent }) {
                 <button onClick={() => sendTest(a)} disabled={!!testBusy} className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[10.5px] font-semibold text-gray-600 disabled:opacity-40">
                   {testBusy === a.id ? "Sending…" : "Send test"}
                 </button>
-                <button onClick={() => commit(accounts.filter((x) => x.id !== a.id))} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+                <button onClick={() => askDelete(`the sender account "${a.email || a.name || "this account"}"`) && commit(accounts.filter((x) => x.id !== a.id))} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
               </span>
             </div>
           ))}
@@ -568,7 +568,7 @@ function CampaignsTab({ accent, company, store, commit, aiConfig, scope, openId,
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={() => setOpenId(null)} className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-gray-500">← Campaigns</button>
         <input value={camp.name} onChange={(e) => patchCamp(camp.id, { name: e.target.value })} className="ll-display min-w-0 flex-1 border-b border-transparent bg-transparent text-[15px] font-semibold outline-none focus:border-gray-300" />
-        <button onClick={() => { commit({ campaigns: campaigns.filter((x) => x.id !== camp.id) }); setOpenId(null); }} className="rounded-md p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+        <button onClick={() => { if (!askDelete(`the campaign "${camp.name}"`)) return; commit({ campaigns: campaigns.filter((x) => x.id !== camp.id) }); setOpenId(null); }} className="rounded-md p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Labeled label={<span className="flex items-center gap-1.5">Folder ({targets.length} · {emailable.length} emailable)

@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { AssignPicker, Ava, Card, NEG, POS, inputCls } from "../../ui/primitives.jsx";
+import { AssignPicker, Ava, Card, NEG, POS, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { fmtDay, fmtTs2, relTime, todayISO } from "../../lib/format.jsx";
 import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
@@ -646,7 +646,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
             log?.("Saved record template", tpl.name);
           } : null}
           onPatch={(patch) => setRecords(records.map((r) => (r.id === openRecord.id ? { ...r, ...patch } : r)))}
-          onDelete={() => { setRecords(records.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
+          onDelete={() => { if (!askDelete(`the record "${openRecord.name}"`)) return; setRecords(records.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
           onClose={() => setOpenId(null)} />
       )}
     </div>

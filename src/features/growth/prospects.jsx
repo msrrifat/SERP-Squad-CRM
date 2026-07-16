@@ -14,7 +14,7 @@ import {
   AtSign, CheckCircle2, ChevronRight, Download, Folder, FolderOpen, Mail,
   Plus, RefreshCw, Search, Send, Sparkles, Target, Trash2, X,
 } from "lucide-react";
-import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { GBP_CATEGORIES } from "../../data/gbpCategories.js";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { csvDownload } from "../research/tools.jsx";
@@ -264,7 +264,7 @@ export function ProspectList({ accent, growth, commit, emptyHint = null }) {
                       {busyId === c.id ? <RefreshCw size={10} className="animate-spin" /> : <AtSign size={10} />} Scrape email
                     </button>
                   )}
-                  <button onClick={() => commit({ contacts: contacts.filter((x) => x.id !== c.id) })} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+                  <button onClick={() => askDelete(`the prospect "${c.name}"`) && commit((g) => ({ contacts: (g.contacts || []).filter((x) => x.id !== c.id) }))} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                 </span>
               </div>
               <div className="mt-1 grid gap-x-4 gap-y-0.5 text-[11px] text-gray-500 sm:grid-cols-2">
