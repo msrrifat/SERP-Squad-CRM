@@ -1697,10 +1697,12 @@ async function handleRerun(body) {
       const { position, url } = parseSerpRank(task, e.domain);
       return { id: e.id, position, url, location: usedLocation };
     };
-    /* DataForSEO occasionally 40101s ("Internal SE Server Error") on single
-       keywords — one spaced retry recovers nearly all of them */
+    /* DataForSEO 40101s ("Internal SE Server Error") come in bursts — two
+       retries with growing gaps ride out the burst instead of failing rows */
     try { return await scanOnce(); }
-    catch { await new Promise((r) => setTimeout(r, 1500)); return await scanOnce(); }
+    catch { await new Promise((r) => setTimeout(r, 2000)); }
+    try { return await scanOnce(); }
+    catch { await new Promise((r) => setTimeout(r, 6000)); return await scanOnce(); }
   }, 5);
   return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, keyword: entries[i].keyword, error: u.error } : u)) }];
 }

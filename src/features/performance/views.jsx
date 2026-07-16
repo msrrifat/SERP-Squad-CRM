@@ -699,11 +699,37 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         ok += updates.length;
         applied += chunk.length;
       }
+      /* second pass: DataForSEO's 40101 bursts can outlast per-row retries —
+         after the main run, failed keywords get one more full attempt */
+      let failedFinal = failed;
+      if (live && failed.length) {
+        setProgress({ done: applied, total: entries.length, note: `retrying ${failed.length} failed` });
+        await new Promise((r) => setTimeout(r, 5000));
+        const retryList = entries.filter((e) => failed.some((f) => f.id === e.id));
+        failedFinal = [];
+        for (let i = 0; i < retryList.length; i += CHUNK) {
+          const chunk = retryList.slice(i, i + CHUNK);
+          try {
+            const res = await fetch("/api/rerun", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              signal: AbortSignal.timeout(240000),
+              body: JSON.stringify({ entries: chunk, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              const ups = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null }));
+              if (ups.length) onRerun?.(ups);
+              ok += ups.length;
+              failedFinal.push(...data.updated.filter((u) => u.error));
+            } else failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: `HTTP ${res.status}` })));
+          } catch (e2) { failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: String(e2?.message || e2).slice(0, 100) }))); }
+        }
+      }
       /* never report a scan where nothing landed as a success */
-      if (!ok) throw new Error(failed.length
-        ? `All ${failed.length} scan${failed.length > 1 ? "s" : ""} failed — ${String(failed[0].error || "").slice(0, 140)}`
+      if (!ok) throw new Error(failedFinal.length
+        ? `All ${failedFinal.length} scan${failedFinal.length > 1 ? "s" : ""} failed — ${String(failedFinal[0].error || "").slice(0, 140)}`
         : "No positions came back from the scan.");
-      return { ok, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, live };
+      return { ok, failed: failedFinal.length, firstError: failedFinal[0] ? `${failedFinal[0].keyword ? failedFinal[0].keyword + ": " : ""}${String(failedFinal[0].error || "").slice(0, 120)}` : null, live };
     });
     if (started) setSelected(new Set());
   };
