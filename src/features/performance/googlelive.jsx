@@ -4,10 +4,10 @@
    click Connect → real Google consent popup → the server stores a refresh
    token and this view pulls LIVE data. Pick a Search Console site + a GA4
    property; everything shown here is real (or an honest error). ---- */
-import React, { useEffect, useMemo, useState } from "react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import React, { useEffect, useState } from "react";
+import { LineChart, Line, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Activity, BarChart3, CheckCircle2, Eye, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
-import { Card, Labeled, StatCard, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 
 const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
@@ -152,40 +152,31 @@ export function GoogleLiveData({ project, accent }) {
 
   const hasGa = conn.connectionId && conn.ga4Property;
   const hasGsc = conn.connectionId && conn.gscSite;
-
-  /* metric toggle for the daily trend — GA4 metrics use ga4.byDate, GSC metrics use gsc.byDate */
-  const metrics = useMemo(() => {
-    const list = [];
-    if (ga4?.live) {
-      list.push(
-        { key: "users", label: "Active users", src: "GA4", rows: ga4.byDate, k: "users" },
-        { key: "sessions", label: "Sessions", src: "GA4", rows: ga4.byDate, k: "sessions" },
-      );
-    }
-    if (gsc?.live) {
-      list.push(
-        { key: "clicks", label: "Clicks", src: "GSC", rows: gsc.byDate, k: "clicks" },
-        { key: "impressions", label: "Impressions", src: "GSC", rows: gsc.byDate, k: "impressions" },
-      );
-    }
-    return list;
-  }, [ga4, gsc]);
-  const [metric, setMetric] = useState("users");
-  const active = metrics.find((m) => m.key === metric) || metrics[0];
-  const chartData = (active?.rows || []).map((r) => ({ date: (r.date || "").slice(5), v: r[active.k] || 0 }));
-
   if (!conn.connectionId || (!hasGsc && !hasGa)) return null;
   const busy = ga4?.busy || gsc?.busy;
   const refresh = () => { if (hasGa) loadGa4(conn.ga4Property); if (hasGsc) loadGsc(conn.gscSite); };
 
+  /* GA4 dates come as "20260716", GSC as "2026-07-16" */
+  const day = (d) => (String(d).length === 8 ? d.slice(4, 6) + "/" + d.slice(6, 8) : String(d || "").slice(5));
+  const gaDaily = (ga4?.byDate || []).map((r) => ({ label: day(r.date), Users: r.users, Sessions: r.sessions }));
+  const gscDaily = (gsc?.byDate || []).map((r) => ({ label: day(r.date), Clicks: r.clicks, Impressions: r.impressions }));
+  const channels = ga4?.channels || [];
+  const sources = ga4?.sources || [];
+  const events = ga4?.events || [];
+  const topPages = ga4?.topPages || [];
+  const maxSource = Math.max(...sources.map((x) => x.value), 1);
+  const PIE_COLORS = [accent, "#64748B", "#A5B4C4", "#CBD5E1", "#E2E8F0"];
+  const AI_SRC = /chatgpt|perplexity|gemini|copilot|claude/i;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* header */}
       <div className="flex items-center gap-2">
         <div className="ll-display text-[15px] font-semibold text-gray-800">Google — live data</div>
+        <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600">Live</span>
         <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">Last 28 days</span>
         {busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
-        <button onClick={refresh} className="ml-auto flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
+        <button onClick={refresh} className="no-print ml-auto flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
@@ -196,88 +187,190 @@ export function GoogleLiveData({ project, accent }) {
           {gsc?.err && <div>Search Console: {gsc.err}</div>}
         </div>
       )}
+      {busy && !ga4?.live && !gsc?.live && (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Card key={i} className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>)}
+        </div>
+      )}
 
-      {/* KPI grid — same StatCard look as the demo dashboard */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {ga4?.live && (<>
-          <StatCard icon={Users} label="Active users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />
-          <StatCard icon={Activity} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />
-          <StatCard icon={Eye} label="Page views" source="GA4" accent={accent} value={fmt(ga4.totals.views)} pct={halfDelta((ga4.byDate || []).map((r) => r.views))} spark={(ga4.byDate || []).map((r) => r.views)} />
-          <StatCard icon={Target} label="Conversions" source="GA4" accent={accent} value={fmt(ga4.totals.conversions)} pct={halfDelta((ga4.byDate || []).map((r) => r.conversions))} spark={(ga4.byDate || []).map((r) => r.conversions)} />
-        </>)}
-        {gsc?.live && (<>
+      {/* ---- GA4: same layout as the designed Website Performance dashboard ---- */}
+      {ga4?.live && (<>
+        <SectionHeader icon={BarChart3} title="Website traffic & conversions" sub="Google Analytics 4 · last 28 days" accent={accent} />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />
+          <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />
+          <StatCard icon={MousePointerClick} label="Engagement rate" source="GA4" accent={accent} value={((ga4.totals.engRate || 0) * 100).toFixed(0) + "%"} pct={null} sub="range average" />
+          <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent} value={fmt(ga4.totals.conversions)} pct={halfDelta((ga4.byDate || []).map((r) => r.conversions))} spark={(ga4.byDate || []).map((r) => r.conversions)} />
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-5">
+          <Card className="p-5 lg:col-span-3">
+            <div className="ll-display mb-4 text-[15px] font-semibold">Traffic <span className="text-xs font-normal text-gray-400">daily</span></div>
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={gaDaily} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F4" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9CA3AF" }} tickLine={false} axisLine={false} minTickGap={16} />
+                <YAxis tick={{ fontSize: 11, fill: "#9CA3AF" }} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Line type="monotone" dataKey="Users" stroke={accent} strokeWidth={2.2} dot={false} />
+                <Line type="monotone" dataKey="Sessions" stroke="#94A3B8" strokeWidth={2} dot={false} strokeDasharray="5 4" />
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
+          {channels.length > 0 && (
+            <Card className="p-5 lg:col-span-2">
+              <div className="ll-display mb-2 text-[15px] font-semibold">Traffic channels <span className="text-xs font-normal text-gray-400">sessions</span></div>
+              <ResponsiveContainer width="100%" height={190}>
+                <PieChart>
+                  <Pie data={channels} dataKey="value" nameKey="name" innerRadius={48} outerRadius={74} paddingAngle={2}>
+                    {channels.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={tooltipStyle} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                {channels.map((c, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-[12px] text-gray-600">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                    {c.name} <span className="ll-mono ml-auto text-gray-400">{fmt(c.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {sources.length > 0 && (
+            <Card className="p-5">
+              <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">sessions · last 28 days</span></div>
+              <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines (organic &amp; paid), social, direct and AI assistants</div>
+              <div className="space-y-2.5">
+                {sources.map((x, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="w-28 shrink-0 truncate text-[12.5px] font-medium text-gray-700">{x.name}</span>
+                    <span className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                      <span className="block h-full rounded-full" style={{ width: `${(x.value / maxSource) * 100}%`, background: AI_SRC.test(x.name) ? "#7C3AED" : accent }} />
+                    </span>
+                    <span className="ll-mono w-12 text-right text-[12px] font-semibold">{fmt(x.value)}</span>
+                    <span className="w-14 text-right">{x.prev > 0 ? <Delta pct={pctDelta(x.value, x.prev)} /> : <span className="text-[11px] text-gray-300">new</span>}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+          {events.length > 0 && (
+            <Card className="overflow-hidden">
+              <div className="border-b border-gray-100 px-5 py-4">
+                <div className="ll-display text-[15px] font-semibold">Event counts</div>
+                <div className="text-[11px] text-gray-400">GA4 events · last 28 days</div>
+              </div>
+              <table className="w-full text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                    <th className="px-5 py-2.5 font-semibold">Event name</th>
+                    <th className="px-3 py-2.5 font-semibold">Count</th>
+                    <th className="px-3 py-2.5 font-semibold">vs prev. half</th>
+                    <th className="px-5 py-2.5 font-semibold">Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.map((e, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                      <td className="ll-mono px-5 py-2.5 text-gray-700">{e.name}</td>
+                      <td className="ll-mono px-3 py-2.5 font-semibold">{fmt(e.value)}</td>
+                      <td className="px-3 py-2.5">{halfDelta(e.series) != null ? <Delta pct={halfDelta(e.series)} /> : <span className="text-gray-300">—</span>}</td>
+                      <td className="px-5 py-2.5"><Spark values={e.series} color={accent} w={72} h={22} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </div>
+
+        {topPages.length > 0 && (
+          <Card className="overflow-hidden">
+            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top landing pages <span className="text-xs font-normal text-gray-400">last 28 days</span></div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[440px] text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                    <th className="px-5 py-3 font-semibold">Page</th>
+                    <th className="px-3 py-3 font-semibold">Users</th>
+                    <th className="px-5 py-3 font-semibold">Conversions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topPages.map((p, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                      <td className="ll-mono max-w-[320px] truncate px-5 py-3 text-gray-700">{p.page}</td>
+                      <td className="ll-mono px-3 py-3">{fmt(p.users)}</td>
+                      <td className="ll-mono px-5 py-3">{fmt(p.conversions)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </>)}
+
+      {/* ---- Search Console: same layout as the designed dashboard ---- */}
+      {gsc?.live && (<>
+        <SectionHeader icon={Search} title="Organic search visibility" sub="Google Search Console · last 28 days" accent={accent} />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(gsc.totals.clicks)} pct={halfDelta((gsc.byDate || []).map((r) => r.clicks))} spark={(gsc.byDate || []).map((r) => r.clicks)} />
           <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(gsc.totals.impressions)} pct={halfDelta((gsc.byDate || []).map((r) => r.impressions))} spark={(gsc.byDate || []).map((r) => r.impressions)} />
-          <StatCard icon={Target} label="Avg CTR" source="GSC" accent={accent} value={pct1(gsc.totals.ctr)} sub="clicks / impressions" />
-          <StatCard icon={Search} label="Avg position" source="GSC" accent={accent} value={gsc.totals.position ? gsc.totals.position.toFixed(1) : "—"} invert sub="lower is better" />
-        </>)}
-        {busy && !ga4?.live && !gsc?.live && Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i} className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
-        ))}
-      </div>
-
-      {/* daily trend — recharts AreaChart with metric toggle, matching the demo */}
-      {active && chartData.length > 0 && (
+          <StatCard icon={Target} label="Avg. CTR" source="GSC" accent={accent} value={pct1(gsc.totals.ctr)} sub="clicks / impressions" />
+          <StatCard icon={Search} label="Avg. position" source="GSC" accent={accent} value={gsc.totals.position ? "#" + gsc.totals.position.toFixed(1) : "—"} invert sub="lower is better" />
+        </div>
         <Card className="p-5">
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <div className="ll-display text-[14px] font-semibold text-gray-800">Daily trend</div>
-            <div className="ml-auto flex flex-wrap gap-1.5">
-              {metrics.map((m) => (
-                <button key={m.key} onClick={() => setMetric(m.key)}
-                  className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition"
-                  style={metric === m.key ? { background: accent, color: "#fff" } : { background: accent + "12", color: accent }}>
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-              <defs>
-                <linearGradient id="glvArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={accent} stopOpacity={0.28} />
-                  <stop offset="100%" stopColor={accent} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eef0f2" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} minTickGap={18} />
-              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={38} tickFormatter={fmt} />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v) => [fmt(v), active.label]} />
-              <Area type="monotone" dataKey="v" stroke={accent} strokeWidth={2} fill="url(#glvArea)" />
-            </AreaChart>
+          <div className="ll-display mb-4 text-[15px] font-semibold">Clicks &amp; impressions <span className="text-xs font-normal text-gray-400">daily</span></div>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={gscDaily} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F4" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9CA3AF" }} tickLine={false} axisLine={false} minTickGap={16} />
+              <YAxis yAxisId="l" tick={{ fontSize: 11, fill: "#9CA3AF" }} tickLine={false} axisLine={false} />
+              <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11, fill: "#9CA3AF" }} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line yAxisId="l" type="monotone" dataKey="Clicks" stroke={accent} strokeWidth={2.2} dot={false} />
+              <Line yAxisId="r" type="monotone" dataKey="Impressions" stroke="#94A3B8" strokeWidth={2} dot={false} strokeDasharray="5 4" />
+            </LineChart>
           </ResponsiveContainer>
         </Card>
-      )}
-
-      {/* Search Console top queries */}
-      {gsc?.live && (
-        <Card className="p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <Search size={14} style={{ color: accent }} />
-            <div className="ll-display text-[14px] font-semibold text-gray-800">Top queries</div>
-            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">Search Console</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[440px] text-left text-[11.5px]">
-              <thead><tr className="border-b border-gray-200 text-[9.5px] uppercase tracking-wide text-gray-400">
-                <th className="px-2 py-1.5 font-semibold">Query</th><th className="px-2 py-1.5 font-semibold">Clicks</th><th className="px-2 py-1.5 font-semibold">Impr.</th><th className="px-2 py-1.5 font-semibold">CTR</th><th className="px-2 py-1.5 font-semibold">Pos.</th>
-              </tr></thead>
-              <tbody>
-                {gsc.queries.map((q) => (
-                  <tr key={q.query} className="border-b border-gray-50">
-                    <td className="max-w-[240px] truncate px-2 py-1.5 font-medium text-gray-700">{q.query}</td>
-                    <td className="ll-mono px-2 py-1.5 text-gray-600">{q.clicks}</td>
-                    <td className="ll-mono px-2 py-1.5 text-gray-500">{q.impressions}</td>
-                    <td className="ll-mono px-2 py-1.5 text-gray-500">{pct1(q.ctr)}</td>
-                    <td className="ll-mono px-2 py-1.5 text-gray-500">{q.position?.toFixed(1)}</td>
+        {gsc.queries.length > 0 && (
+          <Card className="overflow-hidden">
+            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top search queries <span className="text-xs font-normal text-gray-400">last 28 days</span></div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[520px] text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                    <th className="px-5 py-3 font-semibold">Query</th>
+                    <th className="px-3 py-3 font-semibold">Clicks</th>
+                    <th className="px-3 py-3 font-semibold">Impressions</th>
+                    <th className="px-3 py-3 font-semibold">CTR</th>
+                    <th className="px-5 py-3 font-semibold">Position</th>
                   </tr>
-                ))}
-                {!gsc.queries.length && <tr><td colSpan={5} className="py-3 text-center text-[11px] text-gray-300">No query data in this window.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+                </thead>
+                <tbody>
+                  {gsc.queries.map((q) => (
+                    <tr key={q.query} className="border-b border-gray-50 hover:bg-gray-50/60">
+                      <td className="max-w-[280px] truncate px-5 py-3 font-medium text-gray-800">{q.query}</td>
+                      <td className="ll-mono px-3 py-3">{fmt(q.clicks)}</td>
+                      <td className="ll-mono px-3 py-3">{fmt(q.impressions)}</td>
+                      <td className="ll-mono px-3 py-3">{pct1(q.ctr)}</td>
+                      <td className="px-5 py-3"><RankChip pos={Math.round(q.position)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </>)}
     </div>
   );
 }

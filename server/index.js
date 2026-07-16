@@ -345,21 +345,94 @@ async function handleGa4Properties(body) {
     return [200, { live: true, properties: props }];
   } catch (e) { return gErr(e); }
 }
+/* "google / organic" → "Google organic", "(direct) / (none)" → "Direct",
+   "chatgpt.com / referral" → "ChatGPT" — the source list the dashboard was
+   designed around (search engines, social, direct, paid, AI assistants) */
+function prettySourceMedium(sm) {
+  const [src = "", med = ""] = String(sm).split(" / ");
+  const s = src.toLowerCase();
+  const name =
+    s === "(direct)" || s === "(not set)" ? "Direct"
+    : /chatgpt|chat\.openai|openai/.test(s) ? "ChatGPT"
+    : /perplexity/.test(s) ? "Perplexity"
+    : /gemini|bard\.google/.test(s) ? "Gemini"
+    : /copilot/.test(s) ? "Copilot"
+    : /claude|anthropic/.test(s) ? "Claude"
+    : /^m\.facebook|facebook|fb\.com/.test(s) ? "Facebook"
+    : /instagram/.test(s) ? "Instagram"
+    : /linkedin|lnkd\.in/.test(s) ? "LinkedIn"
+    : /youtube/.test(s) ? "YouTube"
+    : /duckduckgo/.test(s) ? "DuckDuckGo"
+    : src.replace(/^www\./, "").replace(/\.(com|net|org|ai|io|co|app)$/, "").replace(/^./, (c) => c.toUpperCase());
+  if (name === "Direct") return "Direct";
+  const m = med.toLowerCase();
+  if (m === "organic") return name + " organic";
+  if (["cpc", "ppc", "paid", "paidsearch", "paid_search"].includes(m)) return name + " paid";
+  return name;
+}
+/* GA4 auto-collected noise that would drown real key events in the table */
+const GA4_NOISE_EVENTS = new Set(["page_view", "session_start", "first_visit", "user_engagement", "scroll", "predicted_top_spenders"]);
+
 async function handleGa4Report(body) {
   if (!body?.connectionId || !body?.propertyId) return [400, { error: "bad_request", detail: "connectionId and propertyId required." }];
   const days = Math.min(Math.max(+body?.days || 28, 1), 365);
   const pid = String(body.propertyId).replace(/^properties\//, "");
+  const range = [{ startDate: `${days}daysAgo`, endDate: "today" }];
+  /* sources get a second range so each source shows a vs-prev-period delta */
+  const cmpRange = [...range, { startDate: `${2 * days}daysAgo`, endDate: `${days + 1}daysAgo` }];
   try { const { accessToken } = await googleAccess(body.connectionId);
-    const rep = await gPost(accessToken, `https://analyticsdata.googleapis.com/v1beta/properties/${pid}:runReport`, {
-      dateRanges: [{ startDate: `${days}daysAgo`, endDate: "today" }],
-      dimensions: [{ name: "date" }],
-      metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "conversions" }],
-      orderBys: [{ dimension: { dimensionName: "date" } }],
-      limit: 400,
+    const d = await gPost(accessToken, `https://analyticsdata.googleapis.com/v1beta/properties/${pid}:batchRunReports`, {
+      requests: [
+        { dateRanges: range, dimensions: [{ name: "date" }], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "conversions" }, { name: "engagementRate" }], orderBys: [{ dimension: { dimensionName: "date" } }], limit: 400 },
+        { dateRanges: range, dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 8 },
+        { dateRanges: cmpRange, dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 60 },
+        { dateRanges: range, dimensions: [{ name: "date" }, { name: "eventName" }], metrics: [{ name: "eventCount" }], limit: 5000 },
+        { dateRanges: range, dimensions: [{ name: "landingPage" }], metrics: [{ name: "activeUsers" }, { name: "conversions" }], orderBys: [{ metric: { metricName: "activeUsers" }, desc: true }], limit: 10 },
+      ],
     });
-    const rows = (rep.rows || []).map((r) => ({ date: r.dimensionValues[0].value, users: +r.metricValues[0].value, sessions: +r.metricValues[1].value, views: +r.metricValues[2].value, conversions: +r.metricValues[3].value }));
+    const [rDate, rChan, rSrc, rEvt, rPages] = d.reports || [];
+
+    const rows = (rDate?.rows || []).map((r) => ({
+      date: r.dimensionValues[0].value,
+      users: +r.metricValues[0].value, sessions: +r.metricValues[1].value, views: +r.metricValues[2].value,
+      conversions: +r.metricValues[3].value, engRate: +r.metricValues[4].value,
+    }));
     const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
-    return [200, { live: true, totals: { users: sum("users"), sessions: sum("sessions"), views: sum("views"), conversions: sum("conversions") }, byDate: rows }];
+    const engRate = sum("sessions") ? rows.reduce((a, r) => a + r.engRate * r.sessions, 0) / sum("sessions") : 0;
+
+    const channels = (rChan?.rows || []).map((r) => ({ name: r.dimensionValues[0].value, value: +r.metricValues[0].value }));
+
+    /* rows carry an extra trailing dateRange dimension when two ranges are queried */
+    const srcMap = new Map();
+    (rSrc?.rows || []).forEach((r) => {
+      const name = prettySourceMedium(r.dimensionValues[0].value);
+      const prevPeriod = r.dimensionValues[1]?.value === "date_range_1";
+      const v = +r.metricValues[0].value || 0;
+      const e = srcMap.get(name) || { name, value: 0, prev: 0 };
+      if (prevPeriod) e.prev += v; else e.value += v;
+      srcMap.set(name, e);
+    });
+    const sources = [...srcMap.values()].sort((a, b) => b.value - a.value).slice(0, 8);
+
+    const evMap = new Map();
+    (rEvt?.rows || []).forEach((r) => {
+      const name = r.dimensionValues[1].value;
+      if (GA4_NOISE_EVENTS.has(name)) return;
+      const e = evMap.get(name) || { name, value: 0, byDate: {} };
+      const v = +r.metricValues[0].value || 0;
+      e.value += v; e.byDate[r.dimensionValues[0].value] = (e.byDate[r.dimensionValues[0].value] || 0) + v;
+      evMap.set(name, e);
+    });
+    const dates = rows.map((r) => r.date);
+    const events = [...evMap.values()].sort((a, b) => b.value - a.value).slice(0, 10)
+      .map((e) => ({ name: e.name, value: e.value, series: dates.map((dt) => e.byDate[dt] || 0) }));
+
+    const topPages = (rPages?.rows || []).map((r) => ({ page: r.dimensionValues[0].value, users: +r.metricValues[0].value, conversions: +r.metricValues[1].value }));
+
+    return [200, { live: true,
+      totals: { users: sum("users"), sessions: sum("sessions"), views: sum("views"), conversions: sum("conversions"), engRate },
+      byDate: rows, channels, sources, events, topPages,
+    }];
   } catch (e) { return gErr(e); }
 }
 function mintSession(identity) {
