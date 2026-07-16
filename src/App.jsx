@@ -17,6 +17,7 @@ import {
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
 import { Ava, BrandMark, DarkToggle, FONT_CSS, Modal, ProjectMark } from "./ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
+import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
@@ -279,6 +280,8 @@ export default function App() {
   const activeDfs = dfsForClient(activeClient);
   /* a real Google connection with a picked GA4 property and/or Search Console site */
   const googleConnected = !!(project?.google?.connectionId && (project.google.gscSite || project.google.ga4Property));
+  /* background scan jobs (rank tracking / geo-grid) — shown app-wide while running */
+  const { running: runningScans } = useScanJobs();
   /* AI agent scope: admins/owner see every project; members need the per-client
      "AI Agent" grant AND assignment. The agent brain only ever receives this list. */
   const agentScope = useMemo(() => {
@@ -1032,6 +1035,19 @@ export default function App() {
         )}
       </main>
 
+      {/* background scans keep running across page changes — this chip shows
+          them anywhere in the app until each scan completes */}
+      {runningScans.length > 0 && (
+        <div className="no-print fixed bottom-4 left-1/2 z-40 -translate-x-1/2 space-y-1.5">
+          {runningScans.map((j) => (
+            <div key={j.key} className="flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-4 py-2 text-[11.5px] font-medium text-gray-600 shadow-lg backdrop-blur">
+              <RefreshCw size={12} className="animate-spin" style={{ color: accent }} />
+              <span className="max-w-[420px] truncate">{j.label}</span>
+              {j.progress?.total > 1 && <span className="ll-mono text-gray-400">{Math.min((j.progress.done || 0) + 1, j.progress.total)}/{j.progress.total}</span>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {agentEnabled && !clientView && (
         <React.Suspense fallback={null}>

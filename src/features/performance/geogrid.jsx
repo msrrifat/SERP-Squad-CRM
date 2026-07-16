@@ -9,6 +9,7 @@ import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
 import { fmt, fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { realDfs } from "../optimization/indexcheck.jsx";
+import { startScanJob, useScanJobs } from "../../lib/scanjobs.js";
 
 /* ================= GBP Geo-Grid Rank Tracker (report-based) =================
    SEO-Utils-style workflow: named reports (Map · Report & Keywords · Schedule),
@@ -474,46 +475,56 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
   const reports = geo.reports || [];
   const [openReportId, setOpenReportId] = useState(null);
   const [setup, setSetup] = useState(null); // null | "new" | report object (edit)
-  const [scanState, setScanState] = useState(null); // { reportId, kwIndex, total }
-  const [err, setErr] = useState(null);
+  /* scans run as global background jobs — navigating away never stops them;
+     this view derives spinner/progress/errors from the job registry */
+  const { get: getJob } = useScanJobs();
+  const jobFor = (rpId) => getJob(`geogrid:${project.id}:${rpId}`);
+  const jobScanState = (rpId) => {
+    const j = jobFor(rpId);
+    return j?.status === "running" ? { reportId: rpId, kwIndex: j.progress?.done || 0, total: j.progress?.total || 1, kw: j.progress?.note } : null;
+  };
+  const anyRunning = reports.some((rp) => jobFor(rp.id)?.status === "running");
   const patchGeo = (p) => onUpdate((proj) => ({ geoGrid: { ...(proj.geoGrid || {}), ...(typeof p === "function" ? p(proj.geoGrid || {}) : p) } }));
   const patchReport = (id, fn) => patchGeo((cur) => ({ reports: (cur.reports || []).map((rp) => (rp.id === id ? { ...rp, ...(typeof fn === "function" ? fn(rp) : fn) } : rp)) }));
 
   const locale = (rp) => LOCALES[rp.locale || 0];
-  const runSnapshot = async (rp) => {
-    setErr(null);
+  const runSnapshot = (rp) => {
     const spacingKm = effSpacing(rp);
     const center = isFinite(biz.lat) && isFinite(biz.lng) ? { lat: +biz.lat, lng: +biz.lng } : null;
-    setScanState({ reportId: rp.id, kwIndex: 0, total: rp.keywords.length });
-    const grids = {};
-    let live = false;
-    for (let i = 0; i < rp.keywords.length; i++) {
-      const kw = rp.keywords[i];
-      setScanState({ reportId: rp.id, kwIndex: i, total: rp.keywords.length, kw });
-      let pts = null;
-      if (center) {
-        try {
-          const res = await fetch("/api/geo-grid", {
-            method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(300000),
-            body: JSON.stringify({
-              keyword: kw, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
-              business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
-            }),
-          });
-          if (res.ok) { const d = await res.json(); pts = d.points; live = true; }
-          else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); setErr("Live scan failed: " + (e2.detail || "provider error")); setScanState(null); return; }
-        } catch { /* server down → demo below */ }
+    startScanJob(`geogrid:${project.id}:${rp.id}`, `Geo-grid · ${project.name} — ${rp.name || rp.keywords[0]}`, async (setProgress) => {
+      const grids = {};
+      let live = false;
+      for (let i = 0; i < rp.keywords.length; i++) {
+        const kw = rp.keywords[i];
+        setProgress({ done: i, total: rp.keywords.length, note: kw });
+        let pts = null;
+        if (center) {
+          try {
+            const res = await fetch("/api/geo-grid", {
+              method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(300000),
+              body: JSON.stringify({
+                keyword: kw, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
+                business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
+              }),
+            });
+            if (res.ok) { const d = await res.json(); pts = d.points; live = true; }
+            else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
+          } catch (e) {
+            if (String(e?.message || "").startsWith("Live scan failed")) throw e;
+            /* server down → demo below */
+          }
+        }
+        if (!pts) {
+          const run = rp.snapshots.length;
+          pts = genDemoGrid(project.id, kw, rp.size, spacingKm, rp.shape, center, run, biz.name || "Your business");
+          await new Promise((r2) => setTimeout(r2, 350));
+        }
+        grids[kw] = pts;
       }
-      if (!pts) {
-        const run = rp.snapshots.length;
-        pts = genDemoGrid(project.id, kw, rp.size, spacingKm, rp.shape, center, run, biz.name || "Your business");
-        await new Promise((r2) => setTimeout(r2, 350));
-      }
-      grids[kw] = pts;
-    }
-    const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape };
-    patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
-    setScanState(null);
+      const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape };
+      patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
+      return { keywords: rp.keywords.length, live };
+    });
   };
 
   /* scheduled runs: execute at most one due report per mount (PROD: server cron) */
@@ -528,7 +539,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 
   const open = reports.find((rp) => rp.id === openReportId);
   if (open) return (
-    <ReportView report={open} biz={biz} accent={accent} scanState={scanState?.reportId === open.id ? scanState : null} err={err}
+    <ReportView report={open} biz={biz} accent={accent} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
       onBack={() => setOpenReportId(null)} onRun={() => runSnapshot(open)} onEdit={() => setSetup(open)}
       onDeleteSnapshot={(sid) => patchReport(open.id, (cur) => ({ snapshots: cur.snapshots.filter((x) => x.id !== sid) }))}
       setupModal={setup && (
@@ -558,7 +569,8 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
       {reports.map((rp) => {
         const last = rp.snapshots[0];
         const avg = last ? snapshotAvg(last) : null;
-        const running = scanState?.reportId === rp.id;
+        const rpScan = jobScanState(rp.id);
+        const running = !!rpScan;
         return (
           <Card key={rp.id} className="flex flex-wrap items-center gap-3 p-4">
             <button onClick={() => setOpenReportId(rp.id)} className="min-w-0 flex-1 text-left">
@@ -575,9 +587,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
                 {last && <span>last run {fmtTs2(last.at)}{avg != null ? ` · Avg rank ${avg.toFixed(1)}` : ""}</span>}
               </div>
             </button>
-            <button onClick={() => runSnapshot(rp)} disabled={!!scanState}
+            <button onClick={() => runSnapshot(rp)} disabled={anyRunning}
               className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-              {running ? <><RefreshCw size={10} className="animate-spin" /> {scanState.kw ? `"${scanState.kw}" (${scanState.kwIndex + 1}/${scanState.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "maps"))}</span></>}
+              {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "maps"))}</span></>}
             </button>
             <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
             <button onClick={() => patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>

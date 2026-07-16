@@ -23,6 +23,7 @@ import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { GoogleLiveData, useGoogleLive, halfDelta, dayLabel } from "./googlelive.jsx";
+import { startScanJob, clearScanJob, useScanJobs } from "../../lib/scanjobs.js";
 
 /* KPI-sized placeholder shown when a card's data source isn't connected —
    the dashboard keeps its designed layout instead of hiding cards */
@@ -573,8 +574,13 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const [showModal, setShowModal] = useState(false);
   const W = project.widgets.ranks;
   const [selected, setSelected] = useState(new Set());
-  const [rerunning, setRerunning] = useState(false);
-  const [rerunResult, setRerunResult] = useState(null); // { ok: number, ts: number } | { error: string }
+  /* scans run as global background jobs (src/lib/scanjobs.js) — navigating to
+     another page never interrupts them; this view just renders the job state */
+  const { get: getJob } = useScanJobs();
+  const jobKey = "ranks:" + project.id;
+  const job = getJob(jobKey);
+  const rerunning = job?.status === "running";
+  const rerunResult = job?.status === "done" ? job.summary : job?.status === "error" ? { error: job.error } : null;
   /* Live rankings ↔ Ranking history (dated scans persisted on every rerun) */
   const [tab, setTab] = useState("live");
   const [histDay, setHistDay] = useState(null);
@@ -617,11 +623,13 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
   /* one scan runner for both flows: "Rerun now" on selected keywords AND the
-     automatic initial scan right after keywords are added (real projects) */
-  const runScan = async (list) => {
+     automatic initial scan right after keywords are added (real projects).
+     Runs as a global background job — finishing is guaranteed even if the
+     user navigates to any other page mid-scan. */
+  const runScan = (list) => {
     if (!list.length) return;
-    setRerunning(true); setRerunResult(null);
-    try {
+    const started = startScanJob(jobKey, `Rank scan · ${project.name} — ${list.length} keyword${list.length > 1 ? "s" : ""}`, async (setProgress) => {
+      setProgress({ done: 0, total: list.length });
       /* REAL path first: the API server runs one live SERP request per keyword
          through DataForSEO and parses the true rank (server/index.js). */
       const entries = list.map((e) => ({ id: e.id, keyword: e.keyword, city: e.city, device: e.device, engine: e.engine, domain: e.domain }));
@@ -659,13 +667,9 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       if (!updates.length) throw new Error(failed.length
         ? `All ${failed.length} scan${failed.length > 1 ? "s" : ""} failed — ${String(failed[0].error || "").slice(0, 140)}`
         : "No positions came back from the scan.");
-      setRerunResult({ ok: updates.length, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, ts: Date.now(), live });
-      setSelected(new Set());
-    } catch (err) {
-      setRerunResult({ error: err.message });
-    } finally {
-      setRerunning(false);
-    }
+      return { ok: updates.length, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, live };
+    });
+    if (started) setSelected(new Set());
   };
   const doRerun = () => runScan([...selected].map((id) => tracking.find((t) => t.id === id)).filter(Boolean));
 
@@ -764,7 +768,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       ? { borderColor: accent, color: accent, background: accent + "0F" }
                       : { borderColor: "#E5E7EB", color: "#6B7280", background: "#fff" }}>
                     {rerunning
-                      ? <><RefreshCw size={13} className="animate-spin" /> Checking {selected.size} keyword{selected.size > 1 ? "s" : ""}…</>
+                      ? <><RefreshCw size={13} className="animate-spin" /> Scanning {job?.progress?.total || ""} keyword{(job?.progress?.total || 0) > 1 ? "s" : ""}… (runs in background)</>
                       : <><RefreshCw size={13} /> Rerun now {selected.size > 0 ? `(${selected.size})` : ""}</>}
                   </button>
                 </>
@@ -780,7 +784,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
                       {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}</>}
               </span>
-              <button onClick={() => setRerunResult(null)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
+              <button onClick={() => clearScanJob(jobKey)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
             </div>
           )}
           {tab === "live" && (
