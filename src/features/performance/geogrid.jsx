@@ -601,7 +601,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
           No reports yet — create one: pick the business on the Map tab, add keywords, set a schedule. Each run scans every keyword across the whole grid.
         </Card>
       )}
-      {err && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[11.5px] text-red-700">{err}</div>}
+      {(() => { const failed = reports.map((rp) => jobFor(rp.id)).find((j) => j?.status === "error"); return failed
+        ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[11.5px] text-red-700">{failed.error}</div>
+        : null; })()}
 
       {setup && (
         <ReportSetup initial={setup === "new" ? null : setup} business={biz} accent={accent} placesKey={placesKey}
