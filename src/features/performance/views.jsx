@@ -22,7 +22,7 @@ import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../li
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
-import { GoogleLiveData } from "./googlelive.jsx";
+import { GoogleLiveData, useGoogleLive, halfDelta, dayLabel } from "./googlelive.jsx";
 
 /* KPI-sized placeholder shown when a card's data source isn't connected —
    the dashboard keeps its designed layout instead of hiding cards */
@@ -58,6 +58,15 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
     ? { ...project.integrations, ga: !!project.google?.ga4Property, gsc: !!project.google?.gscSite }
     : project.integrations;
 
+  /* liveMode: pull the REAL GA4/GSC numbers into the designed cards — same
+     interface as the demo dashboard, live values (28-day window) */
+  const glive = useGoogleLive(liveMode ? project : null, 28);
+  const gaLive = liveMode && glive.ga4?.live ? glive.ga4 : null;
+  const gscLive = liveMode && glive.gsc?.live ? glive.gsc : null;
+  const gaSeries = (k) => (gaLive?.byDate || []).map((r) => r[k]);
+  const gscSeries = (k) => (gscLive?.byDate || []).map((r) => r[k]);
+  const liveCallEvt = gaLive?.events?.find((e) => e.name === "call_click") || null;
+
   const avgNow = tracking.length ? avgPosDaysAgo(tracking, 0) : 0;
   const avgPrev = tracking.length ? avgPosDaysAgo(tracking, cmp * 30) : null;
   const top3 = tracking.filter((t) => t.stats.cur <= 3).length;
@@ -78,10 +87,9 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   const METRICS = {
     gbpViews: { label: "Profile views", get: (m, i) => profileViewsSeries[i], show: anyProfile, color: accent },
-    /* liveMode: the monthly ga/gsc series here are zeros — the live daily charts
-       render in the GoogleLiveData section instead */
-    gaUsers: { label: "Website users", get: (m) => m.ga.users, show: I.ga && !liveMode, color: "#0EA5E9" },
-    gscClicks: { label: "Search clicks", get: (m) => m.gsc.clicks, show: I.gsc && !liveMode, color: "#8B5CF6" },
+    /* liveMode: these two chart the LIVE daily series from Google */
+    gaUsers: { label: "Website users", get: (m) => m.ga.users, show: liveMode ? !!gaLive : I.ga, color: "#0EA5E9" },
+    gscClicks: { label: "Search clicks", get: (m) => m.gsc.clicks, show: liveMode ? !!gscLive : I.gsc, color: "#8B5CF6" },
     avgRank: { label: "Avg. ranking", get: (_, i) => { const v = avgPosDaysAgo(tracking, (12 - i) * 30); return v == null ? null : +v.toFixed(1); }, invert: true, show: tracking.length > 0, color: "#F59E0B" },
   };
   const anyMetric = Object.values(METRICS).some((m) => m.show);
@@ -90,11 +98,19 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   /* range-aware trend: the visible window follows the "Compare vs" selection in
      the top bar — cmp=3 shows the last 3 months, cmp=12 shows the full year.
-     get() still receives the ABSOLUTE month index so avgRank lookups stay correct. */
+     get() still receives the ABSOLUTE month index so avgRank lookups stay correct.
+     Live GA/GSC metrics chart the real daily series instead of monthly mocks. */
   const rangeStart = Math.max(0, 12 - cmp);
-  const chartData = data.months.map((m, i) => ({ label: m.label, value: mCfg.get(m, i) })).slice(rangeStart);
-  const windowSpan = `${data.months[rangeStart].label} – ${data.months[12].label}`;
-  const trendTitle = cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
+  const liveDaily = {
+    gaUsers: gaLive ? gaLive.byDate.map((r) => ({ label: dayLabel(r.date), value: r.users })) : null,
+    gscClicks: gscLive ? gscLive.byDate.map((r) => ({ label: dayLabel(r.date), value: r.clicks })) : null,
+  };
+  const isLiveMetric = liveMode && !!liveDaily[activeMetric];
+  const chartData = isLiveMetric
+    ? liveDaily[activeMetric]
+    : data.months.map((m, i) => ({ label: m.label, value: mCfg.get(m, i) })).slice(rangeStart);
+  const windowSpan = isLiveMetric ? "last 28 days · daily · live" : `${data.months[rangeStart].label} – ${data.months[12].label}`;
+  const trendTitle = isLiveMetric ? "Daily trend" : cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
 
   const movers = [...tracking]
     .map((t) => ({ ...t, change: t.stats.d30 ?? t.stats.life ?? 0 }))
@@ -108,6 +124,8 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
     summary.push(`Business profiles were seen ${fmt(profileViewsSeries[12])} times across ${profileSources.join(", ")} — ${d >= 0 ? "up" : "down"} ${Math.abs(d).toFixed(0)}% vs ${cmp} month${cmp > 1 ? "s" : ""} ago.`);
   }
   if (I.gbp) summary.push(`Customers took ${fmt(cur.gbp.calls + cur.gbp.directions + cur.gbp.websiteClicks)} actions this month — calls, directions and website visits.`);
+  if (gaLive) summary.push(`The website drew ${fmt(gaLive.totals.users)} users in the last 28 days (live Google Analytics).`);
+  if (gscLive) summary.push(`Google Search sent ${fmt(gscLive.totals.clicks)} clicks from ${fmt(gscLive.totals.impressions)} impressions in the last 28 days.`);
   if (tracking.length) summary.push(`${top3} of ${tracking.length} tracked keywords rank in Google's top 3${top3 - top3Prev > 0 ? `, ${top3 - top3Prev} more than ${cmp} month${cmp > 1 ? "s" : ""} ago` : ""}.`);
 
   const cmpPicker = (
@@ -127,8 +145,6 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   return (
     <div className="ll-fade space-y-5">
-      {/* live GA4 + Search Console (when connected in Data sources) */}
-      <GoogleLiveData project={project} accent={accent} />
       {/* the comparison picker must always be reachable — standalone when the insight strip is empty */}
       {summary.length === 0 && <div className="flex">{cmpPicker}</div>}
       {/* insight strip */}
@@ -159,40 +175,74 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         ) : (
           <NotConnectedCard icon={Eye} label="Profile views" hint="Connect Google Business Profile, Bing Places or Apple Maps in Project settings → Data sources." />
         ))}
-        {W.gbp.calls && ((anyProfile || (I.ga && !liveMode)) ? (
+        {W.gbp.calls && (anyProfile ? (
           <StatCard icon={Phone} label="Phone calls" source={[anyProfile && "PROFILES", I.ga && "GA4"].filter(Boolean).join("+")} accent={accent}
+            value={fmt(callsSeries[12])} pct={pctDelta(callsSeries[12], callsSeries[12 - cmp])}
+            spark={callsSeries} sub="profiles + call events" />
+        ) : liveMode && gaLive && liveCallEvt ? (
+          <StatCard icon={Phone} label="Phone calls" source="GA4" accent={accent}
+            value={fmt(liveCallEvt.value)} pct={halfDelta(liveCallEvt.series)}
+            spark={liveCallEvt.series} sub="call events · last 28 days" />
+        ) : !liveMode && I.ga ? (
+          <StatCard icon={Phone} label="Phone calls" source="GA4" accent={accent}
             value={fmt(callsSeries[12])} pct={pctDelta(callsSeries[12], callsSeries[12 - cmp])}
             spark={callsSeries} sub="profiles + call events" />
         ) : (
           <NotConnectedCard icon={Phone} label="Phone calls" hint="Syncs from business profiles and GA4 call events once connected." />
         ))}
-        {W.ga.users && (I.ga ? (!liveMode && (
+        {W.ga.users && (liveMode ? (gaLive ? (
+          <StatCard icon={Users} label="Website users" source="GA4" accent={accent}
+            value={fmt(gaLive.totals.users)} pct={halfDelta(gaSeries("users"))}
+            spark={gaSeries("users")} sub="last 28 days · live" />
+        ) : I.ga ? (
+          <Card className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
+        ) : (
+          <NotConnectedCard icon={Users} label="Website users" hint="Connect Google Analytics 4 in Project settings → Data sources." />
+        )) : I.ga ? (
           <StatCard icon={Users} label="Website users" source="GA4" accent={accent}
             value={fmt(cur.ga.users)} pct={pctDelta(cur.ga.users, prev.ga.users)}
             spark={data.months.map((m) => m.ga.users)} />
-        )) : (
+        ) : (
           <NotConnectedCard icon={Users} label="Website users" hint="Connect Google Analytics 4 in Project settings → Data sources." />
         ))}
-        {W.gsc.clicks && (I.gsc ? (!liveMode && (
+        {W.gsc.clicks && (liveMode ? (gscLive ? (
+          <StatCard icon={MousePointerClick} label="Search clicks" source="GSC" accent={accent}
+            value={fmt(gscLive.totals.clicks)} pct={halfDelta(gscSeries("clicks"))}
+            spark={gscSeries("clicks")} sub="last 28 days · live" />
+        ) : I.gsc ? (
+          <Card className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
+        ) : (
+          <NotConnectedCard icon={MousePointerClick} label="Search clicks" hint="Connect Google Search Console in Project settings → Data sources." />
+        )) : I.gsc ? (
           <StatCard icon={MousePointerClick} label="Search clicks" source="GSC" accent={accent}
             value={fmt(cur.gsc.clicks)} pct={pctDelta(cur.gsc.clicks, prev.gsc.clicks)}
             spark={data.months.map((m) => m.gsc.clicks)} />
-        )) : (
+        ) : (
           <NotConnectedCard icon={MousePointerClick} label="Search clicks" hint="Connect Google Search Console in Project settings → Data sources." />
         ))}
         {W.ranks.insights && (tracking.length > 0 ? (<>
           <StatCard icon={Target} label="Avg. rank position" source="Ranks" accent={accent}
-            value={"#" + avgNow.toFixed(1)} pct={avgPrev != null ? pctDelta(avgNow, avgPrev) : null} invert
+            value={avgNow != null ? "#" + avgNow.toFixed(1) : "—"} pct={avgPrev != null && avgNow != null ? pctDelta(avgNow, avgPrev) : null} invert
             spark={LABELS.map((_, i) => avgPosDaysAgo(tracking, (12 - i) * 30)).filter((v) => v != null)} />
           <StatCard icon={Target} label="Keywords in top 3" source="Ranks" accent={accent}
             value={top3} pct={top3 - top3Prev} deltaSuffix="" sub="vs comparison" />
         </>) : (
           <NotConnectedCard icon={Target} label="Keyword rankings" hint="Track keywords in Website Rank Tracking to see ranking insights here." />
         ))}
+        {liveMode && gaLive && gaLive.events?.[0] && (
+          <StatCard icon={Zap} label={gaLive.events[0].name} source="GA4" accent={accent}
+            value={fmt(gaLive.events[0].value)} pct={halfDelta(gaLive.events[0].series)}
+            spark={gaLive.events[0].series} sub="top event · last 28 days" />
+        )}
         {!liveMode && I.ga && W.ga.events && (
           <StatCard icon={Zap} label={topEvents[0]?.name || "events"} source="GA4" accent={accent}
             value={fmt(topEvents[0]?.series[12])} pct={pctDelta(topEvents[0]?.series[12], topEvents[0]?.series[12 - cmp])}
             spark={topEvents[0]?.series} sub="top event" />
+        )}
+        {liveMode && gaLive && W.ga.conversions && (
+          <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
+            value={fmt(gaLive.totals.conversions)} pct={halfDelta(gaSeries("conversions"))}
+            spark={gaSeries("conversions")} sub="last 28 days · live" />
         )}
         {!liveMode && I.ga && W.ga.conversions && (
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
@@ -207,7 +257,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="ll-display text-[15px] font-semibold">{trendTitle}</div>
-            <div className="ll-mono text-[11px] text-gray-400">{windowSpan} · {chartData.length} month{chartData.length > 1 ? "s" : ""}</div>
+            <div className="ll-mono text-[11px] text-gray-400">{windowSpan}{isLiveMetric ? "" : ` · ${chartData.length} month${chartData.length > 1 ? "s" : ""}`}</div>
           </div>
           <div className="flex flex-wrap gap-1.5 no-print">
             {Object.entries(METRICS).filter(([, m]) => m.show).map(([key, m]) => (
@@ -224,12 +274,8 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         {!anyMetric && (
           <div className="flex h-[260px] flex-col items-center justify-center gap-1.5 text-center">
             <Activity size={20} className="text-gray-300" />
-            <div className="text-[13px] font-semibold text-gray-400">No monthly trend sources yet</div>
-            <div className="max-w-[380px] text-[11.5px] text-gray-400">
-              {(I.ga || I.gsc)
-                ? "Daily Google trends are in the live section above. Business-profile and keyword trends appear here once those sources sync."
-                : "Connect business profiles, Google Analytics or Search Console in Project settings → Data sources, or track keywords — trends appear here as sources sync."}
-            </div>
+            <div className="text-[13px] font-semibold text-gray-400">No trend sources yet</div>
+            <div className="max-w-[380px] text-[11.5px] text-gray-400">Connect business profiles, Google Analytics or Search Console in Project settings → Data sources, or track keywords — trends appear here as sources sync.</div>
           </div>
         )}
         {anyMetric && <ResponsiveContainer width="100%" height={260}>
@@ -290,6 +336,22 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
                   </span>
                 </div>
               ))}
+            </div>
+          </Card>
+        ) : liveMode && gaLive ? (
+          <Card className="p-5">
+            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · last 28 days · live</span></div>
+            <div className="space-y-2">
+              {gaLive.events.slice(0, 4).map((e, i) => (
+                <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
+                  <span className="ll-mono truncate text-[12.5px] text-gray-700">{e.name}</span>
+                  <span className="flex items-center gap-2.5">
+                    <span className="ll-display text-[15px] font-semibold">{fmt(e.value)}</span>
+                    {halfDelta(e.series) != null && <Delta pct={halfDelta(e.series)} />}
+                  </span>
+                </div>
+              ))}
+              {!gaLive.events.length && <div className="py-6 text-center text-[11.5px] text-gray-400">No key events recorded in this window.</div>}
             </div>
           </Card>
         ) : !I.ga ? (
@@ -515,9 +577,24 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const [rerunResult, setRerunResult] = useState(null); // { ok: number, ts: number } | { error: string }
 
   const cities = [...new Set(tracking.map((t) => cityLabel(t.city)))];
+  /* column sorting — defaults to best current positions on top */
+  const [sort, setSort] = useState({ key: "cur", dir: "asc" });
+  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : t.stats[sort.key]);
   const rows = tracking.filter((t) =>
     (cityFilter === "All cities" || cityLabel(t.city) === cityFilter) &&
     (!search.trim() || t.keyword.toLowerCase().includes(search.trim().toLowerCase()))
+  ).sort((a, b) => {
+    const va = sortVal(a), vb = sortVal(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1; // unscanned rows sink to the bottom either direction
+    if (vb == null) return -1;
+    return (va < vb ? -1 : va > vb ? 1 : 0) * (sort.dir === "asc" ? 1 : -1);
+  });
+  const sortBy = (key, defDir = "asc") => setSort((s) => ({ key, dir: s.key === key ? (s.dir === "asc" ? "desc" : "asc") : defDir }));
+  const SortTh = ({ k, defDir = "asc", children, className = "px-3 py-3" }) => (
+    <th className={className + " cursor-pointer select-none font-semibold hover:text-gray-600"} onClick={() => sortBy(k, defDir)}>
+      <span className="inline-flex items-center gap-0.5">{children}{sort.key === k && <span className="text-[9px]" style={{ color: accent }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}</span>
+    </th>
   );
 
   const toggleSelect = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -542,18 +619,20 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         });
         if (res.ok) {
           const data = await res.json();
-          updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 60 })); // null = not in top 100
+          updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null })); // 101 = not in top 100
           live = true;
         } else if (res.status !== 503) throw new Error(await res.text());
-      } catch { /* API server down / unconfigured → demo fallback below */ }
+      } catch { /* API server down / unconfigured → handled below */ }
 
       if (!updates) {
+        /* REAL projects never fabricate positions — surface the failure honestly */
+        if (project.demoMode === false) throw new Error("DataForSEO isn't reachable or configured — no positions were changed. Check Company Settings → API settings and that the API server is running.");
         /* DEMO fallback: deterministic-ish nudge, clearly labeled in the result toast */
         await new Promise((r) => setTimeout(r, 800 + Math.random() * 1200));
         updates = entries.map((e) => {
           const entry = tracking.find((t) => t.id === e.id);
           const shift = Math.round((Math.random() - 0.45) * 3);
-          return { id: e.id, newPos: Math.max(1, Math.min(60, entry.stats.cur + shift)) };
+          return { id: e.id, newPos: Math.max(1, Math.min(60, (entry.stats.cur ?? 30) + shift)) };
         });
       }
       onRerun?.(updates);
@@ -566,10 +645,13 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     }
   };
 
-  const avg = rows.length ? rows.reduce((a, t) => a + t.stats.cur, 0) / rows.length : 0;
-  const top3 = rows.filter((t) => t.stats.cur <= 3).length;
-  const top10 = rows.filter((t) => t.stats.cur <= 10).length;
-  const top20 = rows.filter((t) => t.stats.cur <= 20).length;
+  /* real projects can hold entries that were never scanned (cur == null) —
+     stats only average what actually has positions */
+  const ranked = rows.filter((t) => t.stats.cur != null);
+  const avg = ranked.length ? ranked.reduce((a, t) => a + t.stats.cur, 0) / ranked.length : 0;
+  const top3 = ranked.filter((t) => t.stats.cur <= 3).length;
+  const top10 = ranked.filter((t) => t.stats.cur <= 10).length;
+  const top20 = ranked.filter((t) => t.stats.cur <= 20).length;
   const improved30 = rows.filter((t) => (t.stats.d30 ?? 0) > 0).length;
   const declined30 = rows.filter((t) => (t.stats.d30 ?? 0) < 0).length;
   const dist = [
@@ -584,7 +666,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       {W.insights && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />
-          <StatCard icon={Target} label="Avg. position" source="Ranks" accent={accent} value={rows.length ? "#" + avg.toFixed(1) : "–"} />
+          <StatCard icon={Target} label="Avg. position" source="Ranks" accent={accent} value={ranked.length ? "#" + avg.toFixed(1) : "–"} sub={ranked.length < rows.length ? `${rows.length - ranked.length} not scanned yet` : ""} />
           <StatCard icon={Target} label="Top 3" source="Ranks" accent={accent} value={top3} sub={rows.length ? `${Math.round((top3 / rows.length) * 100)}% of tracked` : ""} />
           <StatCard icon={Target} label="Top 10" source="Ranks" accent={accent} value={top10} sub={rows.length ? `${Math.round((top10 / rows.length) * 100)}% of tracked` : ""} />
           <StatCard icon={Target} label="Top 20" source="Ranks" accent={accent} value={top20} sub={rows.length ? `${Math.round((top20 / rows.length) * 100)}% of tracked` : ""} />
@@ -660,13 +742,13 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     <input type="checkbox" checked={allSelected} onChange={toggleAll}
                       className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
                   </th>
-                  <th className="px-5 py-3 font-semibold">Keyword</th>
-                  <th className="px-3 py-3 font-semibold">Start</th>
-                  <th className="px-3 py-3 font-semibold">Current</th>
-                  <th className="px-3 py-3 font-semibold">1d</th>
-                  <th className="px-3 py-3 font-semibold">7d</th>
-                  <th className="px-3 py-3 font-semibold">30d</th>
-                  <th className="px-3 py-3 font-semibold">Lifetime</th>
+                  <SortTh k="keyword" className="px-5 py-3">Keyword</SortTh>
+                  <SortTh k="start">Start</SortTh>
+                  <SortTh k="cur">Current</SortTh>
+                  <SortTh k="d1" defDir="desc">1d</SortTh>
+                  <SortTh k="d7" defDir="desc">7d</SortTh>
+                  <SortTh k="d30" defDir="desc">30d</SortTh>
+                  <SortTh k="life" defDir="desc">Lifetime</SortTh>
                   <th className="px-3 py-3 font-semibold">Trend</th>
                   <th className="px-3 py-3 font-semibold">Ranking URL</th>
                   <th className="px-3 py-3 no-print"></th>
@@ -1093,6 +1175,17 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
     series: e.series.slice(a, b + 1),
   }));
 
+  /* Top search queries sorting — click a column header to sort */
+  const [qSort, setQSort] = useState({ key: "clicks", dir: "desc" });
+  const qVal = (q) => (qSort.key === "query" ? q.query : qSort.key === "ctr" ? q.clicks / Math.max(1, q.impressions) : q[qSort.key]);
+  const sortedTopQueries = [...data.topQueries].sort((a, b) => { const va = qVal(a), vb = qVal(b); return (va < vb ? -1 : va > vb ? 1 : 0) * (qSort.dir === "asc" ? 1 : -1); });
+  const qSortBy = (key, defDir) => setQSort((s) => ({ key, dir: s.key === key ? (s.dir === "asc" ? "desc" : "asc") : defDir }));
+  const QTh = ({ k, defDir = "desc", children, className = "px-3 py-3" }) => (
+    <th className={className + " cursor-pointer select-none font-semibold hover:text-gray-600"} onClick={() => qSortBy(k, defDir)}>
+      <span className="inline-flex items-center gap-0.5">{children}{qSort.key === k && <span className="text-[9px]" style={{ color: accent }}>{qSort.dir === "asc" ? "▲" : "▼"}</span>}</span>
+    </th>
+  );
+
   /* GSC rates over the range */
   const clicksSeg = tot((m) => m.gsc.clicks), imprSeg = tot((m) => m.gsc.impressions);
   const ctrNow = (clicksSeg / Math.max(1, imprSeg)) * 100;
@@ -1258,15 +1351,15 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
               <table className="w-full text-left text-[13px]">
                 <thead>
                   <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
-                    <th className="px-5 py-3 font-semibold">Query</th>
-                    <th className="px-3 py-3 font-semibold">Clicks</th>
-                    <th className="px-3 py-3 font-semibold">Impressions</th>
-                    <th className="px-3 py-3 font-semibold">CTR</th>
-                    <th className="px-5 py-3 font-semibold">Position</th>
+                    <QTh k="query" defDir="asc" className="px-5 py-3">Query</QTh>
+                    <QTh k="clicks">Clicks</QTh>
+                    <QTh k="impressions">Impressions</QTh>
+                    <QTh k="ctr">CTR</QTh>
+                    <QTh k="position" defDir="asc" className="px-5 py-3">Position</QTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.topQueries.map((q, i) => (
+                  {sortedTopQueries.map((q, i) => (
                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
                       <td className="px-5 py-3 font-medium text-gray-800">{q.query}</td>
                       <td className="ll-mono px-3 py-3">{fmt(q.clicks)}</td>

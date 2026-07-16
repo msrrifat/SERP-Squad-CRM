@@ -22,7 +22,7 @@ import { isoDate } from "../../lib/months.jsx";
 export function snapshot(client, project) {
   const kws = [...new Set(project.tracking.map((t) => t.keyword))];
   const data = genSiteData(project, kws, client.companyName);
-  const tracking = project.tracking.map(hydrate);
+  const tracking = project.tracking.map((t) => hydrate(t, project.demoMode !== false));
   return { client, project, data, tracking, kws };
 }
 

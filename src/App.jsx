@@ -249,7 +249,7 @@ export default function App() {
   };
   const access = isAdmin || roleAuto === "all" ? null : effAccessFor(project);
   const hasAccess = (k) => !access || !!access[k];
-  const tracking = useMemo(() => (project ? project.tracking.map(hydrate) : []), [project?.tracking]);
+  const tracking = useMemo(() => (project ? project.tracking.map((t) => hydrate(t, project.demoMode !== false)) : []), [project?.tracking, project?.demoMode]);
   const trackedKeywords = useMemo(() => (project ? [...new Set(project.tracking.map((t) => t.keyword))] : []), [project?.tracking]);
   const monthKey = useMonthGrid();
   const locSig = (p) => (p?.locations || []).map((l) => l.id + l.name + Object.values(l.integrations || {}).join("")).join("|");
@@ -593,7 +593,7 @@ export default function App() {
   const applyRerun = (updates) => {
     updateProject({ tracking: project.tracking.map((t) => {
       const u = updates.find((x) => x.id === t.id);
-      return u ? { ...t, extraPositions: [...(t.extraPositions || []), u.newPos] } : t;
+      return u ? { ...t, extraPositions: [...(t.extraPositions || []), u.newPos], ...(u.url ? { rankUrl: u.url } : {}) } : t;
     }) });
     logActivity(`Re-checked ${updates.length} keyword${updates.length > 1 ? "s" : ""}`, project?.name);
   };
@@ -638,7 +638,7 @@ export default function App() {
       : null;
     const clientInfo = { companyName: activeClient?.companyName || activeClient?.name, address: activeClient?.address };
     const clientProjects = (activeClient?.projects || []).map((p) => {
-      const tr = p.tracking.map(hydrate);
+      const tr = p.tracking.map((t) => hydrate(t, p.demoMode !== false));
       const kws = [...new Set(p.tracking.map((t) => t.keyword))];
       return { project: p, tracking: tr, data: genSiteData(p, kws, activeClient.companyName) };
     });

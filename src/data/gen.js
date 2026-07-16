@@ -240,12 +240,16 @@ export function avgPosDaysAgo(tracking, daysAgo) {
   return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
-export function hydrate(entry) {
+export function hydrate(entry, demo = true) {
   // extraPositions holds re-check results persisted on the tracking entry in state,
-  // so they survive rehydration (keyword add/delete, project switch, report builds)
-  const positions = [...genPositions(entry), ...(entry.extraPositions || [])];
+  // so they survive rehydration (keyword add/delete, project switch, report builds).
+  // REAL projects (demo=false) show ONLY genuinely scanned positions — the
+  // deterministic mock history is demo-mode only, never mixed into live ranks.
+  const positions = demo ? [...genPositions(entry), ...(entry.extraPositions || [])] : [...(entry.extraPositions || [])];
   const r = mulberry32(hashStr(entry.id + entry.keyword + "url"));
-  const url = "https://" + entry.domain + PAGE_SLUGS[Math.floor(r() * 3)];
+  const url = demo
+    ? "https://" + entry.domain + PAGE_SLUGS[Math.floor(r() * 3)]
+    : entry.rankUrl || "https://" + entry.domain; // real: the URL DataForSEO actually found ranking
   return { ...entry, positions, url, stats: trackStats(positions) };
 }
 

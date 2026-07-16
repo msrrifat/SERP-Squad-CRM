@@ -12,13 +12,46 @@ import { fmt, pctDelta } from "../../lib/format.jsx";
 
 const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
 /* period-over-period delta from a daily series: second half vs first half */
-const halfDelta = (series) => {
+export const halfDelta = (series) => {
   if (!series || series.length < 4) return null;
   const h = Math.floor(series.length / 2);
   const a = series.slice(0, h).reduce((s, v) => s + v, 0);
   const b = series.slice(h).reduce((s, v) => s + v, 0);
   return pctDelta(b, a);
 };
+/* GA4 dates come as "20260716", GSC as "2026-07-16" */
+export const dayLabel = (d) => (String(d).length === 8 ? String(d).slice(4, 6) + "/" + String(d).slice(6, 8) : String(d || "").slice(5));
+
+/* Self-fetching live GA4 + Search Console for the project's FIXED site/property.
+   Shared by GoogleLiveData (full dashboard sections) and OverviewView (KPI
+   cards), so both always show the same numbers. */
+export function useGoogleLive(project, days = 28) {
+  const conn = project?.google || {};
+  const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
+  const [ga4, setGa4] = useState(null);
+
+  const loadGsc = async (site, d) => {
+    setGsc({ busy: true });
+    try {
+      const r = await fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connectionId: conn.connectionId, siteUrl: site, days: d }) });
+      const j = await r.json(); setGsc(r.ok ? j : { err: j.detail || j.error });
+    } catch (e) { setGsc({ err: String(e?.message || e) }); }
+  };
+  const loadGa4 = async (propertyId, d) => {
+    setGa4({ busy: true });
+    try {
+      const r = await fetch("/api/google/ga4/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connectionId: conn.connectionId, propertyId, days: d }) });
+      const j = await r.json(); setGa4(r.ok ? j : { err: j.detail || j.error });
+    } catch (e) { setGa4({ err: String(e?.message || e) }); }
+  };
+  useEffect(() => { if (conn.connectionId && conn.gscSite) loadGsc(conn.gscSite, days); else setGsc(null); }, [conn.connectionId, conn.gscSite, days]); // eslint-disable-line
+  useEffect(() => { if (conn.connectionId && conn.ga4Property) loadGa4(conn.ga4Property, days); else setGa4(null); }, [conn.connectionId, conn.ga4Property, days]); // eslint-disable-line
+
+  const hasGa = !!(conn.connectionId && conn.ga4Property);
+  const hasGsc = !!(conn.connectionId && conn.gscSite);
+  const refresh = () => { if (hasGa) loadGa4(conn.ga4Property, days); if (hasGsc) loadGsc(conn.gscSite, days); };
+  return { ga4, gsc, hasGa, hasGsc, connected: hasGa || hasGsc, refresh };
+}
 
 /* Reusable Google connector — the real OAuth flow + Search Console site & GA4
    property pickers. Used in the Live Analytics view AND in Project settings →
@@ -129,37 +162,29 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
    selected in Data sources. Self-fetching; renders nothing until connected.
    Dropped straight into Overview + Website Performance dashboards. */
 export function GoogleLiveData({ project, accent }) {
-  const conn = project.google || {};
-  const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
-  const [ga4, setGa4] = useState(null);
+  /* timeline: live pulls honor the selected window (GSC data lags ~2 days
+     and caps at 90; GA4 follows the same options for comparable windows) */
+  const [days, setDays] = useState(28);
+  const { ga4, gsc, hasGa, hasGsc, connected, refresh } = useGoogleLive(project, days);
 
-  const loadGsc = async (site) => {
-    setGsc({ busy: true });
-    try {
-      const r = await fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connectionId: conn.connectionId, siteUrl: site, days: 28 }) });
-      const d = await r.json(); setGsc(r.ok ? d : { err: d.detail || d.error });
-    } catch (e) { setGsc({ err: String(e?.message || e) }); }
-  };
-  const loadGa4 = async (propertyId) => {
-    setGa4({ busy: true });
-    try {
-      const r = await fetch("/api/google/ga4/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connectionId: conn.connectionId, propertyId, days: 28 }) });
-      const d = await r.json(); setGa4(r.ok ? d : { err: d.detail || d.error });
-    } catch (e) { setGa4({ err: String(e?.message || e) }); }
-  };
-  useEffect(() => { if (conn.connectionId && conn.gscSite) loadGsc(conn.gscSite); }, [conn.connectionId, conn.gscSite]); // eslint-disable-line
-  useEffect(() => { if (conn.connectionId && conn.ga4Property) loadGa4(conn.ga4Property); }, [conn.connectionId, conn.ga4Property]); // eslint-disable-line
+  /* Top search queries sorting — click a column to sort, click again to flip */
+  const [qSort, setQSort] = useState({ key: "clicks", dir: "desc" });
+  const qSortBy = (key, defDir) => setQSort((s) => ({ key, dir: s.key === key ? (s.dir === "asc" ? "desc" : "asc") : defDir }));
+  const QTh = ({ k, defDir = "desc", children, className = "px-3 py-3" }) => (
+    <th className={className + " cursor-pointer select-none font-semibold hover:text-gray-600"} onClick={() => qSortBy(k, defDir)}>
+      <span className="inline-flex items-center gap-0.5">{children}{qSort.key === k && <span className="text-[9px]" style={{ color: accent }}>{qSort.dir === "asc" ? "▲" : "▼"}</span>}</span>
+    </th>
+  );
+  const sortedQueries = [...(gsc?.queries || [])].sort((a, b) => {
+    const va = qSort.key === "query" ? a.query : a[qSort.key], vb = qSort.key === "query" ? b.query : b[qSort.key];
+    return (va < vb ? -1 : va > vb ? 1 : 0) * (qSort.dir === "asc" ? 1 : -1);
+  });
 
-  const hasGa = conn.connectionId && conn.ga4Property;
-  const hasGsc = conn.connectionId && conn.gscSite;
-  if (!conn.connectionId || (!hasGsc && !hasGa)) return null;
+  if (!connected) return null;
   const busy = ga4?.busy || gsc?.busy;
-  const refresh = () => { if (hasGa) loadGa4(conn.ga4Property); if (hasGsc) loadGsc(conn.gscSite); };
 
-  /* GA4 dates come as "20260716", GSC as "2026-07-16" */
-  const day = (d) => (String(d).length === 8 ? d.slice(4, 6) + "/" + d.slice(6, 8) : String(d || "").slice(5));
-  const gaDaily = (ga4?.byDate || []).map((r) => ({ label: day(r.date), Users: r.users, Sessions: r.sessions }));
-  const gscDaily = (gsc?.byDate || []).map((r) => ({ label: day(r.date), Clicks: r.clicks, Impressions: r.impressions }));
+  const gaDaily = (ga4?.byDate || []).map((r) => ({ label: dayLabel(r.date), Users: r.users, Sessions: r.sessions }));
+  const gscDaily = (gsc?.byDate || []).map((r) => ({ label: dayLabel(r.date), Clicks: r.clicks, Impressions: r.impressions }));
   const channels = ga4?.channels || [];
   const sources = ga4?.sources || [];
   const events = ga4?.events || [];
@@ -170,13 +195,21 @@ export function GoogleLiveData({ project, accent }) {
 
   return (
     <div className="space-y-5">
-      {/* header */}
-      <div className="flex items-center gap-2">
+      {/* header — with the timeline selector so different windows can be compared */}
+      <div className="flex flex-wrap items-center gap-2">
         <div className="ll-display text-[15px] font-semibold text-gray-800">Google — live data</div>
         <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600">Live</span>
-        <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">Last 28 days</span>
         {busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
-        <button onClick={refresh} className="no-print ml-auto flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
+        <span className="ml-auto flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1 no-print">
+          <span className="px-1.5 text-[10.5px] font-medium text-gray-400">Last</span>
+          {[7, 28, 90].map((d) => (
+            <button key={d} onClick={() => setDays(d)} className="ll-mono rounded-lg px-2 py-0.5 text-[11.5px] font-semibold"
+              style={days === d ? { background: accent, color: "#fff" } : { color: "var(--chip-fg, #6B7280)" }}>
+              {d}d
+            </button>
+          ))}
+        </span>
+        <button onClick={refresh} className="no-print flex items-center gap-1 text-[11px] font-semibold" style={{ color: accent }}>
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
@@ -195,7 +228,7 @@ export function GoogleLiveData({ project, accent }) {
 
       {/* ---- GA4: same layout as the designed Website Performance dashboard ---- */}
       {ga4?.live && (<>
-        <SectionHeader icon={BarChart3} title="Website traffic & conversions" sub="Google Analytics 4 · last 28 days" accent={accent} />
+        <SectionHeader icon={BarChart3} title="Website traffic & conversions" sub={`Google Analytics 4 · last ${days} days`} accent={accent} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />
           <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />
@@ -244,7 +277,7 @@ export function GoogleLiveData({ project, accent }) {
         <div className="grid gap-4 lg:grid-cols-2">
           {sources.length > 0 && (
             <Card className="p-5">
-              <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">sessions · last 28 days</span></div>
+              <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">{`sessions · last ${days} days`}</span></div>
               <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines (organic &amp; paid), social, direct and AI assistants</div>
               <div className="space-y-2.5">
                 {sources.map((x, i) => (
@@ -264,7 +297,7 @@ export function GoogleLiveData({ project, accent }) {
             <Card className="overflow-hidden">
               <div className="border-b border-gray-100 px-5 py-4">
                 <div className="ll-display text-[15px] font-semibold">Event counts</div>
-                <div className="text-[11px] text-gray-400">GA4 events · last 28 days</div>
+                <div className="text-[11px] text-gray-400">{`GA4 events · last ${days} days`}</div>
               </div>
               <table className="w-full text-left text-[13px]">
                 <thead>
@@ -292,7 +325,7 @@ export function GoogleLiveData({ project, accent }) {
 
         {topPages.length > 0 && (
           <Card className="overflow-hidden">
-            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top landing pages <span className="text-xs font-normal text-gray-400">last 28 days</span></div>
+            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top landing pages <span className="text-xs font-normal text-gray-400">last {days} days</span></div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[440px] text-left text-[13px]">
                 <thead>
@@ -319,7 +352,7 @@ export function GoogleLiveData({ project, accent }) {
 
       {/* ---- Search Console: same layout as the designed dashboard ---- */}
       {gsc?.live && (<>
-        <SectionHeader icon={Search} title="Organic search visibility" sub="Google Search Console · last 28 days" accent={accent} />
+        <SectionHeader icon={Search} title="Organic search visibility" sub={`Google Search Console · last ${days} days`} accent={accent} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(gsc.totals.clicks)} pct={halfDelta((gsc.byDate || []).map((r) => r.clicks))} spark={(gsc.byDate || []).map((r) => r.clicks)} />
           <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(gsc.totals.impressions)} pct={halfDelta((gsc.byDate || []).map((r) => r.impressions))} spark={(gsc.byDate || []).map((r) => r.impressions)} />
@@ -343,20 +376,20 @@ export function GoogleLiveData({ project, accent }) {
         </Card>
         {gsc.queries.length > 0 && (
           <Card className="overflow-hidden">
-            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top search queries <span className="text-xs font-normal text-gray-400">last 28 days</span></div>
+            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top search queries <span className="text-xs font-normal text-gray-400">last {days} days</span></div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] text-left text-[13px]">
                 <thead>
                   <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
-                    <th className="px-5 py-3 font-semibold">Query</th>
-                    <th className="px-3 py-3 font-semibold">Clicks</th>
-                    <th className="px-3 py-3 font-semibold">Impressions</th>
-                    <th className="px-3 py-3 font-semibold">CTR</th>
-                    <th className="px-5 py-3 font-semibold">Position</th>
+                    <QTh k="query" defDir="asc" className="px-5 py-3">Query</QTh>
+                    <QTh k="clicks">Clicks</QTh>
+                    <QTh k="impressions">Impressions</QTh>
+                    <QTh k="ctr">CTR</QTh>
+                    <QTh k="position" defDir="asc" className="px-5 py-3">Position</QTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {gsc.queries.map((q) => (
+                  {sortedQueries.map((q) => (
                     <tr key={q.query} className="border-b border-gray-50 hover:bg-gray-50/60">
                       <td className="max-w-[280px] truncate px-5 py-3 font-medium text-gray-800">{q.query}</td>
                       <td className="ll-mono px-3 py-3">{fmt(q.clicks)}</td>

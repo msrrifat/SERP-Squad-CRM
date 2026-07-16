@@ -216,7 +216,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   const [range, setRange] = useState(DEFAULT_RANGE);
   const project = allowed.find((p) => p.id === pid) || allowed[0];
 
-  const tracking = useMemo(() => (project ? project.tracking.map(hydrate) : []), [project?.tracking]);
+  const tracking = useMemo(() => (project ? project.tracking.map((t) => hydrate(t, project.demoMode !== false)) : []), [project?.tracking, project?.demoMode]);
   const trackedKeywords = useMemo(() => (project ? [...new Set(project.tracking.map((t) => t.keyword))] : []), [project?.tracking]);
   const monthKey = useMonthGrid();
   const locSig = (p) => (p?.locations || []).map((l) => l.id + l.name + Object.values(l.integrations || {}).join("")).join("|");

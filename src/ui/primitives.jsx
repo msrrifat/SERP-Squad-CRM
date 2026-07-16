@@ -102,7 +102,7 @@ export function RankChip({ pos, muted = false }) {
     : pos <= 3 ? { bg: "#DCFCE7", fg: "#166534" } : pos <= 10 ? { bg: "#FEF9C3", fg: "#854D0E" } : { bg: "#F1F5F9", fg: "#475569" };
   return (
     <span className="ll-mono inline-flex min-w-10 items-center justify-center rounded-md px-2 py-0.5 text-sm font-semibold" style={{ background: tone.bg, color: tone.fg }}>
-      #{pos}
+      {pos > 100 ? "100+" : "#" + pos}
     </span>
   );
 }
