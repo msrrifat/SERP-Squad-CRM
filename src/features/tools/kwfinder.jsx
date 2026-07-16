@@ -111,7 +111,7 @@ function LocationPick({ value, onChange }) {
   );
 }
 
-export function KeywordFinderView({ company, clients = [], onAddToProject, accent }) {
+export function KeywordFinderView({ company, clients = [], onAddToProject, accent, onUpdateCompany = null, savedView = false, onExitSaved = null }) {
   const dfs = company.dfs;
   const dfsReady = !!(dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad"));
   const [mode, setMode] = useState("keyword"); // keyword | domain
@@ -137,9 +137,25 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
           dfs: dfsReady ? { login: dfs.login, password: dfs.password } : undefined }) });
       const d = await r.json();
       if (!r.ok) setErr(d.detail || d.error || `HTTP ${r.status}`);
-      else { setRes(d); setDetail(d.rows[0] || null); }
+      else {
+        setRes(d); setDetail(d.rows[0] || null);
+        /* every LIVE search is saved (last 100) — reopen it later from
+           "Saved keyword searches" without spending credits again */
+        if (d.live && onUpdateCompany) {
+          const rec = { id: "ks" + Date.now().toString(36), at: Date.now(), mode, seed: seed.trim(), locLabel: loc.label, locationName: loc.locationName, lang, live: true, rows: (d.rows || []).slice(0, 250) };
+          onUpdateCompany({ kwSearches: [rec, ...(company.kwSearches || [])].slice(0, 100) });
+        }
+      }
     } catch (e) { setErr("API server unreachable (npm run api) — keyword data flows through it. " + (e?.message || "")); }
     setBusy(false);
+  };
+  /* reopen a saved search — data comes from the stored copy, zero API cost */
+  const openSaved = (rec) => {
+    setMode(rec.mode); setSeed(rec.seed); setLang(rec.lang || "en");
+    setLoc({ label: rec.locLabel, locationName: rec.locationName, national: !String(rec.locationName).includes(",") });
+    setRes({ live: rec.live, mode: rec.mode, keyword: rec.seed, domain: rec.seed, locationName: rec.locationName, rows: rec.rows, fromSaved: true, savedAt: rec.at });
+    setDetail(rec.rows[0] || null); setSelected(new Set()); setSerp(null); setErr(null);
+    onExitSaved?.();
   };
   const loadDemo = () => {
     const rows = demoKeywords(seed.trim().toLowerCase(), !!loc.national);
@@ -174,6 +190,59 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
       {k ? <button onClick={() => setSortBy(k)} className="uppercase" style={sortBy === k ? { color: accent } : {}}>{children} ↓</button> : children}
     </th>
   );
+
+  /* ---- Saved keyword searches (last 100 live searches, zero-credit reopen) ---- */
+  if (savedView) {
+    const saved = company.kwSearches || [];
+    return (
+      <Card className="p-0">
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-5 py-4">
+          <div>
+            <div className="ll-display text-[15px] font-semibold">Saved keyword searches</div>
+            <div className="text-[11px] text-gray-400">Your last {saved.length} live search{saved.length === 1 ? "" : "es"} (max 100) — reopen any of them and analyze the full data again <b>without a new search or spending credits</b>.</div>
+          </div>
+          <button onClick={onExitSaved} className="ml-auto flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-bold text-white" style={{ background: accent }}>
+            <Search size={12} /> New search
+          </button>
+        </div>
+        {saved.length === 0 ? (
+          <div className="p-10 text-center text-[12px] text-gray-400">No saved searches yet — every live keyword or domain search is saved here automatically.</div>
+        ) : (
+          <div className="max-h-[620px] overflow-auto">
+            <table className="w-full min-w-[620px] text-left text-[12px]">
+              <thead className="sticky top-0 bg-gray-50">
+                <tr className="border-b border-gray-200 text-[9px] uppercase tracking-wide text-gray-400">
+                  <th className="px-4 py-2 font-semibold">Search</th>
+                  <th className="px-2 py-2 font-semibold">Type</th>
+                  <th className="px-2 py-2 font-semibold">Location</th>
+                  <th className="px-2 py-2 font-semibold">Keywords</th>
+                  <th className="px-2 py-2 font-semibold">When</th>
+                  <th className="px-4 py-2 font-semibold"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {saved.map((s) => (
+                  <tr key={s.id} className="cursor-pointer border-b border-gray-50 hover:bg-gray-50" onClick={() => openSaved(s)}>
+                    <td className="max-w-[220px] truncate px-4 py-2.5 font-semibold text-gray-800">{s.seed}</td>
+                    <td className="px-2 py-2.5"><span className="rounded bg-gray-100 px-1.5 py-px text-[9px] font-bold uppercase text-gray-500">{s.mode === "domain" ? "domain" : "keyword"}</span></td>
+                    <td className="max-w-[180px] truncate px-2 py-2.5 text-gray-500">{s.locLabel}</td>
+                    <td className="ll-mono px-2 py-2.5 text-gray-600">{(s.rows || []).length}</td>
+                    <td className="ll-mono px-2 py-2.5 text-[11px] text-gray-400">{new Date(s.at).toLocaleDateString()} {new Date(s.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                      <span className="flex items-center justify-end gap-1.5">
+                        <button onClick={() => openSaved(s)} className="rounded-md px-2 py-1 text-[10.5px] font-bold" style={{ background: accent + "14", color: accent }}>Open — no credits</button>
+                        <button onClick={() => onUpdateCompany?.({ kwSearches: (company.kwSearches || []).filter((x) => x.id !== s.id) })} className="rounded-md p-1 text-gray-300 hover:text-red-500"><X size={12} /></button>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -226,6 +295,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
               <span className="text-[12.5px] font-bold text-gray-800">{res.mode === "domain" ? res.domain : res.keyword}</span>
               <span className="text-[11px] text-gray-400">· {loc.label}</span>
               <span className={"rounded px-1.5 py-px text-[8.5px] font-bold uppercase " + (res.live ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>{res.live ? "live · DataForSEO" : "demo"}</span>
+              {res.fromSaved && <span className="rounded bg-sky-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-sky-700" title="Loaded from your saved searches — no credits were spent">saved · {new Date(res.savedAt).toLocaleDateString()}</span>}
               <span className="ml-auto flex items-center gap-2">
                 <button onClick={() => csvDownload(`keywords-${(seed || "kw").replace(/\W+/g, "-")}.csv`,
                   ["Keyword", "Volume", "CPC", "Competition", "KD", ...(res.mode === "domain" ? ["Rank", "URL"] : [])],

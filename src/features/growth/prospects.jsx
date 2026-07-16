@@ -185,17 +185,34 @@ export function ProspectList({ accent, growth, commit, emptyHint = null }) {
   const [note, setNote] = useState(null);
   const active = folders.find(([k]) => k === sel) || folders[0];
 
-  const patchContact = (id, patch) => commit({ contacts: contacts.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
-  const scrape = async (c) => {
-    if (!c.website) { setNote(`${c.name} has no website to scrape.`); return; }
-    setBusyId(c.id); setNote(null);
+  /* functional patch — bulk loops (scrape-all) commit against the freshest
+     contacts, never the render-time array, so earlier results are kept */
+  const patchContact = (id, patch) => commit((g) => ({ contacts: (g.contacts || []).map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+  const scrape = async (c, quiet = false) => {
+    if (!c.website) { if (!quiet) setNote(`${c.name} has no website to scrape.`); return false; }
+    setBusyId(c.id); if (!quiet) setNote(null);
+    let found = false;
     try {
       const r = await fetch("/api/scrape-email", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000), body: JSON.stringify({ website: c.website }) });
       const d = await r.json();
-      if (r.ok && d.emails?.length) patchContact(c.id, { email: d.emails[0], allEmails: d.emails, socials: d.socials || [] });
-      else setNote(r.ok ? `No public email found on ${c.website} — check the site's contact form.` : d.detail || "Scrape failed.");
-    } catch (e) { setNote("API server unreachable — email scraping runs there. " + (e?.message || "")); }
+      if (r.ok && d.emails?.length) { patchContact(c.id, { email: d.emails[0], allEmails: d.emails, socials: d.socials || [] }); found = true; }
+      else if (!quiet) setNote(r.ok ? `No public email found on ${c.website} — check the site's contact form.` : d.detail || "Scrape failed.");
+    } catch (e) { if (!quiet) setNote("API server unreachable — email scraping runs there. " + (e?.message || "")); }
     setBusyId(null);
+    return found;
+  };
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const scrapeAll = async () => {
+    const targets = list.filter((x) => !x.email && x.website);
+    if (!targets.length) { setNote("Every prospect with a website already has an email."); return; }
+    setBulkBusy(true); setNote(`Scraping ${targets.length} site${targets.length > 1 ? "s" : ""}…`);
+    let found = 0;
+    for (let i = 0; i < targets.length; i++) {
+      setNote(`Scraping ${i + 1}/${targets.length} — ${targets[i].name}…`);
+      if (await scrape(targets[i], true)) found++;
+    }
+    setNote(`Bulk scrape done — emails found on ${found} of ${targets.length} site${targets.length > 1 ? "s" : ""}.`);
+    setBulkBusy(false);
   };
 
   if (!folders.length) return (
@@ -223,9 +240,9 @@ export function ProspectList({ accent, growth, commit, emptyHint = null }) {
           <div className="ll-display text-[14px] font-semibold">{folderName}</div>
           <span className="text-[11px] text-gray-400">· {list.filter((c) => c.email).length}/{list.length} with email</span>
           <span className="ml-auto flex gap-2">
-            <button onClick={async () => { for (const c of list.filter((x) => !x.email && x.website)) await scrape(c); }}
-              className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white" style={{ background: accent }}>
-              <AtSign size={12} /> Scrape all missing emails
+            <button onClick={scrapeAll} disabled={bulkBusy}
+              className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-60" style={{ background: accent }}>
+              {bulkBusy ? <RefreshCw size={12} className="animate-spin" /> : <AtSign size={12} />} {bulkBusy ? "Scraping…" : "Scrape all missing emails"}
             </button>
             <button onClick={() => csvDownload(`prospects-${folderName}.csv`.replace(/[^\w.-]+/g, "-"),
               ["Business", "Address", "Phone", "Website", "Email", "Socials"],
@@ -273,8 +290,9 @@ export function ProspectList({ accent, growth, commit, emptyHint = null }) {
 export function GrowthView({ tab, setTab, company, onUpdateCompany, accent, aiConfig, placesKey, showTabs = true }) {
   const growth = company.growth || { contacts: [], campaigns: [] };
   const ref = useRef(growth); ref.current = growth;
-  /* commit against the freshest state so async loops (scrape-all, send batches) never clobber */
-  const commit = (patch) => onUpdateCompany({ growth: { ...ref.current, ...patch } });
+  /* commit against the freshest state so async loops (scrape-all, send batches)
+     never clobber — function patches resolve against the latest growth state */
+  const commit = (patch) => onUpdateCompany({ growth: { ...ref.current, ...(typeof patch === "function" ? patch(ref.current) : patch) } });
 
   const TABS = [["finder", "Lead Finder", Target], ["prospects", `Prospect List`, FolderOpen], ["outreach", "Outreach Campaigns", Send]];
   return (

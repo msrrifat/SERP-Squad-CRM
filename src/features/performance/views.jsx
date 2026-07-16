@@ -59,9 +59,11 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
     ? { ...project.integrations, ga: !!project.google?.ga4Property, gsc: !!project.google?.gscSite }
     : project.integrations;
 
-  /* liveMode: pull the REAL GA4/GSC numbers into the designed cards — same
-     interface as the demo dashboard, live values (28-day window) */
-  const glive = useGoogleLive(liveMode ? project : null, 28);
+  /* liveMode: pull the REAL GA4/GSC numbers into the designed cards — the
+     fetch window FOLLOWS the "Compare vs" timeframe (1mo → 30 days, 3mo → 90,
+     … capped at 12 months) so every box reflects the selected period */
+  const liveDays = Math.min(365, Math.max(7, cmp * 30));
+  const glive = useGoogleLive(liveMode ? project : null, liveDays);
   const gaLive = liveMode && glive.ga4?.live ? glive.ga4 : null;
   const gscLive = liveMode && glive.gsc?.live ? glive.gsc : null;
   const gaSeries = (k) => (gaLive?.byDate || []).map((r) => r[k]);
@@ -110,7 +112,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   const chartData = isLiveMetric
     ? liveDaily[activeMetric]
     : data.months.map((m, i) => ({ label: m.label, value: mCfg.get(m, i) })).slice(rangeStart);
-  const windowSpan = isLiveMetric ? "last 28 days · daily · live" : `${data.months[rangeStart].label} – ${data.months[12].label}`;
+  const windowSpan = isLiveMetric ? `last ${liveDays} days · daily · live` : `${data.months[rangeStart].label} – ${data.months[12].label}`;
   const trendTitle = isLiveMetric ? "Daily trend" : cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
 
   const movers = [...tracking]
@@ -125,8 +127,8 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
     summary.push(`Business profiles were seen ${fmt(profileViewsSeries[12])} times across ${profileSources.join(", ")} — ${d >= 0 ? "up" : "down"} ${Math.abs(d).toFixed(0)}% vs ${cmp} month${cmp > 1 ? "s" : ""} ago.`);
   }
   if (I.gbp) summary.push(`Customers took ${fmt(cur.gbp.calls + cur.gbp.directions + cur.gbp.websiteClicks)} actions this month — calls, directions and website visits.`);
-  if (gaLive) summary.push(`The website drew ${fmt(gaLive.totals.users)} users in the last 28 days (live Google Analytics).`);
-  if (gscLive) summary.push(`Google Search sent ${fmt(gscLive.totals.clicks)} clicks from ${fmt(gscLive.totals.impressions)} impressions in the last 28 days.`);
+  if (gaLive) summary.push(`The website drew ${fmt(gaLive.totals.users)} users in the last ${liveDays} days (live Google Analytics).`);
+  if (gscLive) summary.push(`Google Search sent ${fmt(gscLive.totals.clicks)} clicks from ${fmt(gscLive.totals.impressions)} impressions in the last ${liveDays} days.`);
   if (tracking.length) summary.push(`${top3} of ${tracking.length} tracked keywords rank in Google's top 3${top3 - top3Prev > 0 ? `, ${top3 - top3Prev} more than ${cmp} month${cmp > 1 ? "s" : ""} ago` : ""}.`);
 
   const cmpPicker = (
@@ -183,7 +185,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         ) : liveMode && gaLive && liveCallEvt ? (
           <StatCard icon={Phone} label="Phone calls" source="GA4" accent={accent}
             value={fmt(liveCallEvt.value)} pct={halfDelta(liveCallEvt.series)}
-            spark={liveCallEvt.series} sub="call events · last 28 days" />
+            spark={liveCallEvt.series} sub={`call events · last ${liveDays} days`} />
         ) : !liveMode && I.ga ? (
           <StatCard icon={Phone} label="Phone calls" source="GA4" accent={accent}
             value={fmt(callsSeries[12])} pct={pctDelta(callsSeries[12], callsSeries[12 - cmp])}
@@ -194,7 +196,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         {W.ga.users && (liveMode ? (gaLive ? (
           <StatCard icon={Users} label="Website users" source="GA4" accent={accent}
             value={fmt(gaLive.totals.users)} pct={halfDelta(gaSeries("users"))}
-            spark={gaSeries("users")} sub="last 28 days · live" />
+            spark={gaSeries("users")} sub={`last ${liveDays} days · live`} />
         ) : I.ga ? (
           <Card className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
         ) : (
@@ -209,7 +211,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         {W.gsc.clicks && (liveMode ? (gscLive ? (
           <StatCard icon={MousePointerClick} label="Search clicks" source="GSC" accent={accent}
             value={fmt(gscLive.totals.clicks)} pct={halfDelta(gscSeries("clicks"))}
-            spark={gscSeries("clicks")} sub="last 28 days · live" />
+            spark={gscSeries("clicks")} sub={`last ${liveDays} days · live`} />
         ) : I.gsc ? (
           <Card className="p-4"><div className="h-20 animate-pulse rounded-lg bg-gray-100" /></Card>
         ) : (
@@ -233,7 +235,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         {liveMode && gaLive && gaLive.events?.[0] && (
           <StatCard icon={Zap} label={gaLive.events[0].name} source="GA4" accent={accent}
             value={fmt(gaLive.events[0].value)} pct={halfDelta(gaLive.events[0].series)}
-            spark={gaLive.events[0].series} sub="top event · last 28 days" />
+            spark={gaLive.events[0].series} sub={`top event · last ${liveDays} days`} />
         )}
         {!liveMode && I.ga && W.ga.events && (
           <StatCard icon={Zap} label={topEvents[0]?.name || "events"} source="GA4" accent={accent}
@@ -243,7 +245,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         {liveMode && gaLive && W.ga.conversions && (
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
             value={fmt(gaLive.totals.conversions)} pct={halfDelta(gaSeries("conversions"))}
-            spark={gaSeries("conversions")} sub="last 28 days · live" />
+            spark={gaSeries("conversions")} sub={`last ${liveDays} days · live`} />
         )}
         {!liveMode && I.ga && W.ga.conversions && (
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
@@ -341,7 +343,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
           </Card>
         ) : liveMode && gaLive ? (
           <Card className="p-5">
-            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · last 28 days · live</span></div>
+            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · last {liveDays} days · live</span></div>
             <div className="space-y-2">
               {gaLive.events.slice(0, 4).map((e, i) => (
                 <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">

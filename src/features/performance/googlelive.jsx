@@ -251,7 +251,7 @@ export function GoogleLiveData({ project, accent }) {
         {busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}
         <span className="ml-auto flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1 no-print">
           <span className="px-1.5 text-[10.5px] font-medium text-gray-400">Last</span>
-          {[7, 28, 90].map((d) => (
+          {[7, 28, 90, 180, 365].map((d) => (
             <button key={d} onClick={() => setDays(d)} className="ll-mono rounded-lg px-2 py-0.5 text-[11.5px] font-semibold"
               style={days === d ? { background: accent, color: "#fff" } : { color: "var(--chip-fg, #6B7280)" }}>
               {d}d

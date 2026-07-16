@@ -3,7 +3,7 @@
    tool GROUPS; the selected group's subsections appear as a top-bar tab
    strip inside the window. */
 import React, { useState } from "react";
-import { ArrowLeft, Building2, Crosshair, FileText, FolderOpen, Globe, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
+import { ArrowLeft, Building2, Crosshair, FileText, FolderOpen, Globe, History, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
 import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
@@ -14,12 +14,23 @@ import { MapRankCheck, WebsiteRankCheck } from "./rankcheck.jsx";
 
 const GROUPS = [
   {
-    key: "growth", label: "Growth & Prospects", icon: Target, area: "growth",
+    key: "growth", label: "Growth Finder", icon: Target, area: "growth",
     sub: "Find leads, save prospects, run outreach",
     items: [
       { key: "finder", label: "Lead Finder", icon: Target },
       { key: "prospects", label: "Prospect List", icon: FolderOpen },
       { key: "outreach", label: "Outreach Campaigns", icon: Send },
+    ],
+  },
+  {
+    key: "research", label: "Research & Audit", icon: Search, area: "research",
+    sub: "Audit profiles, sites & listings; build proposals",
+    items: [
+      { key: "profile", label: "Business Profile Audit", icon: Building2 },
+      { key: "website", label: "Website Audit", icon: Globe },
+      { key: "listings", label: "Listings Checker", icon: MapPin },
+      { key: "index", label: "Index Checker", icon: Search },
+      { key: "report", label: "Audit Report", icon: FileText },
     ],
   },
   {
@@ -34,8 +45,10 @@ const GROUPS = [
   {
     key: "kw", label: "Keyword Research", icon: TrendingUp, area: "kw",
     sub: "Local & national keywords, KD, volume, SERP",
+    /* no redundant "Keyword Finder" tab — the finder IS the section; the strip
+       only offers the zero-credit history of past searches */
     items: [
-      { key: "kwfinder", label: "Keyword Finder", icon: TrendingUp },
+      { key: "kwsaved", label: "Saved keyword searches", icon: History },
     ],
   },
   {
@@ -44,17 +57,6 @@ const GROUPS = [
     items: [
       { key: "rankweb", label: "Website Rank Check", icon: TrendingUp },
       { key: "rankmap", label: "Map Rank Check (geo grid)", icon: MapPin },
-    ],
-  },
-  {
-    key: "research", label: "Research & Audit", icon: Search, area: "research",
-    sub: "Audit profiles, sites & listings; build proposals",
-    items: [
-      { key: "profile", label: "Business Profile Audit", icon: Building2 },
-      { key: "website", label: "Website Audit", icon: Globe },
-      { key: "listings", label: "Listings Checker", icon: MapPin },
-      { key: "index", label: "Index Checker", icon: Search },
-      { key: "report", label: "Audit Report", icon: FileText },
     ],
   },
 ];
@@ -149,10 +151,12 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
           </div>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {group.items.map((t) => (
-              <button key={t.key} onClick={() => setSel(t.key)}
+              <button key={t.key}
+                onClick={() => setSel(sel === t.key && group.key === "kw" ? "kwfinder" : t.key)}
                 className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
                 style={sel === t.key ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
                 <t.icon size={13} /> {t.label}
+                {t.key === "kwsaved" && (company.kwSearches || []).length > 0 && <span className="ll-mono rounded-full px-1.5 text-[9.5px] font-bold" style={sel === t.key ? { background: "rgba(255,255,255,.25)" } : { background: "#F3F4F6", color: "#6B7280" }}>{(company.kwSearches || []).length}</span>}
               </button>
             ))}
           </div>
@@ -163,7 +167,8 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} dfs={dfs} />
         ) : group.area === "kw" ? (
           <div className="mx-auto max-w-6xl p-5">
-            <KeywordFinderView company={company} accent={accent}
+            <KeywordFinderView company={company} accent={accent} onUpdateCompany={onChange}
+              savedView={sel === "kwsaved"} onExitSaved={() => setSel("kwfinder")}
               clients={clients.filter((c) => c.projects.some((p) => !p.archived))
                 .map((c) => ({ ...c, projects: c.projects.filter((p) => !p.archived) }))}
               onAddToProject={addKeywordsToProject} />

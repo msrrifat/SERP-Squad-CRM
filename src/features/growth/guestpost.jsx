@@ -22,7 +22,7 @@ import { ProspectList } from "./prospects.jsx";
 export function GuestListView({ company, onUpdateCompany, accent }) {
   const store = company.guest || { contacts: [], campaigns: [] };
   const ref = useRef(store); ref.current = store;
-  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...patch } });
+  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...(typeof patch === "function" ? patch(ref.current) : patch) } });
   return <ProspectList accent={accent} growth={store} commit={commit}
     emptyHint={<>Run the <b>Guest Post Finder</b> and save sites — folders are created automatically per niche.</>} />;
 }
@@ -79,7 +79,7 @@ export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, op
      separated from client-prospecting data, shareable with the team later */
   const growth = company.guest || { contacts: [], campaigns: [] };
   const ref = useRef(growth); ref.current = growth;
-  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...patch } });
+  const commit = (patch) => onUpdateCompany({ guest: { ...ref.current, ...(typeof patch === "function" ? patch(ref.current) : patch) } });
 
   const [niche, setNiche] = useState("");
   const [location, setLocation] = useState("");
