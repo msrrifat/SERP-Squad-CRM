@@ -570,7 +570,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
   );
 }
 
-export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onRerun, readOnly = false, dfs }) {
+export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, readOnly = false, dfs }) {
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -583,14 +583,36 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const job = getJob(jobKey);
   const rerunning = job?.status === "running";
   const rerunResult = job?.status === "done" ? job.summary : job?.status === "error" ? { error: job.error } : null;
-  /* Live rankings ↔ Ranking history (dated scans persisted on every rerun) */
+  /* Live rankings ↔ Ranking history ↔ All cities */
   const [tab, setTab] = useState("live");
   const [histDay, setHistDay] = useState(null);
+  const [openCity, setOpenCity] = useState(null);
 
   const cities = [...new Set(tracking.map((t) => cityLabel(t.city)))];
+
+  /* ---- dynamic change columns: they follow the recurring scan interval.
+     N-day recurring → N d, 2N d, then the month-scale window (7-day scans
+     show 7d/14d/30d, 10-day scans 10d/20d/30d, daily keeps 1d/7d/30d). ---- */
+  const modeN = (() => {
+    const counts = {};
+    tracking.forEach((t) => { if (t.reportingType === "Recurring" && t.rerunDays) counts[t.rerunDays] = (counts[t.rerunDays] || 0) + 1; });
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best ? +best[0] : 1;
+  })();
+  const DELTA_DAYS = modeN === 1 ? [1, 7, 30] : [...new Set([modeN, modeN * 2, modeN * 2 < 30 ? 30 : modeN * 3])];
+  /* change vs D days ago — real projects read the DATED scan log (never index
+     guessing), demo projects read the daily mock series */
+  const deltaFor = (t, d) => {
+    if (t.stats.cur == null) return null;
+    if (project.demoMode !== false) { const at = t.positions[t.positions.length - 1 - d]; return at == null ? null : at - t.stats.cur; }
+    const cutoff = Date.now() - d * 864e5;
+    const past = [...(t.scans || [])].reverse().find((s) => s.t <= cutoff && s.p != null);
+    return past ? past.p - t.stats.cur : null;
+  };
+
   /* column sorting — defaults to best current positions on top */
   const [sort, setSort] = useState({ key: "cur", dir: "asc" });
-  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : t.stats[sort.key]);
+  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
   const rows = tracking.filter((t) =>
     (cityFilter === "All cities" || cityLabel(t.city) === cityFilter) &&
     (!search.trim() || t.keyword.toLowerCase().includes(search.trim().toLowerCase()))
@@ -694,8 +716,8 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const top3 = ranked.filter((t) => t.stats.cur <= 3).length;
   const top10 = ranked.filter((t) => t.stats.cur <= 10).length;
   const top20 = ranked.filter((t) => t.stats.cur <= 20).length;
-  const improved30 = rows.filter((t) => (t.stats.d30 ?? 0) > 0).length;
-  const declined30 = rows.filter((t) => (t.stats.d30 ?? 0) < 0).length;
+  const improved30 = rows.filter((t) => (deltaFor(t, 30) ?? 0) > 0).length;
+  const declined30 = rows.filter((t) => (deltaFor(t, 30) ?? 0) < 0).length;
   const dist = [
     { name: "Top 3", value: rows.filter((t) => t.stats.cur <= 3).length },
     { name: "4–10", value: rows.filter((t) => t.stats.cur > 3 && t.stats.cur <= 10).length },
@@ -734,20 +756,23 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         <Card className="overflow-hidden">
           {/* tab bar: live table ↔ dated scan history */}
           <div className="flex items-center gap-1 border-b border-gray-100 px-5 pt-2 no-print">
-            {[["live", "Live rankings"], ["history", "Ranking history"]].map(([k, label]) => (
+            {[["live", "Live rankings"], ["history", "Ranking history"], ["cities", "All cities"]].map(([k, label]) => (
               <button key={k} onClick={() => setTab(k)}
                 className="-mb-px px-3.5 py-2.5 text-[12.5px] font-semibold transition-colors"
                 style={tab === k ? { color: accent, boxShadow: `inset 0 -2px 0 ${accent}` } : { color: "#9CA3AF" }}>
                 {label}{k === "history" && scanDays.length > 0 && <span className="ll-mono ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] text-gray-500">{scanDays.length}</span>}
+                {k === "cities" && cities.length > 0 && <span className="ll-mono ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] text-gray-500">{cities.length}</span>}
               </button>
             ))}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4">
             <div>
-              <div className="ll-display text-[15px] font-semibold">{tab === "history" ? "Ranking history" : "Keyword rank tracking"}</div>
+              <div className="ll-display text-[15px] font-semibold">{tab === "history" ? "Ranking history" : tab === "cities" ? "All cities" : "Keyword rank tracking"}</div>
               <div className="text-[11px] text-gray-400">
                 {tab === "history"
                   ? "Positions exactly as they were scanned on the selected date — every rerun is kept."
+                  : tab === "cities"
+                  ? "Tracked keywords grouped per city — open a city to see its keywords, or remove a whole city's tracking in one click."
                   : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}</>}
               </div>
             </div>
@@ -776,6 +801,16 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     <Plus size={14} /> Add keywords
                   </button>
                   {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organic" />}
+                  {selected.size > 0 && (
+                    <button onClick={() => {
+                      if (!window.confirm(`Delete ${selected.size} tracked keyword${selected.size > 1 ? "s" : ""}? Their scan history is removed too.`)) return;
+                      onDeleteMany ? onDeleteMany([...selected]) : [...selected].forEach((id) => onDelete(id));
+                      setSelected(new Set());
+                    }}
+                      className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[13px] font-medium text-red-600 hover:bg-red-100">
+                      <Trash2 size={13} /> Delete ({selected.size})
+                    </button>
+                  )}
                   <button onClick={doRerun} disabled={selected.size === 0 || rerunning}
                     className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium disabled:opacity-40"
                     style={selected.size > 0 && !rerunning
@@ -813,9 +848,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   <SortTh k="keyword" className="px-5 py-3">Keyword</SortTh>
                   <SortTh k="start">Start</SortTh>
                   <SortTh k="cur">Current</SortTh>
-                  <SortTh k="d1" defDir="desc">1d</SortTh>
-                  <SortTh k="d7" defDir="desc">7d</SortTh>
-                  <SortTh k="d30" defDir="desc">30d</SortTh>
+                  {DELTA_DAYS.map((d) => <SortTh key={d} k={"dd" + d} defDir="desc">{d}d</SortTh>)}
                   <SortTh k="life" defDir="desc">Lifetime</SortTh>
                   <th className="px-3 py-3 font-semibold">Trend</th>
                   <th className="px-3 py-3 font-semibold">Ranking URL</th>
@@ -824,7 +857,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={11} className="px-5 py-10 text-center text-[13px] text-gray-400">
+                  <tr><td colSpan={8 + DELTA_DAYS.length} className="px-5 py-10 text-center text-[13px] text-gray-400">
                     No keywords tracked yet — add your first keywords to start collecting daily positions.
                   </td></tr>
                 )}
@@ -847,9 +880,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     </td>
                     <td className="px-3 py-3"><RankChip pos={t.stats.start} muted /></td>
                     <td className="px-3 py-3"><RankChip pos={t.stats.cur} /></td>
-                    <td className="px-3 py-3"><PosChange value={t.stats.d1} /></td>
-                    <td className="px-3 py-3"><PosChange value={t.stats.d7} /></td>
-                    <td className="px-3 py-3"><PosChange value={t.stats.d30} /></td>
+                    {DELTA_DAYS.map((d) => <td key={d} className="px-3 py-3"><PosChange value={deltaFor(t, d)} /></td>)}
                     <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>
                     <td className="px-3 py-3"><Spark values={t.positions.slice(-90)} invert color={accent} /></td>
                     <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
@@ -909,6 +940,72 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               </tbody>
             </table>
           </div>
+          )}
+
+          {/* All cities: tracked keywords grouped per city — expand a city to
+              see its keywords; delete a whole city's tracking in one click */}
+          {tab === "cities" && (
+            <div className="space-y-2 p-4">
+              {cities.length === 0 && <div className="py-8 text-center text-[13px] text-gray-400">No keywords tracked yet — cities appear here as you add keywords.</div>}
+              {cities.map((cl) => {
+                const arr = tracking.filter((t) => cityLabel(t.city) === cl);
+                const rankedArr = arr.filter((t) => t.stats.cur != null);
+                const cityAvg = rankedArr.length ? rankedArr.reduce((a, t) => a + t.stats.cur, 0) / rankedArr.length : null;
+                const open = openCity === cl;
+                return (
+                  <div key={cl} className="overflow-hidden rounded-xl border border-gray-100">
+                    <div className="flex flex-wrap items-center gap-2 bg-gray-50/60 px-4 py-3">
+                      <button onClick={() => setOpenCity(open ? null : cl)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                        <MapPin size={14} style={{ color: accent }} />
+                        <span className="text-[13.5px] font-semibold text-gray-800">{cl}</span>
+                        <span className="ll-mono rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">{arr.length} keyword{arr.length > 1 ? "s" : ""}</span>
+                        {cityAvg != null && <span className="text-[11px] text-gray-400">avg #{cityAvg.toFixed(1)}</span>}
+                        <span className="ml-auto text-[11px] font-semibold" style={{ color: accent }}>{open ? "Hide keywords ▲" : "View keywords ▼"}</span>
+                      </button>
+                      {!readOnly && (
+                        <button onClick={() => {
+                          if (!window.confirm(`Delete ALL ${arr.length} tracked keyword${arr.length > 1 ? "s" : ""} for ${cl}? Their scan history is removed too.`)) return;
+                          const ids = arr.map((t) => t.id);
+                          onDeleteMany ? onDeleteMany(ids) : ids.forEach((id) => onDelete(id));
+                          if (open) setOpenCity(null);
+                        }}
+                          className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] font-semibold text-red-600 hover:bg-red-100">
+                          <Trash2 size={12} /> Delete city
+                        </button>
+                      )}
+                    </div>
+                    {open && (
+                      <table className="w-full text-left text-[12.5px]">
+                        <thead>
+                          <tr className="border-b border-gray-100 text-[9.5px] uppercase tracking-wider text-gray-400">
+                            <th className="px-4 py-2 font-semibold">Keyword</th>
+                            <th className="px-3 py-2 font-semibold">Current</th>
+                            <th className="px-3 py-2 font-semibold">Lifetime</th>
+                            <th className="px-3 py-2 font-semibold">Device</th>
+                            <th className="px-3 py-2 font-semibold">Schedule</th>
+                            <th className="px-3 py-2 no-print"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {arr.map((t) => (
+                            <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50/60">
+                              <td className="px-4 py-2 font-medium text-gray-800">{t.keyword}</td>
+                              <td className="px-3 py-2"><RankChip pos={t.stats.cur} /></td>
+                              <td className="px-3 py-2"><PosChange value={t.stats.life} /></td>
+                              <td className="px-3 py-2 text-[11px] text-gray-500">{t.device}</td>
+                              <td className="px-3 py-2 text-[11px] text-gray-500">{t.reportingType === "Recurring" ? `every ${t.rerunDays}d` : "one time"}</td>
+                              <td className="px-3 py-2 no-print">
+                                {!readOnly && <button onClick={() => onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Card>
       )}

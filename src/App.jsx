@@ -598,7 +598,12 @@ export default function App() {
   }, [monthKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addTracking = (entries) => { updateProject({ tracking: [...project.tracking, ...entries] }); logActivity(`Added ${entries.length} keyword${entries.length > 1 ? "s" : ""}`, project?.name); };
-  const deleteTracking = (id) => { updateProject({ tracking: project.tracking.filter((t) => t.id !== id) }); logActivity("Removed a tracked keyword", project?.name); };
+  const deleteTracking = (id) => { updateProject((p) => ({ tracking: p.tracking.filter((t) => t.id !== id) })); logActivity("Removed a tracked keyword", project?.name); };
+  const deleteTrackingMany = (ids) => {
+    const set = new Set(ids);
+    updateProject((p) => ({ tracking: p.tracking.filter((t) => !set.has(t.id)) }));
+    logActivity(`Removed ${ids.length} tracked keyword${ids.length > 1 ? "s" : ""}`, project?.name);
+  };
   const applyRerun = (updates) => {
     const ts = Date.now();
     /* functional update: scans finish long after the click, and keywords may
@@ -1011,7 +1016,7 @@ export default function App() {
               regardless of the demo/aggregated `data` and need no connection. */}
           {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
+              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} readOnly={!canKeywords} dfs={activeDfs} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>

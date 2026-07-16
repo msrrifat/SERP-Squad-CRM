@@ -25,7 +25,7 @@
    per directory through the SERP API, then NAP checks against the result's
    title/snippet. Cost: one live SERP request per directory scanned. */
 import http from "node:http";
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
@@ -199,6 +199,19 @@ const STATE_FILE = new URL("./data/app-state.json", import.meta.url);
 const loadState = () => { try { return JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch { return null; } };
 const saveState = (state) => {
   mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+  /* daily rolling backups (kept 14 days) — deploys never touch server/data,
+     and even a bad write can be rolled back from data/backups/ */
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const bdir = new URL("./data/backups/", import.meta.url);
+    const bfile = new URL(`app-state-${day}.json`, bdir);
+    if (existsSync(STATE_FILE) && !existsSync(bfile)) {
+      mkdirSync(bdir, { recursive: true });
+      copyFileSync(STATE_FILE, bfile);
+      readdirSync(bdir).filter((f) => f.startsWith("app-state-")).sort().slice(0, -14)
+        .forEach((f) => rmSync(new URL(f, bdir), { force: true }));
+    }
+  } catch { /* backups are best-effort — never block a save */ }
   const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
   writeFileSync(tmp, JSON.stringify(state));
   renameSync(tmp, STATE_FILE); // atomic swap
@@ -1671,17 +1684,23 @@ async function handleRerun(body) {
       [e.city.city, e.city.country].filter(Boolean).join(","),
       e.city.country,
     ].filter(Boolean))];
-    let task = null, usedLocation = null, lastErr = null;
-    for (const loc of variants) {
-      try { task = await dfsLive(creds, engine + "/organic", { ...base, location_name: loc }); usedLocation = loc; break; }
-      catch (err) {
-        lastErr = err;
-        if (!/location/i.test(String(err?.message || err))) throw err; // non-location errors are real failures
+    const scanOnce = async () => {
+      let task = null, usedLocation = null, lastErr = null;
+      for (const loc of variants) {
+        try { task = await dfsLive(creds, engine + "/organic", { ...base, location_name: loc }); usedLocation = loc; break; }
+        catch (err) {
+          lastErr = err;
+          if (!/location/i.test(String(err?.message || err))) throw err; // non-location errors are real failures
+        }
       }
-    }
-    if (!task) throw lastErr;
-    const { position, url } = parseSerpRank(task, e.domain);
-    return { id: e.id, position, url, location: usedLocation };
+      if (!task) throw lastErr;
+      const { position, url } = parseSerpRank(task, e.domain);
+      return { id: e.id, position, url, location: usedLocation };
+    };
+    /* DataForSEO occasionally 40101s ("Internal SE Server Error") on single
+       keywords — one spaced retry recovers nearly all of them */
+    try { return await scanOnce(); }
+    catch { await new Promise((r) => setTimeout(r, 1500)); return await scanOnce(); }
   }, 5);
   return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, keyword: entries[i].keyword, error: u.error } : u)) }];
 }
