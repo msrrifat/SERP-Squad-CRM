@@ -2040,8 +2040,14 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     const stalePages = w.pages.filter((pg) => indexStale(pg.index));
     const stalePosts = w.blogs.filter((b) => b.status === "published" && indexStale(b.index));
     if (!stalePages.length && !stalePosts.length) return;
-    setIdxChecking(true);
-    checkIndexApi([...stalePages.map(pageUrl), ...stalePosts.map(postUrl)], dfs)
+    runIndexCheck(stalePages, stalePosts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [w.connected]);
+  /* bulk index check — used by the stale auto-check AND the manual
+     "Re-check indexing" button (which forces EVERY page/post) */
+  const runIndexCheck = (pages, posts) => {
+    setIdxChecking(true); setIdxErr(null);
+    checkIndexApi([...pages.map(pageUrl), ...posts.map(postUrl)], dfs)
       .then(({ results }) => {
         const byUrl = Object.fromEntries(results.filter((r) => r.status !== "error").map((r) => [r.url, r]));
         set((cur) => ({
@@ -2050,9 +2056,11 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         }));
         log?.(`Index check: ${results.filter((r) => r.indexed).length}/${results.length} URLs indexed`, project.website);
       })
-      .catch(() => { /* server absent/unconfigured — tags honestly stay unknown */ })
+      .catch((e) => setIdxErr(e?.code === 503
+        ? "Index checks need DataForSEO credentials in API settings — statuses are never fabricated."
+        : "Index check failed: " + (e?.message || e)))
       .finally(() => setIdxChecking(false));
-  }, [w.connected]);
+  };
   const deploy = () => {
     const payload = buildPixelPayload(w.pages); // PROD: await fetch("/v1/deploy", {method:"POST", body: JSON.stringify({ key: siteKey, payload })})
     set({ pages: w.pages.map((p) => ({ ...p, dirty: false })), lastDeploy: Date.now() });
@@ -2398,6 +2406,11 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           </div>
           <input value={pgSearch} onChange={(e) => setPgSearch(e.target.value)} placeholder="Search pages…"
             className="w-40 rounded-lg border border-gray-200 px-3 py-2 text-[12px] no-print" />
+          <button onClick={() => runIndexCheck(w.pages.slice(0, 50), w.blogs.filter((b) => b.status === "published").slice(0, 50))} disabled={idxChecking}
+            title="Re-check the Google index status of every page and published post (real site: queries via DataForSEO)"
+            className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-600 disabled:opacity-40">
+            {idxChecking ? <><RefreshCw size={12} className="animate-spin" /> Checking…</> : <><Search size={12} /> Re-check indexing</>}
+          </button>
           <button onClick={() => crawlSite()} disabled={crawling || !w.verified}
             className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
             {crawling ? <><RefreshCw size={12} className="animate-spin" /> Crawling…</> : <><RefreshCw size={12} /> Recrawl site</>}
