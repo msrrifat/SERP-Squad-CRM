@@ -102,13 +102,21 @@ async function pool(items, worker, size = 4) {
 const normUrl = (u) => String(u || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[#?].*$/, "").replace(/\/$/, "");
 async function checkIndexOne(creds, url) {
   const bare = url.replace(/^https?:\/\//, "");
-  const task = await dfsLive(creds, "google/organic", { keyword: `site:${bare}`, location_name: "United States", language_code: "en", depth: 10 });
-  const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
   const target = normUrl(url);
   // exact match first; then prefix match ONLY for a root URL (site:example.com
   // legitimately returns deeper pages — a deep URL must match exactly)
   const isRoot = !target.includes("/");
-  const hit = items.find((it) => normUrl(it.url) === target) || (isRoot ? items.find((it) => normUrl(it.url).startsWith(target)) : null);
+  const match = (task) => {
+    const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
+    return items.find((it) => normUrl(it.url) === target) || (isRoot ? items.find((it) => normUrl(it.url).startsWith(target)) : null);
+  };
+  let hit = match(await dfsLive(creds, "google/organic", { keyword: `site:${bare}`, location_name: "United States", language_code: "en", depth: 10 }));
+  /* Google's site: operator is FLAKY for deep URLs — indexed pages often
+     return nothing. Before declaring "not indexed", search the URL itself:
+     an indexed page reliably surfaces for its own address. */
+  if (!hit && !isRoot) {
+    hit = match(await dfsLive(creds, "google/organic", { keyword: `"${bare}"`, location_name: "United States", language_code: "en", depth: 10 }));
+  }
   return { url, indexed: !!hit, matchedUrl: hit?.url || null, checkedAt: Date.now() };
 }
 
@@ -915,6 +923,20 @@ async function handleWpMedia(body) {
   } catch (e) { return wpErr(e); }
 }
 
+/* update a media item's title + alt text straight back into WordPress */
+async function handleWpMediaUpdate(body) {
+  const g = wpGuard(body); if (g) return g;
+  const id = +body.id;
+  if (!id) return [400, { error: "bad_request", detail: "media id required" }];
+  try {
+    const r = await wpFetch(body, `/media/${id}`, { method: "POST", body: JSON.stringify({
+      ...(body.title != null ? { title: String(body.title) } : {}),
+      ...(body.alt != null ? { alt_text: String(body.alt) } : {}),
+    }) });
+    return [200, { live: true, id: r.id, title: r.title?.rendered || "", alt: r.alt_text || "" }];
+  } catch (e) { return wpErr(e); }
+}
+
 /* real site content sync — pages + posts straight from the site's WordPress
    REST API, mapped into the CRM's editor structure (headings & paragraphs
    parsed from the rendered HTML). This is the site's ACTUAL content. */
@@ -936,22 +958,30 @@ async function handleWpContent(body) {
     return blocks;
   };
   const pathOf = (link) => { try { return new URL(link).pathname.replace(/\/$/, "") || "/"; } catch { return "/" + String(link || ""); } };
+  /* the REAL meta title/description: Yoast (or the SEO plugin) exposes them
+     via yoast_head_json; otherwise fall back to the title/excerpt */
+  const metaOf = (p) => ({
+    metaTitle: stripTags(p.yoast_head_json?.title || "") || stripTags(p.title?.rendered),
+    metaDesc: (stripTags(p.yoast_head_json?.description || "") || stripTags(p.excerpt?.rendered)).slice(0, 250),
+  });
   try {
+    const fields = "id,slug,link,title,excerpt,content,modified,yoast_head_json";
     const [pages, posts] = await Promise.all([
-      wpFetch(body, "/pages?per_page=100&status=publish&_fields=id,slug,link,title,excerpt,content,modified"),
-      wpFetch(body, "/posts?per_page=100&status=publish&_fields=id,slug,link,title,excerpt,content,date,modified"),
+      wpFetch(body, `/pages?per_page=100&status=publish&_fields=${fields}`),
+      wpFetch(body, `/posts?per_page=100&status=publish&_fields=${fields},date`),
     ]);
     return [200, { live: true,
       pages: pages.map((p) => ({
         wpId: p.id, url: pathOf(p.link), origUrl: p.link, slug: p.slug,
         name: stripTags(p.title?.rendered) || p.slug,
-        metaTitle: stripTags(p.title?.rendered), metaDesc: stripTags(p.excerpt?.rendered).slice(0, 250),
+        ...metaOf(p),
         content: toBlocks(p.content?.rendered || ""), modified: p.modified,
       })),
       posts: posts.map((p) => ({
         wpId: p.id, slug: p.slug, url: pathOf(p.link),
         title: stripTags(p.title?.rendered) || p.slug,
         body: stripTags(p.excerpt?.rendered).slice(0, 400),
+        ...metaOf(p),
         content: toBlocks(p.content?.rendered || ""),
         status: "published", publishAt: null, createdAt: Date.parse(p.date) || Date.now(), modified: p.modified,
       })),
@@ -2065,7 +2095,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2090,6 +2120,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/custom/deploy" ? await handleCustomDeploy(body)
         : req.url === "/api/dfs-balance" ? await handleDfsBalance(body)
         : req.url === "/api/wp/media" ? await handleWpMedia(body)
+        : req.url === "/api/wp/media-update" ? await handleWpMediaUpdate(body)
         : req.url === "/api/wp/content" ? await handleWpContent(body)
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)
         : req.url === "/api/wp/cleanup" ? await handleWpCleanup(body)

@@ -1856,10 +1856,77 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const [pgSort, setPgSort] = useState({ key: "name", dir: "asc" });
   const [postSearch, setPostSearch] = useState("");
   const [postSort, setPostSort] = useState({ key: "date", dir: "desc" });
+  /* SEO-health filters (the sub-tabs under the visual dashboard) */
+  const [pgFilter, setPgFilter] = useState("all");
+  const [postFilter, setPostFilter] = useState("all");
+  const HEALTH = {
+    all: { label: "All", test: () => true },
+    notindexed: { label: "Not indexed", test: (x) => x.index?.status === "not_indexed" },
+    mtlong: { label: "Meta title > 60", test: (x) => (x.metaTitle || "").length > 60 },
+    mtshort: { label: "Meta title < 45", test: (x) => (x.metaTitle || "").length < 45 },
+    mdlong: { label: "Meta desc > 160", test: (x) => (x.metaDesc || "").length > 160 },
+    mdshort: { label: "Meta desc < 120", test: (x) => (x.metaDesc || "").length < 120 },
+  };
+  const healthStats = (list) => ({
+    total: list.length,
+    indexed: list.filter((x) => x.index?.status === "indexed").length,
+    ...Object.fromEntries(Object.entries(HEALTH).filter(([k]) => k !== "all").map(([k, f]) => [k, list.filter(f.test).length])),
+  });
+  /* compact visual dashboard + the filter sub-tabs, shared by Pages & Posts */
+  const HealthBoard = ({ list, filter, setFilter, noun }) => {
+    const st = healthStats(list);
+    const cards = [
+      ["all", "Total " + noun, st.total, "#334155"],
+      ["indexed", "Indexed", st.indexed, "#16A34A"],
+      ["notindexed", "Not indexed", st.notindexed, "#DC2626"],
+      ["mtlong", "Meta title > 60", st.mtlong, "#D97706"],
+      ["mtshort", "Meta title < 45", st.mtshort, "#D97706"],
+      ["mdlong", "Meta desc > 160", st.mdlong, "#7C3AED"],
+      ["mdshort", "Meta desc < 120", st.mdshort, "#7C3AED"],
+    ];
+    return (
+      <>
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+          {cards.map(([k, label, n, color]) => (
+            <div key={k} className="rounded-xl border border-gray-100 bg-gray-50/60 p-2.5">
+              <div className="text-[9.5px] font-bold uppercase tracking-wide text-gray-400">{label}</div>
+              <div className="ll-display text-[20px] font-bold" style={{ color }}>{n}</div>
+              <div className="mb-1 mt-1 h-1 overflow-hidden rounded-full bg-gray-200">
+                <div className="h-full rounded-full" style={{ width: `${st.total ? Math.min(100, (n / st.total) * 100) : 0}%`, background: color }} />
+              </div>
+              {k !== "indexed" && (
+                <button onClick={() => setFilter(k)} className="text-[9.5px] font-bold" style={{ color: filter === k ? accent : "#9CA3AF" }}>
+                  View {noun} →
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="no-print mb-3 flex flex-wrap gap-1.5">
+          {Object.entries(HEALTH).map(([k, f]) => (
+            <button key={k} onClick={() => setFilter(k)}
+              className="rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold"
+              style={filter === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
+              {k === "all" ? "All " + noun : f.label}
+              <span className="ll-mono ml-1 opacity-70">{k === "all" ? st.total : st[k]}</span>
+            </button>
+          ))}
+        </div>
+      </>
+    );
+  };
   const pageDate = (pg) => (pg.modified ? Date.parse(pg.modified) || 0 : pg.updatedAt || 0);
   const postDate = (b) => (b.modified ? Date.parse(b.modified) || 0 : b.publishAt || b.createdAt || 0);
   const pageRows = useMemo(() => {
     const q = pgSearch.trim().toLowerCase();
+    /* health filter first: a filtered view is a flat, sorted worklist */
+    if (pgFilter !== "all") {
+      const dir = pgSort.dir === "asc" ? 1 : -1;
+      return w.pages.filter(HEALTH[pgFilter].test)
+        .filter((p) => !q || [p.name, p.url, p.metaTitle, p.metaDesc].some((x) => (x || "").toLowerCase().includes(q)))
+        .sort((a, b) => (pgSort.key === "date" ? (pageDate(a) - pageDate(b)) * dir : ((a.name || a.url || "").toLowerCase() < (b.name || b.url || "").toLowerCase() ? -1 : 1) * dir))
+        .map((p) => ({ ...p, depth: 0 }));
+    }
     if (q) return w.pages
       .filter((p) => [p.name, p.url, p.metaTitle, p.metaDesc].some((x) => (x || "").toLowerCase().includes(q)))
       .map((p) => ({ ...p, depth: 0 }));
@@ -1882,16 +1949,17 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     walk("__root__", 0);
     w.pages.forEach((p) => { if (!out.some((o) => o.id === p.id)) out.push({ ...p, depth: 0 }); }); // cycle safety
     return out;
-  }, [w.pages, pgSearch, pgSort]);
+  }, [w.pages, pgSearch, pgSort, pgFilter]);
   const postRows = useMemo(() => {
     const q = postSearch.trim().toLowerCase();
     let list = w.blogs;
+    if (postFilter !== "all") list = list.filter(HEALTH[postFilter].test);
     if (q) list = list.filter((b) => [b.title, b.slug, b.metaTitle, b.metaDesc].some((x) => (x || "").toLowerCase().includes(q)));
     const dir = postSort.dir === "asc" ? 1 : -1;
     return [...list].sort((a, b) => (postSort.key === "date"
       ? (postDate(a) - postDate(b)) * dir
       : ((a.title || "").toLowerCase() < (b.title || "").toLowerCase() ? -1 : 1) * dir));
-  }, [w.blogs, postSearch, postSort]);
+  }, [w.blogs, postSearch, postSort, postFilter]);
   const SortHead = ({ state, setState, k, defDir = "asc", className = "py-2 pr-2", children }) => (
     <th className={className + " cursor-pointer select-none hover:text-gray-600"}
       onClick={() => setState((s) => ({ key: k, dir: s.key === k ? (s.dir === "asc" ? "desc" : "asc") : defDir }))}>
@@ -2010,12 +2078,28 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             const demoSlugs = new Set(DISCOVERED_POSTS.map((p) => p.slug));
             const basePages = cur.pages.filter((p) => !(demoUrls.has(p.url) && !p.dirty && !p.synced && /bright smile/i.test(p.metaTitle || "")));
             const baseBlogs = cur.blogs.filter((b) => !(demoSlugs.has(b.slug) && !b.synced));
-            const newPages = (d.pages || []).filter((dp) => !basePages.some((p) => p.url === dp.url || (dp.wpId && p.wpId === dp.wpId)))
-              .map((dp, i) => ({ ...dp, id: "pg" + Date.now() + i, dirty: false, synced: true }));
-            const newPosts = (d.posts || []).filter((dp) => !baseBlogs.some((b) => b.slug === dp.slug))
-              .map((dp, i) => ({ ...dp, id: "bl" + Date.now() + i, synced: true }));
+            /* recrawl also REFRESHES synced entries that have no local edits \u2014
+               meta/content pulled fresh from the site (WP is the source of truth) */
+            const newPages = [];
+            const pgPatch = new Map();
+            (d.pages || []).forEach((dp) => {
+              const ex = basePages.find((p) => p.url === dp.url || (dp.wpId && p.wpId === dp.wpId));
+              if (!ex) newPages.push({ ...dp, id: "pg" + Date.now() + newPages.length, dirty: false, synced: true });
+              else if (ex.synced && !ex.dirty) pgPatch.set(ex.id, { name: dp.name, metaTitle: dp.metaTitle, metaDesc: dp.metaDesc, content: dp.content, modified: dp.modified, wpId: dp.wpId });
+            });
+            const newPosts = [];
+            const blPatch = new Map();
+            (d.posts || []).forEach((dp) => {
+              const ex = baseBlogs.find((b) => b.slug === dp.slug);
+              if (!ex) newPosts.push({ ...dp, id: "bl" + Date.now() + newPosts.length, synced: true });
+              else if (ex.synced) blPatch.set(ex.id, { title: dp.title, body: dp.body, metaTitle: dp.metaTitle, metaDesc: dp.metaDesc, content: dp.content, modified: dp.modified, wpId: dp.wpId });
+            });
             added.pages = newPages.length; added.posts = newPosts.length;
-            return { pages: [...basePages, ...newPages], blogs: [...newPosts, ...baseBlogs], crawled: true, lastCrawl: Date.now() };
+            return {
+              pages: [...basePages.map((p) => (pgPatch.has(p.id) ? { ...p, ...pgPatch.get(p.id) } : p)), ...newPages],
+              blogs: [...newPosts, ...baseBlogs.map((b) => (blPatch.has(b.id) ? { ...b, ...blPatch.get(b.id) } : b))],
+              crawled: true, lastCrawl: Date.now(),
+            };
           });
           setCrawling(false);
           setTimeout(() => { work?.("website", "siteCrawled", { detail: `${added.pages} pages, ${added.posts} posts` }); log?.(`Synced ${project.website} via WordPress \u2014 imported ${added.pages} page${added.pages === 1 ? "" : "s"} & ${added.posts} post${added.posts === 1 ? "" : "s"}`, project.name); }, 0);
@@ -2339,6 +2423,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             <button onClick={() => setIdxErr(null)} className="shrink-0 font-bold">✕</button>
           </div>
         )}
+        <HealthBoard list={w.pages} filter={pgFilter} setFilter={setPgFilter} noun="pages" />
         <div className="overflow-x-auto">
         <table className="w-full table-fixed text-[11.5px]">
           <thead>
@@ -2443,7 +2528,8 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             <button onClick={() => setIdxErr(null)} className="shrink-0 font-bold">✕</button>
           </div>
         )}
-        <div className="mt-3 overflow-x-auto">
+        <div className="mt-3"><HealthBoard list={w.blogs} filter={postFilter} setFilter={setPostFilter} noun="posts" /></div>
+        <div className="overflow-x-auto">
         <table className="w-full table-fixed text-[11.5px]">
           <thead>
             <tr className="border-b border-gray-100 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
@@ -2568,9 +2654,32 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [mSearch, setMSearch] = useState("");
-  const shown = mSearch.trim()
-    ? media.filter((m) => [m.name, m.title, m.alt].some((x) => (x || "").toLowerCase().includes(mSearch.trim().toLowerCase())))
-    : media;
+  const [mFilter, setMFilter] = useState("all"); // all | noalt
+  const isImg = (m) => m.type === "image" || (m.mime || "").startsWith("image/") || m.demo;
+  const images = media.filter(isImg);
+  const noAlt = images.filter((m) => !(m.alt || "").trim());
+  const shown = media
+    .filter((m) => (mFilter === "noalt" ? isImg(m) && !(m.alt || "").trim() : true))
+    .filter((m) => !mSearch.trim() || [m.name, m.title, m.alt].some((x) => (x || "").toLowerCase().includes(mSearch.trim().toLowerCase())));
+  /* inline title/alt editing — saved straight back into WordPress */
+  const [editId, setEditId] = useState(null);
+  const [editVals, setEditVals] = useState({ title: "", alt: "" });
+  const [savingId, setSavingId] = useState(null);
+  const saveMeta = async (m) => {
+    setSavingId(m.id); setErr(null);
+    try {
+      const r = await fetch("/api/wp/media-update", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ site: project.website, credential: w.credential?.value || w.credential, id: m.id, title: editVals.title, alt: editVals.alt }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setOpt("website", { media: media.map((x) => (x.id === m.id ? { ...x, title: editVals.title, name: editVals.title, alt: editVals.alt } : x)) });
+        work?.("website", "mediaMetaUpdated", { detail: editVals.title || m.name });
+        log?.(`Updated media title/alt — ${editVals.title || m.name}`, project.website);
+        setEditId(null);
+      } else setErr(d.detail || `HTTP ${r.status}`);
+    } catch (e) { setErr("Save failed — " + (e?.message || e)); }
+    setSavingId(null);
+  };
   const demoLibrary = () => {
     const svcs = (w.architecture?.services || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
     const cities = (w.architecture?.locations || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
@@ -2614,12 +2723,39 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
         </button>
       </Card>
       {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-[11.5px] text-amber-800">{err}</div>}
-      {media.length > 0 && <div className="text-[10.5px] text-gray-400">{mSearch ? `${shown.length} of ${media.length} items match` : `${media.length} items`}</div>}
+      {media.length > 0 && (
+        /* visual overview: totals + the no-alt worklist, one click away */
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[["all", "Total items", media.length, "#334155"], ["img", "Images", images.length, "#0E7C66"], ["noalt", "No alt text", noAlt.length, noAlt.length ? "#DC2626" : "#16A34A"], ["withalt", "With alt text", images.length - noAlt.length, "#16A34A"]].map(([k, label, n, color]) => (
+            <div key={k} className="rounded-xl border border-gray-100 bg-gray-50/60 p-2.5">
+              <div className="text-[9.5px] font-bold uppercase tracking-wide text-gray-400">{label}</div>
+              <div className="ll-display text-[20px] font-bold" style={{ color }}>{n}</div>
+              <div className="mb-1 mt-1 h-1 overflow-hidden rounded-full bg-gray-200">
+                <div className="h-full rounded-full" style={{ width: `${media.length ? Math.min(100, (n / media.length) * 100) : 0}%`, background: color }} />
+              </div>
+              {(k === "noalt" || k === "all") && (
+                <button onClick={() => setMFilter(k === "noalt" ? "noalt" : "all")} className="text-[9.5px] font-bold" style={{ color: mFilter === (k === "noalt" ? "noalt" : "all") ? accent : "#9CA3AF" }}>View →</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {media.length > 0 && (
+        <div className="no-print flex flex-wrap items-center gap-1.5">
+          {[["all", `All items (${media.length})`], ["noalt", `No alt text (${noAlt.length})`]].map(([k, label]) => (
+            <button key={k} onClick={() => setMFilter(k)} className="rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold"
+              style={mFilter === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#4B5563" }}>
+              {label}
+            </button>
+          ))}
+          <span className="text-[10.5px] text-gray-400">{mSearch ? ` ${shown.length} match` : ""} · click any item's “Edit alt/title” — saves straight into WordPress</span>
+        </div>
+      )}
       {media.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {shown.map((m) => (
             <Card key={m.id} className="overflow-hidden p-0">
-              {m.type === "image" || (m.mime || "").startsWith("image/") || m.demo ? (
+              {isImg(m) ? (
                 /* real site images load through the CRM's proxy — client-site
                    firewalls challenge direct cross-site <img> loads and the
                    previews hang; failed loads collapse into a labeled tile */
@@ -2629,8 +2765,30 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
                 <div className="flex h-28 w-full items-center justify-center bg-gray-100 text-[10.5px] font-semibold uppercase text-gray-400">{(m.mime || m.type || "file").split("/").pop()}</div>
               )}
               <div className="p-2.5">
-                <div className="truncate text-[11.5px] font-semibold text-gray-700">{m.title || m.name}{m.demo && <span className="ml-1 rounded bg-amber-100 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}</div>
-                <div className="truncate text-[9.5px] text-gray-400">alt: {m.alt || "—"}</div>
+                {editId === m.id ? (
+                  <div className="space-y-1.5">
+                    <input value={editVals.title} onChange={(e) => setEditVals((v) => ({ ...v, title: e.target.value }))} placeholder="Image title"
+                      className="w-full rounded-lg border border-gray-200 px-2 py-1 text-[11px]" />
+                    <input value={editVals.alt} onChange={(e) => setEditVals((v) => ({ ...v, alt: e.target.value }))} placeholder="Alt text (describe the image)"
+                      className="w-full rounded-lg border border-gray-200 px-2 py-1 text-[11px]" />
+                    <div className="flex gap-1.5">
+                      <button onClick={() => saveMeta(m)} disabled={savingId === m.id}
+                        className="flex-1 rounded-lg py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
+                        {savingId === m.id ? "Saving…" : "Save to WordPress"}
+                      </button>
+                      <button onClick={() => setEditId(null)} className="rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-semibold text-gray-500">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="truncate text-[11.5px] font-semibold text-gray-700">{m.title || m.name}{m.demo && <span className="ml-1 rounded bg-amber-100 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}</div>
+                    <div className="truncate text-[9.5px]" style={{ color: (m.alt || "").trim() ? "#9CA3AF" : "#DC2626" }}>alt: {m.alt || "missing"}</div>
+                    {!m.demo && w.platform === "wordpress" && (
+                      <button onClick={() => { setEditId(m.id); setEditVals({ title: m.title || m.name || "", alt: m.alt || "" }); }}
+                        className="mt-1 text-[10px] font-bold" style={{ color: accent }}>Edit alt/title</button>
+                    )}
+                  </>
+                )}
               </div>
             </Card>
           ))}
