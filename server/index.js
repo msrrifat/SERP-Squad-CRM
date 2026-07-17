@@ -51,6 +51,7 @@ async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "b
     method: "POST",
     headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
     body: JSON.stringify([task]),
+    signal: AbortSignal.timeout(35000), // a hung upstream connection must not stall a whole batch
   });
   if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
@@ -112,9 +113,18 @@ async function checkIndexOne(creds, url) {
   };
   /* DataForSEO answers a zero-result SERP with task code 40102 ("No Search
      Results") — that's a valid "nothing found", NOT a failure */
-  const serp = async (keyword) => {
+  const serp = async (keyword, retried) => {
     try { return await dfsLive(creds, "google/organic", { keyword, location_name: "United States", language_code: "en", depth: 10 }); }
-    catch (e) { if (/40102|No Search Results/i.test(String(e?.message || e))) return { result: [{ items: [] }] }; throw e; }
+    catch (e) {
+      const msg = String(e?.message || e);
+      if (/40102|No Search Results/i.test(msg)) return { result: [{ items: [] }] };
+      /* transient: 40101 burst, upstream timeout, connection reset — one retry */
+      if (!retried && /40101|timeout|timed out|abort|ECONN|fetch failed/i.test(msg)) {
+        await new Promise((r) => setTimeout(r, 2500));
+        return serp(keyword, true);
+      }
+      throw e;
+    }
   };
   let hit = match(await serp(`site:${bare}`));
   /* Google's site: operator is FLAKY for deep URLs — indexed pages often
