@@ -110,13 +110,17 @@ async function checkIndexOne(creds, url) {
     const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic");
     return items.find((it) => normUrl(it.url) === target) || (isRoot ? items.find((it) => normUrl(it.url).startsWith(target)) : null);
   };
-  let hit = match(await dfsLive(creds, "google/organic", { keyword: `site:${bare}`, location_name: "United States", language_code: "en", depth: 10 }));
+  /* DataForSEO answers a zero-result SERP with task code 40102 ("No Search
+     Results") — that's a valid "nothing found", NOT a failure */
+  const serp = async (keyword) => {
+    try { return await dfsLive(creds, "google/organic", { keyword, location_name: "United States", language_code: "en", depth: 10 }); }
+    catch (e) { if (/40102|No Search Results/i.test(String(e?.message || e))) return { result: [{ items: [] }] }; throw e; }
+  };
+  let hit = match(await serp(`site:${bare}`));
   /* Google's site: operator is FLAKY for deep URLs — indexed pages often
      return nothing. Before declaring "not indexed", search the URL itself:
      an indexed page reliably surfaces for its own address. */
-  if (!hit && !isRoot) {
-    hit = match(await dfsLive(creds, "google/organic", { keyword: `"${bare}"`, location_name: "United States", language_code: "en", depth: 10 }));
-  }
+  if (!hit && !isRoot) hit = match(await serp(`"${bare}"`));
   return { url, indexed: !!hit, matchedUrl: hit?.url || null, checkedAt: Date.now() };
 }
 
