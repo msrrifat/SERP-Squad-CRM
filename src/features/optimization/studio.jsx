@@ -2000,8 +2000,19 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const [idxChecking, setIdxChecking] = useState(false);
   const [idxBusy, setIdxBusy] = useState({});    // per-URL manual rechecks: "page<id>"/"post<id>" → true
   const [idxErr, setIdxErr] = useState(null);
-  const pageUrl = (pg) => "https://" + project.website + (pg.origUrl || pg.url);
-  const postUrl = (b) => "https://" + project.website + "/blog/" + b.slug;
+  /* synced entries carry an ABSOLUTE origUrl from WordPress — never glue the
+     site host in front of it again (that built garbage URLs and every index
+     check of a synced page came back "not indexed") */
+  const siteBase = "https://" + String(project.website || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const pageUrl = (pg) => {
+    const u = pg.origUrl || pg.url || "/";
+    return /^https?:\/\//.test(u) ? u : siteBase + (u.startsWith("/") ? u : "/" + u);
+  };
+  const postUrl = (b) => {
+    if (b.origUrl && /^https?:\/\//.test(b.origUrl)) return b.origUrl;
+    const path = b.url || "/blog/" + b.slug;
+    return /^https?:\/\//.test(path) ? path : siteBase + (path.startsWith("/") ? path : "/" + path);
+  };
   /* on-demand single-URL recheck (the buttons beside each page/post name) —
      same real /api/check-index call, never fabricated */
   const recheckOne = async (kind, item) => {
