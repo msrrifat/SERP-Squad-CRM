@@ -1610,7 +1610,10 @@ async function handlePixelCheck(body) {
     const html = (await res.text()).slice(0, 2e6);
     const hasScript = html.includes("/px.js");
     const hasKey = html.includes(key);
-    return [200, { live: true, status: res.status, blocked: res.status >= 400, hasScript, hasKey, installed: hasScript && hasKey }];
+    /* bot walls often answer 202/503 with a tiny challenge page — a real
+       homepage is never this small, so treat it as blocked, not "missing" */
+    const blocked = !hasScript && (res.status !== 200 || html.length < 2500);
+    return [200, { live: true, status: res.status, blocked, hasScript, hasKey, installed: hasScript && hasKey }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 180) }]; }
 }
 function handlePixelVerify(body, req) {
