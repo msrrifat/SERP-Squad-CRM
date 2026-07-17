@@ -903,8 +903,15 @@ const wpErr = (e) => [502, { error: "provider_error", detail: "WordPress: " + (e
 async function handleWpMedia(body) {
   const g = wpGuard(body); if (g) return g;
   try {
-    const items = await wpFetch(body, "/media?per_page=100&_fields=id,source_url,title,alt_text,media_type,mime_type,date");
-    return [200, { live: true, media: items.map((m) => ({ id: m.id, url: m.source_url, name: m.title?.rendered || "", alt: m.alt_text || "", type: m.media_type, mime: m.mime_type, date: m.date })) }];
+    /* WP caps per_page at 100 — paginate until the library is exhausted
+       (up to 2000 items) so a 450-image site syncs completely */
+    const all = [];
+    for (let page = 1; page <= 20; page++) {
+      const items = await wpFetch(body, `/media?per_page=100&page=${page}&_fields=id,source_url,title,alt_text,media_type,mime_type,date`);
+      all.push(...items);
+      if (items.length < 100) break;
+    }
+    return [200, { live: true, media: all.map((m) => ({ id: m.id, url: m.source_url, name: m.title?.rendered || "", alt: m.alt_text || "", type: m.media_type, mime: m.mime_type, date: m.date })) }];
   } catch (e) { return wpErr(e); }
 }
 

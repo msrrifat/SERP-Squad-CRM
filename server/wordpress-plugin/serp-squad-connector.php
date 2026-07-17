@@ -39,20 +39,25 @@ add_action('init', function () {
 });
 
 /* 2. Map deployed meta into Yoast SEO / RankMath when installed,
-      so the SEO plugin renders the tags natively. */
+      so the SEO plugin renders the tags natively (singular views only —
+      archives/home must keep their own titles). */
 add_filter('wpseo_title', function ($title) {                 // Yoast
+    if (!is_singular()) return $title;
     $t = get_post_meta(get_the_ID(), '_serpsquad_meta_title', true);
     return $t ?: $title;
 });
 add_filter('wpseo_metadesc', function ($desc) {
+    if (!is_singular()) return $desc;
     $d = get_post_meta(get_the_ID(), '_serpsquad_meta_desc', true);
     return $d ?: $desc;
 });
 add_filter('rank_math/frontend/title', function ($title) {    // RankMath
+    if (!is_singular()) return $title;
     $t = get_post_meta(get_the_ID(), '_serpsquad_meta_title', true);
     return $t ?: $title;
 });
 add_filter('rank_math/frontend/description', function ($desc) {
+    if (!is_singular()) return $desc;
     $d = get_post_meta(get_the_ID(), '_serpsquad_meta_desc', true);
     return $d ?: $desc;
 });
@@ -71,13 +76,26 @@ add_filter('pre_get_document_title', function ($title) {
     return $t ?: $title;
 });
 
-/* 4. Optional pixel injection: define SERPSQUAD_PIXEL_SRC and _KEY in
-      wp-config.php to inject the pixel site-wide without touching the theme:
-      define('SERPSQUAD_PIXEL_SRC', 'https://app.serpsquad.com/px.js');
-      define('SERPSQUAD_PIXEL_KEY', 'ss_live_…'); */
+/* 4. Pixel injection, two ways — no theme editing needed either way:
+      a) REMOTE (one-click from the CRM): the CRM writes the two options
+         below through /wp/v2/settings using the same Application Password.
+      b) MANUAL: define SERPSQUAD_PIXEL_SRC and _KEY in wp-config.php
+         (defines win over options when both are present). */
+add_action('init', function () {
+    register_setting('general', 'serpsquad_pixel_src', [
+        'show_in_rest' => true, 'type' => 'string', 'default' => '',
+        'sanitize_callback' => 'esc_url_raw',
+    ]);
+    register_setting('general', 'serpsquad_pixel_key', [
+        'show_in_rest' => true, 'type' => 'string', 'default' => '',
+        'sanitize_callback' => 'sanitize_text_field',
+    ]);
+});
 add_action('wp_head', function () {
-    if (defined('SERPSQUAD_PIXEL_SRC') && defined('SERPSQUAD_PIXEL_KEY')) {
+    $src = defined('SERPSQUAD_PIXEL_SRC') ? SERPSQUAD_PIXEL_SRC : get_option('serpsquad_pixel_src');
+    $key = defined('SERPSQUAD_PIXEL_KEY') ? SERPSQUAD_PIXEL_KEY : get_option('serpsquad_pixel_key');
+    if ($src && $key) {
         printf('<script async src="%s" data-key="%s"></script>' . "\n",
-            esc_url(SERPSQUAD_PIXEL_SRC), esc_attr(SERPSQUAD_PIXEL_KEY));
+            esc_url($src), esc_attr($key));
     }
 }, 2);

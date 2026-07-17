@@ -1848,6 +1848,56 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const plat = w.platform ? WEB_PLATFORMS[w.platform] : null;
   const caps = plat ? plat.caps : {};
   const dirtyCount = w.pages.filter((p) => p.dirty).length;
+
+  /* ---- pages/posts list controls: search + sortable Name/Date columns.
+     Name sorting keeps the site TREE: children render indented under their
+     parent (sorted within each level); date sorting is a flat timeline. ---- */
+  const [pgSearch, setPgSearch] = useState("");
+  const [pgSort, setPgSort] = useState({ key: "name", dir: "asc" });
+  const [postSearch, setPostSearch] = useState("");
+  const [postSort, setPostSort] = useState({ key: "date", dir: "desc" });
+  const pageDate = (pg) => (pg.modified ? Date.parse(pg.modified) || 0 : pg.updatedAt || 0);
+  const postDate = (b) => (b.modified ? Date.parse(b.modified) || 0 : b.publishAt || b.createdAt || 0);
+  const pageRows = useMemo(() => {
+    const q = pgSearch.trim().toLowerCase();
+    if (q) return w.pages
+      .filter((p) => [p.name, p.url, p.metaTitle, p.metaDesc].some((x) => (x || "").toLowerCase().includes(q)))
+      .map((p) => ({ ...p, depth: 0 }));
+    if (pgSort.key === "date")
+      return [...w.pages].sort((a, b) => (pageDate(a) - pageDate(b)) * (pgSort.dir === "asc" ? 1 : -1)).map((p) => ({ ...p, depth: 0 }));
+    /* tree: nest under the parent page when one exists (never under the homepage) */
+    const norm = (u) => (String(u || "/").replace(/\/+$/, "") || "/");
+    const byUrl = new Map(w.pages.map((p) => [norm(p.url), p]));
+    const kids = { __root__: [] };
+    w.pages.forEach((p) => {
+      const u = norm(p.url);
+      const pp = u.split("/").slice(0, -1).join("/") || "/";
+      const parentKey = u !== "/" && pp !== "/" && byUrl.has(pp) ? pp : "__root__";
+      (kids[parentKey] = kids[parentKey] || []).push(p);
+    });
+    const dir = pgSort.dir === "asc" ? 1 : -1;
+    const cmp = (a, b) => ((a.name || a.url || "").toLowerCase() < (b.name || b.url || "").toLowerCase() ? -1 : 1) * dir;
+    const out = [];
+    const walk = (key, depth) => (kids[key] || []).sort(cmp).forEach((p) => { out.push({ ...p, depth }); walk(norm(p.url), depth + 1); });
+    walk("__root__", 0);
+    w.pages.forEach((p) => { if (!out.some((o) => o.id === p.id)) out.push({ ...p, depth: 0 }); }); // cycle safety
+    return out;
+  }, [w.pages, pgSearch, pgSort]);
+  const postRows = useMemo(() => {
+    const q = postSearch.trim().toLowerCase();
+    let list = w.blogs;
+    if (q) list = list.filter((b) => [b.title, b.slug, b.metaTitle, b.metaDesc].some((x) => (x || "").toLowerCase().includes(q)));
+    const dir = postSort.dir === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => (postSort.key === "date"
+      ? (postDate(a) - postDate(b)) * dir
+      : ((a.title || "").toLowerCase() < (b.title || "").toLowerCase() ? -1 : 1) * dir));
+  }, [w.blogs, postSearch, postSort]);
+  const SortHead = ({ state, setState, k, defDir = "asc", className = "py-2 pr-2", children }) => (
+    <th className={className + " cursor-pointer select-none hover:text-gray-600"}
+      onClick={() => setState((s) => ({ key: k, dir: s.key === k ? (s.dir === "asc" ? "desc" : "asc") : defDir }))}>
+      <span className="inline-flex items-center gap-0.5">{children}{state.key === k && <span style={{ color: accent }}>{state.dir === "asc" ? "▲" : "▼"}</span>}</span>
+    </th>
+  );
   const siteKey = w.siteKey || `ss_live_${project.id}_${hashStr(project.website).toString(36).slice(0, 6)}`;
 
   const trackedKws = [...new Set(project.tracking.map((t) => t.keyword))];
@@ -2262,6 +2312,8 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 : "Pages are crawled and listed automatically once the pixel is verified."}
             </div>
           </div>
+          <input value={pgSearch} onChange={(e) => setPgSearch(e.target.value)} placeholder="Search pages…"
+            className="w-40 rounded-lg border border-gray-200 px-3 py-2 text-[12px] no-print" />
           <button onClick={() => crawlSite()} disabled={crawling || !w.verified}
             className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
             {crawling ? <><RefreshCw size={12} className="animate-spin" /> Crawling…</> : <><RefreshCw size={12} /> Recrawl site</>}
@@ -2292,24 +2344,29 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <thead>
             <tr className="border-b border-gray-100 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
               <th className="w-7 py-2 pr-1">#</th>
-              <th className="py-2 pr-2">Page</th>
+              <SortHead state={pgSort} setState={setPgSort} k="name">Page</SortHead>
               <th className="w-[150px] py-2 pr-2">Meta title</th>
               <th className="w-[170px] py-2 pr-2">Meta description</th>
-              <th className="w-[86px] py-2 pr-2">Date</th>
+              <SortHead state={pgSort} setState={setPgSort} k="date" defDir="desc" className="w-[86px] py-2 pr-2">Date</SortHead>
               <th className="w-[168px] py-2">Opportunity</th>
             </tr>
           </thead>
           <tbody>
-            {w.pages.map((pg, i) => (
+            {pageRows.length === 0 && pgSearch && (
+              <tr><td colSpan={6} className="py-6 text-center text-[12px] text-gray-400">No pages match “{pgSearch}”.</td></tr>
+            )}
+            {pageRows.map((pg, i) => (
               <tr key={pg.id} onClick={() => setOpenPage(pg.id)} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
                 <td className="ll-mono py-2.5 pr-1 text-[10px] text-gray-300">{i + 1}</td>
                 <td className="min-w-0 py-2.5 pr-2">
-                  <div className="flex items-center gap-1.5">
+                  {/* tree indent: children sit visibly under their parent */}
+                  <div className="flex items-center gap-1.5" style={pg.depth ? { paddingLeft: pg.depth * 18 } : undefined}>
+                    {pg.depth > 0 && <span className="shrink-0 text-gray-300">↳</span>}
                     <span className="truncate text-[12.5px] font-medium text-gray-800">{pg.name || pg.metaTitle || pg.url}</span>
                     {pg.dirty && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-600">Pending</span>}
                   </div>
-                  <div className="ll-mono truncate text-[10px] text-gray-400">{pg.url}</div>
-                  <div className="mt-1 flex items-center gap-1.5">
+                  <div className="ll-mono truncate text-[10px] text-gray-400" style={pg.depth ? { paddingLeft: pg.depth * 18 + 18 } : undefined}>{pg.url}</div>
+                  <div className="mt-1 flex items-center gap-1.5" style={pg.depth ? { paddingLeft: pg.depth * 18 + 18 } : undefined}>
                     <IndexTag idx={pg.index} checking={(idxChecking && indexStale(pg.index)) || idxBusy["page" + pg.id]} />
                     <RecheckBtn kind="page" item={pg} />
                   </div>
@@ -2321,7 +2378,8 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                   {pg.metaDesc ? <><span className="line-clamp-2 text-[11px] leading-snug text-gray-500">{pg.metaDesc}</span><div className="mt-0.5"><MetaChip label="MD" value={pg.metaDesc} max={160} /></div></> : null}
                 </td>
                 <td className="ll-mono py-2.5 pr-2 text-[10px] leading-relaxed text-gray-400">
-                  {pg.updatedAt ? <>Upd {fmtTs2(pg.updatedAt)}</> : null}
+                  {pageDate(pg) ? fmtTs2(pageDate(pg)) : null}
+                  {pg.updatedAt && pg.modified ? <div>Upd {fmtTs2(pg.updatedAt)}</div> : null}
                 </td>
                 <td className="py-2.5">
                   <OppBadge projectId={project.id} url={pg.url} tracking={trackedKws} brand={project.name} />
@@ -2360,10 +2418,14 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 : "Publishing is unavailable on this platform — see the note below."}
             </div>
           </div>
-          <button onClick={() => setOpenPost("new")} disabled={!blogsEnabled}
-            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-            <Plus size={13} /> Publish a new post
-          </button>
+          <span className="flex items-center gap-2">
+            <input value={postSearch} onChange={(e) => setPostSearch(e.target.value)} placeholder="Search posts…"
+              className="w-40 rounded-lg border border-gray-200 px-3 py-2 text-[12px] no-print" />
+            <button onClick={() => setOpenPost("new")} disabled={!blogsEnabled}
+              className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+              <Plus size={13} /> Publish a new post
+            </button>
+          </span>
         </div>
         {caps.blogs !== true && (
           <div className="mt-3 rounded-lg bg-amber-50 p-3 text-[11.5px] leading-relaxed text-amber-700">
@@ -2386,16 +2448,19 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <thead>
             <tr className="border-b border-gray-100 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
               <th className="w-7 py-2 pr-1">#</th>
-              <th className="py-2 pr-2">Post</th>
+              <SortHead state={postSort} setState={setPostSort} k="name">Post</SortHead>
               <th className="w-[140px] py-2 pr-2">Meta title</th>
               <th className="w-[160px] py-2 pr-2">Meta description</th>
-              <th className="w-[92px] py-2 pr-2">Date</th>
+              <SortHead state={postSort} setState={setPostSort} k="date" defDir="desc" className="w-[92px] py-2 pr-2">Date</SortHead>
               <th className="w-[168px] py-2 pr-2">Opportunity</th>
               <th className="w-[78px] py-2 pr-2">Status</th>
             </tr>
           </thead>
           <tbody>
-            {w.blogs.map((b, i) => (
+            {postRows.length === 0 && postSearch && (
+              <tr><td colSpan={7} className="py-6 text-center text-[12px] text-gray-400">No posts match “{postSearch}”.</td></tr>
+            )}
+            {postRows.map((b, i) => (
               <tr key={b.id} onClick={() => blogsEnabled && setOpenPost(b.id)} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
                 <td className="ll-mono py-2.5 pr-1 text-[10px] text-gray-300">{i + 1}</td>
                 <td className="min-w-0 py-2.5 pr-2">
@@ -2502,6 +2567,10 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
   const work = useWork();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [mSearch, setMSearch] = useState("");
+  const shown = mSearch.trim()
+    ? media.filter((m) => [m.name, m.title, m.alt].some((x) => (x || "").toLowerCase().includes(mSearch.trim().toLowerCase())))
+    : media;
   const demoLibrary = () => {
     const svcs = (w.architecture?.services || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
     const cities = (w.architecture?.locations || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
@@ -2538,16 +2607,26 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
           <div className="ll-display text-[14px] font-semibold">WordPress media library</div>
           <div className="text-[11px] text-gray-400">Synced media is matched to pages by keyword during full-site deploys — with generated alt & title text on every placement.</div>
         </div>
+        <input value={mSearch} onChange={(e) => setMSearch(e.target.value)} placeholder="Search media…"
+          className="w-44 rounded-lg border border-gray-200 px-3 py-2 text-[12px] no-print" />
         <button onClick={sync} disabled={busy} className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
           <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> {media.length ? "Re-sync media" : "Sync media"}
         </button>
       </Card>
       {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-[11.5px] text-amber-800">{err}</div>}
+      {media.length > 0 && <div className="text-[10.5px] text-gray-400">{mSearch ? `${shown.length} of ${media.length} items match` : `${media.length} items`}</div>}
       {media.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {media.map((m) => (
+          {shown.map((m) => (
             <Card key={m.id} className="overflow-hidden p-0">
-              <img src={m.url} alt={m.alt || m.name} className="h-28 w-full object-cover" loading="lazy" />
+              {m.type === "image" || (m.mime || "").startsWith("image/") || m.demo ? (
+                /* no-referrer defeats hotlink protection that blanks previews;
+                   failed loads collapse into a labeled placeholder */
+                <img src={m.url} alt={m.alt || m.name} className="h-28 w-full bg-gray-50 object-cover" loading="lazy" referrerPolicy="no-referrer"
+                  onError={(e) => { e.currentTarget.outerHTML = '<div class="flex h-28 w-full items-center justify-center bg-gray-100 text-[10px] text-gray-400">preview blocked by site</div>'; }} />
+              ) : (
+                <div className="flex h-28 w-full items-center justify-center bg-gray-100 text-[10.5px] font-semibold uppercase text-gray-400">{(m.mime || m.type || "file").split("/").pop()}</div>
+              )}
               <div className="p-2.5">
                 <div className="truncate text-[11.5px] font-semibold text-gray-700">{m.title || m.name}{m.demo && <span className="ml-1 rounded bg-amber-100 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}</div>
                 <div className="truncate text-[9.5px] text-gray-400">alt: {m.alt || "—"}</div>
