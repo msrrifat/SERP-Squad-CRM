@@ -1954,12 +1954,18 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           const added = { pages: 0, posts: 0 };
           set((cur) => {
             // computed against the LIVE state inside the updater \u2014 edits made during the sync survive
-            const newPages = (d.pages || []).filter((dp) => !cur.pages.some((p) => p.url === dp.url || (dp.wpId && p.wpId === dp.wpId)))
+            /* purge untouched demo leftovers (old sample crawls) so the REAL
+               /about, /contact etc. aren't blocked by the URL dedupe */
+            const demoUrls = new Set(DISCOVERED_PAGES.map((p) => p.url));
+            const demoSlugs = new Set(DISCOVERED_POSTS.map((p) => p.slug));
+            const basePages = cur.pages.filter((p) => !(demoUrls.has(p.url) && !p.dirty && !p.synced && /bright smile/i.test(p.metaTitle || "")));
+            const baseBlogs = cur.blogs.filter((b) => !(demoSlugs.has(b.slug) && !b.synced));
+            const newPages = (d.pages || []).filter((dp) => !basePages.some((p) => p.url === dp.url || (dp.wpId && p.wpId === dp.wpId)))
               .map((dp, i) => ({ ...dp, id: "pg" + Date.now() + i, dirty: false, synced: true }));
-            const newPosts = (d.posts || []).filter((dp) => !cur.blogs.some((b) => b.slug === dp.slug))
+            const newPosts = (d.posts || []).filter((dp) => !baseBlogs.some((b) => b.slug === dp.slug))
               .map((dp, i) => ({ ...dp, id: "bl" + Date.now() + i, synced: true }));
             added.pages = newPages.length; added.posts = newPosts.length;
-            return { pages: [...cur.pages, ...newPages], blogs: [...newPosts, ...cur.blogs], crawled: true, lastCrawl: Date.now() };
+            return { pages: [...basePages, ...newPages], blogs: [...newPosts, ...baseBlogs], crawled: true, lastCrawl: Date.now() };
           });
           setCrawling(false);
           setTimeout(() => { work?.("website", "siteCrawled", { detail: `${added.pages} pages, ${added.posts} posts` }); log?.(`Synced ${project.website} via WordPress \u2014 imported ${added.pages} page${added.pages === 1 ? "" : "s"} & ${added.posts} post${added.posts === 1 ? "" : "s"}`, project.name); }, 0);
