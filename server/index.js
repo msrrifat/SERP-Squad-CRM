@@ -2008,6 +2008,33 @@ http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*" });
       return res.end(PX_JS);
     }
+    /* image preview proxy: client-site WAFs challenge cross-site <img> loads
+       (no cookies) and previews hang — the CRM's server fetches instead.
+       SSRF-guarded: only hosts that are a connected project's website. */
+    if (req.method === "GET" && req.url.startsWith("/api/img?")) {
+      try {
+        const target = new URL(new URL(req.url, "http://x").searchParams.get("u") || "");
+        if (!/^https?:$/.test(target.protocol)) return send(400, { error: "bad_url" });
+        const hosts = new Set();
+        const st = loadState();
+        (st?.clients || []).forEach((c) => (c.projects || []).forEach((p) => {
+          const h = String(p.website || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "").toLowerCase();
+          if (h) hosts.add(h);
+        }));
+        const th = target.hostname.replace(/^www\./, "").toLowerCase();
+        if (![...hosts].some((h) => th === h || th.endsWith("." + h))) return send(403, { error: "host_not_allowed" });
+        const r = await fetch(target, { redirect: "follow", signal: AbortSignal.timeout(25000), headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+        } });
+        const ct = r.headers.get("content-type") || "";
+        if (!r.ok || !ct.startsWith("image/")) return send(502, { error: "not_image", status: r.status });
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > 15e6) return send(502, { error: "too_large" });
+        res.writeHead(200, { "Content-Type": ct, "Cache-Control": "public, max-age=86400", "Content-Length": buf.length });
+        return res.end(buf);
+      } catch (e) { return send(502, { error: String(e?.message || e).slice(0, 100) }); }
+    }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */

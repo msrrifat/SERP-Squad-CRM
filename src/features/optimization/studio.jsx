@@ -2620,9 +2620,10 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
           {shown.map((m) => (
             <Card key={m.id} className="overflow-hidden p-0">
               {m.type === "image" || (m.mime || "").startsWith("image/") || m.demo ? (
-                /* no-referrer defeats hotlink protection that blanks previews;
-                   failed loads collapse into a labeled placeholder */
-                <img src={m.url} alt={m.alt || m.name} className="h-28 w-full bg-gray-50 object-cover" loading="lazy" referrerPolicy="no-referrer"
+                /* real site images load through the CRM's proxy — client-site
+                   firewalls challenge direct cross-site <img> loads and the
+                   previews hang; failed loads collapse into a labeled tile */
+                <img src={m.demo ? m.url : "/api/img?u=" + encodeURIComponent(m.url)} alt={m.alt || m.name} className="h-28 w-full bg-gray-50 object-cover" loading="lazy" referrerPolicy="no-referrer"
                   onError={(e) => { e.currentTarget.outerHTML = '<div class="flex h-28 w-full items-center justify-center bg-gray-100 text-[10px] text-gray-400">preview blocked by site</div>'; }} />
               ) : (
                 <div className="flex h-28 w-full items-center justify-center bg-gray-100 text-[10.5px] font-semibold uppercase text-gray-400">{(m.mime || m.type || "file").split("/").pop()}</div>
