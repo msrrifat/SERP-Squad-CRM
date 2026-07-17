@@ -1970,7 +1970,23 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         log?.(`Website pixel verified — ${d.hits} hit(s), last from ${d.page || "your site"}`, project.website);
         crawlSite();
       } else {
-        setVerifyNote(`No pixel hit recorded yet for ${siteKey}. Place the snippet on the site, open any page once, then check again. The pixel reports to ${appOrigin()} — verification completes once the CRM is hosted there (see DEPLOYMENT.md). For local testing you can hit the local server directly: curl -X POST localhost:8787/api/pixel/verify -d '{"key":"${siteKey}"}' -H 'content-type: application/json'.`);
+        /* concrete diagnosis: fetch the site server-side and check whether the
+           snippet is actually in its HTML — "not installed" vs "installed but
+           never visited" are very different fixes */
+        let diag = "";
+        try {
+          const site = /^https?:\/\//.test(project.website) ? project.website : "https://" + project.website;
+          const c = await fetch("/api/pixel/check", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000), body: JSON.stringify({ url: site, key: siteKey }) });
+          const cd = await c.json();
+          if (cd.live) {
+            diag = cd.installed
+              ? " Good news: the snippet IS installed on the site. Open any page of the site once in a normal browser tab, wait a few seconds, then check again."
+              : cd.hasScript
+                ? " A pixel script exists on the site but with a DIFFERENT key — replace it with the snippet below (it carries this project's key)."
+                : ` The snippet is NOT in the site's HTML (checked ${site}). The paste didn't publish — re-add it inside <head>, save/publish, clear any caching plugin, then reload the site once.`;
+          }
+        } catch { /* diagnostics are best-effort */ }
+        setVerifyNote(`No pixel hit recorded yet for ${siteKey}.${diag || ` Place the snippet on the site, open any page once, then check again. The pixel reports to ${appOrigin()}.`}`);
       }
     } catch { setVerifyNote("API server unreachable (npm run api) — pixel verification requires it."); }
     setVerifying(false);

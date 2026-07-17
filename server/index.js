@@ -1593,6 +1593,21 @@ const PIXELS_FILE = new URL("./data/pixels.json", import.meta.url);
 const loadPixels = () => { try { return JSON.parse(readFileSync(PIXELS_FILE, "utf8")); } catch { return {}; } };
 const savePixels = (d) => { mkdirSync(new URL("./data/", import.meta.url), { recursive: true }); writeFileSync(PIXELS_FILE, JSON.stringify(d)); };
 const PIXEL_ROUTES = ["/api/pixel/verify"];
+/* does the site actually contain the pixel snippet? Fetches the page like a
+   browser and looks for px.js + the site key — turns "not verifying" from a
+   mystery into a concrete answer (not installed vs installed-but-never-visited) */
+async function handlePixelCheck(body) {
+  const url = String(body?.url || "").trim();
+  const key = String(body?.key || "").trim();
+  if (!/^https?:\/\//.test(url) || !key) return [400, { error: "bad_request", detail: "url and key required" }];
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SERPSquadPixelCheck/1.0)" } });
+    const html = (await res.text()).slice(0, 2e6);
+    const hasScript = html.includes("/px.js");
+    const hasKey = html.includes(key);
+    return [200, { live: true, status: res.status, hasScript, hasKey, installed: hasScript && hasKey }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 180) }]; }
+}
 function handlePixelVerify(body, req) {
   const key = String(body?.key || "").slice(0, 80);
   if (!/^ss_(live|test)_/.test(key)) return [400, { error: "bad_request", detail: "invalid pixel key" }];
@@ -1607,7 +1622,10 @@ function handlePixelStatus(body) {
   const hit = loadPixels()[key];
   return [200, { verified: !!hit, lastHit: hit?.lastHit || null, hits: hit?.hits || 0, page: hit?.page || null }];
 }
-const PX_JS = `(function(){try{var s=document.currentScript,k=s&&s.getAttribute("data-key");if(!k)return;var o=s.src.replace(/\/px\.js.*$/,"");var b=JSON.stringify({key:k,page:location.href});if(navigator.sendBeacon){navigator.sendBeacon(o+"/api/pixel/verify",b);}else{fetch(o+"/api/pixel/verify",{method:"POST",body:b,keepalive:true}).catch(function(){});}}catch(e){}})();`;
+/* NOTE: no regex literals in this template — backslash escapes get eaten by
+   the template literal and the served script becomes a SyntaxError (`//` turns
+   into a comment). split() is escape-proof. */
+const PX_JS = `(function(){try{var s=document.currentScript,k=s&&s.getAttribute("data-key");if(!k)return;var o=s.src.split("/px.js")[0];var b=JSON.stringify({key:k,page:location.href});if(navigator.sendBeacon){navigator.sendBeacon(o+"/api/pixel/verify",b);}else{fetch(o+"/api/pixel/verify",{method:"POST",body:b,keepalive:true}).catch(function(){});}}catch(e){}})();`;
 
 /* ---- WordPress connection tester: pinpoint exactly what's wrong ---- */
 async function handleWpTest(body) {
@@ -1961,7 +1979,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -1993,6 +2011,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/webflow/publish" ? await handleWebflowPublish(body)
         : req.url === "/api/pixel/verify" ? handlePixelVerify(body, req)
         : req.url === "/api/pixel/status" ? handlePixelStatus(body)
+        : req.url === "/api/pixel/check" ? await handlePixelCheck(body)
         : req.url === "/api/audit/website" ? await handleAuditWebsite(body)
         : req.url === "/api/audit/profile" ? await handleAuditProfile(body)
         : req.url === "/api/leads/search" ? await handleLeadsSearch(body)
