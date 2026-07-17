@@ -620,9 +620,11 @@ export default function App() {
       return {
         ...t,
         extraPositions: [...(t.extraPositions || []), u.newPos],
-        /* dated scan log — powers the Ranking history tab */
-        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null }],
+        /* dated scan log — powers the Ranking history tab (mp = map-pack pos) */
+        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null, ...(u.mapPos !== undefined ? { mp: u.mapPos } : {}) }],
         rankUrl: u.url || t.rankUrl || null,
+        /* latest local map-pack position — undefined on demo fallbacks keeps the old value */
+        ...(u.mapPos !== undefined ? { mapPos: u.mapPos, packShown: !!u.packShown } : {}),
       };
     }) }));
     logActivity(`Re-checked ${updates.length} keyword${updates.length > 1 ? "s" : ""}`, project?.name);

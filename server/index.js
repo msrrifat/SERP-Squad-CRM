@@ -1740,8 +1740,8 @@ async function handleRerun(body) {
         }
       }
       if (!task) throw lastErr;
-      const { position, url } = parseSerpRank(task, e.domain);
-      return { id: e.id, position, url, location: usedLocation };
+      const { position, url, mapPos, packShown } = parseSerpRank(task, e.domain);
+      return { id: e.id, position, url, mapPos, packShown, location: usedLocation };
     };
     /* DataForSEO 40101s ("Internal SE Server Error") come in bursts — two
        retries with growing gaps ride out the burst instead of failing rows */

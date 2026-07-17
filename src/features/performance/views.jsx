@@ -12,7 +12,7 @@ import {
   LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
-  Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
+  Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin, Columns3,
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
@@ -648,9 +648,25 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     })();
   }, [project.id, tracking.length, dfsConnected]); // eslint-disable-line
 
+  /* local map-pack position: real projects read the latest scan; demo shows
+     a deterministic sample so the column demonstrates itself */
+  const mapOf = (t) => {
+    if (project.demoMode === false) return t.mapPos ?? null;
+    const r = mulberry32(hashStr("mp|" + t.id));
+    return r() < 0.4 ? 1 + Math.floor(r() * 3) : null;
+  };
+
+  /* column visibility — the "View" menu top-right; persisted per browser */
+  const COLS = [["volume", "Volume"], ["strend", "Search trend"], ["start", "Start"], ["current", "Current (web)"], ["map", "Map pack"], ["changes", "Change columns"], ["life", "Lifetime"], ["url", "Ranking URL"]];
+  const [cols, setCols] = useState(() => { try { return JSON.parse(localStorage.getItem("ss_rank_cols") || "{}"); } catch { return {}; } });
+  const colOn = (k) => cols[k] !== false;
+  const toggleCol = (k) => setCols((c) => { const n = { ...c, [k]: !(c[k] !== false) }; try { localStorage.setItem("ss_rank_cols", JSON.stringify(n)); } catch { /* private mode */ } return n; });
+  const [colsOpen, setColsOpen] = useState(false);
+  const visColCount = 3 + ["volume", "strend", "start", "current", "map", "life", "url"].filter(colOn).length + (colOn("changes") ? DELTA_DAYS.length : 0);
+
   /* column sorting — defaults to best current positions on top */
   const [sort, setSort] = useState({ key: "cur", dir: "asc" });
-  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key === "volume" ? svOf(t)?.v : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
+  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key === "volume" ? svOf(t)?.v : sort.key === "map" ? mapOf(t) : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
   const rows = tracking.filter((t) =>
     (cityFilter === "All cities" || cityLabel(t.city) === cityFilter) &&
     (!search.trim() || t.keyword.toLowerCase().includes(search.trim().toLowerCase()))
@@ -713,7 +729,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
           });
           if (res.ok) {
             const data = await res.json();
-            updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null })); // 101 = not in top 100
+            updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })); // 101 = not in top 100
             failed.push(...data.updated.filter((u) => u.error));
             live = true;
           } else if (res.status !== 503) throw new Error(await res.text());
@@ -755,7 +771,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             });
             if (res.ok) {
               const data = await res.json();
-              const ups = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null }));
+              const ups = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }));
               if (ups.length) onRerun?.(ups);
               ok += ups.length;
               failedFinal.push(...data.updated.filter((u) => u.error));
@@ -852,6 +868,24 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             )}
             {tab === "live" && (
             <div className="flex flex-wrap items-center gap-2 no-print">
+              {/* View → toggle columns (persisted) */}
+              <div className="relative">
+                <button onClick={() => setColsOpen((v) => !v)}
+                  className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-gray-600 hover:border-gray-300">
+                  <Columns3 size={13} /> View
+                </button>
+                {colsOpen && (
+                  <div className="absolute right-0 z-30 mt-1 w-52 rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">Toggle columns</div>
+                    {COLS.map(([k, l]) => (
+                      <label key={k} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-gray-700 hover:bg-gray-50">
+                        <input type="checkbox" checked={colOn(k)} onChange={() => toggleCol(k)} className="h-3.5 w-3.5 rounded" style={{ accentColor: accent }} />
+                        {l}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter keywords…"
                 className="w-36 rounded-lg border border-gray-200 px-3 py-1.5 text-[13px]" />
               <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)} className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px]">
@@ -910,19 +944,20 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
                   </th>
                   <SortTh k="keyword" className="px-5 py-3">Keyword</SortTh>
-                  <SortTh k="volume" defDir="desc">Volume</SortTh>
-                  <th className="px-3 py-3 font-semibold" title="Monthly search volume over the last 12 months — see when demand peaks">Search trend (12mo)</th>
-                  <SortTh k="start">Start</SortTh>
-                  <SortTh k="cur">Current</SortTh>
-                  {DELTA_DAYS.map((d) => <SortTh key={d} k={"dd" + d} defDir="desc">{d}d</SortTh>)}
-                  <SortTh k="life" defDir="desc">Lifetime</SortTh>
-                  <th className="px-3 py-3 font-semibold">Ranking URL</th>
+                  {colOn("volume") && <SortTh k="volume" defDir="desc">Volume</SortTh>}
+                  {colOn("strend") && <th className="px-3 py-3 font-semibold" title="Monthly search volume over the last 12 months — see when demand peaks">Search trend (12mo)</th>}
+                  {colOn("start") && <SortTh k="start">Start</SortTh>}
+                  {colOn("current") && <SortTh k="cur">Current</SortTh>}
+                  {colOn("map") && <SortTh k="map" title="Position in Google's local map pack (3-pack) — from the same scan">Map pack</SortTh>}
+                  {colOn("changes") && DELTA_DAYS.map((d) => <SortTh key={d} k={"dd" + d} defDir="desc">{d}d</SortTh>)}
+                  {colOn("life") && <SortTh k="life" defDir="desc">Lifetime</SortTh>}
+                  {colOn("url") && <th className="px-3 py-3 font-semibold">Ranking URL</th>}
                   <th className="px-3 py-3 no-print"></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={9 + DELTA_DAYS.length} className="px-5 py-10 text-center text-[13px] text-gray-400">
+                  <tr><td colSpan={visColCount} className="px-5 py-10 text-center text-[13px] text-gray-400">
                     No keywords tracked yet — add your first keywords to start collecting daily positions.
                   </td></tr>
                 )}
@@ -943,25 +978,39 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         </span>
                       </div>
                     </td>
-                    <td className="ll-mono px-3 py-3 font-semibold text-gray-700">
+                    {colOn("volume") && <td className="ll-mono px-3 py-3 font-semibold text-gray-700">
                       {(() => { const s = svOf(t); return s?.v != null ? <span title={`~${s.v.toLocaleString()} searches/mo in ${cityLabel(t.city)}${s.demo ? " (demo)" : ""}`}>{s.v >= 1000 ? (s.v / 1000).toFixed(s.v >= 10000 ? 0 : 1) + "k" : s.v}</span> : <span className="text-gray-300">—</span>; })()}
-                    </td>
-                    <td className="px-3 py-3">
+                    </td>}
+                    {colOn("strend") && <td className="px-3 py-3">
                       {(() => { const s = svOf(t); const mo = s?.monthly || []; if (!mo.length) return <span className="text-[11px] text-gray-300">—</span>;
                         const max = Math.max(1, ...mo.map((m) => m.v));
                         return <span className="flex h-5 items-end gap-px" title={mo.map((m) => `${m.m}/${m.y || ""}: ${m.v.toLocaleString()}`).join("\n")}>
                           {mo.map((m, i) => <span key={i} className="w-[4px] rounded-sm" style={{ height: `${Math.max(12, (m.v / max) * 100)}%`, background: accent + "99" }} />)}
                         </span>; })()}
-                    </td>
-                    <td className="px-3 py-3"><RankChip pos={t.stats.start} muted /></td>
-                    <td className="px-3 py-3"><RankChip pos={t.stats.cur} /></td>
-                    {DELTA_DAYS.map((d) => <td key={d} className="px-3 py-3"><PosChange value={deltaFor(t, d)} /></td>)}
-                    <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>
-                    <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
+                    </td>}
+                    {colOn("start") && <td className="px-3 py-3"><RankChip pos={t.stats.start} muted /></td>}
+                    {colOn("current") && <td className="px-3 py-3">
+                      <span className="inline-flex items-center gap-1" title="Website (organic) position">
+                        <Globe size={11} className="shrink-0 text-gray-400" /><RankChip pos={t.stats.cur} />
+                      </span>
+                    </td>}
+                    {colOn("map") && <td className="px-3 py-3">
+                      {(() => { const mp = mapOf(t); return (
+                        <span className="inline-flex items-center gap-1" title={mp ? `In Google's local map pack at position ${mp}` : t.packShown ? "Google shows a map pack for this search — the business isn't in it" : "No map-pack data yet — appears on the next scan"}>
+                          <MapPin size={11} className={mp ? "shrink-0 text-emerald-600" : "shrink-0 text-gray-300"} />
+                          {mp
+                            ? <span className="ll-mono inline-flex min-w-8 items-center justify-center rounded-md bg-emerald-100 px-1.5 py-0.5 text-[12.5px] font-semibold text-emerald-700">#{mp}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </span>
+                      ); })()}
+                    </td>}
+                    {colOn("changes") && DELTA_DAYS.map((d) => <td key={d} className="px-3 py-3"><PosChange value={deltaFor(t, d)} /></td>)}
+                    {colOn("life") && <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>}
+                    {colOn("url") && <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
                       {t.url
                         ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
                         : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
-                    </td>
+                    </td>}
                     <td className="px-3 py-3 no-print">
                       {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`) && onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
                     </td>

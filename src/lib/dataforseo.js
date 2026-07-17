@@ -46,13 +46,20 @@ export async function rerunNow(entryIds, dfsCredentials) {
 export function parseSerpRank(taskResult, domain) {
   const items = taskResult?.result?.[0]?.items || [];
   const clean = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase();
-  const hit = items.find((it) => {
-    if (it.type !== "organic") return false;
-    const hd = (it.domain || "").replace(/^www\./, "").toLowerCase();
-    return hd === clean || hd.endsWith("." + clean); // subdomains rank for the site too
-  });
-  return hit
-    ? { position: hit.rank_absolute, url: hit.url }   // rank_absolute = true SERP position
-    : { position: null, url: null };                  // not in top 100
+  const matches = (it) => {
+    const hd = (it.domain || (it.url || "").replace(/^https?:\/\//, "")).replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase();
+    return hd && (hd === clean || hd.endsWith("." + clean)); // subdomains rank for the site too
+  };
+  const hit = items.find((it) => it.type === "organic" && matches(it));
+  /* local map pack (3-pack) — SAME response, zero extra cost: the business's
+     position among the local_pack items, matched by its website domain */
+  const pack = items.filter((it) => it.type === "local_pack");
+  const mapIdx = pack.findIndex(matches);
+  return {
+    position: hit ? hit.rank_absolute : null,          // rank_absolute = true SERP position; null = not in top 100
+    url: hit ? hit.url : null,
+    mapPos: mapIdx >= 0 ? mapIdx + 1 : null,           // 1–3 inside the pack; null = not in the pack
+    packShown: pack.length > 0,                        // whether Google showed a map pack for this query at all
+  };
 }
 
