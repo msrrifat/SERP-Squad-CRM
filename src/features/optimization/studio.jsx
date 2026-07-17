@@ -2047,13 +2047,18 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
      "Re-check indexing" button (which forces EVERY page/post) */
   const runIndexCheck = (pages, posts) => {
     setIdxChecking(true); setIdxErr(null);
-    checkIndexApi([...pages.map(pageUrl), ...posts.map(postUrl)], dfs)
-      .then(({ results }) => {
-        const byUrl = Object.fromEntries(results.filter((r) => r.status !== "error").map((r) => [r.url, r]));
-        set((cur) => ({
-          pages: cur.pages.map((pg) => { const r = byUrl[pageUrl(pg)]; return r ? { ...pg, index: { status: r.indexed ? "indexed" : "not_indexed", checkedAt: r.checkedAt } } : pg; }),
-          blogs: cur.blogs.map((b) => { const r = byUrl[postUrl(b)]; return r ? { ...b, index: { status: r.indexed ? "indexed" : "not_indexed", checkedAt: r.checkedAt } } : b; }),
-        }));
+    /* results apply BATCH BY BATCH — statuses fill in as the check runs and
+       partial progress survives a late failure */
+    const applyBatch = (batch) => {
+      const byUrl = Object.fromEntries(batch.filter((r) => r.status !== "error").map((r) => [r.url, r]));
+      set((cur) => ({
+        pages: cur.pages.map((pg) => { const r = byUrl[pageUrl(pg)]; return r ? { ...pg, index: { status: r.indexed ? "indexed" : "not_indexed", checkedAt: r.checkedAt } } : pg; }),
+        blogs: cur.blogs.map((b) => { const r = byUrl[postUrl(b)]; return r ? { ...b, index: { status: r.indexed ? "indexed" : "not_indexed", checkedAt: r.checkedAt } } : b; }),
+      }));
+    };
+    checkIndexApi([...pages.map(pageUrl), ...posts.map(postUrl)], dfs, applyBatch)
+      .then(({ results, partialError }) => {
+        if (partialError) setIdxErr(`Checked ${results.length} URLs, then: ${partialError}`);
         log?.(`Index check: ${results.filter((r) => r.indexed).length}/${results.length} URLs indexed`, project.website);
       })
       .catch((e) => setIdxErr(e?.code === 503

@@ -15,18 +15,31 @@ import { useWork } from "../../lib/worklog.jsx";
 export const realDfs = (dfs) =>
   dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? { login: dfs.login, password: dfs.password } : undefined;
 
-export async function checkIndexApi(urls, dfs) {
-  const res = await fetch("/api/check-index", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(120000),
-    body: JSON.stringify({ urls, dfs: realDfs(dfs) }),
-  });
-  if (res.ok) return res.json();
-  const err = await res.json().catch(() => ({}));
-  const e = new Error(err.detail || err.hint || err.error || `HTTP ${res.status}`);
-  e.code = res.status;
-  throw e;
+export async function checkIndexApi(urls, dfs, onBatch = null) {
+  /* batches of 10 — each URL can cost two SERP queries, so big lists in one
+     request blow through HTTP timeouts. Results merge across batches and
+     onBatch (when given) streams partial results to the caller. */
+  const all = [];
+  for (let i = 0; i < urls.length; i += 10) {
+    const chunk = urls.slice(i, i + 10);
+    const res = await fetch("/api/check-index", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(180000),
+      body: JSON.stringify({ urls: chunk, dfs: realDfs(dfs) }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const e = new Error(err.detail || err.hint || err.error || `HTTP ${res.status}`);
+      e.code = res.status;
+      if (all.length) return { live: true, results: all, partialError: e.message }; // keep what already landed
+      throw e;
+    }
+    const d = await res.json();
+    all.push(...(d.results || []));
+    onBatch?.(d.results || [], all.length, urls.length);
+  }
+  return { live: true, results: all };
 }
 
 export const INDEX_STALE_MS = 7 * 864e5; // recheck cadence: 7 days
