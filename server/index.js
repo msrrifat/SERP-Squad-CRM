@@ -1601,11 +1601,16 @@ async function handlePixelCheck(body) {
   const key = String(body?.key || "").trim();
   if (!/^https?:\/\//.test(url) || !key) return [400, { error: "bad_request", detail: "url and key required" }];
   try {
-    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20000), headers: { "User-Agent": "Mozilla/5.0 (compatible; SERPSquadPixelCheck/1.0)" } });
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20000), headers: {
+      /* browser-like headers — WAFs 403 unknown bot UAs and we'd misreport "not installed" */
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    } });
     const html = (await res.text()).slice(0, 2e6);
     const hasScript = html.includes("/px.js");
     const hasKey = html.includes(key);
-    return [200, { live: true, status: res.status, hasScript, hasKey, installed: hasScript && hasKey }];
+    return [200, { live: true, status: res.status, blocked: res.status >= 400, hasScript, hasKey, installed: hasScript && hasKey }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 180) }]; }
 }
 function handlePixelVerify(body, req) {

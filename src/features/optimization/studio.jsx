@@ -1981,9 +1981,11 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           if (cd.live) {
             diag = cd.installed
               ? " Good news: the snippet IS installed on the site. Open any page of the site once in a normal browser tab, wait a few seconds, then check again."
-              : cd.hasScript
-                ? " A pixel script exists on the site but with a DIFFERENT key — replace it with the snippet below (it carries this project's key)."
-                : ` The snippet is NOT in the site's HTML (checked ${site}). The paste didn't publish — re-add it inside <head>, save/publish, clear any caching plugin, then reload the site once.`;
+              : cd.blocked
+                ? ` The site's firewall blocked our automated check (HTTP ${cd.status}), so we can't see its HTML — verify manually: open the site, right-click → View Page Source, and search for "px.js". If it's missing, re-paste the snippet inside <head> and publish.`
+                : cd.hasScript
+                  ? " A pixel script exists on the site but with a DIFFERENT key — replace it with the snippet below (it carries this project's key)."
+                  : ` The snippet is NOT in the site's HTML (checked ${site}). The paste didn't publish — re-add it inside <head>, save/publish, clear any caching plugin, then reload the site once.`;
           }
         } catch { /* diagnostics are best-effort */ }
         setVerifyNote(`No pixel hit recorded yet for ${siteKey}.${diag || ` Place the snippet on the site, open any page once, then check again. The pixel reports to ${appOrigin()}.`}`);
