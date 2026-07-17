@@ -1941,16 +1941,43 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     work?.("website", "changesDeployed", { detail: `${dirtyCount} page${dirtyCount > 1 ? "s" : ""}` });
     log?.(`Deployed ${dirtyCount} page change${dirtyCount > 1 ? "s" : ""} (${Object.keys(payload).length} paths)`, project.name);
   };
-  const crawlSite = () => {
-    setCrawling(true); // PROD: POST /v1/crawl {key} \u2014 see the crawler contract above DISCOVERED_PAGES
+  const crawlSite = async () => {
+    setCrawling(true);
+    /* REAL sync for connected WordPress sites: pages + posts pulled from the
+       site's own REST API. Demo content only ever loads for demo projects. */
+    if (w.platform === "wordpress" && w.credential) {
+      try {
+        const r = await fetch("/api/wp/content", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({ site: project.website, credential: w.credential?.value || w.credential }) });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) {
+          const added = { pages: 0, posts: 0 };
+          set((cur) => {
+            // computed against the LIVE state inside the updater \u2014 edits made during the sync survive
+            const newPages = (d.pages || []).filter((dp) => !cur.pages.some((p) => p.url === dp.url || (dp.wpId && p.wpId === dp.wpId)))
+              .map((dp, i) => ({ ...dp, id: "pg" + Date.now() + i, dirty: false, synced: true }));
+            const newPosts = (d.posts || []).filter((dp) => !cur.blogs.some((b) => b.slug === dp.slug))
+              .map((dp, i) => ({ ...dp, id: "bl" + Date.now() + i, synced: true }));
+            added.pages = newPages.length; added.posts = newPosts.length;
+            return { pages: [...cur.pages, ...newPages], blogs: [...newPosts, ...cur.blogs], crawled: true, lastCrawl: Date.now() };
+          });
+          setCrawling(false);
+          setTimeout(() => { work?.("website", "siteCrawled", { detail: `${added.pages} pages, ${added.posts} posts` }); log?.(`Synced ${project.website} via WordPress \u2014 imported ${added.pages} page${added.pages === 1 ? "" : "s"} & ${added.posts} post${added.posts === 1 ? "" : "s"}`, project.name); }, 0);
+          return;
+        }
+        setVerifyNote(`Content sync failed: ${d.detail || `HTTP ${r.status}`}`);
+      } catch (e) { setVerifyNote("Content sync failed \u2014 " + (e?.message || e)); }
+      setCrawling(false);
+      return;
+    }
+    /* demo projects: labeled sample content */
     setTimeout(() => {
       const added = { pages: 0, posts: 0 };
       set((cur) => {
-        // computed against the LIVE state inside the updater \u2014 edits made during the crawl survive
         const newPages = DISCOVERED_PAGES.filter((dp) => !cur.pages.some((p) => p.url === dp.url))
-          .map((dp, i) => ({ ...dp, id: "pg" + Date.now() + i, dirty: false }));
+          .map((dp, i) => ({ ...dp, id: "pg" + Date.now() + i, dirty: false, demo: true }));
         const oldPosts = DISCOVERED_POSTS.filter((dp) => !cur.blogs.some((b) => b.slug === dp.slug))
-          .map((dp, i) => ({ ...dp, id: "bl" + Date.now() + i }));
+          .map((dp, i) => ({ ...dp, id: "bl" + Date.now() + i, demo: true }));
         added.pages = newPages.length; added.posts = oldPosts.length;
         return { pages: [...cur.pages, ...newPages], blogs: [...oldPosts, ...cur.blogs], crawled: true, lastCrawl: Date.now() };
       });
@@ -2484,7 +2511,9 @@ export function WebsiteMediaTab({ opt, setOpt, accent, log, project }) {
     if (w.platform === "wordpress" && w.credential) {
       try {
         const r = await fetch("/api/wp/media", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({ site: project.website, credential: w.credential }) });
+          /* the server wants the raw "user:app-password" string — the stored
+             credential is an object holding it in .value */
+          body: JSON.stringify({ site: project.website, credential: w.credential?.value || w.credential }) });
         const d = await r.json().catch(() => ({}));
         if (r.ok) { setOpt("website", { media: d.media.map((m) => ({ ...m, title: m.name, demo: false })) }); work?.("website", "mediaSynced", { detail: `${d.media.length} items` }); log?.(`Synced ${d.media.length} media items`, project.website); setBusy(false); return; }
         setErr(d.detail || `HTTP ${r.status}`);

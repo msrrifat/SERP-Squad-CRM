@@ -908,6 +908,50 @@ async function handleWpMedia(body) {
   } catch (e) { return wpErr(e); }
 }
 
+/* real site content sync — pages + posts straight from the site's WordPress
+   REST API, mapped into the CRM's editor structure (headings & paragraphs
+   parsed from the rendered HTML). This is the site's ACTUAL content. */
+async function handleWpContent(body) {
+  const g = wpGuard(body); if (g) return g;
+  const stripTags = (h) => String(h || "").replace(/<[^>]+>/g, " ").replace(/&#?[a-z0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
+  const toBlocks = (html) => {
+    const blocks = []; let i = 0;
+    const re = /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
+    let m;
+    while ((m = re.exec(html)) && blocks.length < 80) {
+      const text = stripTags(m[2]);
+      if (!text) continue;
+      const tag = m[1].toLowerCase();
+      blocks.push(tag[0] === "h"
+        ? { id: "wb" + i++, kind: "heading", level: +tag[1], text: text.slice(0, 300) }
+        : { id: "wb" + i++, kind: "text", text: text.slice(0, 1500), links: [] });
+    }
+    return blocks;
+  };
+  const pathOf = (link) => { try { return new URL(link).pathname.replace(/\/$/, "") || "/"; } catch { return "/" + String(link || ""); } };
+  try {
+    const [pages, posts] = await Promise.all([
+      wpFetch(body, "/pages?per_page=100&status=publish&_fields=id,slug,link,title,excerpt,content,modified"),
+      wpFetch(body, "/posts?per_page=100&status=publish&_fields=id,slug,link,title,excerpt,content,date,modified"),
+    ]);
+    return [200, { live: true,
+      pages: pages.map((p) => ({
+        wpId: p.id, url: pathOf(p.link), origUrl: p.link, slug: p.slug,
+        name: stripTags(p.title?.rendered) || p.slug,
+        metaTitle: stripTags(p.title?.rendered), metaDesc: stripTags(p.excerpt?.rendered).slice(0, 250),
+        content: toBlocks(p.content?.rendered || ""), modified: p.modified,
+      })),
+      posts: posts.map((p) => ({
+        wpId: p.id, slug: p.slug, url: pathOf(p.link),
+        title: stripTags(p.title?.rendered) || p.slug,
+        body: stripTags(p.excerpt?.rendered).slice(0, 400),
+        content: toBlocks(p.content?.rendered || ""),
+        status: "published", publishAt: null, createdAt: Date.parse(p.date) || Date.now(), modified: p.modified,
+      })),
+    }];
+  } catch (e) { return wpErr(e); }
+}
+
 /* find-or-create by slug, set parent/meta/status/date; Elementor pages also get
    _elementor_data + edit mode (meta must be exposed — the companion plugin does
    this; without it WP silently ignores unknown meta and the HTML fallback shows) */
@@ -1987,7 +2031,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2012,6 +2056,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/custom/deploy" ? await handleCustomDeploy(body)
         : req.url === "/api/dfs-balance" ? await handleDfsBalance(body)
         : req.url === "/api/wp/media" ? await handleWpMedia(body)
+        : req.url === "/api/wp/content" ? await handleWpContent(body)
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)
         : req.url === "/api/wp/cleanup" ? await handleWpCleanup(body)
         : req.url === "/api/wp/test" ? await handleWpTest(body)
