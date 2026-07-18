@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SERP Squad Connector
  * Description: Companion plugin for the SERP Squad CRM — exposes the meta fields full-site deploys write (SEO title/description, Elementor data), prints them server-side, and maps them into Yoast/RankMath when present. No settings needed.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: SERP Squad
  * License: GPL-2.0-or-later
  */
@@ -132,7 +132,9 @@ add_action('wp_head', function () {
     $src = defined('SERPSQUAD_PIXEL_SRC') ? SERPSQUAD_PIXEL_SRC : get_option('serpsquad_pixel_src');
     $key = defined('SERPSQUAD_PIXEL_KEY') ? SERPSQUAD_PIXEL_KEY : get_option('serpsquad_pixel_key');
     if ($src && $key) {
-        printf('<script async src="%s" data-key="%s"></script>' . "\n",
+        /* nowprocket + data-cfasync: WP Rocket / Rocket Loader must not
+           re-host or delay the pixel — that breaks hit reporting */
+        printf('<script async src="%s" data-key="%s" nowprocket data-cfasync="false"></script>' . "\n",
             esc_url($src), esc_attr($key));
     }
 }, 2);

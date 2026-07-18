@@ -999,7 +999,9 @@ export function buildPixelPayload(pages) {
    served from (connect the repo to any domain/subdomain and snippets adapt
    instantly) → the production fallback. Never a localhost URL. */
 export const pixelOrigin = () => appOrigin();
-export const pixelSnippet = (key) => `<script async src="${appOrigin()}/px.js" data-key="${key}"></script>`;
+/* nowprocket + data-cfasync tell WP Rocket / Cloudflare Rocket Loader to leave
+   the tag alone — optimizers re-hosting px.js was silently breaking pixel hits */
+export const pixelSnippet = (key) => `<script async src="${appOrigin()}/px.js" data-key="${key}" nowprocket data-cfasync="false"></script>`;
 
 /* Connector registry — n8n-style: auth, operations, guide, honest capability notes */
 export const WEB_PLATFORMS = {

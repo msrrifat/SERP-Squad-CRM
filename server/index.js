@@ -937,6 +937,14 @@ async function handleAdsPublish(body) {
    every call hits the site's /wp-json/wp/v2 API. Missing site/credential → 503;
    WordPress rejections → 502 with WP's own message. Never fabricates success. */
 const wpBase = (site) => "https://" + String(site || "").replace(/^https?:\/\//, "").replace(/\/$/, "") + "/wp-json/wp/v2";
+/* client-site firewalls (Cloudflare, security plugins) often 403 obvious bot
+   requests while allowing browsers — REST calls go out with browser headers,
+   same trick the /api/img proxy uses */
+const BROWSER_HEADERS = {
+  "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  accept: "application/json, text/plain, */*",
+  "accept-language": "en-US,en;q=0.9",
+};
 const wpAuth = (credential) => "Basic " + Buffer.from(String(credential || "").trim()).toString("base64");
 const wpGuard = (body) => {
   if (!body?.site) return [400, { error: "bad_request", detail: "site (domain) required" }];
@@ -948,7 +956,7 @@ async function wpFetch(body, path, init = {}) {
   const r = await fetch(wpBase(body.site) + path, {
     signal: AbortSignal.timeout(30000),
     ...init,
-    headers: { Authorization: wpAuth(body.credential), "content-type": "application/json", ...(init.headers || {}) },
+    headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential), "content-type": "application/json", ...(init.headers || {}) },
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(d.message || `WordPress ${r.status}`); e.wp = r.status; throw e; }
@@ -1779,14 +1787,18 @@ function handlePixelStatus(body) {
 /* NOTE: no regex literals in this template — backslash escapes get eaten by
    the template literal and the served script becomes a SyntaxError (`//` turns
    into a comment). split() is escape-proof. */
-const PX_JS = `(function(){try{var s=document.currentScript,k=s&&s.getAttribute("data-key");if(!k)return;var o=s.src.split("/px.js")[0];var b=JSON.stringify({key:k,page:location.href});if(navigator.sendBeacon){navigator.sendBeacon(o+"/api/pixel/verify",b);}else{fetch(o+"/api/pixel/verify",{method:"POST",body:b,keepalive:true}).catch(function(){});}}catch(e){}})();`;
+/* the endpoint is BAKED IN at serve time — optimizers like WP Rocket re-host
+   px.js on the client's own domain (wp-content/cache/min/…), so deriving the
+   endpoint from the script's src silently sent hits to the wrong site.
+   Key lookup also falls back to any data-key tag for rewritten script tags. */
+const pxJs = (origin) => `(function(){try{var s=document.currentScript,k=s&&s.getAttribute("data-key");if(!k){var a=document.querySelector('script[data-key]');k=a&&a.getAttribute("data-key");}if(!k)return;var o=${JSON.stringify(origin)};var b=JSON.stringify({key:k,page:location.href});if(navigator.sendBeacon){navigator.sendBeacon(o+"/api/pixel/verify",b);}else{fetch(o+"/api/pixel/verify",{method:"POST",body:b,keepalive:true}).catch(function(){});}}catch(e){}})();`;
 
 /* ---- WordPress connection tester: pinpoint exactly what's wrong ---- */
 async function handleWpTest(body) {
   if (!body?.site) return [400, { error: "bad_request", detail: "site required" }];
   const checks = { reachable: false, restApi: false, authenticated: false, user: null, canPublish: false };
   try {
-    const ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { signal: AbortSignal.timeout(10000) });
+    const ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
     checks.reachable = true;
     checks.restApi = ping.ok;
     if (!ping.ok) return [200, { checks, detail: `Site reached but /wp-json returned HTTP ${ping.status} — REST API may be disabled or blocked by a security plugin.` }];
@@ -1796,7 +1808,7 @@ async function handleWpTest(body) {
   if (!body.credential || !String(body.credential).includes(":"))
     return [200, { checks, detail: "REST API reachable ✓ — now add the Application Password as username:xxxx xxxx xxxx xxxx (the USERNAME prefix and the colon are required, not just the password)." }];
   try {
-    const me = await fetch(wpBase(body.site) + "/users/me?context=edit", { headers: { Authorization: wpAuth(body.credential) }, signal: AbortSignal.timeout(10000) });
+    const me = await fetch(wpBase(body.site) + "/users/me?context=edit", { headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential) }, signal: AbortSignal.timeout(10000) });
     const d = await me.json().catch(() => ({}));
     if (!me.ok) return [200, { checks, detail: `Authentication failed (HTTP ${me.status}): ${d.message || "check the username and that the Application Password was copied with its spaces"}. Note: some hosts strip the Authorization header — add "SetEnvIf Authorization" rules or enable it in the host panel.` }];
     checks.authenticated = true; checks.user = d.name || d.slug;
@@ -2100,8 +2112,10 @@ http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/health") return send(200, { ok: true, dfsConfigured: !!fileCreds() });
     if (req.method === "GET" && req.url.startsWith("/px.js")) {
+      const host = String(req.headers["x-forwarded-host"] || req.headers.host || "app.serpsquad.com").split(",")[0].trim();
+      const proto = /^(localhost|127\.)/.test(host) ? "http://" : "https://";
       res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*" });
-      return res.end(PX_JS);
+      return res.end(pxJs(proto + host));
     }
     /* image preview proxy: client-site WAFs challenge cross-site <img> loads
        (no cookies) and previews hang — the CRM's server fetches instead.
