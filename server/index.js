@@ -1801,7 +1801,17 @@ async function handleWpTest(body) {
     const ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
     checks.reachable = true;
     checks.restApi = ping.ok;
-    if (!ping.ok) return [200, { checks, detail: `Site reached but /wp-json returned HTTP ${ping.status} — REST API may be disabled or blocked by a security plugin.` }];
+    if (!ping.ok) {
+      /* identify WHO blocked us — a Cloudflare 1020/challenge page needs an
+         IP Access Rule in the Cloudflare dashboard, a host firewall needs the
+         hosting panel; "REST disabled" is the rarest cause, not the default */
+      const bodyText = (await ping.text().catch(() => "")).slice(0, 4000);
+      const cfRay = ping.headers.get("cf-ray");
+      const who = /error code: 10\d\d|cloudflare/i.test(bodyText) || cfRay
+        ? `Cloudflare is blocking this server's IP (${cfRay ? "ray " + cfRay : "edge block"}) — in the site's Cloudflare dashboard add Security → WAF → Tools → IP Access Rules → ALLOW for the CRM server IP.`
+        : `The site's server/host firewall is blocking this server's IP — whitelist the CRM server IP in the hosting panel (bot protection / firewall).`;
+      return [200, { checks, detail: `Site reached but /wp-json returned HTTP ${ping.status}. ${who}` }];
+    }
   } catch (e) {
     return [200, { checks, detail: `Could not reach https://${body.site}/wp-json — check the domain, DNS and that the site is online. (${e?.message || e})` }];
   }
