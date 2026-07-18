@@ -15,7 +15,7 @@ import {
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
   Mic, Network,
 } from "lucide-react";
-import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, inputCls, askDelete } from "../../ui/primitives.jsx";
+import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, askDelete, askDisconnect, inputCls } from "../../ui/primitives.jsx";
 import { blocksToHtml, escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.jsx";
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -1909,6 +1909,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const [crawling, setCrawling] = useState(false);
   const [deployState, setDeployState] = useState("idle"); // idle | busy | done | done-meta
   const [deployErr, setDeployErr] = useState(null);
+  const [postPush, setPostPush] = useState(null); // { slug, status: "busy" | "done" }
   const [credDraft, setCredDraft] = useState("");
   const [testingCred, setTestingCred] = useState(false);
 
@@ -2111,18 +2112,24 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       <RefreshCw size={9} className={idxBusy[kind + item.id] ? "animate-spin" : ""} />
     </button>
   );
-  const idxRan = useRef(false);
+  /* index checks are MANUAL ONLY — they run from the "Re-check indexing"
+     button, never automatically on mount or after a recrawl (each check costs
+     real DataForSEO requests) */
+  /* real projects: strip demo sample content an old crawl may have imported */
+  const demoPurged = useRef(false);
   useEffect(() => {
-    if (idxRan.current || !w.connected) return;
-    idxRan.current = true;
-    const stalePages = w.pages.filter((pg) => indexStale(pg.index));
-    const stalePosts = w.blogs.filter((b) => b.status === "published" && indexStale(b.index));
-    if (!stalePages.length && !stalePosts.length) return;
-    runIndexCheck(stalePages, stalePosts);
+    if (demoPurged.current || project.demoMode !== false) return;
+    demoPurged.current = true;
+    const demoUrls = new Set(DISCOVERED_PAGES.map((p) => p.url));
+    const demoSlugs = new Set(DISCOVERED_POSTS.map((p) => p.slug));
+    const isDemoPage = (p) => p.demo || (demoUrls.has(p.url) && !p.dirty && !p.synced);
+    const isDemoPost = (b) => b.demo || (demoSlugs.has(b.slug) && !b.synced);
+    if (!(w.pages || []).some(isDemoPage) && !(w.blogs || []).some(isDemoPost)) return;
+    set((cur) => ({ pages: cur.pages.filter((p) => !isDemoPage(p)), blogs: cur.blogs.filter((b) => !isDemoPost(b)) }));
+    log?.("Removed demo sample pages/posts — live projects never show sample content", project.name);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [w.connected]);
-  /* bulk index check — used by the stale auto-check AND the manual
-     "Re-check indexing" button (which forces EVERY page/post) */
+  }, []);
+  /* bulk index check — the manual "Re-check indexing" button (every page/post) */
   const runIndexCheck = (pages, posts) => {
     setIdxChecking(true); setIdxErr(null);
     /* results apply BATCH BY BATCH — statuses fill in as the check runs and
@@ -2238,6 +2245,21 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         setVerifyNote(`Content sync failed: ${d.detail || `HTTP ${r.status}`}`);
       } catch (e) { setVerifyNote("Content sync failed \u2014 " + (e?.message || e)); }
       setCrawling(false);
+      return;
+    }
+    /* REAL projects never get sample content: without a WordPress credential
+       there is nothing honest to import — purge any demo leftovers and say
+       what's needed instead of faking pages */
+    if (project.demoMode === false) {
+      const demoUrls = new Set(DISCOVERED_PAGES.map((p) => p.url));
+      const demoSlugs = new Set(DISCOVERED_POSTS.map((p) => p.slug));
+      set((cur) => ({
+        pages: cur.pages.filter((p) => !(p.demo || (demoUrls.has(p.url) && !p.dirty && !p.synced))),
+        blogs: cur.blogs.filter((b) => !(b.demo || (demoSlugs.has(b.slug) && !b.synced))),
+        crawled: true, lastCrawl: Date.now(),
+      }));
+      setCrawling(false);
+      setVerifyNote("Pixel traffic is recording, but importing this site's real pages & posts needs the WordPress connection (Application Password) in the Connector tab — sample content is never shown for live projects.");
       return;
     }
     /* demo projects: labeled sample content */
@@ -2455,7 +2477,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             </button>
           )}
           {verifyNote && <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">{verifyNote}</div>}
-          <button onClick={() => set({ connected: false, platform: null, verified: false, credential: null })}
+          <button onClick={() => { if (askDisconnect(`the website connection for ${project.website} (pixel stays installed; pages/posts keep their local copies)`)) set({ connected: false, platform: null, verified: false, credential: null }); }}
             className="ml-auto text-[11.5px] text-gray-400 hover:text-red-500">Disconnect</button>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -2479,7 +2501,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               <div className="flex items-center gap-2 text-[12px]">
                 <span className="ll-mono rounded-lg bg-gray-50 px-2.5 py-1 text-gray-500">{w.credential.masked}</span>
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Valid</span>
-                <button onClick={() => set({ credential: null })} className="text-[11px] text-gray-400 hover:text-red-500">Remove</button>
+                <button onClick={() => { if (askDisconnect("the WordPress Application Password (publishing, deploys and media sync stop working until it's re-added)")) set({ credential: null }); }} className="text-[11px] text-gray-400 hover:text-red-500">Remove</button>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
@@ -2683,6 +2705,13 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             <button onClick={() => setDeployErr(null)} className="shrink-0 font-bold">✕</button>
           </div>
         )}
+        {postPush && (
+          <div className={"mt-3 flex items-center gap-2 rounded-xl px-3 py-2.5 text-[12px] " + (postPush.status === "busy" ? "bg-blue-50 text-blue-700" : "ll-fade bg-emerald-50 text-emerald-700")}>
+            {postPush.status === "busy"
+              ? <><RefreshCw size={13} className="animate-spin" /> Pushing /{postPush.slug} to WordPress…</>
+              : <><CheckCircle2 size={13} /> Updated — /{postPush.slug} is live on WordPress.</>}
+          </div>
+        )}
         <div className="mt-3"><HealthBoard list={w.blogs} filter={postFilter} setFilter={setPostFilter} noun="posts" /></div>
         <div className="overflow-x-auto">
         <table className="w-full table-fixed text-[11.5px]">
@@ -2765,6 +2794,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                pages (find-or-create by wpId/slug, metas synced into Yoast/RankMath) */
             if (w.platform === "wordpress" && w.credential) {
               const wpId = openPost === "new" ? undefined : w.blogs.find((x) => x.id === openPost)?.wpId;
+              setPostPush({ slug: post.slug, status: "busy" });
               fetch("/api/wp/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
                 body: JSON.stringify({ site: project.website, credential: w.credential?.value || w.credential, payload: {
                   kind: "post", wpId, slug: post.slug, title: post.title,
@@ -2778,8 +2808,10 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                   if (!r.ok) throw new Error(d.detail || d.hint || d.error || "HTTP " + r.status);
                   if (d.id) set((cur) => ({ blogs: cur.blogs.map((x) => (x.slug === post.slug ? { ...x, wpId: d.id, synced: true } : x)) }));
                   log?.(`Post pushed to WordPress (${d.updated ? "updated" : "created"}: /${post.slug})`, project.website);
+                  setPostPush({ slug: post.slug, status: "done" });
+                  setTimeout(() => setPostPush((cur) => (cur?.slug === post.slug && cur.status === "done" ? null : cur)), 6000);
                 })
-                .catch((e) => { setIdxErr(null); setDeployErr(`post /${post.slug}: ${e.message || e}`); });
+                .catch((e) => { setIdxErr(null); setPostPush(null); setDeployErr(`post /${post.slug}: ${e.message || e}`); });
             }
             setOpenPost(null);
           }}

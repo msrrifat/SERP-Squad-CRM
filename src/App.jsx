@@ -15,7 +15,7 @@ import {
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
-import { Ava, BrandMark, DarkToggle, FONT_CSS, Modal, ProjectMark } from "./ui/primitives.jsx";
+import { Ava, BrandMark, DarkToggle, FONT_CSS, GoTopButton, Modal, ProjectMark } from "./ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
 import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
@@ -1081,6 +1081,7 @@ export default function App() {
           {agentOpen && <AgentPanel ctx={agentCtx} accent={accent} aiProvider={aiProviders[0] || null} onAction={runAgentAction} onClose={() => setAgentOpen(false)} />}
         </React.Suspense>
       )}
+      <GoTopButton />
       {modal?.type === "clientSettings" && (() => {
         const mc = clients.find((c) => c.id === modal.clientId);
         if (!mc) return null;

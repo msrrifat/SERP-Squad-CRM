@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from "react";
 import { LineChart, Line, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Activity, BarChart3, CheckCircle2, Eye, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
-import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { emptySiteData } from "../../data/gen.js";
 import { MONTH_DATES } from "../../lib/months.jsx";
@@ -141,7 +141,10 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
       const iv = setInterval(() => { if (popup?.closed) { clearInterval(iv); setConnecting(false); window.removeEventListener("message", onMsg); } }, 800);
     } catch (e) { setErr("API server unreachable — the OAuth flow runs there. " + (e?.message || "")); setConnecting(false); }
   };
-  const disconnect = () => { setConn({ connectionId: null, email: "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null); };
+  const disconnect = () => {
+    if (!askDisconnect(`Google (Search Console & GA4${conn.email ? `, ${conn.email}` : ""}) from this project`)) return;
+    setConn({ connectionId: null, email: "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null);
+  };
 
   useEffect(() => {
     if (!conn.connectionId) return;
@@ -273,8 +276,10 @@ export function GoogleLiveData({ project, accent }) {
 
   return (
     <div className="space-y-5">
-      {/* header — with the timeline selector so different windows can be compared */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* header — with the timeline selector so different windows can be
+          compared; STICKY so the date range stays changeable however far down
+          the page has scrolled */}
+      <div className="sticky top-2 z-30 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white/95 px-2.5 py-1.5 shadow-sm backdrop-blur">
         <div className="ll-display text-[15px] font-semibold text-gray-800">Google — live data</div>
         <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600">Live</span>
         {busy && <RefreshCw size={13} className="animate-spin text-gray-300" />}

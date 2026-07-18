@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
+import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
 import { money, relTime } from "../../lib/format.jsx";
@@ -308,6 +308,7 @@ export function ApiCard({ api, company, onChange }) {
     } else onChange({ apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: filled } } });
   };
   const disconnect = () => {
+    if (!askDisconnect(`the ${api.name} connection`)) return;
     if (api.useDfs) onChange({ dfs: { ...company.dfs, connected: false } });
     else onChange({
       apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: false } },

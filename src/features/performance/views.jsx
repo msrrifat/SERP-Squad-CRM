@@ -149,15 +149,14 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 
   return (
     <div className="ll-fade space-y-5">
-      {/* the comparison picker must always be reachable — standalone when the insight strip is empty */}
-      {summary.length === 0 && <div className="flex">{cmpPicker}</div>}
+      {/* comparison picker: STICKY — stays reachable however far the page scrolls */}
+      <div className="no-print sticky top-2 z-30 -mb-2 flex shadow-sm" style={{ width: "fit-content", marginLeft: "auto" }}>{cmpPicker}</div>
       {/* insight strip */}
       {summary.length > 0 && (
         <Card className="overflow-hidden p-0">
           <div className="flex items-center gap-2 px-5 pt-4">
             <span className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: accent + "18", color: accent }}><Activity size={13} /></span>
             <span className="ll-display text-[14.5px] font-semibold">{clientView ? "This month at a glance" : "Snapshot"}</span>
-            {cmpPicker}
           </div>
           <div className="grid gap-px bg-gray-100 p-px sm:grid-cols-3">
             {summary.map((s, i) => (
@@ -834,15 +833,17 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     <div className="ll-fade space-y-5">
       {W.insights && (
         <div className="space-y-2">
-          <div className="flex items-center justify-end gap-1 no-print">
-            <span className="mr-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
-            {CMP_MODES.map(([k, label]) => (
-              <button key={k} onClick={() => setCmpMode(k)}
-                className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
-                style={cmpMode === k ? { background: accent, color: "#fff" } : { background: "#F3F4F6", color: "#6B7280" }}>
-                {label}
-              </button>
-            ))}
+          <div className="no-print sticky top-2 z-30 flex justify-end">
+            <div className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1.5 shadow-sm">
+              <span className="mx-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
+              {CMP_MODES.map(([k, label]) => (
+                <button key={k} onClick={() => setCmpMode(k)}
+                  className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                  style={cmpMode === k ? { background: accent, color: "#fff" } : { background: "#F3F4F6", color: "#6B7280" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
             <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />

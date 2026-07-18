@@ -6,7 +6,7 @@ import {
 import {
   MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
   Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
-  Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
+  Printer, ArrowUp, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
   MousePointerClick, BarChart3, Smartphone, Monitor, RefreshCw, Clock,
   Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
   LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
@@ -108,6 +108,8 @@ export function RankChip({ pos, muted = false }) {
 }
 /* every destructive button confirms through this — one consistent dialog */
 export const askDelete = (what) => window.confirm(`Are you sure you want to delete ${what}? This can't be undone.`);
+/* every connector's disconnect/remove confirms through this */
+export const askDisconnect = (what) => window.confirm(`Do you want to disconnect ${what}? You can reconnect it any time.`);
 
 export function Card({ children, className = "", style }) {
   return <div className={`rounded-2xl border border-gray-200 bg-white ${className}`} style={style}>{children}</div>;
@@ -440,10 +442,30 @@ export function ConnBadge({ on }) {
     </span>
   );
 }
+/* floating "back to top" — appears once the window has scrolled a bit;
+   sits above the AI-agent FAB in the bottom-right corner */
+export function GoTopButton() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const on = () => setShow(window.scrollY > 480);
+    window.addEventListener("scroll", on, { passive: true });
+    on();
+    return () => window.removeEventListener("scroll", on);
+  }, []);
+  if (!show) return null;
+  return (
+    <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} title="Back to top"
+      className="no-print fixed bottom-24 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-lg transition-colors hover:text-gray-900">
+      <ArrowUp size={17} />
+    </button>
+  );
+}
+
 export function OAuthButton({ label, onDone, accent, connected, onDisconnect }) {
   const [busy, setBusy] = useState(false);
   if (connected) return (
-    <button onClick={onDisconnect} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-red-200 hover:text-red-500">Disconnect</button>
+    <button onClick={() => { if (askDisconnect("this account")) onDisconnect(); }}
+      className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-red-200 hover:text-red-500">Disconnect</button>
   );
   return (
     <button disabled={busy}

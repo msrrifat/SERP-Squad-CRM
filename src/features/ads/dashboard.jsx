@@ -7,7 +7,7 @@ import {
   ArrowLeft, ChevronDown, ChevronRight, Copy, Megaphone, Pause, Play, Plus,
   Rocket, Sparkles, Target, Trash2, Wand2, X,
 } from "lucide-react";
-import { Card, GuideTip, Labeled, Modal, Seg, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { Card, GuideTip, Labeled, Modal, Seg, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { API_GUIDES } from "../../data/apiGuides.js";
 import { fmt, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -397,7 +397,7 @@ export function AdsView({ project, accent, onUpdate, log, company, aiConfig }) {
         <ConnectAdsModal platform={connecting} project={project} company={company} accent={accent}
           current={ads.accounts?.[connecting]}
           onConnect={(acct) => { patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: acct } })); setConnecting(null); log?.(`Connected ${AD_PLATFORMS[connecting].label}`, acct.name); }}
-          onDisconnect={() => { patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: null } })); setConnecting(null); }}
+          onDisconnect={() => { if (!askDisconnect(`the ${AD_PLATFORMS[connecting].label} ad account`)) return; patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: null } })); setConnecting(null); }}
           onClose={() => setConnecting(null)} />
       )}
       {wizard && (

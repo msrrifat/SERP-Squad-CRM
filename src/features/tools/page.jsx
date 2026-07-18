@@ -4,7 +4,7 @@
    strip inside the window. */
 import React, { useState } from "react";
 import { ArrowLeft, Building2, Crosshair, FileText, FolderOpen, Globe, History, MapPin, PenLine, Search, Send, Target, TrendingUp } from "lucide-react";
-import { BrandMark, DarkToggle, FONT_CSS } from "../../ui/primitives.jsx";
+import { BrandMark, DarkToggle, FONT_CSS, GoTopButton } from "../../ui/primitives.jsx";
 import { ResearchToolsView } from "../research/tools.jsx";
 import { GrowthView } from "../growth/prospects.jsx";
 import { GuestListView, GuestPostFinder } from "../growth/guestpost.jsx";
@@ -59,13 +59,22 @@ const GROUPS = [
       { key: "rankmap", label: "Map Rank Check (geo grid)", icon: MapPin },
     ],
   },
+  {
+    /* also reachable inside Research & Audit — this top-level entry keeps the
+       index checker one click away, same tool & saved results */
+    key: "indexchk", label: "Index Checker", icon: Search, area: "research",
+    sub: "Bulk-check any URLs' Google index status",
+    items: [
+      { key: "index", label: "Index Checker", icon: Search },
+    ],
+  },
 ];
 
 export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs, clients = [], onUpdateProjectById = null, onBack, dark, setDark }) {
   const [groupKey, setGroupKey] = useState("growth");
   const group = GROUPS.find((g) => g.key === groupKey) || GROUPS[0];
   /* the active subsection is tracked per group so switching back restores it */
-  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", rank: "rankweb", research: "profile" });
+  const [selByGroup, setSelByGroup] = useState({ growth: "finder", guest: "guestposts", kw: "kwfinder", rank: "rankweb", research: "profile", indexchk: "index" });
 
   /* Keyword Finder → project. Always records to the keyword bank (deduped,
      kept sorted by volume high→low). When a specific page/post/mapping node
@@ -190,6 +199,7 @@ export function ToolsPage({ company, onChange, accent, aiConfig, placesKey, dfs,
             company={company} onUpdateCompany={onChange} accent={accent} aiConfig={aiConfig} placesKey={placesKey} />
         )}
       </main>
+      <GoTopButton />
     </div>
   );
 }

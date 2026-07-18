@@ -3,7 +3,7 @@ import {
   Building2, Calendar, CheckCircle2, ChevronRight, Globe, ImagePlus, Link2, Lock,
   MapPin, Plus, RefreshCw, Rocket, Search, Send, Share2, Trash2, Upload, X, Zap,
 } from "lucide-react";
-import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
+import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, askDelete, askDisconnect, inputCls } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -686,7 +686,7 @@ function SitesTab({ br, set, accent, log, project, brandName, opt }) {
                       <span key={l} className="rounded bg-white px-1.5 py-0.5 text-[9.5px] font-medium text-emerald-700">{l}</span>
                     ))}
                   </div>
-                  <button onClick={() => patchSite(pl.key, { siteCreated: false, connected: false, credential: null })} className="text-[10px] text-emerald-600/70 hover:text-red-500">Disconnect</button>
+                  <button onClick={() => { if (askDisconnect(`the ${pl.name} Web 2.0 site`)) patchSite(pl.key, { siteCreated: false, connected: false, credential: null }); }} className="text-[10px] text-emerald-600/70 hover:text-red-500">Disconnect</button>
                 </div>
               )}
             </Card>
