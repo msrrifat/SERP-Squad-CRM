@@ -514,8 +514,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <tr key={t.id}><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
-              <td className={td + " max-w-40 truncate text-[11.5px]"} title={t.url}>
-                <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: b.color || accent }}>{urlSlug(t.url)}</a></td></tr>
+              <td className={td + " max-w-40 truncate text-[11.5px]"} title={t.url || ""}>
+                {t.url
+                  ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: b.color || accent }}>{urlSlug(t.url)}</a>
+                  : <span className="text-gray-300">—</span>}</td></tr>
           ))}</tbody>
         </table>
         {b.limit && b.limit !== "all" && tracking.length > +b.limit && (
@@ -869,8 +871,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <tr key={t.id}><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
-              <td className={td + " max-w-32 truncate"} title={t.url}>
-                <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: color }}>{urlSlug(t.url)}</a></td></tr>
+              <td className={td + " max-w-32 truncate"} title={t.url || ""}>
+                {t.url
+                  ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: color }}>{urlSlug(t.url)}</a>
+                  : <span className="text-gray-300">—</span>}</td></tr>
           ))}</tbody>
         </table>
         {b.limit && b.limit !== "all" && tr.length > +b.limit && (

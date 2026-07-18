@@ -126,7 +126,9 @@ export const cityLabel = (c) => c.region ? `${c.city}, ${regionShort(c.region)}`
    "York,United Kingdom" resolve correctly against DataForSEO's location list */
 export const cityLocationName = (c) => [c.city, c.region, c.country].filter(Boolean).join(",");
 export const urlSlug = (url) => {
-  const noProto = url.includes("//") ? url.slice(url.indexOf("//") + 2) : url;
+  const s = String(url || "");
+  if (!s) return "—"; // unscanned keywords have no ranking URL yet
+  const noProto = s.includes("//") ? s.slice(s.indexOf("//") + 2) : s;
   const i = noProto.indexOf("/");
   return i === -1 ? "/" : noProto.slice(i);
 };
