@@ -60,7 +60,7 @@ export function IndexTag({ idx, checking }) {
         style={idx.status === "indexed" ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEE2E2", color: "#991B1B" }}>
         {idx.status === "indexed" ? "Indexed" : "Not indexed"}
       </span>
-      <span className="ll-mono text-[9px] text-gray-400" title="Last real Google check — rechecked automatically every 7 days">
+      <span className="ll-mono text-[9px] text-gray-400" title="Last real Google check — re-run any time from the Re-check indexing button">
         <Clock size={8} className="mr-0.5 inline" />{fmtTs2(idx.checkedAt)}
       </span>
     </span>
@@ -160,7 +160,7 @@ export function IndexCheckerTab({ opt, setOpt, accent, log, project, dfs }) {
         </Card>
       )}
       {!results.length && !err && (
-        <Card className="p-8 text-center text-[12px] text-gray-400">No checks yet. Pages & Posts in Business Website also get automatic index tags — rechecked every 7 days when the API server is available.</Card>
+        <Card className="p-8 text-center text-[12px] text-gray-400">No checks yet. Pages & Posts in Business Website get index tags too — run them from the "Re-check indexing" button there (checks only ever run when you click).</Card>
       )}
     </div>
   );
