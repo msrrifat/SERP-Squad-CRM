@@ -96,6 +96,22 @@ export function genPageQueries(projectId, url, trackedKeywords = [], brandName =
   const level = top >= 90 ? "high" : top >= 35 ? "medium" : "low";
   return { queries, level, top };
 }
+/* ---- REAL Search Console rows → the same opportunity shape genPageQueries
+   produces, so badges/panels work identically on live data ---- */
+export function oppFromRows(rows = []) {
+  const queries = rows
+    .map((r) => ({
+      query: r.query, intent: queryIntent(r.query),
+      position: +(+r.position || 0).toFixed(1),
+      impressions: r.impressions || 0, clicks: r.clicks || 0,
+      score: Math.round(((r.impressions || 0) * strikeFactor(+r.position || 100)) / 10),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 14);
+  const top = queries[0]?.score || 0;
+  return { queries, level: top >= 90 ? "high" : top >= 35 ? "medium" : "low", top };
+}
+
 export const OPP_STYLE = {
   high: { bg: "#DCFCE7", fg: "#166534", label: "High" },
   medium: { bg: "#FEF3C7", fg: "#92400E", label: "Medium" },

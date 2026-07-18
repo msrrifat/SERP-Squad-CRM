@@ -1605,7 +1605,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
               );
               return (
                 <>
-                  {template !== "work" && clientProjects.length > 0 && (
+                  {template !== "work" && clientProjects.length > 1 && (
                     <Group title="Projects (pick, then add sections)">
                       {clientProjects.map((cp) => {
                         const on = pickedProjIds.has(cp.project.id);

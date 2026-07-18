@@ -792,12 +792,37 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   /* real projects can hold entries that were never scanned (cur == null) —
      stats only average what actually has positions */
   const ranked = rows.filter((t) => t.stats.cur != null);
-  const avg = ranked.length ? ranked.reduce((a, t) => a + t.stats.cur, 0) / ranked.length : 0;
   const top3 = ranked.filter((t) => t.stats.cur <= 3).length;
   const top10 = ranked.filter((t) => t.stats.cur <= 10).length;
   const top20 = ranked.filter((t) => t.stats.cur <= 20).length;
-  const improved30 = rows.filter((t) => (deltaFor(t, 30) ?? 0) > 0).length;
-  const declined30 = rows.filter((t) => (deltaFor(t, 30) ?? 0) < 0).length;
+  const inPack = rows.filter((t) => { const m = mapOf(t); return m != null && m <= 3; }).length;
+
+  /* ---- overview comparison: previous scan / 7d / 14d / 30d / lifetime ----
+     every card compares its count against the chosen point; positions come
+     from the dated scan log (real projects) or the daily series (demo) */
+  const [cmpMode, setCmpMode] = useState("prev");
+  const CMP_MODES = [["prev", "Prev scan"], ["7", "7D"], ["14", "14D"], ["30", "30D"], ["life", "Lifetime"]];
+  const cmpLabel = cmpMode === "prev" ? "previous scan" : cmpMode === "life" ? "first scan" : cmpMode + "d ago";
+  const posAtCmp = (t) => {
+    if (cmpMode === "life") return t.stats.start ?? null;
+    if (cmpMode === "prev") {
+      if (project.demoMode !== false) return t.positions[t.positions.length - 2] ?? null;
+      const scans = (t.scans || []).filter((s) => s.p != null);
+      return scans.length > 1 ? scans[scans.length - 2].p : null;
+    }
+    if (project.demoMode !== false) return t.positions[t.positions.length - 1 - +cmpMode] ?? null;
+    const cutoff = Date.now() - +cmpMode * 864e5;
+    const past = [...(t.scans || [])].reverse().find((s) => s.t <= cutoff && s.p != null);
+    return past ? past.p : null;
+  };
+  const cmpDelta = (t) => { if (t.stats.cur == null) return null; const p = posAtCmp(t); return p == null ? null : p - t.stats.cur; };
+  const improvedCmp = rows.filter((t) => (cmpDelta(t) ?? 0) > 0).length;
+  const declinedCmp = rows.filter((t) => (cmpDelta(t) ?? 0) < 0).length;
+  const countAtCmp = (max) => rows.filter((t) => { const p = posAtCmp(t); return p != null && p <= max; }).length;
+  const cmpSub = (now, before) => {
+    const d = now - before;
+    return d === 0 ? `±0 vs ${cmpLabel}` : `${d > 0 ? "+" : ""}${d} vs ${cmpLabel}`;
+  };
   const dist = [
     { name: "Top 3", value: rows.filter((t) => t.stats.cur <= 3).length },
     { name: "4–10", value: rows.filter((t) => t.stats.cur > 3 && t.stats.cur <= 10).length },
@@ -808,13 +833,25 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   return (
     <div className="ll-fade space-y-5">
       {W.insights && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />
-          <StatCard icon={Target} label="Avg. position" source="Ranks" accent={accent} value={ranked.length ? "#" + avg.toFixed(1) : "–"} sub={ranked.length < rows.length ? `${rows.length - ranked.length} not scanned yet` : ""} />
-          <StatCard icon={Target} label="Top 3" source="Ranks" accent={accent} value={top3} sub={rows.length ? `${Math.round((top3 / rows.length) * 100)}% of tracked` : ""} />
-          <StatCard icon={Target} label="Top 10" source="Ranks" accent={accent} value={top10} sub={rows.length ? `${Math.round((top10 / rows.length) * 100)}% of tracked` : ""} />
-          <StatCard icon={Target} label="Top 20" source="Ranks" accent={accent} value={top20} sub={rows.length ? `${Math.round((top20 / rows.length) * 100)}% of tracked` : ""} />
-          <StatCard icon={ArrowUpRight} label="Movement (30d)" source="Ranks" accent={accent} value={`↑${improved30} / ↓${declined30}`} sub="up / down" />
+        <div className="space-y-2">
+          <div className="flex items-center justify-end gap-1 no-print">
+            <span className="mr-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
+            {CMP_MODES.map(([k, label]) => (
+              <button key={k} onClick={() => setCmpMode(k)}
+                className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                style={cmpMode === k ? { background: accent, color: "#fff" } : { background: "#F3F4F6", color: "#6B7280" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+            <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />
+            <StatCard icon={MapPin} label="In Google 3-Pack" source="Ranks" accent={accent} value={inPack} sub={rows.length ? `${Math.round((inPack / rows.length) * 100)}% of tracked` : ""} />
+            <StatCard icon={Target} label="Top 3" source="Ranks" accent={accent} value={top3} sub={cmpSub(top3, countAtCmp(3))} />
+            <StatCard icon={Target} label="Top 10" source="Ranks" accent={accent} value={top10} sub={cmpSub(top10, countAtCmp(10))} />
+            <StatCard icon={Target} label="Top 20" source="Ranks" accent={accent} value={top20} sub={cmpSub(top20, countAtCmp(20))} />
+            <StatCard icon={ArrowUpRight} label="Movement" source="Ranks" accent={accent} value={`↑${improvedCmp} / ↓${declinedCmp}`} sub={`up / down vs ${cmpLabel}`} />
+          </div>
         </div>
       )}
 

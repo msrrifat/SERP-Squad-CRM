@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SERP Squad Connector
  * Description: Companion plugin for the SERP Squad CRM — exposes the meta fields full-site deploys write (SEO title/description, Elementor data), prints them server-side, and maps them into Yoast/RankMath when present. No settings needed.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: SERP Squad
  * License: GPL-2.0-or-later
  */
@@ -35,6 +35,43 @@ add_action('init', function () {
                 'auth_callback' => function () { return current_user_can('edit_posts'); },
             ]);
         }
+    }
+});
+
+/* 1b. Copy deployed meta STRAIGHT INTO Yoast/RankMath storage the moment the
+       CRM writes it — then the SEO plugin owns the value everywhere: frontend
+       tags, sitemaps, and the REST head the CRM reads back on recrawl. */
+$serpsquad_sync_meta = function ($meta_id, $post_id, $meta_key, $value) {
+    if ($meta_key === '_serpsquad_meta_title' && $value !== '') {
+        if (defined('WPSEO_VERSION'))  update_post_meta($post_id, '_yoast_wpseo_title', $value);
+        if (class_exists('RankMath'))  update_post_meta($post_id, 'rank_math_title', $value);
+    }
+    if ($meta_key === '_serpsquad_meta_desc' && $value !== '') {
+        if (defined('WPSEO_VERSION'))  update_post_meta($post_id, '_yoast_wpseo_metadesc', $value);
+        if (class_exists('RankMath'))  update_post_meta($post_id, 'rank_math_description', $value);
+    }
+};
+add_action('added_post_meta',   $serpsquad_sync_meta, 10, 4);
+add_action('updated_post_meta', $serpsquad_sync_meta, 10, 4);
+
+/* 1c. Uniform read-back for the CRM crawler: the REAL per-post SEO title/desc
+       regardless of which SEO plugin the site runs (Yoast, RankMath, or our
+       own fields). Template values ("%%title%%…") are skipped — the CRM falls
+       back to the rendered head / post title for those. */
+add_action('rest_api_init', function () {
+    $literal = function ($v) { return (is_string($v) && $v !== '' && strpos($v, '%') === false) ? $v : ''; };
+    $get = function ($post) use ($literal) {
+        $id = $post['id'];
+        $title = $literal(get_post_meta($id, '_yoast_wpseo_title', true))
+            ?: $literal(get_post_meta($id, 'rank_math_title', true))
+            ?: $literal(get_post_meta($id, '_serpsquad_meta_title', true));
+        $desc = $literal(get_post_meta($id, '_yoast_wpseo_metadesc', true))
+            ?: $literal(get_post_meta($id, 'rank_math_description', true))
+            ?: $literal(get_post_meta($id, '_serpsquad_meta_desc', true));
+        return ['title' => $title, 'desc' => $desc];
+    };
+    foreach (['page', 'post'] as $type) {
+        register_rest_field($type, 'serpsquad_seo', ['get_callback' => $get, 'schema' => null]);
     }
 });
 

@@ -16,7 +16,7 @@ import {
   Mic, Network,
 } from "lucide-react";
 import { Card, GuideTip, CharCount, ConnBadge, Labeled, LogoUpload, MetaChip, Modal, OAuthButton, Seg, inputCls, askDelete } from "../../ui/primitives.jsx";
-import { escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.jsx";
+import { blocksToHtml, escHtml, inlineFmt, mdFmt, renderTextWithLinks } from "../../lib/text.jsx";
 import { fmtTs2, relTime, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { AiWriteButton } from "../../lib/aiwrite.jsx";
@@ -30,7 +30,7 @@ import { BrandingOptTab, ListingsScannerTab } from "./branding.jsx";
 import { IndexCheckerTab, IndexTag, checkIndexApi, indexStale } from "./indexcheck.jsx";
 import { BrandVoiceTab } from "./brandvoice.jsx";
 import { WebsiteMappingTab } from "./architect.jsx";
-import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keywordUsage, pageTextParts, regenSuggestion, relevancy } from "../../lib/seo.js";
+import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keywordUsage, oppFromRows, pageTextParts, regenSuggestion, relevancy } from "../../lib/seo.js";
 
 export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send };
 export const SOCIAL_COLORS = { fb: "#1877F2", ig: "#E4405F", li: "#0A66C2", x: "#111827", yt: "#FF0000", tt: "#111827", pin: "#E60023", th: "#111827", bs: "#0285FF" };
@@ -1082,8 +1082,59 @@ export const EDIT_LEGEND = [
    keywords, relevancy vs intent, exact-usage counts, AI placement suggestions
    ("Get suggestions") and one-click "Magic optimization". PROD: suggestions
    come from the AI provider configured in Company Settings → API settings. */
-export function OppBadge({ projectId, url, tracking, brand }) {
-  const { queries, level } = useMemo(() => genPageQueries(projectId, url, tracking, brand), [projectId, url]);
+/* ---- REAL per-page Search Console queries: ONE bulk page+query pull per
+   project (10-min cache) shared by every OppBadge row and the editor sidebar.
+   Demo projects keep the deterministic generator; real projects show real
+   queries or nothing — never fabricated ones. ---- */
+const gscBulkCache = new Map(); // "projectId|site" -> { t, busy? , byPage? }
+const gscBulkSubs = new Set(); // every mounted badge/panel re-renders when a pull lands
+const gscBulkNotify = () => gscBulkSubs.forEach((fn) => fn((x) => x + 1));
+const gscNormPath = (u) => {
+  try { const x = new URL(/^https?:/.test(u) ? u : "https://x.invalid" + (String(u).startsWith("/") ? u : "/" + u)); return x.pathname.replace(/\/$/, "").toLowerCase() || "/"; }
+  catch { return String(u || "/").toLowerCase(); }
+};
+export function useGscByPage(google, projectId, demo) {
+  const enabled = !demo && !!(google?.connectionId && google?.gscSite);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    gscBulkSubs.add(setTick);
+    return () => gscBulkSubs.delete(setTick);
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    const key = projectId + "|" + google.gscSite;
+    const c = gscBulkCache.get(key);
+    if (c && Date.now() - c.t < 600e3) return;
+    gscBulkCache.set(key, { t: Date.now(), busy: true });
+    fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
+      body: JSON.stringify({ connectionId: google.connectionId, siteUrl: google.gscSite, days: 28, byPage: true }) })
+      .then((r) => r.json())
+      .then((j) => {
+        const byPage = {};
+        (j.rows || []).forEach((r) => { const p = gscNormPath(r.page); (byPage[p] = byPage[p] || []).push(r); });
+        gscBulkCache.set(key, { t: Date.now(), byPage: j.live ? byPage : null });
+        gscBulkNotify();
+      })
+      .catch(() => { gscBulkCache.set(key, { t: Date.now(), byPage: null }); gscBulkNotify(); });
+  }, [enabled, projectId, google?.gscSite]); // eslint-disable-line
+  if (!enabled) return { real: false, lookup: null };
+  const byPage = gscBulkCache.get(projectId + "|" + google.gscSite)?.byPage || null;
+  return {
+    real: true, loaded: !!byPage,
+    lookup: (url) => {
+      if (!byPage) return null;
+      const p = gscNormPath(url);
+      return byPage[p] || (p.startsWith("/blog/") ? byPage[p.slice(5)] : null) || [];
+    },
+  };
+}
+export function OppBadge({ projectId, url, tracking, brand, google = null, demo = true }) {
+  const gsc = useGscByPage(google, projectId, demo);
+  const { queries, level } = useMemo(() => {
+    if (!demo) { const rows = gsc.real ? gsc.lookup?.(url) : null; return oppFromRows(rows || []); }
+    return genPageQueries(projectId, url, tracking, brand);
+  }, [projectId, url, demo, gsc.real, gsc.loaded]); // eslint-disable-line
   const st = OPP_STYLE[level];
   const striking = queries.filter((q) => q.position > 3 && q.position <= 25).length;
   return (
@@ -1093,8 +1144,12 @@ export function OppBadge({ projectId, url, tracking, brand }) {
   );
 }
 
-export function OpportunityPanel({ projectId, url, page, tracking, brand, accent, aiProviders = [], applySuggestion, sitePages = [], suggestions, setSuggestions, applied, setApplied, showList = false }) {
-  const { queries } = useMemo(() => genPageQueries(projectId, url, tracking, brand), [projectId, url]);
+export function OpportunityPanel({ projectId, url, page, tracking, brand, accent, aiProviders = [], applySuggestion, sitePages = [], suggestions, setSuggestions, applied, setApplied, showList = false, google = null, demo = true }) {
+  const gsc = useGscByPage(google, projectId, demo);
+  const { queries } = useMemo(() => {
+    if (!demo) { const rows = gsc.real ? gsc.lookup?.(url) : null; return oppFromRows(rows || []); }
+    return genPageQueries(projectId, url, tracking, brand);
+  }, [projectId, url, demo, gsc.real, gsc.loaded]); // eslint-disable-line
   const parts = pageTextParts(page); // recomputed every render — reacts live to edits
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(null);          // null | "suggest" | "magic"
@@ -1154,7 +1209,15 @@ export function OpportunityPanel({ projectId, url, page, tracking, brand, accent
             </button>
           );
         })}
-        {queries.length === 0 && <div className="py-6 text-center text-[11px] text-gray-300">No Search Console queries for this URL yet.</div>}
+        {queries.length === 0 && (
+          <div className="py-6 text-center text-[11px] leading-relaxed text-gray-300">
+            {!demo && !google?.connectionId
+              ? <>Connect <b>Google (Search Console)</b> in Project settings → Data sources to see the real queries this page ranks for.</>
+              : !demo && gsc.real && !gsc.loaded
+              ? <span className="inline-flex items-center gap-1.5 text-gray-400"><RefreshCw size={11} className="animate-spin" /> Pulling this page's queries from Search Console…</span>
+              : <>No Search Console queries for this URL yet.</>}
+          </div>
+        )}
       </div>
 
       <div className="space-y-2 border-t border-gray-100 bg-white p-3">
@@ -1349,6 +1412,7 @@ export function LivePageEditor({ page, onPatch, accent, slugsEnabled, siteHost, 
         {project && (
           <OpportunityPanel projectId={project.id} url={page.origUrl || page.url} page={page}
             tracking={[...new Set(project.tracking.map((t) => t.keyword))]} brand={project.name}
+            google={project.google} demo={project.demoMode !== false}
             accent={accent} aiProviders={aiProviders} applySuggestion={applySuggestion}
             sitePages={sitePages} suggestions={suggestions} setSuggestions={setSuggestions} applied={applied} setApplied={setApplied} />
         )}
@@ -1620,8 +1684,9 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
 
         <div className="flex min-h-0 flex-1">
           {project && (
-            <OpportunityPanel projectId={project.id} url={"/blog/" + (p.slug || "new-post")} page={{ metaTitle: p.metaTitle, metaDesc: p.metaDesc, content: p.content }}
+            <OpportunityPanel projectId={project.id} url={(project.demoMode === false && p.url) || "/blog/" + (p.slug || "new-post")} page={{ metaTitle: p.metaTitle, metaDesc: p.metaDesc, content: p.content }}
               tracking={[...new Set(project.tracking.map((t) => t.keyword))]} brand={project.name}
+              google={project.google} demo={project.demoMode !== false}
               accent={accent} aiProviders={aiProviders} applySuggestion={applySuggestion} showList
               sitePages={sitePages} suggestions={pSuggestions} setSuggestions={setPSuggestions} applied={pApplied} setApplied={setPApplied} />
           )}
@@ -1842,6 +1907,8 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const [copied, setCopied] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [crawling, setCrawling] = useState(false);
+  const [deployState, setDeployState] = useState("idle"); // idle | busy | done | done-meta
+  const [deployErr, setDeployErr] = useState(null);
   const [credDraft, setCredDraft] = useState("");
   const [testingCred, setTestingCred] = useState(false);
 
@@ -2077,7 +2144,46 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         : "Index check failed: " + (e?.message || e)))
       .finally(() => setIdxChecking(false));
   };
-  const deploy = () => {
+  const deploy = async () => {
+    const dirty = w.pages.filter((p) => p.dirty);
+    if (!dirty.length) return;
+    /* REAL deploy for connected WordPress sites: each edited page pushes
+       through /api/wp/deploy (title, content, meta title/description — the
+       companion plugin copies metas into Yoast/RankMath). */
+    if (w.platform === "wordpress" && w.credential) {
+      setDeployState("busy"); setDeployErr(null);
+      const credential = w.credential?.value || w.credential;
+      const errs = []; let metaOnly = 0;
+      for (const pg of dirty) {
+        const slug = pg.slug || (pg.url || "").split("/").filter(Boolean).pop() || "";
+        try {
+          if (!slug && pg.url !== "/") throw new Error("no slug — recrawl the site first");
+          const r = await fetch("/api/wp/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+            body: JSON.stringify({ site: project.website, credential, payload: {
+              kind: "page", wpId: pg.wpId, slug, title: pg.name || slug,
+              metaTitle: pg.metaTitle || "", metaDesc: pg.metaDesc || "",
+              content: blocksToHtml(pg.content || []),
+            } }) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.detail || d.hint || d.error || "HTTP " + r.status);
+          if (d.contentSkipped) metaOnly++;
+          set((cur) => ({ pages: cur.pages.map((x) => (x.id === pg.id ? { ...x, dirty: false, wpId: d.id || x.wpId, synced: true } : x)) }));
+        } catch (e) { errs.push(`${pg.url || slug}: ${e.message || e}`); }
+      }
+      set({ lastDeploy: Date.now() });
+      const okCount = dirty.length - errs.length;
+      if (okCount) {
+        work?.("website", "changesDeployed", { detail: `${okCount} page${okCount > 1 ? "s" : ""}` });
+        log?.(`Deployed ${okCount} page change${okCount > 1 ? "s" : ""} to WordPress${metaOnly ? ` (${metaOnly} Elementor page${metaOnly > 1 ? "s" : ""}: meta only)` : ""}`, project.name);
+      }
+      if (errs.length) { setDeployErr(`${okCount} deployed, ${errs.length} failed — ${errs[0]}`); setDeployState("idle"); }
+      else {
+        setDeployState(metaOnly ? "done-meta" : "done");
+        setTimeout(() => setDeployState("idle"), 6000);
+      }
+      return;
+    }
+    /* demo/pixel sites: the pixel payload path (unchanged) */
     const payload = buildPixelPayload(w.pages); // PROD: await fetch("/v1/deploy", {method:"POST", body: JSON.stringify({ key: siteKey, payload })})
     set({ pages: w.pages.map((p) => ({ ...p, dirty: false })), lastDeploy: Date.now() });
     work?.("website", "changesDeployed", { detail: `${dirtyCount} page${dirtyCount > 1 ? "s" : ""}` });
@@ -2431,9 +2537,12 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
             {crawling ? <><RefreshCw size={12} className="animate-spin" /> Crawling…</> : <><RefreshCw size={12} /> Recrawl site</>}
           </button>
-          <button onClick={deploy} disabled={dirtyCount === 0}
-            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-            <Rocket size={13} /> Deploy {dirtyCount > 0 ? `${dirtyCount} change${dirtyCount > 1 ? "s" : ""}` : "changes"}
+          <button onClick={deploy} disabled={dirtyCount === 0 || deployState === "busy"}
+            className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40"
+            style={{ background: deployState === "done" || deployState === "done-meta" ? "#16A34A" : accent, ...(deployState === "done" || deployState === "done-meta" ? { opacity: 1 } : {}) }}>
+            {deployState === "busy" ? <><RefreshCw size={13} className="animate-spin" /> Deploying…</>
+              : deployState === "done" || deployState === "done-meta" ? <><CheckCircle2 size={13} /> Deployed</>
+              : <><Rocket size={13} /> Deploy {dirtyCount > 0 ? `${dirtyCount} change${dirtyCount > 1 ? "s" : ""}` : "changes"}</>}
           </button>
         </div>
         {crawling && (
@@ -2450,6 +2559,17 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
             <span className="min-w-0 flex-1">{idxErr}</span>
             <button onClick={() => setIdxErr(null)} className="shrink-0 font-bold">✕</button>
+          </div>
+        )}
+        {deployErr && (
+          <div className="mb-2 flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[12px] text-red-700">
+            <span>Deploy: {deployErr}</span>
+            <button onClick={() => setDeployErr(null)} className="shrink-0 font-bold">✕</button>
+          </div>
+        )}
+        {deployState === "done-meta" && (
+          <div className="ll-fade mb-2 rounded-xl bg-emerald-50 px-3 py-2.5 text-[12px] text-emerald-700">
+            Deployed. Elementor-built pages received their meta title/description only — their layout is Elementor data, so text-block edits don't overwrite it.
           </div>
         )}
         <HealthBoard list={w.pages} filter={pgFilter} setFilter={setPgFilter} noun="pages" />
@@ -2496,7 +2616,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                   {pg.updatedAt && pg.modified ? <div>Upd {fmtTs2(pg.updatedAt)}</div> : null}
                 </td>
                 <td className="py-2.5">
-                  <OppBadge projectId={project.id} url={pg.url} tracking={trackedKws} brand={project.name} />
+                  <OppBadge projectId={project.id} url={pg.origUrl || pg.url} tracking={trackedKws} brand={project.name} google={project.google} demo={project.demoMode !== false} />
                   <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
                     <Settings2 size={11} /> Live edit & re-optimize
                   </span>
@@ -2557,6 +2677,12 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             <button onClick={() => setIdxErr(null)} className="shrink-0 font-bold">✕</button>
           </div>
         )}
+        {deployErr && (
+          <div className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[12px] text-red-700">
+            <span>Push failed — {deployErr}</span>
+            <button onClick={() => setDeployErr(null)} className="shrink-0 font-bold">✕</button>
+          </div>
+        )}
         <div className="mt-3"><HealthBoard list={w.blogs} filter={postFilter} setFilter={setPostFilter} noun="posts" /></div>
         <div className="overflow-x-auto">
         <table className="w-full table-fixed text-[11.5px]">
@@ -2600,7 +2726,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                   {b.updatedAt ? <><br />Upd {fmtTs2(b.updatedAt)}</> : null}
                 </td>
                 <td className="py-2.5 pr-2">
-                  <OppBadge projectId={project.id} url={"/blog/" + (b.slug || "")} tracking={trackedKws} brand={project.name} />
+                  <OppBadge projectId={project.id} url={(project.demoMode === false && b.url) || "/blog/" + (b.slug || "")} tracking={trackedKws} brand={project.name} google={project.google} demo={project.demoMode !== false} />
                   <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
                     <Settings2 size={11} /> Live edit & re-optimize
                   </span>
@@ -2634,6 +2760,26 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               set({ blogs: w.blogs.map((x) => (x.id === openPost ? { ...x, ...post, updatedAt: Date.now() } : x)) });
               work?.("website", "blogUpdated", { detail: post.title });
               log?.("Updated blog post on website", post.title);
+            }
+            /* REAL push for connected WordPress sites — same deploy endpoint as
+               pages (find-or-create by wpId/slug, metas synced into Yoast/RankMath) */
+            if (w.platform === "wordpress" && w.credential) {
+              const wpId = openPost === "new" ? undefined : w.blogs.find((x) => x.id === openPost)?.wpId;
+              fetch("/api/wp/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+                body: JSON.stringify({ site: project.website, credential: w.credential?.value || w.credential, payload: {
+                  kind: "post", wpId, slug: post.slug, title: post.title,
+                  metaTitle: post.metaTitle || "", metaDesc: post.metaDesc || "",
+                  content: blocksToHtml(post.content || []),
+                  status: post.status === "scheduled" ? "future" : post.status === "draft" ? "draft" : "publish",
+                  ...(post.status === "scheduled" && post.publishAt ? { date: new Date(post.publishAt).toISOString() } : {}),
+                } }) })
+                .then(async (r) => {
+                  const d = await r.json().catch(() => ({}));
+                  if (!r.ok) throw new Error(d.detail || d.hint || d.error || "HTTP " + r.status);
+                  if (d.id) set((cur) => ({ blogs: cur.blogs.map((x) => (x.slug === post.slug ? { ...x, wpId: d.id, synced: true } : x)) }));
+                  log?.(`Post pushed to WordPress (${d.updated ? "updated" : "created"}: /${post.slug})`, project.website);
+                })
+                .catch((e) => { setIdxErr(null); setDeployErr(`post /${post.slug}: ${e.message || e}`); });
             }
             setOpenPost(null);
           }}

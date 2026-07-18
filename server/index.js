@@ -358,15 +358,49 @@ async function handleGscQuery(body) {
   const endDate = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
   const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(body.siteUrl)}/searchAnalytics/query`;
   try { const { accessToken } = await googleAccess(body.connectionId);
-    const [totals, queries, dates] = await Promise.all([
+    /* pull EVERY row, not a top-20 sample — GSC pages at 25k rows/request */
+    const pullAll = async (dims, filter) => {
+      const rows = [];
+      for (let start = 0; start < 125000; start += 25000) {
+        const d = await gPost(accessToken, base, { startDate, endDate, dimensions: dims, rowLimit: 25000, startRow: start,
+          ...(filter ? { dimensionFilterGroups: [{ filters: [filter] }] } : {}) });
+        const r = d.rows || [];
+        rows.push(...r);
+        if (r.length < 25000) break;
+      }
+      return rows;
+    };
+    const rowOf = (r) => ({ clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position });
+    /* Search Console wraps some scraped/API queries in double quotes — noise,
+       never real searches; drop them like the GSC UI effectively does */
+    const cleanQueries = (rows) => rows
+      .filter((r) => !String(r.keys[0]).includes('"'))
+      .map((r) => ({ query: r.keys[0], ...rowOf(r) }));
+    /* bulk page+query mode: every (page, query) pair in one pull — the
+       Optimization Studio groups these per page for its keyword suggestions */
+    if (body.byPage) {
+      const rows = await pullAll(["page", "query"]);
+      return [200, { live: true, range: { startDate, endDate },
+        rows: rows.filter((r) => !String(r.keys[1]).includes('"'))
+          .map((r) => ({ page: r.keys[0], query: r.keys[1], ...rowOf(r) })) }];
+    }
+    /* per-page mode: the queries Google ranks ONE page for — feeds the
+       page's suggested-keywords panel in the Optimization Studio */
+    if (body.page) {
+      const rows = await pullAll(["query"], { dimension: "page", operator: "equals", expression: body.page });
+      return [200, { live: true, range: { startDate, endDate }, page: body.page, queries: cleanQueries(rows) }];
+    }
+    const [totals, queries, pages, dates] = await Promise.all([
       gPost(accessToken, base, { startDate, endDate }),
-      gPost(accessToken, base, { startDate, endDate, dimensions: ["query"], rowLimit: 20 }),
+      pullAll(["query"]),
+      pullAll(["page"]),
       gPost(accessToken, base, { startDate, endDate, dimensions: ["date"], rowLimit: 500 }),
     ]);
     const t = totals.rows?.[0] || {};
     return [200, { live: true, range: { startDate, endDate },
       totals: { clicks: t.clicks || 0, impressions: t.impressions || 0, ctr: t.ctr || 0, position: t.position || 0 },
-      queries: (queries.rows || []).map((r) => ({ query: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position })),
+      queries: cleanQueries(queries),
+      pages: pages.map((r) => ({ page: r.keys[0], ...rowOf(r) })),
       byDate: (dates.rows || []).map((r) => ({ date: r.keys[0], clicks: r.clicks, impressions: r.impressions })),
     }];
   } catch (e) { return gErr(e); }
@@ -972,14 +1006,17 @@ async function handleWpContent(body) {
     return blocks;
   };
   const pathOf = (link) => { try { return new URL(link).pathname.replace(/\/$/, "") || "/"; } catch { return "/" + String(link || ""); } };
-  /* the REAL meta title/description: Yoast (or the SEO plugin) exposes them
-     via yoast_head_json; otherwise fall back to the title/excerpt */
+  /* the REAL meta title/description, best source first:
+     1. serpsquad_seo — per-post Yoast/RankMath/deployed values, exposed by our
+        companion plugin (works on RankMath sites, where yoast_head_json is absent)
+     2. yoast_head_json — Yoast's rendered head
+     3. post title / excerpt as the last honest fallback */
   const metaOf = (p) => ({
-    metaTitle: stripTags(p.yoast_head_json?.title || "") || stripTags(p.title?.rendered),
-    metaDesc: (stripTags(p.yoast_head_json?.description || "") || stripTags(p.excerpt?.rendered)).slice(0, 250),
+    metaTitle: stripTags(p.serpsquad_seo?.title || "") || stripTags(p.yoast_head_json?.title || "") || stripTags(p.title?.rendered),
+    metaDesc: (stripTags(p.serpsquad_seo?.desc || "") || stripTags(p.yoast_head_json?.description || "") || stripTags(p.excerpt?.rendered)).slice(0, 250),
   });
   try {
-    const fields = "id,slug,link,title,excerpt,content,modified,yoast_head_json";
+    const fields = "id,slug,link,title,excerpt,content,modified,yoast_head_json,serpsquad_seo";
     const [pages, posts] = await Promise.all([
       wpFetch(body, `/pages?per_page=100&status=publish&_fields=${fields}`),
       wpFetch(body, `/posts?per_page=100&status=publish&_fields=${fields},date`),
@@ -1017,26 +1054,40 @@ async function handleWpDeploy(body) {
       const found = await wpFetch(body, `/pages?slug=${encodeURIComponent(p2.parentSlug)}&_fields=id`);
       parentId = found[0]?.id || 0;
     }
-    const existing = await wpFetch(body, `/${kind}?slug=${encodeURIComponent(p2.slug)}&status=any&_fields=id`);
+    const existingId = p2.wpId
+      || (await wpFetch(body, `/${kind}?slug=${encodeURIComponent(p2.slug)}&status=any&_fields=id`))[0]?.id
+      || 0;
+    /* Elementor guard: an Elementor-built page renders from _elementor_data,
+       not post_content — overwriting post_content there changes nothing
+       visually AND destroys the stored copy. Unless this deploy carries
+       elementorData itself, push meta/title only for such pages. */
+    let contentSkipped = false;
+    if (existingId && p2.content && !p2.elementorData) {
+      try {
+        const cur = await wpFetch(body, `/${kind}/${existingId}?context=edit&_fields=meta`);
+        if (String(cur?.meta?._elementor_data || "").length > 50) contentSkipped = true;
+      } catch { /* meta not exposed (no companion plugin) — deploy content as asked */ }
+    }
     const payload = {
-      title: p2.title, slug: p2.slug, content: p2.content || "",
+      title: p2.title, slug: p2.slug,
+      ...(p2.content && !contentSkipped ? { content: p2.content } : {}),
       status: p2.status || "publish",
       ...(p2.date ? { date: p2.date } : {}),
       ...(kind === "pages" && parentId ? { parent: parentId } : {}),
       /* blank canvas template (theme bypass); WP ignores it gracefully when
          the template isn't registered on the site */
       ...(kind === "pages" && p2.template ? { template: p2.template } : {}),
-      excerpt: p2.metaDesc || "",
+      ...(p2.metaDesc ? { excerpt: p2.metaDesc } : {}),
       meta: {
         ...(p2.elementorData ? { _elementor_data: p2.elementorData, _elementor_edit_mode: "builder" } : {}),
-        /* written into Yoast/RankMath when the companion plugin maps them */
+        /* the companion plugin copies these into Yoast/RankMath storage */
         _serpsquad_meta_title: p2.metaTitle || "", _serpsquad_meta_desc: p2.metaDesc || "",
       },
     };
-    const res2 = existing[0]?.id
-      ? await wpFetch(body, `/${kind}/${existing[0].id}`, { method: "POST", body: JSON.stringify(payload) })
+    const res2 = existingId
+      ? await wpFetch(body, `/${kind}/${existingId}`, { method: "POST", body: JSON.stringify(payload) })
       : await wpFetch(body, `/${kind}`, { method: "POST", body: JSON.stringify(payload) });
-    return [200, { live: true, id: res2.id, link: res2.link, updated: !!existing[0]?.id }];
+    return [200, { live: true, id: res2.id, link: res2.link, updated: !!existingId, contentSkipped }];
   } catch (e) { return wpErr(e); }
 }
 

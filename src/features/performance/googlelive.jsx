@@ -229,6 +229,35 @@ export function GoogleLiveData({ project, accent }) {
     return (va < vb ? -1 : va > vb ? 1 : 0) * (qSort.dir === "asc" ? 1 : -1);
   });
 
+  /* GSC table: QUERIES ↔ PAGES (like Search Console itself); every row is
+     pulled, so long lists render in slices of 100 */
+  const [gscTab, setGscTab] = useState("queries");
+  const [qLimit, setQLimit] = useState(100);
+  const [pSort, setPSort] = useState({ key: "clicks", dir: "desc" });
+  const sortedPages = [...(gsc?.pages || [])].sort((a, b) => {
+    const va = pSort.key === "page" ? a.page : a[pSort.key], vb = pSort.key === "page" ? b.page : b[pSort.key];
+    return (va < vb ? -1 : va > vb ? 1 : 0) * (pSort.dir === "asc" ? 1 : -1);
+  });
+  const PTh = ({ k, defDir = "desc", children, className = "px-3 py-3" }) => (
+    <th className={className + " cursor-pointer select-none font-semibold hover:text-gray-600"}
+      onClick={() => setPSort((s) => ({ key: k, dir: s.key === k ? (s.dir === "asc" ? "desc" : "asc") : defDir }))}>
+      <span className="inline-flex items-center gap-0.5">{children}{pSort.key === k && <span className="text-[9px]" style={{ color: accent }}>{pSort.dir === "asc" ? "▲" : "▼"}</span>}</span>
+    </th>
+  );
+  /* click a page → its ranking queries (a real page-filtered GSC pull) */
+  const [pageQ, setPageQ] = useState(null); // { page, busy } | { page, rows } | { page, err }
+  const openPageQueries = async (page) => {
+    if (pageQ?.page === page) { setPageQ(null); return; }
+    setPageQ({ page, busy: true });
+    try {
+      const conn = project?.google || {};
+      const r = await fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionId: conn.connectionId, siteUrl: conn.gscSite, days, page }) });
+      const j = await r.json();
+      setPageQ(r.ok ? { page, rows: j.queries || [] } : { page, err: j.detail || j.error });
+    } catch (e) { setPageQ({ page, err: String(e?.message || e) }); }
+  };
+
   if (!connected) return null;
   const busy = ga4?.busy || gsc?.busy;
 
@@ -423,9 +452,19 @@ export function GoogleLiveData({ project, accent }) {
             </LineChart>
           </ResponsiveContainer>
         </Card>
-        {gsc.queries.length > 0 && (
+        {(gsc.queries.length > 0 || (gsc.pages || []).length > 0) && (
           <Card className="overflow-hidden">
-            <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top search queries <span className="text-xs font-normal text-gray-400">last {days} days</span></div>
+            <div className="flex items-center gap-1 border-b border-gray-100 px-5 pt-2">
+              {[["queries", "Queries", gsc.queries.length], ["pages", "Pages", (gsc.pages || []).length]].map(([k, label, n]) => (
+                <button key={k} onClick={() => { setGscTab(k); setQLimit(100); }}
+                  className="-mb-px px-3.5 py-2.5 text-[12.5px] font-semibold transition-colors"
+                  style={gscTab === k ? { color: accent, boxShadow: `inset 0 -2px 0 ${accent}` } : { color: "#9CA3AF" }}>
+                  {label}<span className="ll-mono ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] text-gray-500">{fmt(n)}</span>
+                </button>
+              ))}
+              <span className="ml-auto pb-2 text-[10.5px] text-gray-400">last {days} days · every row from Search Console</span>
+            </div>
+            {gscTab === "queries" && (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] text-left text-[13px]">
                 <thead>
@@ -438,7 +477,7 @@ export function GoogleLiveData({ project, accent }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedQueries.map((q) => (
+                  {sortedQueries.slice(0, qLimit).map((q) => (
                     <tr key={q.query} className="border-b border-gray-50 hover:bg-gray-50/60">
                       <td className="max-w-[280px] truncate px-5 py-3 font-medium text-gray-800">{q.query}</td>
                       <td className="ll-mono px-3 py-3">{fmt(q.clicks)}</td>
@@ -449,7 +488,70 @@ export function GoogleLiveData({ project, accent }) {
                   ))}
                 </tbody>
               </table>
+              {sortedQueries.length > qLimit && (
+                <button onClick={() => setQLimit((l) => l + 200)} className="w-full border-t border-gray-100 py-2.5 text-[12px] font-semibold" style={{ color: accent }}>
+                  Show more — {fmt(sortedQueries.length - qLimit)} more queries
+                </button>
+              )}
             </div>
+            )}
+            {gscTab === "pages" && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[520px] text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                    <PTh k="page" defDir="asc" className="px-5 py-3">Top pages · click one to see its ranking queries</PTh>
+                    <PTh k="clicks">Clicks</PTh>
+                    <PTh k="impressions">Impressions</PTh>
+                    <PTh k="ctr">CTR</PTh>
+                    <PTh k="position" defDir="asc" className="px-5 py-3">Position</PTh>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedPages.slice(0, qLimit).map((p) => (
+                    <React.Fragment key={p.page}>
+                      <tr onClick={() => openPageQueries(p.page)} className="cursor-pointer border-b border-gray-50 hover:bg-gray-50/60">
+                        <td className="ll-mono max-w-[340px] truncate px-5 py-3 font-medium" style={{ color: pageQ?.page === p.page ? accent : "#1F2937" }}>{p.page}</td>
+                        <td className="ll-mono px-3 py-3">{fmt(p.clicks)}</td>
+                        <td className="ll-mono px-3 py-3">{fmt(p.impressions)}</td>
+                        <td className="ll-mono px-3 py-3">{pct1(p.ctr)}</td>
+                        <td className="px-5 py-3"><RankChip pos={Math.round(p.position)} /></td>
+                      </tr>
+                      {pageQ?.page === p.page && (
+                        <tr className="border-b border-gray-50 bg-gray-50/40">
+                          <td colSpan={5} className="px-5 py-3">
+                            {pageQ.busy && <span className="flex items-center gap-2 text-[12px] text-gray-400"><RefreshCw size={12} className="animate-spin" /> Pulling this page's queries from Search Console…</span>}
+                            {pageQ.err && <span className="text-[12px] text-amber-700">Couldn't load queries: {pageQ.err}</span>}
+                            {pageQ.rows && (
+                              pageQ.rows.length === 0
+                                ? <span className="text-[12px] text-gray-400">Search Console has no query data for this page in the selected window.</span>
+                                : <div className="space-y-1.5">
+                                    <div className="text-[10.5px] font-semibold uppercase tracking-wide text-gray-400">Queries Google ranks this page for ({pageQ.rows.length}) — these feed the page's suggested keywords in the Optimization Studio</div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {pageQ.rows.slice(0, 60).map((q) => (
+                                        <span key={q.query} className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11.5px] text-gray-700">
+                                          {q.query}
+                                          <span className="ll-mono text-[10px] text-gray-400">#{Math.round(q.position)} · {fmt(q.impressions)} imp</span>
+                                        </span>
+                                      ))}
+                                      {pageQ.rows.length > 60 && <span className="text-[11px] text-gray-400">+{pageQ.rows.length - 60} more</span>}
+                                    </div>
+                                  </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+              {sortedPages.length > qLimit && (
+                <button onClick={() => setQLimit((l) => l + 200)} className="w-full border-t border-gray-100 py-2.5 text-[12px] font-semibold" style={{ color: accent }}>
+                  Show more — {fmt(sortedPages.length - qLimit)} more pages
+                </button>
+              )}
+            </div>
+            )}
           </Card>
         )}
       </>)}

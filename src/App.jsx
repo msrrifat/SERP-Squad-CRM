@@ -669,12 +669,12 @@ export default function App() {
       ? { name: rwl.name || activeClient.companyName || activeClient.name, logo: rwl.logo, accent: project.accent }
       : null;
     const clientInfo = { companyName: activeClient?.companyName || activeClient?.name, address: activeClient?.address };
-    const clientProjects = (activeClient?.projects || []).map((p) => {
-      const tr = p.tracking.map((t) => hydrate(t, p.demoMode !== false));
-      const kws = [...new Set(p.tracking.map((t) => t.keyword))];
-      /* real sibling projects contribute zeros, never generated numbers */
-      return { project: p, tracking: tr, data: p.demoMode !== false ? genSiteData(p, kws, activeClient.companyName) : emptySiteData(p) };
-    });
+    /* reports are PER PROJECT — each project gets its own report, so the
+       builder only ever sees the selected project (with its live data, not a
+       regenerated copy; real projects report zero-series + real integrations,
+       never fabricated numbers) */
+    const reportData = data || liveData;
+    const clientProjects = [{ project, tracking, data: reportData }];
     const saveReport = (rep) => setCompany((c) => {
       const list = c.savedReports || [];
       const existing = showReport.savedId;
@@ -684,7 +684,7 @@ export default function App() {
     const saveTemplate = (tpl) => setCompany((c) => ({ ...c, reportTemplates: [{ id: "tpl" + Date.now(), name: tpl.name, blocks: tpl.blocks, createdAt: Date.now() }, ...(c.reportTemplates || [])] }));
     return (
       <>
-        <Lazy><ReportBuilder key={"rb" + (reportAi?.run || 0) + (showReport.savedId || showReport.key || "new")} project={project} data={data} tracking={tracking} clientProjects={clientProjects} records={project.records || []} template={showReport.template || "performance"} initialBlocks={showReport.initialBlocks || null} initialTitle={showReport.initialTitle || null} initialRange={showReport.initialRange || null} agencyBrand={agencyBrand} wlBrand={wlBrand} clientInfo={clientInfo} defaultCmp={cmp} dark={dark} setDark={setDark} aiSummary={reportAi?.summary || null} onSave={saveReport} onSaveTemplate={saveTemplate} onClose={() => { setShowReport(null); setReportAi(null); }} /></Lazy>
+        <Lazy><ReportBuilder key={"rb" + (reportAi?.run || 0) + (showReport.savedId || showReport.key || "new")} project={project} data={reportData} tracking={tracking} clientProjects={clientProjects} records={project.records || []} template={showReport.template || "performance"} initialBlocks={showReport.initialBlocks || null} initialTitle={showReport.initialTitle || null} initialRange={showReport.initialRange || null} agencyBrand={agencyBrand} wlBrand={wlBrand} clientInfo={clientInfo} defaultCmp={cmp} dark={dark} setDark={setDark} aiSummary={reportAi?.summary || null} onSave={saveReport} onSaveTemplate={saveTemplate} onClose={() => { setShowReport(null); setReportAi(null); }} /></Lazy>
         {agentEnabled && (
           <React.Suspense fallback={null}>
             {!agentOpen && <AgentLauncher accent={accent} onClick={() => setAgentOpen(true)} />}
