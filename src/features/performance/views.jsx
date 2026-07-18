@@ -831,20 +831,24 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
 
   return (
     <div className="ll-fade space-y-5">
+      {/* sticky compare bar — DIRECT child of the view root so it stays pinned
+          for the entire page, not just the stat-card block */}
+      {W.insights && (
+        <div className="no-print sticky top-2 z-30 flex justify-end">
+          <div className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1.5 shadow-sm">
+            <span className="mx-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
+            {CMP_MODES.map(([k, label]) => (
+              <button key={k} onClick={() => setCmpMode(k)}
+                className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                style={cmpMode === k ? { background: accent, color: "#fff" } : { background: "#F3F4F6", color: "#6B7280" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {W.insights && (
         <div className="space-y-2">
-          <div className="no-print sticky top-2 z-30 flex justify-end">
-            <div className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1.5 shadow-sm">
-              <span className="mx-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
-              {CMP_MODES.map(([k, label]) => (
-                <button key={k} onClick={() => setCmpMode(k)}
-                  className="rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors"
-                  style={cmpMode === k ? { background: accent, color: "#fff" } : { background: "#F3F4F6", color: "#6B7280" }}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
             <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />
             <StatCard icon={MapPin} label="In Google 3-Pack" source="Ranks" accent={accent} value={inPack} sub={rows.length ? `${Math.round((inPack / rows.length) * 100)}% of tracked` : ""} />
