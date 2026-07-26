@@ -45,6 +45,11 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 
 ## Conventions
 
+- **Deploys are automatic**: every push to `main` rebuilds app.serpsquad.com
+  (.github/workflows/deploy.yml, with one automatic retry on the flaky VPS
+  step). When a change set is complete and verified, commit and push it —
+  never end a conversation with verified work sitting unpushed. A Stop hook
+  warns when the tree is dirty or ahead of origin/main.
 - **New API credentials**: add one entry to `API_REGISTRY` in
   src/features/company/settings.jsx — it appears in Company Settings → API settings
   automatically. Never build separate credential UIs.

@@ -16,7 +16,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # The VPS step fails transiently every ~10 runs (SSH/network flake) —
+      # a first failure retries automatically instead of needing a manual
+      # "Redeploy" push. Only two consecutive failures fail the run.
       - name: Pull, build & restart on the VPS
+        id: deploy
+        continue-on-error: true
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -31,3 +36,19 @@ jobs:
             npm run build
             pm2 restart serpsquad-api --update-env
             echo "deployed $(git rev-parse --short HEAD)"
+      - name: Retry after transient failure
+        if: steps.deploy.outcome == 'failure'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd /var/www/serpsquad
+            git fetch origin main
+            git reset --hard origin/main
+            npm ci
+            npm run build
+            pm2 restart serpsquad-api --update-env
+            echo "deployed $(git rev-parse --short HEAD) (retry)"

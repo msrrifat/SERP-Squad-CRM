@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && d=$(git status --porcelain | wc -l | tr -d ' '); u=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0); if [ \"$d\" -gt 0 ] || [ \"$u\" -gt 0 ]; then echo \"{\\\"systemMessage\\\":\\\"Deploy pending: $d uncommitted file(s), $u unpushed commit(s) — push to main to auto-deploy app.serpsquad.com\\\"}\"; fi",
+            "timeout": 15,
+            "statusMessage": "Checking for undeployed changes"
+          }
+        ]
+      }
+    ]
+  }
+}
