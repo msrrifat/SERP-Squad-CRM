@@ -109,6 +109,83 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  /* ---------- URL ROUTING ----------------------------------------------
+     Every screen has a unique path so browser back/forward works:
+       /dashboard  my assignments (post-login landing)   /chat  /team  /account
+       /company    company settings                      /tools research tools
+       /project/<id>/<section>[/<view>]                  /portal client portal
+     State is the source of truth: state changes push their path; back/forward
+     parses the path back into state. /privacy + /terms are plain public pages
+     outside this loop. Only the homepage is indexable — every other path gets
+     a robots noindex meta (the SPA serves one index.html for all routes). */
+  const popNav = useRef(false);           // true while restoring state from back/forward
+  const initialPath = useRef(window.location.pathname);
+  const PROJECT_SECTIONS = ["performance", "adsmgr", "management", "optimization", "reports"];
+  const pathForState = () => {
+    if (screen === "login") return "/login";
+    if (screen === "home") return "/";
+    if (session) return "/portal";
+    if (screen === "company") return "/company";
+    if (screen === "tools") return "/tools";
+    if (accountView === "assignments") return "/dashboard";
+    if (accountView === "chat") return "/chat";
+    if (accountView === "team") return "/team";
+    if (accountView === "settings") return "/account";
+    if (activeProjectId) return `/project/${activeProjectId}/${section}${section === "performance" ? `/${view}` : ""}`;
+    return "/dashboard";
+  };
+  const applyPathRef = useRef(() => {});
+  applyPathRef.current = (path) => {
+    const seg = path.split("/").filter(Boolean);
+    if (!localStorage.getItem("ss_token")) { setScreen(path === "/login" ? "login" : "home"); return; }
+    if (seg[0] === "company") { setScreen("company"); return; }
+    if (seg[0] === "tools") { setScreen("tools"); return; }
+    setScreen("app");
+    if (seg[0] === "project" && seg[1] && clients.some((c) => c.projects.some((p) => p.id === seg[1]))) {
+      const cl = clients.find((c) => c.projects.some((p) => p.id === seg[1]));
+      setActiveClientId(cl.id); setActiveProjectId(seg[1]); setAccountView(null);
+      setSection(PROJECT_SECTIONS.includes(seg[2]) ? seg[2] : "performance");
+      setView(seg[2] === "performance" && seg[3] ? seg[3] : "overview");
+      return;
+    }
+    if (seg[0] === "portal") return; // client session already renders the portal
+    setAccountView({ dashboard: "assignments", chat: "chat", team: "team", account: "settings" }[seg[0]] || "assignments");
+  };
+  useEffect(() => {
+    const onPop = () => { popNav.current = true; applyPathRef.current(window.location.pathname); };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  /* deep links: a reload of /chat or /project/… lands back on that screen.
+     Project links must wait for the server workspace to replace the seed
+     data (runtime-created project ids aren't in SEED_CLIENTS) — the effect
+     re-runs as `clients` arrives and applies once the project exists. */
+  const deepLinked = useRef(false), dlTries = useRef(0);
+  useEffect(() => {
+    if (!hydrated || deepLinked.current) return;
+    if (!localStorage.getItem("ss_token")) { deepLinked.current = true; return; }
+    const seg = initialPath.current.split("/").filter(Boolean);
+    const missingProject = seg[0] === "project" && seg[1] && !clients.some((c) => c.projects.some((p) => p.id === seg[1]));
+    if (missingProject && dlTries.current++ < 2) return; // give the workspace load a chance, then fall through to the dashboard
+    deepLinked.current = true;
+    popNav.current = true;
+    applyPathRef.current(missingProject ? "/dashboard" : initialPath.current);
+  }, [hydrated, clients]); // eslint-disable-line
+  useEffect(() => {
+    if (!hydrated || !deepLinked.current) return;
+    if (["/privacy", "/terms"].includes(window.location.pathname)) return; // public pages own their URL
+    const want = pathForState();
+    if (window.location.pathname !== want) {
+      if (popNav.current) history.replaceState(null, "", want);
+      else history.pushState(null, "", want);
+    }
+    popNav.current = false;
+    /* only the marketing homepage may be indexed */
+    let m = document.querySelector('meta[name="robots"]');
+    if (!m) { m = document.createElement("meta"); m.name = "robots"; document.head.appendChild(m); }
+    m.content = window.location.pathname === "/" ? "index,follow" : "noindex,nofollow";
+  }); // runs after every render — cheap, and never misses a navigation source
+
   /* on load with a token: pull the persisted workspace from the server and
      restore the signed-in identity. A stale/invalid token → back to login. */
   useEffect(() => {
@@ -122,7 +199,9 @@ export default function App() {
         if (d.state?.company) setCompany(d.state.company);
         if (d.state?.clients) setClients(d.state.clients);
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
-        if (idn?.kind === "team") { setTeamSession({ memberId: idn.id }); setAccountView("assignments"); }
+        /* landing view comes from the URL (deep-link effect) — setting
+           "assignments" here would stomp a /project/… or /chat reload */
+        if (idn?.kind === "team") setTeamSession({ memberId: idn.id });
         else if (idn?.kind === "client") setSession({ clientId: idn.id });
         else { localStorage.removeItem("ss_token"); setScreen("login"); }
       } catch { /* server unreachable — keep the login gate, data will sync once reachable */ setScreen("login"); }
@@ -134,7 +213,7 @@ export default function App() {
   const onAuthed = (token, identity) => {
     localStorage.setItem("ss_token", token);
     localStorage.setItem("ss_identity", JSON.stringify(identity));
-    if (window.location.pathname !== "/") history.replaceState(null, "", "/"); // signed in — drop /login from the URL
+    if (window.location.pathname !== "/dashboard") history.replaceState(null, "", "/dashboard"); // signed in — the workspace starts at /dashboard
     setHydrated(true);
     /* pull the latest server state so a second browser sees shared data */
     fetch("/api/state", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
