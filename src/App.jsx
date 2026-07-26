@@ -50,6 +50,9 @@ const SELF_DATA_VIEWS = ["ranks", "geogrid"];
 const GoogleLiveData = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleLiveData");
 const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
+const MarketingHome = lazyOf(() => import("./features/marketing/home.jsx"), "MarketingHome");
+const PrivacyPage = lazyOf(() => import("./features/marketing/home.jsx"), "PrivacyPage");
+const TermsPage = lazyOf(() => import("./features/marketing/home.jsx"), "TermsPage");
 const AgentPanel = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentPanel");
 const AgentLauncher = lazyOf(() => import("./features/agent/AgentPanel.jsx"), "AgentLauncher");
 
@@ -71,7 +74,11 @@ export default function App() {
   /* LOGIN-FIRST: nobody (owner included) sees the dashboard without signing
      in. The session token (ss_token) gates the server data API; app data is
      loaded from and saved to the server so it survives reloads. */
-  const [screen, setScreen] = useState(() => (localStorage.getItem("ss_token") ? "app" : "login")); // "app" | "login"
+  /* PUBLIC FRONT DOOR: app.serpsquad.com/ is the marketing homepage when
+     signed out; /login is the sign-in screen (old #login links still work).
+     Signed-in visitors skip both and land in the app. */
+  const [screen, setScreen] = useState(() => (localStorage.getItem("ss_token") ? "app"
+    : window.location.pathname === "/login" ? "login" : "home")); // "app" | "login" | "home"
   const [hydrated, setHydrated] = useState(false); // true once state is loaded from the server (or first-run decided)
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
   const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
@@ -127,6 +134,7 @@ export default function App() {
   const onAuthed = (token, identity) => {
     localStorage.setItem("ss_token", token);
     localStorage.setItem("ss_identity", JSON.stringify(identity));
+    if (window.location.pathname !== "/") history.replaceState(null, "", "/"); // signed in — drop /login from the URL
     setHydrated(true);
     /* pull the latest server state so a second browser sees shared data */
     fetch("/api/state", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
@@ -638,6 +646,12 @@ export default function App() {
 
   /* public shared report link (#share=<id>) — read-only, no session needed */
   if (shareView) return <Lazy><SharedReportView shareId={shareView} /></Lazy>;
+
+  /* public pages — always reachable, signed in or not (Google's OAuth
+     verification reviewers open these URLs directly) */
+  if (window.location.pathname === "/privacy") return <Lazy><PrivacyPage /></Lazy>;
+  if (window.location.pathname === "/terms") return <Lazy><TermsPage /></Lazy>;
+  if (screen === "home") return <Lazy><MarketingHome /></Lazy>;
 
   /* client portal session takes over the whole screen */
   if (session) {
