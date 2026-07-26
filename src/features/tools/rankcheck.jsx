@@ -76,7 +76,7 @@ export function WebsiteRankCheck({ company, accent }) {
     setBusy(true); setErr(null);
     try {
       const entries = keywords.map((k, i) => ({ id: "rc" + i, keyword: k, city: { city: city.city, region: city.region, country: city.country }, device, engine, domain: cleanDomain }));
-      const r = await fetch("/api/rerun", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
+      const r = await fetch("/api/rerun", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(660000),
         body: JSON.stringify({ entries, dfs: dfsReady ? { login: dfs.login, password: dfs.password } : undefined }) });
       const d = await r.json();
       if (!r.ok) setErr(r.status === 503 ? "DataForSEO isn't connected — add the credentials in API settings, or run a labeled demo." : (d.detail || d.error || `HTTP ${r.status}`));
@@ -115,7 +115,7 @@ export function WebsiteRankCheck({ company, accent }) {
           <button onClick={run} disabled={busy || !cleanDomain.includes(".") || !keywords.length}
             className="ml-auto flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {busy ? <><RefreshCw size={13} className="animate-spin" /> Scanning {keywords.length} keyword(s)…</> : <><Search size={13} /> Check rankings</>}
-            {dfsReady && keywords.length > 0 && <DfsCostChip requests={keywords.length} kind={engine === "Bing" ? "bing" : "organic"} />}
+            {dfsReady && keywords.length > 0 && <DfsCostChip requests={keywords.length} kind={engine === "Bing" ? "bingQueue" : "organicQueue"} />}
           </button>
         </div>
         {err && (

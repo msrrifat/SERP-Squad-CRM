@@ -37,32 +37,60 @@ const snapshotAvg = (snap) => {
   return arps.length ? arps.reduce((a, b) => a + b, 0) / arps.length : null;
 };
 
-/* ---------- grid geometry (shared with the demo generator) ---------- */
+/* ---------- grid geometry (shared with the demo generator; MUST mirror
+   gridPoints() in server/index.js) ---------- */
 const buildPoints = (center, size, spacingKm, shape) => {
   const half = (size - 1) / 2, pts = [];
-  const maxR = half * spacingKm + 1e-6;
-  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
-    const dLatKm = (half - r) * spacingKm, dLngKm = (c - half) * spacingKm;
-    const skipped = shape === "circle" && Math.hypot(dLatKm, dLngKm) > maxR;
-    pts.push({
-      row: r, col: c, skipped,
-      lat: center ? +(center.lat + dLatKm / 111.32).toFixed(6) : null,
-      lng: center ? +(center.lng + dLngKm / (111.32 * Math.cos(((center?.lat || 0) * Math.PI) / 180))).toFixed(6) : null,
-    });
+  const push = (dLatKm, dLngKm, extra) => pts.push({
+    ...extra,
+    lat: center ? +(center.lat + dLatKm / 111.32).toFixed(7) : null,
+    lng: center ? +(center.lng + dLngKm / (111.32 * Math.cos(((center?.lat || 0) * Math.PI) / 180))).toFixed(7) : null,
+  });
+  if (shape === "circle") {
+    /* radial circle (the SEO Utils / Local Falcon layout): center pin +
+       rings every `spacing`, ring k carrying ⌊2πk⌋ evenly spaced pins
+       starting due north — even disk coverage, no clipped-square corners */
+    push(0, 0, { row: 0, col: 0, ring: 0, isCenter: true });
+    for (let k = 1; k <= half; k++) {
+      const n = Math.floor(2 * Math.PI * k);
+      for (let i = 0; i < n; i++) {
+        const a = (2 * Math.PI * i) / n;
+        push(k * spacingKm * Math.cos(a), k * spacingKm * Math.sin(a), { row: k, col: i, ring: k });
+      }
+    }
+    return pts;
   }
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++)
+    push((half - r) * spacingKm, (c - half) * spacingKm, { row: r, col: c, isCenter: r === half && c === half });
   return pts;
 };
+
+/* center test that survives both layouts: radial points carry `ring`
+   (ring k, slot i live in row/col — row===half&&col===half would false-match
+   ring `half`, slot `half`), legacy square snapshots only row/col */
+const isCenterPt = (p, half) => p.isCenter || (p.ring == null && p.row === half && p.col === half);
 
 /* points scanned before the business was located carry lat/lng = null —
    re-derive them from grid geometry so the map renders once a center exists */
 const fillCoords = (points, center, size, spacingKm) => {
   if (!center || !points) return points;
   const half = (size - 1) / 2;
-  return points.map((p) => (p.lat != null ? p : {
-    ...p,
-    lat: +(center.lat + (half - p.row) * spacingKm / 111.32).toFixed(6),
-    lng: +(center.lng + (p.col - half) * spacingKm / (111.32 * Math.cos((center.lat * Math.PI) / 180))).toFixed(6),
-  }));
+  const cosLat = 111.32 * Math.cos((center.lat * Math.PI) / 180);
+  return points.map((p) => {
+    if (p.lat != null) return p;
+    if (p.ring != null) {
+      const n = Math.floor(2 * Math.PI * p.ring) || 1;
+      const a = (2 * Math.PI * p.col) / n;
+      return { ...p,
+        lat: +(center.lat + (p.ring * spacingKm * Math.cos(a)) / 111.32).toFixed(7),
+        lng: +(center.lng + (p.ring * spacingKm * Math.sin(a)) / cosLat).toFixed(7),
+      };
+    }
+    return { ...p,
+      lat: +(center.lat + (half - p.row) * spacingKm / 111.32).toFixed(7),
+      lng: +(center.lng + (p.col - half) * spacingKm / cosLat).toFixed(7),
+    };
+  });
 };
 
 /* ---------- demo scan: spatially correlated, deterministic, always labeled ---------- */
@@ -75,7 +103,7 @@ export function genDemoGrid(projectId, keyword, size, spacingKm, shape, center, 
   const compBase = DEMO_COMPETITORS.map((title, i) => ({ title, base: 1 + ((hashStr(projectId + title) + run) % 9), rating: +(3.9 + ((hashStr(title) % 10) / 10)).toFixed(1), reviews: 40 + (hashStr(title + projectId) % 400) }));
   return buildPoints(center, size, spacingKm, shape).map((pt) => {
     if (pt.skipped) return { ...pt, rank: null, results: [] };
-    const dist = Math.max(Math.abs(pt.row - half), Math.abs(pt.col - half));
+    const dist = pt.ring != null ? pt.ring : Math.max(Math.abs(pt.row - half), Math.abs(pt.col - half));
     let rank = base + Math.round(dist * (0.9 + r() * 1.6) * Math.max(0.6, spacingKm)) + (r() < 0.12 ? 3 : 0) - (run > 0 && r() < 0.35 ? 1 : 0);
     rank = Math.max(1, rank);
     if (rank > 20) rank = null;
@@ -162,18 +190,18 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
         {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
           const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
           if (left < -60 || left > pxW + 60 || top < -60 || top > PX_H + 60) return null;
-          const isCenter = p.row === half && p.col === half;
+          const isCenter = isCenterPt(p, half);
           const prev = prevAt(p);
           const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
           const top3 = (p.results || []).slice(0, 3);
           return (
             <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 50"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 100"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
               <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
                 style={preview
                   ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
                   : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
-                {preview ? "+" : p.error ? "!" : p.rank ?? "50+"}
+                {preview ? "+" : p.error ? "!" : p.rank ?? "100+"}
               </div>
               {delta != null && delta !== 0 && (
                 <span className="absolute flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow-md"
@@ -193,7 +221,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
         </div>
         <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1.5 py-0.5 text-[9px] text-gray-500">© OpenStreetMap contributors © CARTO</span>
       </div>
-      <Legend size={size} spacingKm={spacingKm} />
+      <Legend size={size} spacingKm={spacingKm} count={points.filter((p) => !p.skipped).length} radial={points.some((p) => p.ring != null)} />
     </div>
   );
 }
@@ -202,38 +230,57 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
 export function AbstractGrid({ points, size, spacingKm, prevPoints }) {
   const half = (size - 1) / 2;
   const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
+  const radial = points.some((p) => p.ring != null);
+  const step = 46; // px between rings / rows
+  const box = step * (size - 1) + 56;
+  const bubble = (p) => {
+    const prev = prevAt(p);
+    const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
+    return (
+      <div className="relative" title={`Rank: ${p.rank ?? "not in top 100"}`}>
+        <div className={"flex h-10 w-10 items-center justify-center rounded-full text-[12px] font-bold text-white shadow-sm " + (isCenterPt(p, half) ? "ring-2 ring-offset-2 ring-gray-800" : "")} style={{ background: rankColor(p.rank) }}>
+          {p.rank ?? "100+"}
+        </div>
+        {delta != null && delta !== 0 && (
+          <span className="absolute -bottom-1 -right-1 rounded-full bg-white px-1 text-[8px] font-bold shadow" style={{ color: delta > 0 ? "#16A34A" : "#DC2626" }}>
+            {delta > 0 ? `▲${delta}` : `▼${Math.abs(delta)}`}
+          </span>
+        )}
+      </div>
+    );
+  };
   return (
     <div>
-      <div className="mx-auto grid w-fit gap-1.5 rounded-2xl border border-gray-100 bg-[linear-gradient(#F1F5F9_1px,transparent_1px),linear-gradient(90deg,#F1F5F9_1px,transparent_1px)] bg-[size:22px_22px] p-4"
-        style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))` }}>
-        {points.map((p) => {
-          const isCenter = p.row === half && p.col === half;
-          const prev = prevAt(p);
-          const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
-          if (p.skipped) return <div key={`${p.row}-${p.col}`} className="h-10 w-10" />;
-          return (
-            <div key={`${p.row}-${p.col}`} className="relative" title={`Rank: ${p.rank ?? "not in top 50"}`}>
-              <div className={"flex h-10 w-10 items-center justify-center rounded-full text-[12px] font-bold text-white shadow-sm " + (isCenter ? "ring-2 ring-offset-2 ring-gray-800" : "")} style={{ background: rankColor(p.rank) }}>
-                {p.rank ?? "50+"}
+      {radial ? (
+        <div className="relative mx-auto rounded-2xl border border-gray-100 bg-[linear-gradient(#F1F5F9_1px,transparent_1px),linear-gradient(90deg,#F1F5F9_1px,transparent_1px)] bg-[size:22px_22px]" style={{ width: box, height: box }}>
+          {points.map((p) => {
+            const n = Math.floor(2 * Math.PI * (p.ring || 0)) || 1;
+            const a = (2 * Math.PI * p.col) / n;
+            return (
+              <div key={`${p.row}-${p.col}`} className="absolute -translate-x-1/2 -translate-y-1/2"
+                style={{ left: box / 2 + (p.ring || 0) * step * Math.sin(a), top: box / 2 - (p.ring || 0) * step * Math.cos(a) }}>
+                {bubble(p)}
               </div>
-              {delta != null && delta !== 0 && (
-                <span className="absolute -bottom-1 -right-1 rounded-full bg-white px-1 text-[8px] font-bold shadow" style={{ color: delta > 0 ? "#16A34A" : "#DC2626" }}>
-                  {delta > 0 ? `▲${delta}` : `▼${Math.abs(delta)}`}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <Legend size={size} spacingKm={spacingKm} />
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mx-auto grid w-fit gap-1.5 rounded-2xl border border-gray-100 bg-[linear-gradient(#F1F5F9_1px,transparent_1px),linear-gradient(90deg,#F1F5F9_1px,transparent_1px)] bg-[size:22px_22px] p-4"
+          style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))` }}>
+          {points.map((p) => p.skipped
+            ? <div key={`${p.row}-${p.col}`} className="h-10 w-10" />
+            : <div key={`${p.row}-${p.col}`}>{bubble(p)}</div>)}
+        </div>
+      )}
+      <Legend size={size} spacingKm={spacingKm} count={points.filter((p) => !p.skipped).length} radial={radial} />
     </div>
   );
 }
-const Legend = ({ size, spacingKm }) => (
+const Legend = ({ size, spacingKm, count, radial }) => (
   <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-[10px] text-gray-400">
-    <span className="ll-mono">{size}×{size} · {spacingKm} km spacing</span>
+    <span className="ll-mono">{radial ? `${count} pts · ${(size - 1) / 2} rings` : `${size}×${size}`} · {spacingKm} km spacing</span>
     <span className="flex items-center gap-1.5">
-      {[["1–3", "#16A34A"], ["4–10", "#F59E0B"], ["11–50", "#EF4444"], ["50+", "#5B6472"]].map(([l, c]) => (
+      {[["1–3", "#16A34A"], ["4–10", "#F59E0B"], ["11–100", "#EF4444"], ["100+", "#5B6472"]].map(([l, c]) => (
         <span key={l} className="flex items-center gap-0.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: c }} /> {l}</span>
       ))}
     </span>
@@ -376,7 +423,7 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
           <div className="grid gap-2 sm:grid-cols-3">
             <Labeled label="Grid size">
               <select value={r.size} onChange={(e) => setR({ ...r, size: +e.target.value })} className={inputCls}>
-                {[3, 5, 7, 9, 11, 13].map((n) => <option key={n} value={n}>{n}×{n} ({n * n} points)</option>)}
+                {[3, 5, 7, 9, 11, 13, 15].map((n) => <option key={n} value={n}>{n}×{n}</option>)}
               </select>
             </Labeled>
             {r.mode === "radius" ? (
@@ -391,12 +438,12 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
             <Labeled label="Grid shape">
               <select value={r.shape} onChange={(e) => setR({ ...r, shape: e.target.value })} className={inputCls}>
                 <option value="square">Square</option>
-                <option value="circle">Circle (corners clipped — cheaper)</option>
+                <option value="circle">Circle (center + rings — cheaper, even coverage)</option>
               </select>
             </Labeled>
           </div>
           <div className="text-[10.5px] text-gray-400">
-            Effective spacing: <b className="ll-mono">{effSpacing(r)} km</b> · scan points: <b className="ll-mono">{pts}</b>{r.shape === "circle" ? ` of ${r.size * r.size} (circle clips ${r.size * r.size - pts})` : ""}
+            Effective spacing: <b className="ll-mono">{effSpacing(r)} km</b> · scan points: <b className="ll-mono">{pts}</b>{r.shape === "circle" ? ` (center + ${(r.size - 1) / 2} rings — a ${r.size}×${r.size} square would be ${r.size * r.size})` : ""}
           </div>
 
           {/* live grid preview — the exact points the scan will hit, on the real
@@ -447,8 +494,8 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
           </button>
           {showCost && (
             <div className="rounded-xl bg-gray-50 p-3 text-[11.5px] leading-relaxed text-gray-600">
-              <b>{requests.toLocaleString()} live Maps requests per run</b> ({pts} points × {Math.max(1, kws.length)} keyword{kws.length === 1 ? "" : "s"})
-              ≈ <b>${(requests * 0.0035).toFixed(2)}</b> at DataForSEO's ~$0.0035/request live-advanced rate — verify current pricing on your DataForSEO plan. Circle shape and smaller grids cut cost directly.
+              <b>{requests.toLocaleString()} Maps SERP tasks per run</b> ({pts} points × {Math.max(1, kws.length)} keyword{kws.length === 1 ? "" : "s"})
+              ≈ <b>${(requests * 0.0006).toFixed(2)}</b> at DataForSEO's $0.0006/SERP standard-queue rate (results in ~1–5 min) — verify current pricing on your DataForSEO plan. Circle shape and smaller grids cut cost directly.
             </div>
           )}
         </div>
@@ -512,34 +559,38 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
     const spacingKm = effSpacing(rp);
     const center = isFinite(biz.lat) && isFinite(biz.lng) ? { lat: +biz.lat, lng: +biz.lng } : null;
     startScanJob(`geogrid:${project.id}:${rp.id}`, `Geo-grid · ${project.name} — ${rp.name || rp.keywords[0]}`, async (setProgress) => {
-      const grids = {};
+      let grids = null;
       let live = false;
-      for (let i = 0; i < rp.keywords.length; i++) {
-        const kw = rp.keywords[i];
-        setProgress({ done: i, total: rp.keywords.length, note: kw });
-        let pts = null;
-        if (center) {
-          try {
-            const res = await fetch("/api/geo-grid", {
-              method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(300000),
-              body: JSON.stringify({
-                keyword: kw, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
-                business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
-              }),
-            });
-            if (res.ok) { const d = await res.json(); pts = d.points; live = true; }
-            else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
-          } catch (e) {
-            if (String(e?.message || "").startsWith("Live scan failed")) throw e;
-            /* server down → demo below */
-          }
+      if (center) {
+        /* ALL keywords go in one request — the server queues every
+           (keyword × point) task at once ($0.0006/scan, standard queue),
+           so the whole report takes queue latency (~1–5 min), not
+           keywords × latency */
+        setProgress({ done: 0, total: rp.keywords.length, note: `${activePointCount(rp) * rp.keywords.length} tasks queued (1–5 min)` });
+        try {
+          const res = await fetch("/api/geo-grid", {
+            method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(660000),
+            body: JSON.stringify({
+              keywords: rp.keywords, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
+              business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
+            }),
+          });
+          if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; }
+          else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
+        } catch (e) {
+          if (String(e?.message || "").startsWith("Live scan failed")) throw e;
+          /* server down → demo below */
         }
-        if (!pts) {
+      }
+      if (!grids) {
+        grids = {};
+        for (let i = 0; i < rp.keywords.length; i++) {
+          const kw = rp.keywords[i];
+          setProgress({ done: i, total: rp.keywords.length, note: kw });
           const run = rp.snapshots.length;
-          pts = genDemoGrid(project.id, kw, rp.size, spacingKm, rp.shape, center, run, biz.name || "Your business");
+          grids[kw] = genDemoGrid(project.id, kw, rp.size, spacingKm, rp.shape, center, run, biz.name || "Your business");
           await new Promise((r2) => setTimeout(r2, 350));
         }
-        grids[kw] = pts;
       }
       const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape };
       patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
@@ -609,7 +660,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             </button>
             <button onClick={() => runSnapshot(rp)} disabled={anyRunning}
               className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-              {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "maps"))}</span></>}
+              {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "mapsQueue"))}</span></>}
             </button>
             <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
             <button onClick={() => askDelete(`the report "${rp.name}" and all its snapshots`) && patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
@@ -728,7 +779,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
           <button onClick={onRun} disabled={!!scanState}
             className="flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {scanState ? <><RefreshCw size={10} className="animate-spin" /> "{scanState.kw}" ({scanState.kwIndex + 1}/{scanState.total})</> : <><Search size={10} /> Run snapshot now</>}
-            {!scanState && <DfsCostChip requests={activePointCount(rp) * rp.keywords.length} kind="maps" className="ml-1 border-white/40 bg-white/20 text-white" />}
+            {!scanState && <DfsCostChip requests={activePointCount(rp) * rp.keywords.length} kind="mapsQueue" className="ml-1 border-white/40 bg-white/20 text-white" />}
           </button>
           <span className="relative">
             <button onClick={() => setActionsOpen(!actionsOpen)} className="rounded-lg border border-gray-200 bg-white px-3.5 py-1.5 text-[11.5px] font-semibold text-gray-700 shadow-sm hover:border-gray-300">Actions</button>
@@ -759,7 +810,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
                 <button onClick={() => setOverlay("snapshot")} disabled={!snap} className="block w-full px-3.5 py-2 text-left text-[12.5px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">⭳  Snapshot report (PDF, all keywords)</button>
                 <button disabled={!snap} onClick={() => {
                   const rows = [["Keyword", "Row", "Col", "Lat", "Lng", "Rank"]];
-                  Object.entries(snap.grids).forEach(([k2, pts]) => pts.filter((p) => !p.skipped).forEach((p) => rows.push([k2, p.row, p.col, p.lat ?? "", p.lng ?? "", p.rank ?? "50+"])));
+                  Object.entries(snap.grids).forEach(([k2, pts]) => pts.filter((p) => !p.skipped).forEach((p) => rows.push([k2, p.row, p.col, p.lat ?? "", p.lng ?? "", p.rank ?? "100+"])));
                   const a = document.createElement("a");
                   a.href = URL.createObjectURL(new Blob([rows.map((r2) => r2.join(",")).join("\n")], { type: "text/csv" }));
                   a.download = `${rp.name} — snapshot ${new Date(snap.at).toISOString().slice(0, 10)}.csv`;
@@ -995,14 +1046,14 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
       {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
         const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
         if (left < -40 || left > px + 40 || top < -40 || top > px + 40) return null;
-        const isCenter = p.row === half && p.col === half;
+        const isCenter = isCenterPt(p, half);
         const prev = prevAt(p);
         const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
         return (
           <div key={`${p.row}-${p.col}`} className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}>
             <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-2 ring-gray-900 ring-offset-1" : "")}
               style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: rankColor(p.rank) }}>
-              {p.rank ?? "50+"}
+              {p.rank ?? "100+"}
             </div>
             {delta != null && delta !== 0 && (
               <span className="absolute -right-1 -top-1 flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow"

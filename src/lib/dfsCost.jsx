@@ -4,13 +4,19 @@ import React from "react";
    DataForSEO COST CALCULATOR — one shared rate table so every action
    that spends DataForSEO credits shows its price BEFORE you run it.
 
-   Rates are the standard live-advanced list prices; verify against your
-   plan at app.dataforseo.com → Billing (priority queues cost more).
+   Rank tracking (organic re-checks + geo-grid) runs through the STANDARD
+   TASK QUEUE — $0.0006/SERP, results within ~1–5 min. Tools that need an
+   instant answer (index checks, citations, competitor discovery) stay on
+   the live endpoints at live-advanced list prices. Verify against your
+   plan at app.dataforseo.com → Billing (high-priority queues cost more).
    ===================================================================== */
 export const DFS_RATES = {
-  organic: { rate: 0.003,  label: "Google organic live-advanced" },   // rank re-checks, index checks, citations, competitor scans
-  bing:    { rate: 0.003,  label: "Bing organic live-advanced" },
-  maps:    { rate: 0.0035, label: "Google Maps live-advanced" },      // geo-grid points
+  organic:      { rate: 0.003,  label: "Google organic live-advanced" },    // index checks, citations, competitor scans
+  bing:         { rate: 0.003,  label: "Bing organic live-advanced" },
+  maps:         { rate: 0.0035, label: "Google Maps live-advanced" },
+  organicQueue: { rate: 0.0006, label: "Google organic standard queue" },   // rank re-checks
+  bingQueue:    { rate: 0.0006, label: "Bing organic standard queue" },
+  mapsQueue:    { rate: 0.0006, label: "Google Maps standard queue" },      // geo-grid points
 };
 
 export const dfsCost = (requests, kind = "organic") => requests * (DFS_RATES[kind]?.rate || DFS_RATES.organic.rate);

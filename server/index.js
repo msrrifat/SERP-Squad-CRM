@@ -31,7 +31,7 @@ import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
 
 const PORT = process.env.PORT || 8787;
-const DFS_BASE = "https://api.dataforseo.com/v3";
+const DFS_BASE = process.env.DFS_BASE || "https://api.dataforseo.com/v3"; // override for offline tests
 
 function fileCreds() {
   try {
@@ -58,6 +58,52 @@ async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "b
   const t = data.tasks?.[0];
   if (!t || t.status_code !== 20000) throw new Error(`DataForSEO task ${t?.status_code}: ${t?.status_message}`);
   return t;
+}
+
+/* ---- DataForSEO standard task queue ----------------------------------
+   task_post → tasks_ready → task_get: the exact same SERP data as /live
+   at $0.0006 per SERP (standard priority) instead of $0.002+ — results
+   just arrive asynchronously (usually <1 min, worst case ~5 min).
+   Returns an array aligned with `tasks`: { task } on success, { error }
+   on creation failure / task failure / poll-budget timeout. */
+async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 420000, pollMs = 10000 } = {}) {
+  const out = new Array(tasks.length).fill(null);
+  const pending = new Map(); // DataForSEO task id → index into `tasks`
+  const headers = { Authorization: authHeader(creds), "Content-Type": "application/json" };
+  for (let i = 0; i < tasks.length; i += 100) { // API cap: 100 tasks per POST
+    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: String(i + j) }));
+    const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_post`, {
+      method: "POST", headers, body: JSON.stringify(chunk), signal: AbortSignal.timeout(35000),
+    });
+    if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    for (const t of (await res.json()).tasks || []) {
+      const idx = +(t.data?.tag ?? -1);
+      if (!(idx >= 0 && idx < tasks.length)) continue;
+      if (t.status_code === 20100) pending.set(t.id, idx); // 20100 = Task Created
+      else out[idx] = { error: `task ${t.status_code}: ${t.status_message}` };
+    }
+  }
+  const deadline = Date.now() + budgetMs;
+  while (pending.size && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    let ready = [];
+    try {
+      const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/tasks_ready`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(35000) });
+      /* tasks_ready is account-global — other tools (or a second CRM scan)
+         may share the account, so collect ONLY ids this call created */
+      if (res.ok) ready = ((await res.json()).tasks?.[0]?.result || []).filter((r2) => pending.has(r2.id));
+    } catch { /* transient poll failure — next cycle retries */ }
+    await pool(ready, async (r2) => {
+      const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_get/advanced/${r2.id}`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(35000) });
+      if (!res.ok) return; // stays pending — it reappears in the next tasks_ready cycle
+      const t = (await res.json()).tasks?.[0];
+      const idx = pending.get(r2.id);
+      pending.delete(r2.id);
+      out[idx] = t && t.status_code === 20000 ? { task: t } : { error: `task ${t?.status_code}: ${t?.status_message}` };
+    }, 5);
+  }
+  for (const idx of pending.values()) if (!out[idx]) out[idx] = { error: "queue timeout — task did not complete in time" };
+  return out;
 }
 
 /* ---- citation scan: one site: query per directory, NAP-checked ---- */
@@ -1905,87 +1951,103 @@ async function handleRerun(body) {
     "United Arab Emirates": "google.ae", "South Africa": "google.co.za",
   };
   /* 25 per request is the HTTP-timeout guard, NOT a scan limit — the client
-     batches any keyword count into sequential 25-keyword requests */
-  const updated = await pool(entries.slice(0, 25), async (e) => {
-    const engine = (e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google";
-    const base = {
-      keyword: e.keyword,
-      language_code: "en",
-      device: (e.device || "Desktop").toLowerCase(),
-      os: e.device === "Mobile" ? "android" : "windows",
-      depth: 100,
-      ...(engine === "google" && SE_DOMAIN[e.city?.country] ? { se_domain: SE_DOMAIN[e.city.country] } : {}),
-    };
-    /* DataForSEO only accepts location_names from its own database — custom or
-       partial cities ("York" with no region) fail on the exact form, so walk
-       from most to least specific instead of erroring the whole scan */
-    const variants = [...new Set([
-      [e.city.city, e.city.region, e.city.country].filter(Boolean).join(","),
-      [e.city.city, e.city.country].filter(Boolean).join(","),
-      e.city.country,
-    ].filter(Boolean))];
-    const scanOnce = async () => {
-      let task = null, usedLocation = null, lastErr = null;
-      for (const loc of variants) {
-        try { task = await dfsLive(creds, engine + "/organic", { ...base, location_name: loc }); usedLocation = loc; break; }
-        catch (err) {
-          lastErr = err;
-          if (!/location/i.test(String(err?.message || err))) throw err; // non-location errors are real failures
-        }
-      }
-      if (!task) throw lastErr;
-      const { position, url, mapPos, packShown } = parseSerpRank(task, e.domain);
-      return { id: e.id, position, url, mapPos, packShown, location: usedLocation };
-    };
-    /* DataForSEO 40101s ("Internal SE Server Error") come in bursts — two
-       retries with growing gaps ride out the burst instead of failing rows */
-    try { return await scanOnce(); }
-    catch { await new Promise((r) => setTimeout(r, 2000)); }
-    try { return await scanOnce(); }
-    catch { await new Promise((r) => setTimeout(r, 6000)); return await scanOnce(); }
-  }, 5);
-  return [200, { live: true, updated: updated.map((u, i) => (u.error ? { id: entries[i].id, keyword: entries[i].keyword, error: u.error } : u)) }];
+     batches any keyword count into sequential 25-keyword requests.
+     Checks run through the standard task queue ($0.0006/SERP vs $0.003
+     live) — same SERP data, results just arrive within a few minutes. */
+  const list = entries.slice(0, 25);
+  /* DataForSEO only accepts location_names from its own database — custom or
+     partial cities ("York" with no region) fail on the exact form, so walk
+     from most to least specific instead of erroring the whole scan */
+  const variantsOf = (e) => [...new Set([
+    [e.city.city, e.city.region, e.city.country].filter(Boolean).join(","),
+    [e.city.city, e.city.country].filter(Boolean).join(","),
+    e.city.country,
+  ].filter(Boolean))];
+  const buildTask = (e, engine, loc) => ({
+    keyword: e.keyword,
+    language_code: "en",
+    device: (e.device || "Desktop").toLowerCase(),
+    os: e.device === "Mobile" ? "android" : "windows",
+    depth: 100,
+    location_name: loc,
+    ...(engine === "google" && SE_DOMAIN[e.city?.country] ? { se_domain: SE_DOMAIN[e.city.country] } : {}),
+  });
+  const updated = new Array(list.length);
+  for (const engine of ["google", "bing"]) {
+    const idxs = list.map((_, i) => i).filter((i) => ((list[i].engine || "Google").toLowerCase() === "bing" ? "bing" : "google") === engine);
+    if (!idxs.length) continue;
+    /* invalid locations fail at task creation (instantly, unbilled) — walk
+       the failed subset down the variant ladder in follow-up rounds */
+    let work = idxs.map((i) => ({ i, vi: 0 }));
+    for (let round = 0; round < 3 && work.length; round++) {
+      const res = await dfsQueue(creds, engine + "/organic", work.map(({ i, vi }) => buildTask(list[i], engine, variantsOf(list[i])[vi])));
+      const next = [];
+      res.forEach((r, j) => {
+        const { i, vi } = work[j];
+        const e = list[i];
+        if (r?.task) {
+          const { position, url, mapPos, packShown } = parseSerpRank(r.task, e.domain);
+          updated[i] = { id: e.id, position, url, mapPos, packShown, location: variantsOf(e)[vi] };
+        } else if (/location/i.test(r?.error || "") && variantsOf(e)[vi + 1]) next.push({ i, vi: vi + 1 });
+        else updated[i] = { id: e.id, keyword: e.keyword, error: r?.error || "no result" };
+        /* transient task failures (40101 bursts, queue timeouts) surface as
+           per-entry errors — the client's retry pass reposts exactly those */
+      });
+      work = next;
+    }
+    work.forEach(({ i }) => { updated[i] = updated[i] || { id: list[i].id, keyword: list[i].keyword, error: "location not accepted by DataForSEO" }; });
+  }
+  return [200, { live: true, updated }];
 }
 
 /* ---- GBP geo-grid rank scan =================================
-   The Local Falcon / BrightLocal technique, for real: one Google Maps SERP
-   request per grid point with an exact location_coordinate (lat,lng,15z),
-   then find the business in the local results by name/CID. Accuracy comes
-   from the coordinate targeting — each point returns what a searcher AT
-   that spot would see. Cost: gridSize² live Maps requests per scan. ---- */
+   The Local Falcon / SEO Utils technique, for real: one Google Maps SERP
+   task per grid point with an exact location_coordinate (lat,lng,17z),
+   then find the business in the local results by CID/place_id/name.
+   Accuracy comes from the coordinate targeting — 17z scopes each request
+   to roughly what a searcher standing AT that spot sees (15z was wide
+   enough that neighboring points returned homogenized results).
+   Cost: points × keywords standard-queue tasks @ $0.0006 per scan. ---- */
 const normName = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function gridPoints(center, size, spacingKm, shape = "square") {
   const half = (size - 1) / 2, pts = [];
-  const maxR = half * spacingKm + 1e-6; // circle clip radius
-  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
-    const dLatKm = (half - r) * spacingKm, dLngKm = (c - half) * spacingKm;
-    const skipped = shape === "circle" && Math.hypot(dLatKm, dLngKm) > maxR;
-    pts.push({
-      row: r, col: c, skipped,
-      lat: +(center.lat + dLatKm / 111.32).toFixed(6),
-      lng: +(center.lng + dLngKm / (111.32 * Math.cos((center.lat * Math.PI) / 180))).toFixed(6),
-    });
+  const push = (dLatKm, dLngKm, extra) => pts.push({
+    ...extra,
+    lat: +(center.lat + dLatKm / 111.32).toFixed(7),
+    lng: +(center.lng + dLngKm / (111.32 * Math.cos((center.lat * Math.PI) / 180))).toFixed(7),
+  });
+  if (shape === "circle") {
+    /* true radial circle (what SEO Utils / Local Falcon render): center pin
+       + concentric rings every `spacing`, ring k carrying ⌊2πk⌋ pins so the
+       arc gap ≈ the radial gap — even coverage of the disk with ~22% fewer
+       paid scans than a corner-clipped square */
+    push(0, 0, { row: 0, col: 0, ring: 0, isCenter: true });
+    for (let k = 1; k <= half; k++) {
+      const n = Math.floor(2 * Math.PI * k);
+      for (let i = 0; i < n; i++) {
+        const a = (2 * Math.PI * i) / n; // bearing from north, clockwise
+        push(k * spacingKm * Math.cos(a), k * spacingKm * Math.sin(a), { row: k, col: i, ring: k });
+      }
+    }
+    return pts;
   }
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++)
+    push((half - r) * spacingKm, (c - half) * spacingKm, { row: r, col: c, isCenter: r === half && c === half });
   return pts;
 }
-async function scanGridPoint(creds, keyword, pt, business, languageCode = "en") {
-  if (pt.skipped) return { ...pt, rank: null, results: [] }; // circle-clipped corner — not scanned, not billed
-  const task = await dfsLive(creds, "google/maps", {
-    keyword, location_coordinate: `${pt.lat},${pt.lng},15z`, language_code: languageCode, depth: 50, // ranks tracked to 50 — beyond shows 50+
-  });
+/* parse one Maps task into a grid-point result (matching tiers: CID →
+   place_id → exact normalized name → containment; items arrive in rank
+   order so the first hit within a tier is the best position) */
+function parseMapsTask(task, business) {
   const items = (task.result?.[0]?.items || []).filter((it) => it.type === "maps_search");
   const target = normName(business.name);
-  /* precision matching — strongest identifier first: CID, then place_id, then
-     exact normalized name, then containment. Items arrive in rank order, so
-     the first hit within each tier is the best position. */
   const hit =
     (business.cid && items.find((it) => String(it.cid) === String(business.cid))) ||
     (business.placeId && items.find((it) => it.place_id === business.placeId)) ||
     items.find((it) => normName(it.title) === target) ||
     items.find((it) => normName(it.title).includes(target) || target.includes(normName(it.title)));
   return {
-    ...pt,
-    rank: hit ? hit.rank_group : null, // rank among local results; null = not in top 50
+    rank: hit ? hit.rank_group : null, // null = not in top 100
     /* top-20 stored per point — competitor grids are derived from this
        same response later at ZERO extra API cost (token-efficient by design) */
     results: items.slice(0, 20).map((it) => ({
@@ -1998,20 +2060,39 @@ async function scanGridPoint(creds, keyword, pt, business, languageCode = "en") 
 async function handleGeoGrid(body) {
   const creds = resolveCreds(body);
   if (!creds) return [503, { error: "not_configured" }];
-  const { keyword, center, grid, business } = body;
-  if (!keyword || !business?.name || !isFinite(center?.lat) || !isFinite(center?.lng)) return [400, { error: "keyword, business.name, center.lat/lng required" }];
-  const size = [3, 5, 7, 9, 11, 13].includes(+grid?.size) ? +grid.size : 5;
+  const { center, grid, business } = body;
+  const keywords = (Array.isArray(body.keywords) && body.keywords.length ? body.keywords : [body.keyword]).filter(Boolean).slice(0, 40);
+  if (!keywords.length || !business?.name || !isFinite(center?.lat) || !isFinite(center?.lng)) return [400, { error: "keyword(s), business.name, center.lat/lng required" }];
+  const size = [3, 5, 7, 9, 11, 13, 15].includes(+grid?.size) ? +grid.size : 5;
   const spacingKm = Math.min(10, Math.max(0.05, +grid?.spacingKm || 1));
   const pts = gridPoints(center, size, spacingKm, grid?.shape === "circle" ? "circle" : "square");
-  /* one automatic retry per point — a transient SERP error must not leave a
-     hole in the grid pretending to be a bad rank */
-  const results = await pool(pts, async (pt) => {
-    try { return await scanGridPoint(creds, keyword, pt, business, body.language_code || "en"); }
-    catch { return await scanGridPoint(creds, keyword, pt, business, body.language_code || "en"); }
-  }, 5);
-  const clean = results.map((r, i) => (r.error ? { ...pts[i], rank: null, error: r.error, results: [] } : r));
-  if (clean.every((r) => r.error || r.skipped)) return [502, { error: "provider_error", detail: clean.find((r) => r.error)?.error || "scan failed" }];
-  return [200, { live: true, points: clean, size, spacingKm, checkedAt: Date.now() }];
+  const languageCode = body.language_code || "en";
+  /* every (keyword, point) task goes into ONE standard-queue batch — the
+     whole report scans in queue-latency time regardless of its size */
+  const tasks = [];
+  for (const kw of keywords) for (const pt of pts) tasks.push({
+    keyword: kw, location_coordinate: `${pt.lat},${pt.lng},17z`, language_code: languageCode, depth: 100,
+  });
+  const results = await dfsQueue(creds, "google/maps", tasks);
+  /* one repost round — a transient SERP error or queue timeout must not
+     leave a hole in the grid pretending to be a bad rank */
+  const missIdx = results.map((r, i) => (!r?.task ? i : -1)).filter((i) => i >= 0);
+  if (missIdx.length && missIdx.length < tasks.length) {
+    const retry = await dfsQueue(creds, "google/maps", missIdx.map((i) => tasks[i]), { budgetMs: 150000 });
+    retry.forEach((r, j) => { if (r?.task) results[missIdx[j]] = r; });
+  }
+  const grids = {};
+  keywords.forEach((kw, ki) => {
+    grids[kw] = pts.map((pt, pi) => {
+      const r = results[ki * pts.length + pi];
+      return r?.task ? { ...pt, ...parseMapsTask(r.task, business) } : { ...pt, rank: null, error: r?.error || "scan failed", results: [] };
+    });
+  });
+  if (Object.values(grids).every((g) => g.every((p) => p.error))) {
+    return [502, { error: "provider_error", detail: Object.values(grids)[0].find((p) => p.error)?.error || "scan failed" }];
+  }
+  /* `points` kept for single-keyword callers (older client bundles) */
+  return [200, { live: true, grids, points: grids[keywords[0]], size, spacingKm, checkedAt: Date.now() }];
 }
 
 /* ---- Google Places: resolve the business location (Find Place) ---- */
