@@ -52,25 +52,26 @@ jobs:
             npm run build
             pm2 restart serpsquad-api --update-env
             echo "deployed $(git rev-parse --short HEAD) (retry)"
-      # One-time (idempotent) nginx tuning from the PageSpeed audit: hashed
-      # /assets/ get year-long immutable caching, plus HSTS + nosniff headers.
-      # Guarded by nginx -t; reverts and reports rather than breaking the site.
-      - name: Ensure nginx cache + security headers
+      # One-time (idempotent) web-server tuning from the PageSpeed audit: the
+      # VPS serves the app with CADDY (server: Caddy) — hashed /assets/ get
+      # year-long immutable caching, plus HSTS + nosniff headers. Guarded by
+      # caddy validate; reverts rather than breaking the site.
+      - name: Ensure Caddy cache + security headers
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            CONF=$(grep -rl "serpsquad" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ /etc/nginx/nginx.conf 2>/dev/null | grep -v ssq-bak | head -1)
+            CONF=$(ls /etc/caddy/Caddyfile 2>/dev/null || grep -rl "app.serpsquad.com" /etc/caddy 2>/dev/null | head -1)
             echo "located config: ${CONF:-none}"
-            if [ -z "$CONF" ]; then echo "no nginx config mentions serpsquad, skipping"; exit 0; fi
-            if grep -q "SSQ-TUNING" "$CONF"; then echo "nginx already tuned"; exit 0; fi
+            if [ -z "$CONF" ]; then echo "no Caddyfile found, skipping"; exit 0; fi
+            if grep -q "SSQ-TUNING" "$CONF"; then echo "caddy already tuned"; exit 0; fi
             cp "$CONF" "$CONF.ssq-bak"
-            sed -i '/server_name/a\    # SSQ-TUNING\n    location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; }\n    add_header Strict-Transport-Security "max-age=31536000" always;\n    add_header X-Content-Type-Options "nosniff" always;' "$CONF"
-            if nginx -t; then
-              systemctl reload nginx && echo "nginx tuned"
-              sleep 1; curl -sI http://127.0.0.1/ | grep -i "strict-transport\|x-content" || echo "warning: headers not visible on localhost probe"
+            sed -i '/app\.serpsquad\.com.*{/a\	# SSQ-TUNING\n	@ssqassets path /assets/*\n	header @ssqassets Cache-Control "public, max-age=31536000, immutable"\n	header Strict-Transport-Security "max-age=31536000"\n	header X-Content-Type-Options "nosniff"' "$CONF"
+            if caddy validate --config "$CONF"; then
+              systemctl reload caddy && echo "caddy tuned"
+              sleep 2; curl -sI https://app.serpsquad.com/robots.txt | grep -i "strict-transport\|x-content" || echo "warning: headers not visible yet"
             else
-              mv "$CONF.ssq-bak" "$CONF"; echo "nginx patch failed validation, reverted"
+              mv "$CONF.ssq-bak" "$CONF"; echo "caddy patch failed validation, reverted"
             fi
