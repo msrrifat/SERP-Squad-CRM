@@ -62,9 +62,15 @@ jobs:
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            CONF=$(grep -rl "serpsquad" /etc/nginx/sites-enabled/ 2>/dev/null | head -1)
-            if [ -z "$CONF" ]; then echo "no nginx config found, skipping"; exit 0; fi
+            CONF=$(grep -rl "serpsquad" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ /etc/nginx/nginx.conf 2>/dev/null | grep -v ssq-bak | head -1)
+            echo "located config: ${CONF:-none}"
+            if [ -z "$CONF" ]; then echo "no nginx config mentions serpsquad, skipping"; exit 0; fi
             if grep -q "SSQ-TUNING" "$CONF"; then echo "nginx already tuned"; exit 0; fi
             cp "$CONF" "$CONF.ssq-bak"
             sed -i '/server_name/a\    # SSQ-TUNING\n    location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; }\n    add_header Strict-Transport-Security "max-age=31536000" always;\n    add_header X-Content-Type-Options "nosniff" always;' "$CONF"
-            if nginx -t; then systemctl reload nginx && echo "nginx tuned"; else mv "$CONF.ssq-bak" "$CONF"; echo "nginx patch failed validation, reverted"; fi
+            if nginx -t; then
+              systemctl reload nginx && echo "nginx tuned"
+              sleep 1; curl -sI http://127.0.0.1/ | grep -i "strict-transport\|x-content" || echo "warning: headers not visible on localhost probe"
+            else
+              mv "$CONF.ssq-bak" "$CONF"; echo "nginx patch failed validation, reverted"
+            fi
