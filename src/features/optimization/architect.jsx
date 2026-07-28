@@ -161,6 +161,61 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish 
   );
 }
 
+/* ---- service-page keyword box: the page's keywords as chips (primary ★ +
+   secondaries), manual add, and one-click adds from matching researched
+   keywords — no full bank picker on service pages ---- */
+function ServiceKeywordsBox({ node, project, seo, setSeo, accent }) {
+  const [draft, setDraft] = useState("");
+  const cur = [seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean);
+  const curSet = new Set(cur.map((k) => k.toLowerCase()));
+  const addKw = (kw) => {
+    const v = String(kw || "").trim();
+    if (!v || curSet.has(v.toLowerCase())) return;
+    setSeo((c) => c.primaryKw?.trim()
+      ? { secondaryKws: [...new Set([...String(c.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean), v])].join(", ") }
+      : { primaryKw: v });
+  };
+  const removeKw = (kw) => setSeo((c) => kw === c.primaryKw
+    ? { primaryKw: "" }
+    : { secondaryKws: String(c.secondaryKws || "").split(",").map((s) => s.trim()).filter((s) => s && s !== kw).join(", ") });
+  const titleWords = new Set(node.title.toLowerCase().split(/\W+/).filter((w) => w.length > 3));
+  const researched = (project?.keywordBank || [])
+    .filter((k) => !curSet.has(k.keyword.toLowerCase()) && [...titleWords].some((w) => k.keyword.toLowerCase().includes(w)))
+    .slice(0, 10);
+  return (
+    <div className="rounded-xl border border-dashed border-gray-200 p-2.5">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] font-bold text-gray-700">
+        <Target size={12} style={{ color: accent }} /> Page keywords
+        <span className="font-normal text-gray-400">first = primary, the rest are secondaries</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {cur.map((k) => (
+          <span key={k} className="flex items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold"
+            style={k === seo.primaryKw ? { borderColor: accent, color: accent, background: accent + "10" } : { borderColor: "#E5E7EB", color: "#4B5563" }}>
+            {k === seo.primaryKw && "★ "}{k}
+            <button onClick={() => removeKw(k)} className="opacity-50 hover:opacity-100"><X size={10} /></button>
+          </span>
+        ))}
+        <input value={draft} onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { addKw(draft); setDraft(""); } }}
+          placeholder="add keyword + Enter" className="w-40 rounded-lg border border-gray-200 px-2 py-1 text-[11px] outline-none" />
+      </div>
+      {researched.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-gray-50 pt-2">
+          <span className="text-[9.5px] font-bold uppercase tracking-wide text-gray-400">From keyword research:</span>
+          {researched.map((k) => (
+            <button key={k.id} onClick={() => addKw(k.keyword)}
+              title={`${k.volume?.toLocaleString() ?? "?"} searches/mo · ${k.location}`}
+              className="rounded-lg border px-2 py-0.5 text-[10.5px] font-semibold" style={{ borderColor: accent + "44", color: accent }}>
+              + {k.keyword}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---- per-page content pipeline editor ---- */
 function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
   const work = useWork();
@@ -280,8 +335,12 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
           <FileText size={15} style={{ color: accent }} />
           <div className="min-w-0 flex-1">
             <div className="ll-display truncate text-[14px] font-semibold">{node.title}</div>
-            <div className="ll-mono text-[10.5px] text-gray-400">{project.website}{node.url} · market: {locationName}{ai?.key ? ` · AI: ${ai.provider}` : " · no AI provider (drafts)"}</div>
+            <div className="ll-mono text-[10.5px] text-gray-400">{project.website}{node.url} · market: {locationName}{ai?.key ? ` · AI: ${ai.provider}` : " · no AI provider (drafts)"} · <span className="text-emerald-600">✓ scans &amp; drafts auto-save</span></div>
           </div>
+          <button onClick={onClose} title="Everything here is already saved to the site map — close and continue anytime"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-600 hover:border-gray-300">
+            Save &amp; close
+          </button>
           {onPublish && (
             <button onClick={onPublish} title="Publish only this page to the connected site"
               className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white" style={{ background: accent }}>
@@ -300,14 +359,16 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
               <Labeled label="Primary keyword (one intent per page)"><input value={seo.primaryKw || ""} onChange={(e) => setSeo({ primaryKw: e.target.value })} className={inputCls} /></Labeled>
               <Labeled label="Secondary keywords (comma-separated)"><input value={seo.secondaryKws || ""} onChange={(e) => setSeo({ secondaryKws: e.target.value })} placeholder="long-tail, related terms" className={inputCls} /></Labeled>
             </div>
-            {/* researched keywords (Keyword Finder → project bank): first pick
-               becomes the primary, the rest join the secondaries — they then
-               drive the content structure + writer below */}
-            <KwBankPicker project={project} accent={accent}
-              used={[seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean)}
-              onPick={(k) => setSeo((cur) => cur.primaryKw?.trim()
-                ? { secondaryKws: [...new Set([...String(cur.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean), k.keyword])].join(", ") }
-                : { primaryKw: k.keyword })} />
+            {/* researched keywords: service pages get a focused keyword box
+               (assigned keywords + manual add + matching research); other
+               page types keep the full bank picker */}
+            {node.type === "service"
+              ? <ServiceKeywordsBox node={node} project={project} seo={seo} setSeo={setSeo} accent={accent} />
+              : <KwBankPicker project={project} accent={accent}
+                  used={[seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean)}
+                  onPick={(k) => setSeo((cur) => cur.primaryKw?.trim()
+                    ? { secondaryKws: [...new Set([...String(cur.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean), k.keyword])].join(", ") }
+                    : { primaryKw: k.keyword })} />}
           </Card>
 
           <Card className="space-y-3 p-4">
@@ -544,7 +605,10 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
             const dups = [];
             walk(tree, (n) => {
               if (n.adoptedExisting || n.dupResolved) return;
-              const d = findDuplicate({ title: n.title, slug: n.url.split("/").filter(Boolean).pop() || "", url: n.url }, livePages, liveBlogs);
+              /* pages match existing PAGES; only blog-article nodes match posts */
+              const d = n.type === "article"
+                ? findDuplicate({ title: n.title, slug: n.url.split("/").filter(Boolean).pop() || "", url: n.url }, [], liveBlogs)
+                : findDuplicate({ title: n.title, slug: n.url.split("/").filter(Boolean).pop() || "", url: n.url }, livePages, []);
               if (d && d.url !== n.url) dups.push({ node: n, dup: d });
               else if (d && d.url === n.url) dups.push({ node: n, dup: d, same: true });
             });

@@ -321,9 +321,11 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
       list = draftArchitecture(svcList, market, w.architecture?.niche || "");
     }
     /* duplicate cross-check against the LIVE site */
+    /* posts only match existing POSTS — a service page sharing words with a
+       post title is not a duplicate of it */
     const withDup = list.map((p, i) => ({
       id: "pa" + Date.now().toString(36) + i, ...p, status: "planned", content: null,
-      dup: findDuplicate(p, livePages, liveBlogs),
+      dup: findDuplicate(p, [], liveBlogs),
     }));
     setOpt("website", (cur) => ({ postsPlan: { generatedAt: Date.now(), live, provider: aiConfig?.provider, posts: withDup } }));
     const dups = withDup.filter((p) => p.dup).length;
@@ -542,8 +544,10 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
           <FileText size={15} style={{ color: accent }} />
           <div className="min-w-0 flex-1">
             <div className="ll-display flex items-center gap-2 truncate text-[14px] font-semibold">{post.title} <CatChip cat={post.category} /></div>
-            <div className="ll-mono text-[10.5px] text-gray-400">/{post.category === "answer" ? "answers" : "blog"}/{post.slug} · supports {post.serviceUrl} · kw "{post.primaryKw}"</div>
+            <div className="ll-mono text-[10.5px] text-gray-400">/{post.category === "answer" ? "answers" : "blog"}/{post.slug} · supports {post.serviceUrl} · kw "{post.primaryKw}" · <span className="text-emerald-600">✓ auto-saves</span></div>
           </div>
+          <button onClick={onClose} title="Content is already saved to the plan — close and continue anytime"
+            className="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-600 hover:border-gray-300">Save &amp; close</button>
           <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100"><X size={16} /></button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">

@@ -202,11 +202,19 @@ async function handleSerpTop(body) {
   if (!keyword) return [400, { error: "keyword required" }];
   const location = body.location_name || "United States";
   const n = Math.min(10, Math.max(1, +body.count || 5));
-  const task = await dfsLive(creds, "google/organic", { keyword, location_name: location, language_code: "en", depth: 20 })
-    .catch((e) => ({ __err: String(e.message || e) }));
-  if (task.__err) return [502, { error: "provider_error", detail: task.__err }];
+  /* DataForSEO only accepts location_names from its own database — walk the
+     tracked market from most to least specific (city,region,country → country)
+     instead of failing the whole competitor scan on an unknown city form */
+  const parts = location.split(",").map((s) => s.trim()).filter(Boolean);
+  const variants = [...new Set([parts.join(","), parts.slice(-2).join(","), parts[parts.length - 1]])].filter(Boolean);
+  let task = null, usedLocation = location, lastErr = null;
+  for (const loc of variants) {
+    try { task = await dfsLive(creds, "google/organic", { keyword, location_name: loc, language_code: "en", depth: 20 }); usedLocation = loc; break; }
+    catch (e) { lastErr = e; if (!/location/i.test(String(e?.message || e))) return [502, { error: "provider_error", detail: String(e?.message || e) }]; }
+  }
+  if (!task) return [502, { error: "provider_error", detail: String(lastErr?.message || lastErr) }];
   const items = (task.result?.[0]?.items || []).filter((it) => it.type === "organic").slice(0, n);
-  return [200, { live: true, keyword, results: items.map((it) => ({
+  return [200, { live: true, keyword, locationName: usedLocation, results: items.map((it) => ({
     rank: it.rank_group, title: it.title, url: it.url, domain: (it.domain || "").replace(/^www\./, ""), description: it.description || "",
   })) }];
 }

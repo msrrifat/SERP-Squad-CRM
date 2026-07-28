@@ -21,6 +21,9 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
     setOpt("brandVoice", patch);
   };
   const [err, setErr] = useState(null);
+  const [savedAt, setSavedAt] = useState(null);
+  /* re-render to flip ✓ Saved back after the confirmation window */
+  React.useEffect(() => { if (!savedAt) return; const t = setTimeout(() => setSavedAt(null), 2600); return () => clearTimeout(t); }, [savedAt]);
 
   const addFiles = (fileList) => {
     setErr(null);
@@ -166,6 +169,18 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
           <input type="file" accept=".txt,.md,.markdown,text/*" multiple className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
         </label>
         {err && <div className="flex items-center gap-1.5 text-[11px] text-red-500"><X size={12} /> {err}</div>}
+      </Card>
+
+      {/* explicit save — the data already persists on every change, this
+         confirms it and stamps the work log */}
+      <Card className="flex items-center justify-between gap-3 p-4">
+        <span className="text-[11.5px] text-gray-400">
+          Changes save automatically as you type — this button confirms everything is stored on the server.
+        </span>
+        <button onClick={() => { work?.("brandvoice", "bvSaved"); setSavedAt(Date.now()); }}
+          className="shrink-0 rounded-lg px-5 py-2 text-[12.5px] font-semibold text-white" style={{ background: savedAt && Date.now() - savedAt < 2500 ? "#16A34A" : accent }}>
+          {savedAt && Date.now() - savedAt < 2500 ? "✓ Saved" : "Save brand voice"}
+        </button>
       </Card>
     </div>
   );
