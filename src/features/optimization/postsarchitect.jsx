@@ -26,6 +26,28 @@ const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").repla
 const cap = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
 const parseJsonLoose = (text) => { const m = String(text).match(/\{[\s\S]*\}/); return JSON.parse(m ? m[0] : text); };
 
+/* ---------- markdown → editor blocks (Posts tab full editor) ----------
+   Markdown links stay inline in text blocks — the editor renders them as
+   highlighted anchor text. */
+export function mdToBlocks(md) {
+  const blocks = []; let i = 0;
+  const bid = () => "mb" + Date.now().toString(36) + i++;
+  let list = null;
+  const flushList = () => { if (list) { blocks.push(list); list = null; } };
+  String(md || "").split("\n").forEach((l) => {
+    const h = l.match(/^(#{1,4})\s+(.*)/);
+    const img = l.match(/^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/);
+    const li = l.match(/^\s*[-*]\s+(.*)/);
+    if (h) { flushList(); if (h[1].length > 1) blocks.push({ id: bid(), kind: "heading", level: Math.min(5, h[1].length), text: h[2] }); return; } // H1 = the post title, not a block
+    if (img) { flushList(); blocks.push({ id: bid(), kind: "image", src: img[2], alt: img[1], title: img[1], dataUrl: null }); return; }
+    if (li) { if (!list) list = { id: bid(), kind: "list", style: "bullet", items: [] }; list.items.push(li[1]); return; }
+    if (/^\*[^*]+\*\s*$/.test(l)) { flushList(); blocks.push({ id: bid(), kind: "text", text: l, links: [] }); return; } // image caption line
+    if (l.trim()) { flushList(); blocks.push({ id: bid(), kind: "text", text: l, links: [] }); }
+  });
+  flushList();
+  return blocks.slice(0, 80);
+}
+
 /* ---------- markdown → WordPress HTML (figure/figcaption for images) ----------
    A caption line in *italics* directly under an image becomes its figcaption. */
 export function mdToWpHtml(md) {
@@ -449,15 +471,20 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
     /* a sibling service (topical breadth) */
     const sib = livePages.find((p) => /^\/services\//.test(p.url || "") && p.url !== post.serviceUrl);
     if (sib) push(sib.url, sib.name || sib.url, (sib.name || "").toLowerCase());
-    /* a related post from this plan or the live blog (cluster interlinking) */
-    const rel = allPosts.find((x) => x.id !== post.id && x.service === post.service && (x.content || x.status === "published"));
-    if (rel) push("/" + (rel.category === "answer" ? "answers" : "blog") + "/" + rel.slug, rel.title, rel.primaryKw);
-    else { const lb = liveBlogs.find((b) => jaccard2(b.title, post.title) > 0.15); if (lb) push("/blog/" + (lb.slug || ""), lb.title, ""); }
+    /* related posts from the plan: blog↔answer cross-link on the same service
+       first (the cluster's strongest signal), then a same-category sibling */
+    const postUrl = (x) => "/" + (x.category === "answer" ? "answers" : "blog") + "/" + x.slug;
+    const rels = allPosts.filter((x) => x.id !== post.id && (x.content || x.status === "published"));
+    const crossCat = rels.find((x) => x.service === post.service && x.category !== post.category);
+    if (crossCat) push(postUrl(crossCat), crossCat.title, crossCat.primaryKw);
+    const sameCat = rels.find((x) => x.service === post.service && x.category === post.category);
+    if (sameCat) push(postUrl(sameCat), sameCat.title, sameCat.primaryKw);
+    if (!crossCat && !sameCat) { const lb = liveBlogs.find((b) => jaccard2(b.title, post.title) > 0.15); if (lb) push("/blog/" + (lb.slug || ""), lb.title, ""); }
     const contact = livePages.find((p) => /contact/.test(p.url || ""));
     if (contact) push(contact.url, "contact page", `contact ${brand.toLowerCase()}`);
     const home = livePages.find((p) => p.url === "/");
     if (home) push("/", brand, brand.toLowerCase());
-    return targets.slice(0, 5);
+    return targets.slice(0, 6);
   };
   function jaccard2(a, b) { const A = tokens2(a), B = tokens2(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach((x) => B.has(x) && n++); return n / (A.size + B.size - n); }
   function tokens2(s) { return new Set(String(s || "").toLowerCase().split(/\W+/).filter((x) => x.length > 2)); }
@@ -579,6 +606,12 @@ function PublishPostsModal({ posts, opt, setOpt, accent, project, log, onDone, o
   const live = mode === "live" && canLive;
   const [start, setStart] = useState(new Date(Date.now() + 864e5).toISOString().slice(0, 10));
   const [every, setEvery] = useState(3);
+  /* per-post dates: seeded by the drip cadence, then editable ROW BY ROW —
+     a date of today (or past) publishes immediately, future = WP scheduled */
+  const seedDates = (startISO, everyDays) => posts.map((_, i) =>
+    new Date(new Date((startISO || new Date().toISOString().slice(0, 10)) + "T09:00:00").getTime() + i * Math.max(1, +everyDays || 3) * 864e5).toISOString().slice(0, 10));
+  const [dates, setDates] = useState(() => seedDates(start, every));
+  const reseed = (s, ev) => setDates(seedDates(s, ev));
   const [progress, setProgress] = useState(null);
   const [done, setDone] = useState(false);
 
@@ -590,7 +623,7 @@ function PublishPostsModal({ posts, opt, setOpt, accent, project, log, onDone, o
     for (let i = 0; i < posts.length; i++) {
       const p = posts[i];
       mark(i, "creating");
-      const when = new Date(new Date(start + "T09:00:00").getTime() + i * Math.max(1, +every || 3) * 864e5);
+      const when = new Date((dates[i] || start) + "T09:00:00");
       const scheduled = when.getTime() > Date.now();
       if (live) {
         try {
@@ -613,7 +646,7 @@ function PublishPostsModal({ posts, opt, setOpt, accent, project, log, onDone, o
       setOpt("website", (cur) => ({
         blogs: [
           { id: "pb" + Date.now() + i, title: p.title, slug: p.slug, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
-            categories: [p.category === "answer" ? "Answer" : "Blog"],
+            content: mdToBlocks(p.content.markdown), categories: [p.category === "answer" ? "Answer" : "Blog"],
             ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: Date.now() }),
             createdAt: Date.now(), demo: !live },
           ...(cur.blogs || []).filter((b) => b.slug !== p.slug),
@@ -634,10 +667,20 @@ function PublishPostsModal({ posts, opt, setOpt, accent, project, log, onDone, o
           <div className="rounded-xl border border-gray-100 p-3">
             <div className="text-[12px] font-semibold text-gray-700">Publishing schedule</div>
             <div className="mt-1.5 flex items-center gap-2 text-[12px] text-gray-500">
-              start <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={inputCls + " w-auto"} />
-              every <input type="number" min={1} value={every} onChange={(e) => setEvery(e.target.value)} className={inputCls + " w-16"} /> day(s)
+              seed: start <input type="date" value={start} onChange={(e) => { setStart(e.target.value); reseed(e.target.value, every); }} className={inputCls + " w-auto"} />
+              every <input type="number" min={1} value={every} onChange={(e) => { setEvery(e.target.value); reseed(start, e.target.value); }} className={inputCls + " w-16"} /> day(s)
             </div>
-            <div className="mt-1 text-[10px] text-gray-400">Future dates deploy as WordPress "scheduled" — they auto-publish on their dates. Drip-feeding reads naturally to Google.</div>
+            {/* per-post dates — each article pushes ON ITS OWN DATE */}
+            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto pr-1">
+              {posts.map((p, i) => (
+                <div key={p.id} className="flex items-center gap-2 rounded-lg bg-gray-50 px-2 py-1 text-[11.5px]">
+                  <span className="min-w-0 flex-1 truncate text-gray-700">{p.title}</span>
+                  <input type="date" value={dates[i] || start} onChange={(e) => setDates((d) => d.map((x, j) => (j === i ? e.target.value : x)))}
+                    className={"ll-mono " + inputCls + " w-auto py-1 text-[11px]"} />
+                </div>
+              ))}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-400">Adjust any post's date individually. Today or earlier publishes immediately; future dates deploy as WordPress "scheduled" and auto-publish that day. Drip-feeding reads naturally to Google.</div>
           </div>
           {canLive && (
             <div className="flex items-center gap-2 rounded-xl border border-gray-200 p-1">

@@ -33,8 +33,20 @@ export function inlineFmt(str, keyBase = "f") {
   return out;
 }
 export function renderTextWithLinks(text, links = []) {
-  if (!links.length) return inlineFmt(text || "");
-  let parts = [text];
+  /* inline markdown links [anchor](url) — AI-written and WP-synced content —
+     render as highlighted anchor text, never as raw syntax */
+  const mdSplit = (str) => {
+    const out = []; const re = /\[([^\]]+)\]\(([^)\s]+)\)/g; let last = 0, m, i = 0;
+    while ((m = re.exec(str))) {
+      if (m.index > last) out.push(str.slice(last, m.index));
+      out.push(<a key={"md" + i} href={m[2]} target="_blank" rel="noopener" className="underline decoration-2 underline-offset-2" style={{ color: "#B45309" }}>{m[1]}</a>);
+      last = m.index + m[0].length; i++;
+    }
+    if (last < str.length) out.push(str.slice(last));
+    return out;
+  };
+  let parts = mdSplit(String(text || ""));
+  if (!links.length) return parts.flatMap((seg, i) => (typeof seg === "string" ? inlineFmt(seg, "s" + i) : [seg]));
   links.forEach((l) => {
     parts = parts.flatMap((seg) => {
       if (typeof seg !== "string" || !seg.includes(l.phrase)) return [seg];
@@ -45,7 +57,7 @@ export function renderTextWithLinks(text, links = []) {
   return parts.flatMap((seg, i) => (typeof seg === "string" ? inlineFmt(seg, "s" + i) : [seg]));
 }
 export const escHtml = (s = "") => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-export const mdFmt = (t = "") => t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/~~([^~]+)~~/g, "<s>$1</s>").replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+export const mdFmt = (t = "") => t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>').replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/~~([^~]+)~~/g, "<s>$1</s>").replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 export const mdInline = (t = "") => mdFmt(escHtml(t));
 export function blocksToHtml(blocks = []) {
   return blocks.map((b) => {

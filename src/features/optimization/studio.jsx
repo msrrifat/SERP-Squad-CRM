@@ -1316,74 +1316,7 @@ export function LivePageEditor({ page, onPatch, accent, slugsEnabled, siteHost, 
     else patchBlock(sg.targetId, { text: sg.after });
     setApplied((a) => new Set([...a, sg.id]));
   };
-  const editSuggestion = (id, patch) => setSuggestions((list) => list.map((x) => (x.id === id ? { ...x, ...patch,
-    ...(patch.anchor || patch.href ? { sentence: `Learn more about ${patch.anchor ?? list.find((y) => y.id === id).anchor} on this page.`, after: `Learn more about ${patch.anchor ?? list.find((y) => y.id === id).anchor} on this page.` } : {}) } : x)));
-  /* one visible suggestion per section: alternatives cycle via Regenerate —
-     first through the other target keywords, then through fresh phrasings */
-  const [variantIdx, setVariantIdx] = useState({});
-  const [regenBusy, setRegenBusy] = useState(null);
-  const pendingRaw = (targetKind, targetId = null) =>
-    (suggestions || []).filter((sg) => sg.targetKind === targetKind && sg.targetId === targetId && !applied.has(sg.id));
-  const pendingFor = (targetKind, targetId = null) => {
-    const alts = pendingRaw(targetKind, targetId);
-    if (!alts.length) return [];
-    const key = targetKind + ":" + (targetId || "");
-    return [alts[(variantIdx[key] || 0) % alts.length]];
-  };
-  const regen = (sg) => {
-    const key = sg.targetKind + ":" + (sg.targetId || "");
-    setRegenBusy(key);
-    setTimeout(() => { // PROD: re-prompt the provider for an alternative phrasing
-      const alts = pendingRaw(sg.targetKind, sg.targetId);
-      const next = (variantIdx[key] || 0) + 1;
-      setVariantIdx((v) => ({ ...v, [key]: next }));
-      const shown = alts[next % alts.length];
-      const round = Math.floor(next / alts.length);
-      if (round > 0) setSuggestions((list) => list.map((x) => (x.id === shown.id ? { ...x, ...regenSuggestion(shown, round, project?.name || "") } : x)));
-      setRegenBusy(null);
-    }, 500);
-  };
-  /* green, editable suggestion card rendered beside its content section */
-  const SuggCard = ({ sg }) => (
-    <div className="ll-fade w-[250px] shrink-0 self-start rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5" onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">
-        <Zap size={10} /> {sg.where} <span className="ll-mono ml-auto font-medium normal-case text-emerald-600/70">“{sg.kw}”</span>
-      </div>
-      {sg.targetKind === "link" ? (
-        <div className="mt-1.5 space-y-1.5">
-          <input value={sg.anchor} onChange={(e) => editSuggestion(sg.id, { anchor: e.target.value })}
-            className="w-full rounded border border-emerald-200 bg-white px-1.5 py-1 text-[11px] font-medium text-emerald-800" title="Anchor text" />
-          <input value={sg.href} onChange={(e) => editSuggestion(sg.id, { href: e.target.value })}
-            className="ll-mono w-full rounded border border-emerald-200 bg-white px-1.5 py-1 text-[10px] text-emerald-700" title="Link target" />
-        </div>
-      ) : (
-        <textarea value={sg.after} rows={Math.min(6, Math.max(2, Math.ceil((sg.after || "").length / 34)))}
-          onChange={(e) => setSuggestions((list) => list.map((x) => (x.id === sg.id ? { ...x, after: e.target.value } : x)))}
-          className="mt-1.5 w-full resize-none rounded border border-emerald-200 bg-white px-1.5 py-1 text-[11px] leading-snug text-emerald-800" />
-      )}
-      {sg.note && <div className="mt-1.5 text-[9.5px] leading-snug text-emerald-700/80">{sg.note}</div>}
-      <div className="mt-1.5 flex gap-1.5">
-        <button onClick={() => applySuggestion(sg)} className="flex-1 rounded bg-emerald-600 py-1 text-[10px] font-bold text-white hover:bg-emerald-700">Apply</button>
-        <button onClick={() => regen(sg)} disabled={regenBusy === sg.targetKind + ":" + (sg.targetId || "")}
-          title="Regenerate suggestion" className="flex items-center gap-1 rounded border border-emerald-200 px-2 py-1 text-[10px] font-semibold text-emerald-600 disabled:opacity-50">
-          <RefreshCw size={9} className={regenBusy === sg.targetKind + ":" + (sg.targetId || "") ? "animate-spin" : ""} /> Regenerate
-        </button>
-        <button onClick={() => setApplied((a) => new Set([...a, sg.id]))} className="rounded border border-emerald-200 px-2 py-1 text-[10px] font-semibold text-emerald-600">Skip</button>
-      </div>
-    </div>
-  );
-  const withSugg = (kind, id, node) => {
-    const sgs = kind === "metaBox"
-      ? [...pendingFor("metaTitle"), ...pendingFor("metaDesc")]
-      : [...pendingFor("block", id), ...pendingFor("link", id), ...pendingFor("alt", id)];
-    if (!sgs.length) return node;
-    return (
-      <div key={id || kind} className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">{node}</div>
-        <div className="space-y-2">{sgs.map((sg) => <SuggCard key={sg.id} sg={sg} />)}</div>
-      </div>
-    );
-  };
+  const withSugg = useSuggestionCards({ suggestions, setSuggestions, applied, setApplied, applySuggestion, brandName: project?.name || "" });
 
   const mark = (color, label) => (
     <span className="pointer-events-none absolute -top-2.5 left-2 z-10 rounded px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-white opacity-0 transition-opacity group-hover:opacity-100" style={{ background: color }}>{label}</span>
@@ -1587,6 +1520,78 @@ export const DISCOVERED_POSTS = [
      Yoast (_yoast_wpseo_title/_yoast_wpseo_metadesc) or RankMath via their REST.
    Webflow: POST/PATCH CMS item in the blog collection + site publish.
    Shopify: POST/PUT /blogs/{blog}/articles.json (body_html, tags, image, metafields). */
+/* ---- shared beside-content suggestion cards (page editor + post editor) ----
+   One visible suggestion per section; alternatives cycle via Regenerate —
+   first through the other target keywords, then through fresh phrasings. */
+function useSuggestionCards({ suggestions, setSuggestions, applied, setApplied, applySuggestion, brandName = "" }) {
+  const [variantIdx, setVariantIdx] = useState({});
+  const [regenBusy, setRegenBusy] = useState(null);
+  const editSuggestion = (id, patch) => setSuggestions((list) => list.map((x) => (x.id === id ? { ...x, ...patch,
+    ...(patch.anchor || patch.href ? { sentence: `Learn more about ${patch.anchor ?? list.find((y) => y.id === id).anchor} on this page.`, after: `Learn more about ${patch.anchor ?? list.find((y) => y.id === id).anchor} on this page.` } : {}) } : x)));
+  const pendingRaw = (targetKind, targetId = null) =>
+    (suggestions || []).filter((sg) => sg.targetKind === targetKind && sg.targetId === targetId && !applied.has(sg.id));
+  const pendingFor = (targetKind, targetId = null) => {
+    const alts = pendingRaw(targetKind, targetId);
+    if (!alts.length) return [];
+    const key = targetKind + ":" + (targetId || "");
+    return [alts[(variantIdx[key] || 0) % alts.length]];
+  };
+  const regen = (sg) => {
+    const key = sg.targetKind + ":" + (sg.targetId || "");
+    setRegenBusy(key);
+    setTimeout(() => { // PROD: re-prompt the provider for an alternative phrasing
+      const alts = pendingRaw(sg.targetKind, sg.targetId);
+      const next = (variantIdx[key] || 0) + 1;
+      setVariantIdx((v) => ({ ...v, [key]: next }));
+      const shown = alts[next % alts.length];
+      const round = Math.floor(next / alts.length);
+      if (round > 0) setSuggestions((list) => list.map((x) => (x.id === shown.id ? { ...x, ...regenSuggestion(shown, round, brandName) } : x)));
+      setRegenBusy(null);
+    }, 500);
+  };
+  /* green, editable suggestion card rendered beside its content section */
+  const SuggCard = ({ sg }) => (
+    <div className="ll-fade w-[250px] shrink-0 self-start rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">
+        <Zap size={10} /> {sg.where} <span className="ll-mono ml-auto font-medium normal-case text-emerald-600/70">“{sg.kw}”</span>
+      </div>
+      {sg.targetKind === "link" ? (
+        <div className="mt-1.5 space-y-1.5">
+          <input value={sg.anchor} onChange={(e) => editSuggestion(sg.id, { anchor: e.target.value })}
+            className="w-full rounded border border-emerald-200 bg-white px-1.5 py-1 text-[11px] font-medium text-emerald-800" title="Anchor text" />
+          <input value={sg.href} onChange={(e) => editSuggestion(sg.id, { href: e.target.value })}
+            className="ll-mono w-full rounded border border-emerald-200 bg-white px-1.5 py-1 text-[10px] text-emerald-700" title="Link target" />
+        </div>
+      ) : (
+        <textarea value={sg.after} rows={Math.min(6, Math.max(2, Math.ceil((sg.after || "").length / 34)))}
+          onChange={(e) => setSuggestions((list) => list.map((x) => (x.id === sg.id ? { ...x, after: e.target.value } : x)))}
+          className="mt-1.5 w-full resize-none rounded border border-emerald-200 bg-white px-1.5 py-1 text-[11px] leading-snug text-emerald-800" />
+      )}
+      {sg.note && <div className="mt-1.5 text-[9.5px] leading-snug text-emerald-700/80">{sg.note}</div>}
+      <div className="mt-1.5 flex gap-1.5">
+        <button onClick={() => applySuggestion(sg)} className="flex-1 rounded bg-emerald-600 py-1 text-[10px] font-bold text-white hover:bg-emerald-700">Apply</button>
+        <button onClick={() => regen(sg)} disabled={regenBusy === sg.targetKind + ":" + (sg.targetId || "")}
+          title="Regenerate suggestion" className="flex items-center gap-1 rounded border border-emerald-200 px-2 py-1 text-[10px] font-semibold text-emerald-600 disabled:opacity-50">
+          <RefreshCw size={9} className={regenBusy === sg.targetKind + ":" + (sg.targetId || "") ? "animate-spin" : ""} /> Regenerate
+        </button>
+        <button onClick={() => setApplied((a) => new Set([...a, sg.id]))} className="rounded border border-emerald-200 px-2 py-1 text-[10px] font-semibold text-emerald-600">Skip</button>
+      </div>
+    </div>
+  );
+  return (kind, id, node) => {
+    const sgs = kind === "metaBox"
+      ? [...pendingFor("metaTitle"), ...pendingFor("metaDesc")]
+      : [...pendingFor("block", id), ...pendingFor("link", id), ...pendingFor("alt", id)];
+    if (!sgs.length) return node;
+    return (
+      <div key={id || kind} className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">{node}</div>
+        <div className="space-y-2">{sgs.map((sg) => <SuggCard key={sg.id} sg={sg} />)}</div>
+      </div>
+    );
+  };
+}
+
 export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, onDelete, onClose, project, aiProviders = [], sitePages = [] }) {
   const isNew = !initial.id;
   const [p, setP] = useState(() => ({
@@ -1620,6 +1625,9 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
     else patchBlock(sg.targetId, { text: sg.after });
     setPApplied((a) => new Set([...a, sg.id]));
   };
+  /* suggestions render as green cards BESIDE the section they change —
+     same pattern as the page editor, not a far-away list */
+  const withSugg = useSuggestionCards({ suggestions: pSuggestions, setSuggestions: setPSuggestions, applied: pApplied, setApplied: setPApplied, applySuggestion, brandName: project?.name || "" });
   const taRef = useRef(null);
   const wrapSel = (b, mark) => {
     const ta = taRef.current; if (!ta) return;
@@ -1690,7 +1698,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
             <OpportunityPanel projectId={project.id} url={(project.demoMode === false && p.url) || "/blog/" + (p.slug || "new-post")} page={{ metaTitle: p.metaTitle, metaDesc: p.metaDesc, content: p.content }}
               tracking={[...new Set(project.tracking.map((t) => t.keyword))]} brand={project.name}
               google={project.google} demo={project.demoMode !== false}
-              accent={accent} aiProviders={aiProviders} applySuggestion={applySuggestion} showList
+              accent={accent} aiProviders={aiProviders} applySuggestion={applySuggestion}
               sitePages={sitePages} suggestions={pSuggestions} setSuggestions={setPSuggestions} applied={pApplied} setApplied={setPApplied} />
           )}
           {/* main column — title, permalink, blocks */}
@@ -1724,7 +1732,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
             )}
 
             <div className="mt-5 space-y-3">
-              {p.content.map((b) => (
+              {p.content.map((b) => withSugg("block", b.id,
                 <div key={b.id} className="group relative rounded-lg">
                   {/* block toolbar */}
                   <div className="absolute -left-1 top-0 z-10 hidden -translate-x-full flex-col gap-0.5 pr-1.5 group-hover:flex">
@@ -1870,7 +1878,8 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
             <Labeled label="Excerpt">
               <textarea value={p.excerpt} onChange={(e) => set({ excerpt: e.target.value })} rows={2} className={inputCls + " resize-none bg-white"} />
             </Labeled>
-            {/* SEO panel (Yoast/RankMath-style) */}
+            {/* SEO panel (Yoast/RankMath-style) — meta suggestions dock beside it */}
+            {withSugg("metaBox", null,
             <div className="rounded-xl border border-gray-200 bg-white p-3">
               <div className="mb-2 text-[11px] font-bold text-gray-600">SEO — search appearance</div>
               <Labeled label={<span className="flex items-center justify-between">Meta title <CharCount value={p.metaTitle} max={60} /></span>}>
@@ -1886,7 +1895,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
                 <div className="ll-mono truncate text-[9.5px] text-emerald-700">{siteHost}/blog/{autoSlug || "slug"}</div>
                 <div className="line-clamp-2 text-[10.5px] leading-snug text-gray-500">{p.metaDesc || p.excerpt || "Meta description preview…"}</div>
               </div>
-            </div>
+            </div>)}
             {!isNew && onDelete && (
               <button onClick={() => { onDelete(); onClose(); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-100 py-2 text-[12px] font-medium text-red-500 hover:bg-red-50">
                 <Trash2 size={12} /> Delete post

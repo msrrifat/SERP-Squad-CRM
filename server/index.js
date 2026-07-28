@@ -1046,6 +1046,9 @@ async function handleWpContent(body) {
   const g = wpGuard(body); if (g) return g;
   const stripTags = (h) => String(h || "").replace(/<[^>]+>/g, " ").replace(/&#?[a-z0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
   const toBlocks = (html) => {
+    /* anchors survive the sync as markdown links — the editor highlights them
+       as anchor text, and blocksToHtml turns them back into <a> on push */
+    html = String(html || "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, h, inner) => `[${stripTags(inner)}](${h})`);
     const blocks = []; let i = 0;
     const re = /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
     let m;
@@ -1560,6 +1563,23 @@ async function dfsLabs(creds, endpoint, task) {
   if (!t || t.status_code !== 20000) throw new Error(`DataForSEO: ${t?.status_message || "task error"}`);
   return t.result?.[0] || {};
 }
+/* Labs only accepts locations from ITS OWN database (mostly countries + big
+   metros) — a tracked city like "York,Yorkshire and the Humber,United Kingdom"
+   fails with "Invalid Field: 'location_name'". Walk from most to least
+   specific instead of erroring the whole search, and report what was used. */
+async function dfsLabsLoc(creds, endpoint, task, locationName) {
+  const parts = String(locationName || "United States").split(",").map((s) => s.trim()).filter(Boolean);
+  const variants = [...new Set([parts.join(","), parts.slice(-2).join(","), parts[parts.length - 1]])].filter(Boolean);
+  let lastErr = null;
+  for (const loc of variants) {
+    try { const r = await dfsLabs(creds, endpoint, { ...task, location_name: loc }); return { ...r, usedLocation: loc }; }
+    catch (e) {
+      lastErr = e;
+      if (!/location/i.test(String(e?.message || e))) throw e; // non-location errors are real failures
+    }
+  }
+  throw lastErr;
+}
 /* ---- search volumes for tracked keywords (Google Ads data) ----
    POST /api/kw/volume { keywords:[...≤700], city:{city,region,country}, dfs }
    One flat-priced request covers the whole list; the client caches results
@@ -1615,12 +1635,12 @@ async function handleKwResearch(body) {
   const language_code = String(body?.languageCode || "en");
   const limit = Math.min(Math.max(+body?.limit || 200, 20), 400);
   try {
-    const r = await dfsLabs(creds, "keyword_suggestions", { keyword, location_name, language_code, limit, include_seed_keyword: true, include_serp_info: false });
+    const r = await dfsLabsLoc(creds, "keyword_suggestions", { keyword, language_code, limit, include_seed_keyword: true, include_serp_info: false }, location_name);
     const rows = [];
     if (r.seed_keyword_data) rows.push(kwRow(r.seed_keyword || keyword, r.seed_keyword_data.keyword_info, r.seed_keyword_data.keyword_properties, { seed: true }));
     (r.items || []).forEach((it) => { if ((it.keyword || "") !== (r.seed_keyword || keyword) || !rows.length) rows.push(kwRow(it.keyword, it.keyword_info, it.keyword_properties)); });
     rows.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || (b.volume ?? -1) - (a.volume ?? -1));
-    return [200, { live: true, mode: "keyword", keyword, locationName: location_name, total: rows.length, rows }];
+    return [200, { live: true, mode: "keyword", keyword, locationName: r.usedLocation || location_name, total: rows.length, rows }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
 }
 async function handleKwDomain(body) {
@@ -1632,12 +1652,12 @@ async function handleKwDomain(body) {
   const language_code = String(body?.languageCode || "en");
   const limit = Math.min(Math.max(+body?.limit || 200, 20), 400);
   try {
-    const r = await dfsLabs(creds, "ranked_keywords", { target, location_name, language_code, limit,
-      order_by: ["keyword_data.keyword_info.search_volume,desc"] });
+    const r = await dfsLabsLoc(creds, "ranked_keywords", { target, language_code, limit,
+      order_by: ["keyword_data.keyword_info.search_volume,desc"] }, location_name);
     const rows = (r.items || []).map((it) => kwRow(
       it.keyword_data?.keyword, it.keyword_data?.keyword_info, it.keyword_data?.keyword_properties,
       { rank: it.ranked_serp_element?.serp_item?.rank_absolute ?? null, url: it.ranked_serp_element?.serp_item?.url || "" }));
-    return [200, { live: true, mode: "domain", domain: target, locationName: location_name, total: r.total_count ?? rows.length, rows }];
+    return [200, { live: true, mode: "domain", domain: target, locationName: r.usedLocation || location_name, total: r.total_count ?? rows.length, rows }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
 }
 
