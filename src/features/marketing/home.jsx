@@ -168,7 +168,7 @@ const TopNav = ({ cta = true }) => (
     <div className="mx-auto flex max-w-6xl items-center gap-5 px-5 py-3">
       <a href="/" className="ll-display flex items-center gap-2 text-[16px] font-bold text-gray-900">
         <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gray-900 text-[13px] font-bold text-white">SS</span>
-        SERP Squad
+        SERP Squad Studio
       </a>
       <nav className="ml-4 hidden gap-5 text-[12.5px] font-semibold text-gray-500 md:flex">
         <a href="/#features" className="hover:text-gray-900">Features</a>
@@ -187,8 +187,8 @@ const TopNav = ({ cta = true }) => (
 const Footer = () => (
   <footer className="border-t border-gray-100 bg-gray-50">
     <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-5 py-8 text-[11.5px] text-gray-400">
-      <span className="ll-display font-bold text-gray-600">SERP Squad</span>
-      <span>© {new Date().getFullYear()} SERP Squad — AI-powered local SEO management.</span>
+      <span className="ll-display font-bold text-gray-600">SERP Squad Studio</span>
+      <span>© {new Date().getFullYear()} SERP Squad — local SEO, done &amp; monitored in one place.</span>
       <span className="ml-auto flex gap-5">
         <a href="/privacy" className="font-semibold hover:text-gray-700">Privacy policy</a>
         <a href="/terms" className="font-semibold hover:text-gray-700">Terms of service</a>
@@ -210,7 +210,7 @@ const FEATURES = [
   { icon: BarChart3, title: "Live Google data", desc: "Search Console and GA4 plug straight into each project's dashboard — impressions, clicks and traffic beside your rank grids." },
 ];
 export function MarketingHome() {
-  useEffect(() => { document.title = "SERP Squad — AI-powered local SEO management"; }, []);
+  useEffect(() => { document.title = "SERP Squad Studio — Get Your SEO Done & Monitored in One Place"; }, []);
   const kw = useCountUp(12400), scans = useCountUp(9300000), lift = useCountUp(18), leads = useCountUp(3.2, 1600, 1);
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -229,7 +229,7 @@ export function MarketingHome() {
               <span style={{ color: ACCENT }}>SEO on autopilot.</span>
             </h1>
             <p className="mt-4 max-w-md text-[14.5px] leading-relaxed text-gray-500">
-              SERP Squad is the AI-powered SEO management platform for small and local businesses —
+              SERP Squad Studio is the AI-powered SEO platform for small and local businesses —
               it tracks your rankings street by street, fixes what holds you back, writes and publishes
               what pushes you up, and turns the climb into calls, leads and customers.
             </p>
@@ -279,7 +279,7 @@ export function MarketingHome() {
           <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Rankings that climb. Leads that compound.</h2>
           <p className="mx-auto mt-2 max-w-xl text-[13px] text-gray-500">
             The system is simple: get found where customers search, and the phone rings.
-            Here's the shape of a typical SERP Squad engagement for a small business.
+            Here's the shape of a typical engagement run through SERP Squad Studio for a small business.
           </p>
         </Reveal>
         <div className="mt-10 grid gap-6 md:grid-cols-2">
@@ -324,7 +324,7 @@ export function MarketingHome() {
         </Reveal>
         <div className="mt-10 grid gap-6 md:grid-cols-3">
           {[
-            [Globe2, "1 · Connect & baseline", "Plug in your business profile, website, Search Console and Analytics. SERP Squad scans your rankings block by block and finds every gap holding you back."],
+            [Globe2, "1 · Connect & baseline", "Plug in your business profile, website, Search Console and Analytics. SERP Squad Studio scans your rankings block by block and finds every gap holding you back."],
             [Bot, "2 · AI does the heavy lifting", "The AI plans your site, writes local content in your voice, fixes listings, schedules posts and re-checks Google's index as work ships."],
             [Rocket, "3 · Watch the grid turn green", "Rankings climb, the map fills with top-3 dots, and calls, leads and booked jobs follow — all reported to you (or your clients) automatically."],
           ].map(([Icon, t, d], i) => (
@@ -343,7 +343,7 @@ export function MarketingHome() {
           <div className="rounded-3xl" style={{ background: "linear-gradient(120deg,#111827,#1D4ED8)", margin: "-3rem -2rem", padding: "3rem 2rem" }}>
             <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Ready to own your local market?</h2>
             <p className="mx-auto mt-2 max-w-md text-[13px] text-blue-100">
-              Sign in to your SERP Squad workspace — or talk to us about bringing your business on board.
+              Sign in to your SERP Squad Studio workspace — or talk to us about bringing your business on board.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <a href="/login" className="rounded-xl bg-white px-6 py-3 text-[13.5px] font-bold text-gray-900 transition hover:opacity-90">Sign in</a>
@@ -360,7 +360,7 @@ export function MarketingHome() {
 /* ================= POLICY PAGES ================= */
 const Prose = ({ children }) => <div className="space-y-4 text-[13px] leading-relaxed text-gray-600 [&_h2]:ll-display [&_h2]:mt-8 [&_h2]:text-[18px] [&_h2]:font-bold [&_h2]:text-gray-900 [&_h3]:text-[14px] [&_h3]:font-bold [&_h3]:text-gray-800 [&_li]:ml-5 [&_li]:list-disc">{children}</div>;
 const PolicyShell = ({ title, updated, children }) => {
-  useEffect(() => { document.title = `${title} — SERP Squad`; window.scrollTo(0, 0); }, [title]);
+  useEffect(() => { document.title = `${title} — SERP Squad Studio`; window.scrollTo(0, 0); }, [title]);
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <MktCss /><TopNav />
@@ -379,8 +379,8 @@ export function PrivacyPage() {
     <PolicyShell title="Privacy Policy" updated="July 26, 2026">
       <Prose>
         <p>
-          SERP Squad ("we", "us") provides an SEO management platform for agencies and local businesses at
-          <b> app.serpsquad.com</b> (the "Service"). This policy explains what information the Service handles,
+          <b>SERP Squad Studio</b> is an SEO management platform for agencies and local businesses at
+          <b> app.serpsquad.com</b> (the "Service"), operated by SERP Squad ("we", "us"). This policy explains what information the Service handles,
           how it is used, and the choices you have. Questions: <a className="font-semibold text-blue-600" href="mailto:serpsquad@gmail.com">serpsquad@gmail.com</a>.
         </p>
 
@@ -408,7 +408,7 @@ export function PrivacyPage() {
           <b> AI/ML:</b> Google user data is not used to train or improve any machine-learning or AI models.
         </p>
         <p>
-          SERP Squad's use and transfer of information received from Google APIs adheres to the
+          SERP Squad Studio's use and transfer of information received from Google APIs adheres to the
           <a className="font-semibold text-blue-600" href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer"> Google API Services User Data Policy</a>,
           including the <b>Limited Use</b> requirements.
         </p>
@@ -454,7 +454,7 @@ export function TermsPage() {
     <PolicyShell title="Terms of Service" updated="July 26, 2026">
       <Prose>
         <p>
-          These terms govern use of the SERP Squad platform at app.serpsquad.com (the "Service"), operated by SERP Squad.
+          These terms govern use of SERP Squad Studio at app.serpsquad.com (the "Service"), operated by SERP Squad.
           By signing in or using the Service you agree to these terms.
         </p>
         <h2>Accounts</h2>
