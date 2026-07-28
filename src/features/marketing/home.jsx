@@ -73,15 +73,17 @@ function MapGridHero() {
       {/* browser chrome — this is a product screenshot, and it reads like one */}
       <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2">
         <span className="flex gap-1"><i className="h-2.5 w-2.5 rounded-full bg-red-300" /><i className="h-2.5 w-2.5 rounded-full bg-amber-300" /><i className="h-2.5 w-2.5 rounded-full bg-emerald-300" /></span>
-        <span className="ll-mono flex-1 truncate rounded-md bg-white px-2 py-0.5 text-[9.5px] text-gray-400 ring-1 ring-gray-200">app.serpsquad.com/project/dallas-plumbing/performance/geogrid</span>
+        <span className="ll-mono flex-1 truncate rounded-md bg-white px-2 py-0.5 text-[9.5px] text-gray-600 ring-1 ring-gray-200">app.serpsquad.com/project/dallas-plumbing/performance/geogrid</span>
       </div>
       <div className="flex items-center justify-between px-3.5 py-2">
         <span className="text-[11px] font-bold text-gray-700"><MapPin size={11} className="mr-1 inline text-blue-600" />GBP Rank Tracking · "emergency plumber dallas"</span>
         <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-bold text-emerald-600"><i className="mkt-blink h-1.5 w-1.5 rounded-full bg-emerald-500" />LIVE SCAN</span>
       </div>
       <div className="relative overflow-hidden" style={{ height: HERO_H }}>
+        {/* one subdomain only: a single preconnected HTTP/2 connection beats
+            sharding, and the LCP tile gets fetchpriority=high */}
         {tiles.map((tl, i) => (
-          <img key={i} alt="" draggable={false} src={`https://${"abcd"[(tl.tx + tl.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${HERO_Z}/${tl.tx}/${tl.ty}.png`}
+          <img key={i} alt="" draggable={false} fetchpriority="high" src={`https://a.basemaps.cartocdn.com/rastertiles/voyager/${HERO_Z}/${tl.tx}/${tl.ty}.png`}
             className="pointer-events-none absolute select-none" style={{ left: tl.left, top: tl.top, width: 256, height: 256 }} />
         ))}
         {pins.map((p, i) => {
@@ -103,9 +105,9 @@ function MapGridHero() {
       </div>
       <div className="ll-mono flex items-center gap-4 border-t border-gray-100 px-3.5 py-2 text-[9.5px] font-bold text-gray-500">
         <span>ARP <b className="text-gray-800">#2.4</b></span>
-        <span>SoLV <b className="text-emerald-600">74%</b></span>
+        <span>SoLV <b className="text-emerald-700">74%</b></span>
         <span>37 scan points</span>
-        <span className="ml-auto font-semibold text-gray-400">updated today</span>
+        <span className="ml-auto font-semibold text-gray-500">updated today</span>
       </div>
     </div>
   );
@@ -154,8 +156,8 @@ function RankTrackerCard() {
               <tr key={r.kw} className="border-b border-gray-50 text-[11px]">
                 <td className="max-w-[150px] truncate py-2 pl-4 font-semibold text-gray-700">{r.kw}</td>
                 <td className="px-1 text-center"><span className="inline-flex h-6 w-8 items-center justify-center rounded-md text-[10.5px] font-bold text-white transition-colors duration-500" style={{ background: posColor(cur) }}>{cur}</span></td>
-                <td className="px-1 text-center text-[10px] font-bold" style={{ color: delta > 0 ? "#16A34A" : "#9CA3AF" }}>{delta > 0 ? `▲${delta}` : "—"}</td>
-                <td className="ll-mono hidden px-1 text-center text-[10px] font-bold text-gray-600 sm:table-cell">{step >= 2 ? `#${r.map}` : "—"}</td>
+                <td className="px-1 text-center text-[10px] font-bold" style={{ color: delta > 0 ? "#15803D" : "#6B7280" }}>{delta > 0 ? `▲${delta}` : "-"}</td>
+                <td className="ll-mono hidden px-1 text-center text-[10px] font-bold text-gray-600 sm:table-cell">{step >= 2 ? `#${r.map}` : "-"}</td>
                 <td className="ll-mono hidden px-1 text-center text-[10px] text-gray-400 sm:table-cell">{r.vol}</td>
                 <td className="py-2 pr-4"><span className="float-right"><Sparkline vals={r.pos} upTo={step} /></span></td>
               </tr>
@@ -163,7 +165,7 @@ function RankTrackerCard() {
           })}
         </tbody>
       </table>
-      <div className="ll-mono flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[9px] font-bold text-gray-400">
+      <div className="ll-mono flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[9px] font-bold text-gray-500">
         Tracking: <span className="text-gray-600">Google</span>·<span className="text-gray-600">Bing</span>·<span className="text-gray-600">Maps 3-Pack</span>·<span className="text-gray-600">AI search</span>
         <span className="ml-auto font-semibold">real SERP data, never estimates</span>
       </div>
@@ -181,10 +183,10 @@ function RankCard() {
     <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-lg">
       <Search size={18} className="text-blue-600" />
       <div className="min-w-0">
-        <div className="text-[10px] font-semibold text-gray-400">"emergency plumber dallas"</div>
+        <div className="text-[10px] font-semibold text-gray-600">"emergency plumber dallas"</div>
         <div className="flex items-baseline gap-1.5">
           <span className="ll-display text-[22px] font-bold text-gray-900">#{rank}</span>
-          {up && <span className="flex items-center text-[10.5px] font-bold text-emerald-600"><TrendingUp size={11} className="mr-0.5" />climbing</span>}
+          {up && <span className="flex items-center text-[10.5px] font-bold text-emerald-700"><TrendingUp size={11} className="mr-0.5" />climbing</span>}
         </div>
       </div>
     </div>
@@ -198,10 +200,10 @@ function LeadsCard() {
     <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-lg">
       <Phone size={18} className="text-emerald-600" />
       <div>
-        <div className="text-[10px] font-semibold text-gray-400">Calls + leads this month</div>
+        <div className="text-[10px] font-semibold text-gray-600">Calls + leads this month</div>
         <div className="flex items-baseline gap-1.5">
           <span className="ll-display text-[22px] font-bold text-gray-900">{LEAD_FRAMES[i]}</span>
-          <span className="text-[10.5px] font-bold text-emerald-600">+{Math.round((LEAD_FRAMES[i] / LEAD_FRAMES[0] - 1) * 100)}%</span>
+          <span className="text-[10.5px] font-bold text-emerald-700">+{Math.round((LEAD_FRAMES[i] / LEAD_FRAMES[0] - 1) * 100)}%</span>
         </div>
       </div>
     </div>
@@ -218,7 +220,7 @@ function LeadsBarChart() {
         <rect key={i} x={8 + i * 33} width="22" y={155 - h * 0.9} height={h * 0.9} rx="4" fill={i >= bars.length - 3 ? "#16A34A" : "#86EFAC"}
           className="mkt-grow" style={{ animationDelay: `${i * 90}ms`, transformOrigin: `${19 + i * 33}px 155px` }} />
       ))}
-      <text x="392" y="14" fontSize="10" fontWeight="700" fill="#16A34A" textAnchor="end">+590% leads</text>
+      <text x="392" y="14" fontSize="10" fontWeight="700" fill="#15803D" textAnchor="end">+590% leads</text>
     </svg>
   );
 }
@@ -262,7 +264,7 @@ const TopNav = ({ cta = true }) => (
 );
 const Footer = () => (
   <footer className="border-t border-gray-100 bg-gray-50">
-    <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-5 py-8 text-[11.5px] text-gray-400">
+    <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-5 py-8 text-[11.5px] text-gray-500">
       <span className="ll-display font-bold text-gray-600">SERP Squad Studio</span>
       <span>© {new Date().getFullYear()} SERP Squad · SEO done &amp; monitored in one place.</span>
       <span className="ml-auto flex gap-5">
@@ -276,14 +278,14 @@ const Footer = () => (
 
 /* ================= HOMEPAGE ================= */
 const FEATURES = [
-  { icon: MapPin, title: "GBP geo-grid rank tracking", desc: "Coordinate-targeted Google Maps scans across a city grid — see exactly where you rank on every block, watch it turn green as work lands." },
-  { icon: LineChart, title: "Keyword rank tracking", desc: "Google & Bing positions per city and device, local 3-Pack included, re-checked on schedule with real SERP data — never estimates." },
+  { icon: MapPin, title: "GBP geo-grid rank tracking", desc: "Coordinate-targeted Google Maps scans across a city grid: see exactly where you rank on every block, watch it turn green as work lands." },
+  { icon: LineChart, title: "Keyword rank tracking", desc: "Google & Bing positions per city and device, local 3-Pack included, re-checked on schedule with real SERP data, never estimates." },
   { icon: Bot, title: "AI website architect & writer", desc: "AI plans your site architecture from live SERPs, structures every page and writes conversion-ready content in your brand voice." },
-  { icon: ListChecks, title: "Listings & citation scanner", desc: "Real directory-by-directory scans verify your business name, address and phone everywhere it matters — with fix lists." },
+  { icon: ListChecks, title: "Listings & citation scanner", desc: "Real directory-by-directory scans verify your business name, address and phone everywhere it matters, with fix lists." },
   { icon: FileSearch, title: "Google index checker", desc: "Every page and post checked against Google's actual index, auto-rechecked as content ships." },
-  { icon: LayoutDashboard, title: "Client portal & reports", desc: "White-label dashboards and one-click performance reports your clients actually read — rankings, leads, work done." },
+  { icon: LayoutDashboard, title: "Client portal & reports", desc: "White-label dashboards and one-click performance reports your clients actually read: rankings, leads, work done." },
   { icon: Megaphone, title: "Campaign automation", desc: "Branded Web 2.0 properties, GBP posts and content campaigns run on autopilot with AI drafting and scheduling." },
-  { icon: BarChart3, title: "Live Google data", desc: "Search Console and GA4 plug straight into each project's dashboard — impressions, clicks and traffic beside your rank grids." },
+  { icon: BarChart3, title: "Live Google data", desc: "Search Console and GA4 plug straight into each project's dashboard: impressions, clicks and traffic beside your rank grids." },
 ];
 export function MarketingHome() {
   useEffect(() => { document.title = "SERP Squad Studio | Get Your SEO Done & Monitored in One Place"; }, []);
@@ -291,6 +293,7 @@ export function MarketingHome() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <MktCss /><TopNav />
+      <main>
 
       {/* hero */}
       <section className="relative overflow-hidden">
@@ -306,7 +309,7 @@ export function MarketingHome() {
             </h1>
             <p className="mt-4 max-w-md text-[14.5px] leading-relaxed text-gray-500">
               SERP Squad Studio is the AI-powered platform that plans, writes and fixes your SEO,
-              then tracks every ranking it moves — across Google's organic results, the local map
+              then tracks every ranking it moves across Google's organic results, the local map
               grid and AI-powered search. Local shop or national brand, visibility turns into
               calls, leads and customers.
             </p>
@@ -318,7 +321,7 @@ export function MarketingHome() {
                 See what's inside
               </a>
             </div>
-            <div className="mt-5 flex items-center gap-4 text-[11px] font-semibold text-gray-400">
+            <div className="mt-5 flex items-center gap-4 text-[11px] font-semibold text-gray-500">
               <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-emerald-500" /> Real SERP data</span>
               <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-emerald-500" /> White-label ready</span>
               <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-emerald-500" /> Client portal</span>
@@ -344,7 +347,7 @@ export function MarketingHome() {
           ].map(([v, l]) => (
             <div key={l}>
               <div className="ll-display text-[26px] font-bold" style={{ color: ACCENT }}>{v}</div>
-              <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{l}</div>
+              <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-600">{l}</div>
             </div>
           ))}
         </div>
@@ -355,7 +358,7 @@ export function MarketingHome() {
         <Reveal className="text-center">
           <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Rankings that climb. Leads that compound.</h2>
           <p className="mx-auto mt-2 max-w-xl text-[13px] text-gray-500">
-            Track every keyword across the SERP, the map grid and AI answers — get found where
+            Track every keyword across the SERP, the map grid and AI answers. Get found where
             customers search, and the phone rings. This is what a running engagement looks like.
           </p>
         </Reveal>
@@ -373,7 +376,7 @@ export function MarketingHome() {
       <section id="features" className="border-t border-gray-100 bg-gray-50/50">
         <div className="mx-auto max-w-6xl px-5 py-16">
           <Reveal className="text-center">
-            <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Everything an SEO team runs — in one workspace</h2>
+            <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Everything an SEO team runs, in one workspace</h2>
             <p className="mx-auto mt-2 max-w-xl text-[13px] text-gray-500">
               Built by a local-SEO agency, for running real client work: tracking, content, listings, reporting and automation together.
             </p>
@@ -399,7 +402,7 @@ export function MarketingHome() {
           {[
             [Globe2, "1 · Connect & baseline", "Plug in your business profile, website, Search Console and Analytics. SERP Squad Studio maps your rankings across the SERP, the local grid and AI answers, and finds every gap holding you back."],
             [Bot, "2 · AI does the heavy lifting", "The AI plans your site, writes local content in your voice, fixes listings, schedules posts and re-checks Google's index as work ships."],
-            [Rocket, "3 · Watch the grid turn green", "Rankings climb, the map fills with top-3 dots, and calls, leads and booked jobs follow — all reported to you (or your clients) automatically."],
+            [Rocket, "3 · Watch the grid turn green", "Rankings climb, the map fills with top-3 dots, and calls, leads and booked jobs follow, all reported to you (or your clients) automatically."],
           ].map(([Icon, t, d], i) => (
             <Reveal key={t} delay={i * 120} className="rounded-2xl border border-gray-200 p-6 text-center shadow-sm">
               <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50"><Icon size={22} style={{ color: ACCENT }} /></span>
@@ -416,7 +419,7 @@ export function MarketingHome() {
           <div className="rounded-3xl" style={{ background: "linear-gradient(120deg,#111827,#1D4ED8)", margin: "-3rem -2rem", padding: "3rem 2rem" }}>
             <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Ready to own your market?</h2>
             <p className="mx-auto mt-2 max-w-md text-[13px] text-blue-100">
-              Sign in to your SERP Squad Studio workspace — or talk to us about bringing your business on board.
+              Sign in to your SERP Squad Studio workspace, or talk to us about bringing your business on board.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <a href="/login" className="rounded-xl bg-white px-6 py-3 text-[13.5px] font-bold text-gray-900 transition hover:opacity-90">Sign in</a>
@@ -425,6 +428,7 @@ export function MarketingHome() {
           </div>
         </Reveal>
       </section>
+      </main>
       <Footer />
     </div>
   );
@@ -459,9 +463,9 @@ export function PrivacyPage() {
 
         <h2>Information we collect</h2>
         <ul>
-          <li><b>Account information</b> — name, email address, username and a password (stored hashed) for team members and client-portal users.</li>
-          <li><b>Workspace data</b> — the business and SEO data you add to manage projects: business names and addresses, keywords, rankings, content, tasks, reports and files.</li>
-          <li><b>Usage &amp; security data</b> — session tokens, device/browser identifiers used for new-device verification, and server logs (IP address, timestamps) kept for security.</li>
+          <li><b>Account information</b>: name, email address, username and a password (stored hashed) for team members and client-portal users.</li>
+          <li><b>Workspace data</b>: the business and SEO data you add to manage projects: business names and addresses, keywords, rankings, content, tasks, reports and files.</li>
+          <li><b>Usage &amp; security data</b>: session tokens, device/browser identifiers used for new-device verification, and server logs (IP address, timestamps) kept for security.</li>
         </ul>
 
         <h2>Google user data</h2>
@@ -469,9 +473,9 @@ export function PrivacyPage() {
           If you choose to connect a Google account, the Service accesses these Google APIs with <b>read-only</b> scopes:
         </p>
         <ul>
-          <li><b>Google Search Console</b> (<code>webmasters.readonly</code>) — search performance (queries, clicks, impressions, positions) of the sites you select.</li>
-          <li><b>Google Analytics 4</b> (<code>analytics.readonly</code>) — traffic metrics of the properties you select.</li>
-          <li><b>Basic profile</b> (<code>openid</code>, <code>email</code>) — your email address, only to label the connection in the app.</li>
+          <li><b>Google Search Console</b> (<code>webmasters.readonly</code>): search performance (queries, clicks, impressions, positions) of the sites you select.</li>
+          <li><b>Google Analytics 4</b> (<code>analytics.readonly</code>): traffic metrics of the properties you select.</li>
+          <li><b>Basic profile</b> (<code>openid</code>, <code>email</code>): your email address, only to label the connection in the app.</li>
         </ul>
         <p>
           <b>How it is used:</b> this data is displayed inside the dashboards and reports of the specific project you connect it to,

@@ -52,3 +52,19 @@ jobs:
             npm run build
             pm2 restart serpsquad-api --update-env
             echo "deployed $(git rev-parse --short HEAD) (retry)"
+      # One-time (idempotent) nginx tuning from the PageSpeed audit: hashed
+      # /assets/ get year-long immutable caching, plus HSTS + nosniff headers.
+      # Guarded by nginx -t; reverts and reports rather than breaking the site.
+      - name: Ensure nginx cache + security headers
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            CONF=$(grep -rl "serpsquad" /etc/nginx/sites-enabled/ 2>/dev/null | head -1)
+            if [ -z "$CONF" ]; then echo "no nginx config found, skipping"; exit 0; fi
+            if grep -q "SSQ-TUNING" "$CONF"; then echo "nginx already tuned"; exit 0; fi
+            cp "$CONF" "$CONF.ssq-bak"
+            sed -i '/server_name/a\    # SSQ-TUNING\n    location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; }\n    add_header Strict-Transport-Security "max-age=31536000" always;\n    add_header X-Content-Type-Options "nosniff" always;' "$CONF"
+            if nginx -t; then systemctl reload nginx && echo "nginx tuned"; else mv "$CONF.ssq-bak" "$CONF"; echo "nginx patch failed validation, reverted"; fi

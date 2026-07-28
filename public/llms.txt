@@ -1,0 +1,15 @@
+# SERP Squad Studio
+
+> SERP Squad Studio (app.serpsquad.com) is an AI-powered platform that gets SEO done and monitored in one place: rankings across Google's organic results, the local map grid and AI search, plus AI content, listings management, reports and a client portal. It is operated by the SEO agency SERP Squad.
+
+Only the homepage is intended for indexing; the application itself requires a customer sign-in and its screens are private.
+
+## Pages
+
+- [Home](https://app.serpsquad.com/): what the platform does, feature overview and how it works
+- [Privacy policy](https://app.serpsquad.com/privacy): data handling, including Google user data and Limited Use compliance
+- [Terms of service](https://app.serpsquad.com/terms): terms for using the platform
+
+## Contact
+
+- [Support](mailto:serpsquad@gmail.com): questions about the platform or this file
