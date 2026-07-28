@@ -50,35 +50,127 @@ const Reveal = ({ children, delay = 0, className = "" }) => {
 };
 
 /* ---------- hero visuals ---------- */
-/* geo-grid that heals from red to green in a ripple, then loops */
-const GRID = 7, GRID_HALF = (GRID - 1) / 2;
-function HeroGrid() {
+/* the REAL geo-grid look: radial scan pins over actual map tiles (same CARTO
+   basemap the tracker itself renders), healing red → green in a ripple */
+const lon2x = (lon, z) => ((lon + 180) / 360) * 256 * 2 ** z;
+const lat2y = (lat, z) => { const r = (lat * Math.PI) / 180; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 256 * 2 ** z; };
+const HERO_W = 560, HERO_H = 380, HERO_Z = 12, HERO_LAT = 32.7767, HERO_LNG = -96.797; // Dallas
+function MapGridHero() {
   const t = useTick(700, 14); // 0..8 ripple, then hold, then reset
   const stage = t <= 8 ? t : 8;
+  const cx = lon2x(HERO_LNG, HERO_Z), cy = lat2y(HERO_LAT, HERO_Z);
+  const x0 = cx - HERO_W / 2, y0 = cy - HERO_H / 2;
+  const tiles = [];
+  for (let ty = Math.floor(y0 / 256); ty * 256 < y0 + HERO_H; ty++)
+    for (let tx = Math.floor(x0 / 256); tx * 256 < x0 + HERO_W; tx++)
+      tiles.push({ tx, ty, left: tx * 256 - x0, top: ty * 256 - y0 });
+  /* radial scan grid exactly like a real report: center pin + rings of 6/12/18 */
+  const pins = [{ ring: 0, a: 0 }];
+  [[1, 6], [2, 12], [3, 18]].forEach(([k, n]) => { for (let i = 0; i < n; i++) pins.push({ ring: k, a: (2 * Math.PI * i) / n }); });
+  const STEP = 58;
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-xl">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[11px] font-bold text-gray-700"><MapPin size={11} className="mr-1 inline text-blue-600" />Map rank grid — "plumber near me"</span>
-        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-bold text-emerald-600">LIVE SCAN</span>
+    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl">
+      {/* browser chrome — this is a product screenshot, and it reads like one */}
+      <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2">
+        <span className="flex gap-1"><i className="h-2.5 w-2.5 rounded-full bg-red-300" /><i className="h-2.5 w-2.5 rounded-full bg-amber-300" /><i className="h-2.5 w-2.5 rounded-full bg-emerald-300" /></span>
+        <span className="ll-mono flex-1 truncate rounded-md bg-white px-2 py-0.5 text-[9.5px] text-gray-400 ring-1 ring-gray-200">app.serpsquad.com/project/dallas-plumbing/performance/geogrid</span>
       </div>
-      <div className="grid grid-cols-7 gap-1.5">
-        {Array.from({ length: GRID * GRID }, (_, i) => {
-          const r = Math.floor(i / GRID), c = i % GRID;
-          const d = Math.max(Math.abs(r - GRID_HALF), Math.abs(c - GRID_HALF));
-          const healed = stage >= d * 1.6;
-          const rank = healed ? Math.min(3, 1 + d) : Math.min(19, 8 + d * 3);
+      <div className="flex items-center justify-between px-3.5 py-2">
+        <span className="text-[11px] font-bold text-gray-700"><MapPin size={11} className="mr-1 inline text-blue-600" />GBP Rank Tracking · "emergency plumber dallas"</span>
+        <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-bold text-emerald-600"><i className="mkt-blink h-1.5 w-1.5 rounded-full bg-emerald-500" />LIVE SCAN</span>
+      </div>
+      <div className="relative overflow-hidden" style={{ height: HERO_H }}>
+        {tiles.map((tl, i) => (
+          <img key={i} alt="" draggable={false} src={`https://${"abcd"[(tl.tx + tl.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${HERO_Z}/${tl.tx}/${tl.ty}.png`}
+            className="pointer-events-none absolute select-none" style={{ left: tl.left, top: tl.top, width: 256, height: 256 }} />
+        ))}
+        {pins.map((p, i) => {
+          const x = HERO_W / 2 + p.ring * STEP * Math.sin(p.a);
+          const y = HERO_H / 2 - p.ring * STEP * Math.cos(p.a);
+          const healed = stage >= p.ring * 2;
+          const rank = healed ? (p.ring <= 1 ? 1 + p.ring : p.ring === 2 ? 3 : 4 + (i % 3)) : Math.min(19, 9 + p.ring * 3);
+          const good = rank <= 3;
           return (
-            <div key={i} className="flex h-7 w-7 items-center justify-center rounded-full text-[9px] font-bold text-white transition-all duration-500 sm:h-8 sm:w-8 sm:text-[10px]"
-              style={{ background: healed ? (rank <= 3 ? "#16A34A" : "#F59E0B") : "#EF4444", transform: healed ? "scale(1)" : "scale(.92)" }}>
+            <div key={i} className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-bold text-white transition-all duration-500"
+              style={{ left: x, top: y, width: p.ring === 0 ? 34 : 30, height: p.ring === 0 ? 34 : 30,
+                background: healed ? (good ? "#16A34A" : "#F59E0B") : "#EF4444",
+                boxShadow: "0 2px 6px rgba(0,0,0,.3)", outline: p.ring === 0 ? "2.5px solid #111827" : "none", outlineOffset: 2 }}>
               {rank}
             </div>
           );
         })}
+        <span className="absolute bottom-0 right-0 rounded-tl bg-white/85 px-1.5 py-0.5 text-[8px] text-gray-500">© OpenStreetMap © CARTO</span>
       </div>
-      <div className="mt-2 text-center text-[9.5px] text-gray-400">every dot = a real coordinate-targeted Google Maps scan</div>
+      <div className="ll-mono flex items-center gap-4 border-t border-gray-100 px-3.5 py-2 text-[9.5px] font-bold text-gray-500">
+        <span>ARP <b className="text-gray-800">#2.4</b></span>
+        <span>SoLV <b className="text-emerald-600">74%</b></span>
+        <span>37 scan points</span>
+        <span className="ml-auto font-semibold text-gray-400">updated today</span>
+      </div>
     </div>
   );
 }
+/* realistic rank-tracker snapshot: keyword rows whose positions climb in
+   steps with change badges and sparklines — exactly what the tracker shows */
+const TRACK_ROWS = [
+  { kw: "emergency plumber dallas", pos: [14, 9, 6, 3], map: 2, vol: "2.4K" },
+  { kw: "water heater repair dallas", pos: [22, 15, 9, 5], map: 3, vol: "1.9K" },
+  { kw: "plumber near me", pos: [31, 24, 17, 8], map: 4, vol: "12K" },
+  { kw: "slab leak detection dallas", pos: [11, 8, 5, 2], map: 1, vol: "880" },
+  { kw: "drain cleaning service", pos: [18, 12, 7, 4], map: 3, vol: "3.6K" },
+];
+const posColor = (p) => (p <= 3 ? "#16A34A" : p <= 10 ? "#F59E0B" : "#EF4444");
+function Sparkline({ vals, upTo }) {
+  const shown = vals.slice(0, upTo + 1);
+  const pts = shown.map((v, i) => `${4 + i * 17},${22 - (32 - v) * 0.55}`).join(" L");
+  return (
+    <svg viewBox="0 0 60 24" className="h-5 w-14">
+      <path d={"M" + pts} fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={4 + (shown.length - 1) * 17} cy={22 - (32 - shown[shown.length - 1]) * 0.55} r="2.5" fill="#2563EB" />
+    </svg>
+  );
+}
+function RankTrackerCard() {
+  const t = useTick(1600, 6); // steps 0..3 then hold, then loop
+  const step = Math.min(3, t);
+  return (
+    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5">
+        <span className="text-[12px] font-bold text-gray-700"><Target size={13} className="mr-1.5 inline text-blue-600" />Website Rank Tracking · Dallas, TX</span>
+        <span className="ll-mono rounded-full bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-600">re-checked today</span>
+      </div>
+      <table className="w-full text-left">
+        <thead>
+          <tr className="ll-mono border-b border-gray-100 text-[8.5px] font-bold uppercase tracking-wide text-gray-400">
+            <th className="py-1.5 pl-4">Keyword</th><th className="px-1 text-center">Google</th>
+            <th className="px-1 text-center">Δ 90d</th><th className="hidden px-1 text-center sm:table-cell">3-Pack</th>
+            <th className="hidden px-1 text-center sm:table-cell">Vol</th><th className="pr-4 text-right">Trend</th>
+          </tr>
+        </thead>
+        <tbody>
+          {TRACK_ROWS.map((r) => {
+            const cur = r.pos[step], delta = r.pos[0] - cur;
+            return (
+              <tr key={r.kw} className="border-b border-gray-50 text-[11px]">
+                <td className="max-w-[150px] truncate py-2 pl-4 font-semibold text-gray-700">{r.kw}</td>
+                <td className="px-1 text-center"><span className="inline-flex h-6 w-8 items-center justify-center rounded-md text-[10.5px] font-bold text-white transition-colors duration-500" style={{ background: posColor(cur) }}>{cur}</span></td>
+                <td className="px-1 text-center text-[10px] font-bold" style={{ color: delta > 0 ? "#16A34A" : "#9CA3AF" }}>{delta > 0 ? `▲${delta}` : "—"}</td>
+                <td className="ll-mono hidden px-1 text-center text-[10px] font-bold text-gray-600 sm:table-cell">{step >= 2 ? `#${r.map}` : "—"}</td>
+                <td className="ll-mono hidden px-1 text-center text-[10px] text-gray-400 sm:table-cell">{r.vol}</td>
+                <td className="py-2 pr-4"><span className="float-right"><Sparkline vals={r.pos} upTo={step} /></span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="ll-mono flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[9px] font-bold text-gray-400">
+        Tracking: <span className="text-gray-600">Google</span>·<span className="text-gray-600">Bing</span>·<span className="text-gray-600">Maps 3-Pack</span>·<span className="text-gray-600">AI search</span>
+        <span className="ml-auto font-semibold">real SERP data, never estimates</span>
+      </div>
+    </div>
+  );
+}
+
 /* rank ticker: climbs #27 → #3 then loops */
 const RANK_FRAMES = [27, 22, 18, 14, 11, 8, 6, 4, 3, 3, 3, 27];
 function RankCard() {
@@ -116,23 +208,7 @@ function LeadsCard() {
   );
 }
 
-/* ---------- animated charts (pure CSS draw-in, restarted via key) ---------- */
-function RankLineChart() {
-  const cycle = useTick(9000, 2); // re-mount the path every 9s to replay the draw
-  /* a ranking chart: lower is better, so the line falls from #24 to #2 */
-  const pts = [[0, 18], [40, 26], [80, 42], [120, 58], [160, 70], [200, 96], [240, 108], [280, 118], [320, 126], [360, 131], [400, 134]];
-  const d = "M" + pts.map(([x, y]) => `${x},${150 - y}`).join(" L");
-  return (
-    <svg viewBox="0 0 400 160" className="w-full">
-      {[1, 5, 10, 15, 20, 25].map((r2, i) => (
-        <g key={r2}><line x1="0" x2="400" y1={150 - 134 + i * 26} y2={150 - 134 + i * 26} stroke="#EEF2F7" strokeWidth="1" />
-          <text x="2" y={150 - 138 + i * 26 + 8} fontSize="8" fill="#9CA3AF">#{r2}</text></g>
-      ))}
-      <path key={cycle} d={d} fill="none" stroke={ACCENT} strokeWidth="3" strokeLinecap="round" className="mkt-draw" pathLength="1" />
-      <circle cx="400" cy={150 - 134} r="4" fill={ACCENT} className="mkt-blink" />
-    </svg>
-  );
-}
+/* ---------- animated leads chart (pure CSS draw-in, restarted via key) ---------- */
 function LeadsBarChart() {
   const cycle = useTick(9000, 2);
   const bars = [22, 30, 27, 41, 55, 63, 78, 92, 104, 121, 135, 152];
@@ -188,7 +264,7 @@ const Footer = () => (
   <footer className="border-t border-gray-100 bg-gray-50">
     <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-5 py-8 text-[11.5px] text-gray-400">
       <span className="ll-display font-bold text-gray-600">SERP Squad Studio</span>
-      <span>© {new Date().getFullYear()} SERP Squad — local SEO, done &amp; monitored in one place.</span>
+      <span>© {new Date().getFullYear()} SERP Squad · SEO done &amp; monitored in one place.</span>
       <span className="ml-auto flex gap-5">
         <a href="/privacy" className="font-semibold hover:text-gray-700">Privacy policy</a>
         <a href="/terms" className="font-semibold hover:text-gray-700">Terms of service</a>
@@ -202,7 +278,7 @@ const Footer = () => (
 const FEATURES = [
   { icon: MapPin, title: "GBP geo-grid rank tracking", desc: "Coordinate-targeted Google Maps scans across a city grid — see exactly where you rank on every block, watch it turn green as work lands." },
   { icon: LineChart, title: "Keyword rank tracking", desc: "Google & Bing positions per city and device, local 3-Pack included, re-checked on schedule with real SERP data — never estimates." },
-  { icon: Bot, title: "AI website architect & writer", desc: "AI plans your site architecture from live SERPs, structures every page and writes conversion-ready local content in your brand voice." },
+  { icon: Bot, title: "AI website architect & writer", desc: "AI plans your site architecture from live SERPs, structures every page and writes conversion-ready content in your brand voice." },
   { icon: ListChecks, title: "Listings & citation scanner", desc: "Real directory-by-directory scans verify your business name, address and phone everywhere it matters — with fix lists." },
   { icon: FileSearch, title: "Google index checker", desc: "Every page and post checked against Google's actual index, auto-rechecked as content ships." },
   { icon: LayoutDashboard, title: "Client portal & reports", desc: "White-label dashboards and one-click performance reports your clients actually read — rankings, leads, work done." },
@@ -210,7 +286,7 @@ const FEATURES = [
   { icon: BarChart3, title: "Live Google data", desc: "Search Console and GA4 plug straight into each project's dashboard — impressions, clicks and traffic beside your rank grids." },
 ];
 export function MarketingHome() {
-  useEffect(() => { document.title = "SERP Squad Studio — Get Your SEO Done & Monitored in One Place"; }, []);
+  useEffect(() => { document.title = "SERP Squad Studio | Get Your SEO Done & Monitored in One Place"; }, []);
   const kw = useCountUp(12400), scans = useCountUp(9300000), lift = useCountUp(18), leads = useCountUp(3.2, 1600, 1);
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -222,16 +298,17 @@ export function MarketingHome() {
         <div className="mx-auto grid max-w-6xl items-center gap-10 px-5 py-16 md:grid-cols-2 md:py-24">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-700">
-              <Sparkles size={11} /> AI-powered · built for local businesses
+              <Sparkles size={11} /> AI-powered · for businesses of any size
             </span>
             <h1 className="ll-display mt-4 text-[34px] font-bold leading-[1.12] sm:text-[44px]">
-              Own the map.<br />Grow the calls.<br />
-              <span style={{ color: ACCENT }}>SEO on autopilot.</span>
+              Get your SEO done<br />&amp; monitored in one place.<br />
+              <span style={{ color: ACCENT }}>SERP · Maps · AI search.</span>
             </h1>
             <p className="mt-4 max-w-md text-[14.5px] leading-relaxed text-gray-500">
-              SERP Squad Studio is the AI-powered SEO platform for small and local businesses —
-              it tracks your rankings street by street, fixes what holds you back, writes and publishes
-              what pushes you up, and turns the climb into calls, leads and customers.
+              SERP Squad Studio is the AI-powered platform that plans, writes and fixes your SEO,
+              then tracks every ranking it moves — across Google's organic results, the local map
+              grid and AI-powered search. Local shop or national brand, visibility turns into
+              calls, leads and customers.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <a href="/login" className="flex items-center gap-2 rounded-xl px-6 py-3 text-[13.5px] font-bold text-white shadow-lg transition hover:opacity-90" style={{ background: ACCENT }}>
@@ -247,8 +324,8 @@ export function MarketingHome() {
               <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-emerald-500" /> Client portal</span>
             </div>
           </div>
-          <div className="relative mx-auto w-full max-w-md">
-            <HeroGrid />
+          <div className="relative mx-auto w-full max-w-xl">
+            <MapGridHero />
             <div className="mkt-float absolute -left-6 -top-5 hidden sm:block"><RankCard /></div>
             <div className="mkt-float absolute -bottom-6 -right-4 hidden sm:block" style={{ animationDelay: "1.2s" }}><LeadsCard /></div>
             <div className="mt-4 flex flex-col gap-3 sm:hidden"><RankCard /><LeadsCard /></div>
@@ -278,20 +355,16 @@ export function MarketingHome() {
         <Reveal className="text-center">
           <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Rankings that climb. Leads that compound.</h2>
           <p className="mx-auto mt-2 max-w-xl text-[13px] text-gray-500">
-            The system is simple: get found where customers search, and the phone rings.
-            Here's the shape of a typical engagement run through SERP Squad Studio for a small business.
+            Track every keyword across the SERP, the map grid and AI answers — get found where
+            customers search, and the phone rings. This is what a running engagement looks like.
           </p>
         </Reveal>
-        <div className="mt-10 grid gap-6 md:grid-cols-2">
-          <Reveal className="rounded-2xl border border-gray-200 p-6 shadow-sm">
-            <div className="mb-3 flex items-center gap-2 text-[13px] font-bold text-gray-700"><Target size={15} className="text-blue-600" /> Average keyword position</div>
-            <RankLineChart />
-            <div className="mt-2 text-[11px] text-gray-400">From page 3 to the top 3 — tracked with real coordinate-level SERP scans, not estimates.</div>
-          </Reveal>
+        <div className="mt-10 grid items-start gap-6 md:grid-cols-2">
+          <Reveal><RankTrackerCard /></Reveal>
           <Reveal delay={120} className="rounded-2xl border border-gray-200 p-6 shadow-sm">
             <div className="mb-3 flex items-center gap-2 text-[13px] font-bold text-gray-700"><Phone size={15} className="text-emerald-600" /> Monthly calls &amp; leads</div>
             <LeadsBarChart />
-            <div className="mt-2 text-[11px] text-gray-400">Visibility converts: map-pack wins turn into calls, forms and booked jobs.</div>
+            <div className="mt-2 text-[11px] text-gray-400">Visibility converts: SERP and map-pack wins turn into calls, forms and booked jobs.</div>
           </Reveal>
         </div>
       </section>
@@ -324,7 +397,7 @@ export function MarketingHome() {
         </Reveal>
         <div className="mt-10 grid gap-6 md:grid-cols-3">
           {[
-            [Globe2, "1 · Connect & baseline", "Plug in your business profile, website, Search Console and Analytics. SERP Squad Studio scans your rankings block by block and finds every gap holding you back."],
+            [Globe2, "1 · Connect & baseline", "Plug in your business profile, website, Search Console and Analytics. SERP Squad Studio maps your rankings across the SERP, the local grid and AI answers, and finds every gap holding you back."],
             [Bot, "2 · AI does the heavy lifting", "The AI plans your site, writes local content in your voice, fixes listings, schedules posts and re-checks Google's index as work ships."],
             [Rocket, "3 · Watch the grid turn green", "Rankings climb, the map fills with top-3 dots, and calls, leads and booked jobs follow — all reported to you (or your clients) automatically."],
           ].map(([Icon, t, d], i) => (
@@ -341,7 +414,7 @@ export function MarketingHome() {
       <section className="mx-auto max-w-6xl px-5 pb-20">
         <Reveal className="overflow-hidden rounded-3xl px-8 py-12 text-center text-white shadow-xl" >
           <div className="rounded-3xl" style={{ background: "linear-gradient(120deg,#111827,#1D4ED8)", margin: "-3rem -2rem", padding: "3rem 2rem" }}>
-            <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Ready to own your local market?</h2>
+            <h2 className="ll-display text-[26px] font-bold sm:text-[30px]">Ready to own your market?</h2>
             <p className="mx-auto mt-2 max-w-md text-[13px] text-blue-100">
               Sign in to your SERP Squad Studio workspace — or talk to us about bringing your business on board.
             </p>
@@ -360,7 +433,7 @@ export function MarketingHome() {
 /* ================= POLICY PAGES ================= */
 const Prose = ({ children }) => <div className="space-y-4 text-[13px] leading-relaxed text-gray-600 [&_h2]:ll-display [&_h2]:mt-8 [&_h2]:text-[18px] [&_h2]:font-bold [&_h2]:text-gray-900 [&_h3]:text-[14px] [&_h3]:font-bold [&_h3]:text-gray-800 [&_li]:ml-5 [&_li]:list-disc">{children}</div>;
 const PolicyShell = ({ title, updated, children }) => {
-  useEffect(() => { document.title = `${title} — SERP Squad Studio`; window.scrollTo(0, 0); }, [title]);
+  useEffect(() => { document.title = `${title} | SERP Squad Studio`; window.scrollTo(0, 0); }, [title]);
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <MktCss /><TopNav />
