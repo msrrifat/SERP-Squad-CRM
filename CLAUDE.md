@@ -25,7 +25,8 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | SEO opportunity engine (per-page GSC queries, relevancy/intent, AI suggestions, anchor-text engine) | src/lib/seo.js |
 | Website architecture + content engine (IA generator, content structure from SERP entities, audit/adjust, content writer) | src/lib/architect.js |
 | Website Mapping & Content Architect tab (Business Website sub-tab) | src/features/optimization/architect.jsx |
-| Brand Voice tab (guidelines/tone/files fed to all writing tools) | src/features/optimization/brandvoice.jsx |
+| Posts Architect (Blog/Answer post architecture, anchor-variety internal linking, media auto-images, duplicate cross-check) | src/features/optimization/postsarchitect.jsx |
+| Brand Voice tab (business info + shared brand properties + tone/files fed to all writing tools) | src/features/optimization/brandvoice.jsx |
 | AI agent (scoped brain: agent.js; chat panel: AgentPanel.jsx) | src/features/agent/ |
 | Seed company/clients/projects, ROLE_PRESETS, demo teamAccess grants | src/data/seed.js |
 | Shared UI primitives (Card, StatCard, Modal, Toggle, inputs, FONT_CSS) | src/ui/primitives.jsx |

@@ -30,6 +30,7 @@ import { BrandingOptTab, ListingsScannerTab } from "./branding.jsx";
 import { IndexCheckerTab, IndexTag, checkIndexApi, indexStale } from "./indexcheck.jsx";
 import { BrandVoiceTab } from "./brandvoice.jsx";
 import { WebsiteMappingTab } from "./architect.jsx";
+import { PostsArchitectTab } from "./postsarchitect.jsx";
 import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keywordUsage, oppFromRows, pageTextParts, regenSuggestion, relevancy } from "../../lib/seo.js";
 
 export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send };
@@ -2432,6 +2433,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     { key: "pages", label: "Pages", icon: Globe, note: `${w.pages.length} tracked${dirtyCount ? ` \u00b7 ${dirtyCount} pending` : ""}` },
     { key: "posts", label: "Posts", icon: FileTextIcon, note: `${w.blogs.length} post${w.blogs.length === 1 ? "" : "s"}` },
     { key: "mapping", label: "Website Mapping & Content", icon: Network, note: w.architecture?.tree?.length ? `${w.architecture.tree.length} top pages` : "AI site architecture" },
+    { key: "postsmap", label: "Posts Architect", icon: FileTextIcon, note: w.postsPlan?.posts?.length ? `${w.postsPlan.posts.filter((p) => p.status !== "removed").length} posts planned` : "Blog & Answer architecture" },
     { key: "media", label: "Media", icon: ImagePlus, note: (w.media || []).length ? `${w.media.length} items synced` : "Sync the WP media library" },
   ];
   return (
@@ -2823,6 +2825,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       </>)}
 
       {sub === "mapping" && <WebsiteMappingTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} aiConfig={aiConfig} />}
+      {sub === "postsmap" && <PostsArchitectTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiConfig={aiConfig} />}
       {sub === "media" && <WebsiteMediaTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} />}
       </div>
     </div>

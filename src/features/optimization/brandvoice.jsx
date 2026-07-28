@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { FileText, Mic, Plus, Trash2, Upload, X } from "lucide-react";
+import { Building2, FileText, Link2, Mic, Trash2, Upload, Wand2, X } from "lucide-react";
 import { Card, Labeled, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { useWork } from "../../lib/worklog.jsx";
@@ -42,6 +42,77 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
           <b className="text-gray-700">One voice, everywhere.</b> Everything here is fed into every AI writing step — campaign content,
           page re-optimization and the content architect — so drafts match <b>{project.name}</b>'s tone, terminology and rules instead of sounding generic.
         </div>
+      </Card>
+
+      {/* ---- Business information (GBP-style facts every writer cites) ---- */}
+      <Card className="space-y-3 p-5">
+        <div className="flex items-center justify-between">
+          <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Building2 size={15} style={{ color: accent }} /> Business information</div>
+          {(opt.gbp?.bizName || opt.gbp?.address) && (
+            <button onClick={() => set((cur) => ({ biz: {
+                name: opt.gbp.bizName || "", category: opt.gbp.category || "", address: opt.gbp.address || "",
+                phone: opt.gbp.phone || "", hours: opt.gbp.hours || "", description: opt.gbp.description || "",
+                ...(cur.biz || {}),
+              } }))}
+              className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600 hover:border-gray-300">
+              <Wand2 size={11} /> Prefill empty fields from GBP
+            </button>
+          )}
+        </div>
+        <div className="text-[11.5px] text-gray-400">
+          The same facts a Google Business Profile holds. Every content generator (pages, posts, campaigns) reads these,
+          so the writing cites real business details — name, services, areas, hours — instead of inventing them.
+        </div>
+        {(() => { const biz = bv.biz || {}; const sb = (k) => (e) => set((cur) => ({ biz: { ...(cur.biz || {}), [k]: e.target.value } }));
+          return (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Labeled label="Business name"><input value={biz.name || ""} onChange={sb("name")} placeholder={project.name} className={inputCls} /></Labeled>
+                <Labeled label="Primary category"><input value={biz.category || ""} onChange={sb("category")} placeholder="e.g. Plumber, Dental clinic" className={inputCls} /></Labeled>
+                <Labeled label="Phone"><input value={biz.phone || ""} onChange={sb("phone")} placeholder="+1 …" className={"ll-mono " + inputCls} /></Labeled>
+                <Labeled label="Email"><input value={biz.email || ""} onChange={sb("email")} placeholder="hello@…" className={"ll-mono " + inputCls} /></Labeled>
+                <Labeled label="Address"><input value={biz.address || ""} onChange={sb("address")} placeholder="Street, City, State ZIP" className={inputCls} /></Labeled>
+                <Labeled label="Opening hours"><input value={biz.hours || ""} onChange={sb("hours")} placeholder="Mon–Fri 8am–6pm, Sat 9am–1pm" className={inputCls} /></Labeled>
+                <Labeled label="Service areas (comma-separated)"><input value={biz.serviceAreas || ""} onChange={sb("serviceAreas")} placeholder="Dallas, Plano, Frisco" className={inputCls} /></Labeled>
+                <Labeled label="Services (comma-separated)"><input value={biz.services || ""} onChange={sb("services")} placeholder="drain cleaning, water heater repair" className={inputCls} /></Labeled>
+              </div>
+              <Labeled label="Business description (what a GBP 'from the business' section would say)">
+                <textarea value={biz.description || ""} onChange={sb("description")} rows={3} className={inputCls + " resize-y"}
+                  placeholder="Who you serve, what you do best, years in business, guarantees…" />
+              </Labeled>
+            </>
+          ); })()}
+      </Card>
+
+      {/* ---- Other information: the SAME properties as Branding & Automation →
+             Properties — edited here, saved there (one source of truth) ---- */}
+      <Card className="space-y-3 p-5">
+        <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><Link2 size={15} style={{ color: accent }} /> Other information — brand properties</div>
+        <div className="text-[11.5px] text-gray-400">
+          Your official links (website, Google Business Profile, socials). Shared with <b>Branding & Automation → Properties</b> —
+          editing here updates there and vice versa. Writers use these for branded citations and links.
+        </div>
+        {(() => {
+          const props = opt.branding?.properties || {};
+          const setProp = (k) => (e) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), [k]: e.target.value } }));
+          const setSocial = (k) => (e) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), socials: { ...((cur?.properties || {}).socials || {}), [k]: e.target.value } } }));
+          const MAIN = [["website", "Official website"], ["gbpShare", "Google Business Profile — share link"], ["gbpReview", "Google review link"], ["bing", "Bing Places"], ["apple", "Apple Maps"]];
+          const SOC = [["facebook", "Facebook"], ["instagram", "Instagram"], ["linkedin", "LinkedIn"], ["youtube", "YouTube"], ["x", "X / Twitter"], ["tiktok", "TikTok"]];
+          return (
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              {MAIN.map(([k, label]) => (
+                <Labeled key={k} label={label}>
+                  <input value={props[k] || ""} onChange={setProp(k)} placeholder={k === "website" ? "https://" + project.website : "https://…"} className={"ll-mono " + inputCls} />
+                </Labeled>
+              ))}
+              {SOC.map(([k, label]) => (
+                <Labeled key={k} label={label}>
+                  <input value={(props.socials || {})[k] || ""} onChange={setSocial(k)} placeholder="https://…" className={"ll-mono " + inputCls} />
+                </Labeled>
+              ))}
+            </div>
+          );
+        })()}
       </Card>
 
       <Card className="space-y-3 p-5">

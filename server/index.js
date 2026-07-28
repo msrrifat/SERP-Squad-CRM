@@ -1122,9 +1122,24 @@ async function handleWpDeploy(body) {
         if (String(cur?.meta?._elementor_data || "").length > 50) contentSkipped = true;
       } catch { /* meta not exposed (no companion plugin) — deploy content as asked */ }
     }
+    /* post categories by NAME (e.g. "Blog" / "Answer") — resolved to term ids,
+       created on the site when missing, so taxonomy stays consistent */
+    let categoryIds = [];
+    if (kind === "posts" && Array.isArray(p2.categories) && p2.categories.length) {
+      for (const name of p2.categories.slice(0, 5)) {
+        try {
+          const found = await wpFetch(body, `/categories?search=${encodeURIComponent(name)}&_fields=id,name`);
+          const exact = (found || []).find((c) => c.name.toLowerCase() === String(name).toLowerCase());
+          if (exact) { categoryIds.push(exact.id); continue; }
+          const made = await wpFetch(body, `/categories`, { method: "POST", body: JSON.stringify({ name }) });
+          if (made?.id) categoryIds.push(made.id);
+        } catch { /* category failure never blocks the post itself */ }
+      }
+    }
     const payload = {
       title: p2.title, slug: p2.slug,
       ...(p2.content && !contentSkipped ? { content: p2.content } : {}),
+      ...(categoryIds.length ? { categories: categoryIds } : {}),
       status: p2.status || "publish",
       ...(p2.date ? { date: p2.date } : {}),
       ...(kind === "pages" && parentId ? { parent: parentId } : {}),

@@ -19,12 +19,37 @@ export async function aiGenerate(ai, { system, prompt, json = false, maxTokens }
   throw e;
 }
 
-export function brandVoiceBlock(bv, brand) {
+export function brandVoiceBlock(bv, brand, props = null) {
   if (!bv) return `Brand: ${brand}.`;
   const files = (bv.files || []).map((f) => `--- ${f.name} ---\n${f.text}`).join("\n").slice(0, 6000);
+  /* business facts (Brand Voice → Business information) — writers cite these
+     exactly and never invent NAP data */
+  const biz = bv.biz || {};
+  const bizLines = [
+    biz.name && `Name: ${biz.name}${biz.category ? ` (${biz.category})` : ""}`,
+    biz.description && `Description: ${biz.description}`,
+    biz.services && `Services: ${biz.services}`,
+    biz.address && `Address: ${biz.address}`,
+    biz.phone && `Phone: ${biz.phone}`,
+    biz.email && `Email: ${biz.email}`,
+    biz.hours && `Hours: ${biz.hours}`,
+    biz.serviceAreas && `Service areas: ${biz.serviceAreas}`,
+  ].filter(Boolean);
+  /* official brand properties (shared with Branding & Automation) — link
+     targets for branded citations, never to be invented */
+  const propLines = props ? [
+    props.website && `Website: ${props.website}`,
+    props.gbpShare && `Google Business Profile: ${props.gbpShare}`,
+    props.gbpReview && `Google reviews: ${props.gbpReview}`,
+    props.bing && `Bing Places: ${props.bing}`,
+    props.apple && `Apple Maps: ${props.apple}`,
+    ...Object.entries(props.socials || {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`),
+  ].filter(Boolean) : [];
   return [
     `Brand: ${bv.brandName || brand}. ${bv.tagline ? "Positioning: " + bv.tagline + "." : ""}`,
     bv.brandInfo ? `About: ${bv.brandInfo}` : "",
+    bizLines.length ? `BUSINESS FACTS (use these exactly where relevant — NEVER invent name/address/phone/hours):\n${bizLines.join("\n")}` : "",
+    propLines.length ? `OFFICIAL BRAND PROPERTIES (the only external brand links you may reference):\n${propLines.join("\n")}` : "",
     bv.toneWords ? `Tone: ${bv.toneWords}` : "",
     bv.doList ? `Always: ${bv.doList}` : "",
     bv.dontList ? `Never: ${bv.dontList}` : "",

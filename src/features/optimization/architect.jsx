@@ -14,6 +14,7 @@ import {
 } from "../../lib/architect.js";
 import { CharCount, Toggle } from "../../ui/primitives.jsx";
 import { buildDeployPlan, demoReviews, exportSiteZip, scheduleDates, serializeElementor, serializeGutenberg, serializeHtml, serializeWpBody, webflowItems } from "../../lib/webdeploy.js";
+import { findDuplicate } from "./postsarchitect.jsx";
 
 /* ================= Website Mapping & Content Architect =================
    AI-FIRST: every stage calls the configured provider (Company Settings →
@@ -161,7 +162,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish 
 }
 
 /* ---- per-page content pipeline editor ---- */
-function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
+function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
   const work = useWork();
   const seo = node.seo || {};
   /* functional through to project state — concurrent stages can't clobber each other */
@@ -246,7 +247,7 @@ function PageEditor({ node, project, brandVoice, niche, accent, dfs, ai, locatio
       const plan = linkPlanRows(buildLinkPlan(node.url, siteLinks, node.type));
       const text = await aiGenerate(ai, {
         system: SYS_WRITER, maxTokens: 8000,
-        prompt: `BRAND VOICE (must follow):\n${brandVoiceBlock(brandVoice, project.name)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
+        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
       });
       /* parse the structured output; tolerate providers that skip markers */
       const metaM = text.match(/---META---([\s\S]*?)---CONTENT---/);
@@ -535,6 +536,39 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
                 onPublish={(n) => setDeploying({ only: n })} />
             ))}
           </div>
+          {/* ---- duplicate cross-check: suggested map vs the LIVE site ---- */}
+          {(() => {
+            const livePages = (w.pages || []).filter((p) => !p.demo);
+            const liveBlogs = (w.blogs || []).filter((b) => !b.demo);
+            if (!livePages.length && !liveBlogs.length) return null;
+            const dups = [];
+            walk(tree, (n) => {
+              if (n.adoptedExisting || n.dupResolved) return;
+              const d = findDuplicate({ title: n.title, slug: n.url.split("/").filter(Boolean).pop() || "", url: n.url }, livePages, liveBlogs);
+              if (d && d.url !== n.url) dups.push({ node: n, dup: d });
+              else if (d && d.url === n.url) dups.push({ node: n, dup: d, same: true });
+            });
+            if (!dups.length) return null;
+            return (
+              <div className="mt-3 space-y-1.5 rounded-xl border border-amber-100 bg-amber-50/50 p-3">
+                <div className="text-[12px] font-bold text-amber-800">Already on the live site ({dups.length})</div>
+                <div className="text-[10.5px] text-gray-500">Deploying a same-slug page updates the existing one. For different-URL matches: remove the suggestion, or adopt the existing page's URL so nothing is duplicated.</div>
+                {dups.map(({ node, dup, same }) => (
+                  <div key={node.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px]">
+                    <span className="min-w-0 flex-1 truncate font-medium text-gray-700">{node.title} <span className="ll-mono text-gray-400">{node.url}</span></span>
+                    <span className="ll-mono truncate text-[10px] text-amber-700" title={dup.title}>existing {dup.kind}: {dup.url}</span>
+                    {same ? <span className="rounded bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">will update in place</span> : (
+                      <span className="flex shrink-0 gap-1">
+                        <button onClick={() => setTree((t) => removeNode(t, node.id))} className="rounded border border-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-600 hover:text-red-600">Remove</button>
+                        <button onClick={() => patchNode(node.id, { url: dup.url, adoptedExisting: true })} className="rounded px-2 py-0.5 text-[10px] font-semibold text-white" style={{ background: accent }}>Use existing URL</button>
+                        <button onClick={() => patchNode(node.id, { dupResolved: true })} className="rounded px-2 py-0.5 text-[10px] font-semibold text-gray-400 hover:text-gray-600">Keep both</button>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {/* ---- the money button: turn the whole researched map into a live site ---- */}
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-4">
             <button onClick={() => setDeploying({})}
@@ -555,7 +589,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
         const siteLinks = [];
         walk(tree, (p) => siteLinks.push({ title: p.title, url: p.url, type: p.type, primaryKw: p.seo?.primaryKw || "" }));
         return (
-          <PageEditor node={openNode} project={project} brandVoice={brandVoice} niche={arch?.niche || niche || project.name}
+          <PageEditor node={openNode} project={project} brandVoice={brandVoice} brandProps={opt.branding?.properties || null} niche={arch?.niche || niche || project.name}
             accent={accent} dfs={dfs} ai={aiConfig} locationName={locationName} siteLinks={siteLinks}
             onPatch={(patch) => patchNode(openNode.id, patch)} onPublish={() => setDeploying({ only: openNode })} onClose={() => setOpenId(null)} />
         );
