@@ -828,6 +828,8 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
   ];
   const ctx = {
     sameAs,
+    /* Brand Voice → Brand colors drive the deployed pages' design palette */
+    brandColors: brandVoice?.colors || null,
     tree, brand: project.name.split(" — ")[0], niche: arch?.niche || project.name,
     services: (arch?.services || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean),
     gbp, brandVoice, website: project.website, accent,

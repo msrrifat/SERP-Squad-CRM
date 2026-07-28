@@ -34,6 +34,12 @@ const shade = (hex, pct) => {
   const f = (i) => Math.max(0, Math.min(255, Math.round(parseInt(n.slice(i, i + 2), 16) * (1 + pct / 100))));
   return "#" + [0, 2, 4].map((i) => f(i).toString(16).padStart(2, "0")).join("");
 };
+const hexRgba = (hex, a) => {
+  const h = String(hex || "").replace("#", "");
+  const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.padEnd(6, "0");
+  const v = (i) => parseInt(n.slice(i, i + 2), 16) || 0;
+  return `rgba(${v(0)},${v(2)},${v(4)},${a})`;
+};
 
 /* ---- researched-content parser: the writer's markdown → design sections ---
    The generated page body (seo.content.markdown) is the page — every H2
@@ -342,12 +348,23 @@ const sectionHtml = (s, base) => {
    for hero/CTA, alternating white/tinted content bands, cards, checklists,
    numbered process steps, styled pricing, FAQ accordion and labeled image
    slots. `hard` adds !important so any WordPress theme is overridden. */
-function designCss(accent, { hard = false } = {}) {
+function designCss(ctx, { hard = false } = {}) {
   const i = hard ? "!important" : "";
-  const acc = accent || "#0E7C66";
-  const accD = shade(acc, -26), accT = acc + "12", ink = "#141b24", mut = "#46525f", line = "#e5eaef", tint = "#f5f8fa";
+  /* the palette comes from Brand Voice → Brand colors; anything unset falls
+     back to the project accent + clean neutral defaults */
+  const c = (ctx && ctx.brandColors) || {};
+  const okHex = (v) => (/^#[0-9a-fA-F]{3,8}$/.test(String(v || "").trim()) ? String(v).trim() : "");
+  const acc = okHex(c.primary) || (ctx && ctx.accent) || "#0E7C66";
+  const sec = okHex(c.secondary) || acc;
+  const band = okHex(c.ctaBg) || acc;                    // hero + CTA brand bands
+  const accD = shade(band, -26), accT = hexRgba(acc, 0.07);
+  const ink = okHex(c.heading) || "#141b24", mut = okHex(c.text) || "#46525f";
+  const link = okHex(c.link) || acc, btn = okHex(c.button) || acc, btnTx = okHex(c.buttonText) || "#fff";
+  const pageBg = okHex(c.pageBg) || "#fff", line = "#e5eaef";
+  const tint = okHex(c.sectionTint) || "#f5f8fa";
+  const sh = okHex(c.cardShadow) || "#0f1e32";
   return `
-.ss-sec{box-sizing:border-box;width:100%${i};max-width:none${i};margin:0${i};padding:56px 5vw;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif${i};line-height:1.7}
+.ss-sec{box-sizing:border-box;width:100%${i};max-width:none${i};margin:0${i};padding:56px 5vw;background:${pageBg};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif${i};line-height:1.7}
 .ss-sec *{box-sizing:border-box}
 .ss-sec .wrap{max-width:1060px;margin:0 auto}
 .ss-sec.bg-tint{background:${tint}}
@@ -356,40 +373,40 @@ function designCss(accent, { hard = false } = {}) {
 .ss-sec h2{font-size:clamp(23px,3vw,32px)${i};font-weight:750${i};margin:0 0 20px${i}}
 .ss-sec h3{font-size:clamp(16.5px,2.2vw,20px)${i};font-weight:700${i};margin:22px 0 8px${i}}
 .ss-sec p{font-size:16.5px${i};margin:0 0 14px${i};color:${mut};line-height:1.75${i}}
-.ss-sec a{color:${acc}}
+.ss-sec a{color:${link}}
 .ss-sec img{max-width:100%${i};height:auto${i};border-radius:16px;display:block}
 .ss-sec figure{margin:18px 0}.ss-sec figcaption{font-size:12.5px;color:${mut};margin-top:8px;text-align:center}
 .ss-sec ul,.ss-sec ol{margin:0 0 16px;padding-left:22px}.ss-sec li{font-size:16px${i};color:${mut};margin:6px 0}
 .ss-sec blockquote{border-left:4px solid ${acc};margin:16px 0;padding:10px 18px;background:${accT};border-radius:0 12px 12px 0}
-.ss-sec .btn{display:inline-block;background:${acc};color:#fff${i};padding:14px 26px;border-radius:12px;text-decoration:none${i};font-weight:700;font-size:15.5px}
+.ss-sec .btn{display:inline-block;background:${btn};color:${btnTx}${i};padding:14px 26px;border-radius:12px;text-decoration:none${i};font-weight:700;font-size:15.5px}
 .ss-sec .hbtns{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
 /* hero + CTA brand bands */
-.ss-sec.sec-hero{background:linear-gradient(130deg,${accD},${acc});padding:64px 5vw}
+.ss-sec.sec-hero{background:linear-gradient(130deg,${accD},${band});padding:64px 5vw}
 .ss-sec.sec-hero h1,.ss-sec.sec-cta h2{color:#fff${i}}
 .ss-sec.sec-hero p,.ss-sec.sec-cta p{color:rgba(255,255,255,.86)${i};font-size:17.5px${i}}
 .ss-sec.sec-hero .hgrid{display:grid;gap:36px;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));align-items:center}
 .ss-sec.sec-hero .hmedia img{box-shadow:0 22px 50px rgba(0,0,0,.28)}
 .ss-sec .btn.light{background:#fff;color:${accD}${i}}
 .ss-sec .btn.ghost{background:transparent;color:#fff${i};border:1.5px solid rgba(255,255,255,.65)}
-.ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${acc});text-align:center;padding:60px 5vw}
+.ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${band});text-align:center;padding:60px 5vw}
 .ss-sec.sec-cta .hbtns{justify-content:center}
 /* researched-content layouts */
 .ss-sec .split{display:grid;gap:32px;grid-template-columns:1.5fr 1fr;align-items:start}
 .ss-sec .split.rev{grid-template-columns:1fr 1.5fr}.ss-sec .split.rev .ctext{order:2}
-.ss-sec .imgslot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:220px;border:2px dashed ${acc}55;border-radius:16px;background:${accT};color:${mut};font-size:13px;text-align:center;padding:18px}
+.ss-sec .imgslot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:220px;border:2px dashed ${hexRgba(acc,0.33)};border-radius:16px;background:${accT};color:${mut};font-size:13px;text-align:center;padding:18px}
 .ss-sec .imgslot .ph{font-size:30px;opacity:.7}
 .ss-sec .imgslot.hero{min-height:280px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:rgba(255,255,255,.85)}
 .ss-sec ul.checks{list-style:none;padding:0;display:grid;gap:10px 22px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
 .ss-sec ul.checks li{position:relative;padding-left:30px}
-.ss-sec ul.checks li:before{content:"✓";position:absolute;left:0;top:1px;width:21px;height:21px;border-radius:50%;background:${acc};color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.ss-sec ul.checks li:before{content:"✓";position:absolute;left:0;top:1px;width:21px;height:21px;border-radius:50%;background:${sec};color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
 .ss-sec ol.steps{list-style:none;padding:0;counter-reset:step}
 .ss-sec ol.steps li{counter-increment:step;position:relative;padding:0 0 14px 44px}
-.ss-sec ol.steps li:before{content:counter(step);position:absolute;left:0;top:0;width:30px;height:30px;border-radius:50%;background:${acc};color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
+.ss-sec ol.steps li:before{content:counter(step);position:absolute;left:0;top:0;width:30px;height:30px;border-radius:50%;background:${sec};color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
 /* cards, grids, pricing, chips */
 .ss-sec .grid3{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr))}
 .ss-sec .grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
-.ss-sec .card{background:#fff;border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px rgba(15,30,50,.05);margin:0}
-.ss-sec.bg-tint .card{box-shadow:0 6px 22px rgba(15,30,50,.07)}
+.ss-sec .card{background:${pageBg === "#fff" ? "#fff" : pageBg};border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px ${hexRgba(sh,0.05)};margin:0}
+.ss-sec.bg-tint .card{box-shadow:0 6px 22px ${hexRgba(sh,0.07)}}
 .ss-sec .card h3{margin-top:0${i}}
 .ss-sec table.price{width:100%;border-collapse:collapse;background:#fff;border:1px solid ${line};border-radius:16px;overflow:hidden}
 .ss-sec table.price td{padding:14px 18px;border-bottom:1px solid ${line};font-size:15.5px${i};color:${mut}}
@@ -418,7 +435,7 @@ const chromeHeaderHtml = (chrome, ctx) => `<header class="ss-sec" style="padding
 const chromeFooterHtml = (chrome, ctx) => chrome.footer.nap ? `<footer class="ss-sec" style="padding:22px 5vw;border-top:1px solid #e5eaef;background:#f5f8fa"><div class="wrap" style="color:#46525f;font-size:14px"><p style="margin:0"><strong>${esc(chrome.footer.nap.name)}</strong> · ${esc(chrome.footer.nap.address || "")} · ${esc(chrome.footer.nap.phone || "")}</p></div></footer>` : "";
 export function serializeWpBody(page, chrome, ctx, { withChrome = false } = {}) {
   const base = "";
-  const style = `<style>${designCss(ctx.accent, { hard: true })}</style>`;
+  const style = `<style>${designCss(ctx, { hard: true })}</style>`;
   const body = page.sections.map((s2) => sectionHtml(s2, base)).join("\n");
   return `${style}${withChrome ? chromeHeaderHtml(chrome, ctx) : ""}${body}${withChrome ? chromeFooterHtml(chrome, ctx) : ""}\n<script type="application/ld+json">${JSON.stringify(page.schema)}</script>`;
 }
@@ -435,7 +452,7 @@ export function serializeHtml(page, chrome, ctx) {
 <link rel="canonical" href="https://${ctx.website}${page.node.url}">
 <meta property="og:title" content="${esc(page.metaTitle)}"><meta property="og:description" content="${esc(page.metaDesc)}"><meta property="og:type" content="website">
 <style>*{box-sizing:border-box;margin:0}body{font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#141b24;background:#fff}header.site{background:#fff}header.site,footer.site{padding:16px 5vw;border-bottom:1px solid #e5eaef}footer.site{border-top:1px solid #e5eaef;border-bottom:0;color:#46525f;font-size:14px;background:#f5f8fa;padding:24px 5vw}footer.site p{margin:6px 0}nav{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}nav a{text-decoration:none;color:#141b24;font-weight:600;font-size:14.5px}footer.site a{color:${ctx.accent || "#0E7C66"}}
-${designCss(ctx.accent)}</style>
+${designCss(ctx)}</style>
 <script type="application/ld+json">${JSON.stringify(page.schema)}</script>
 </head>
 <body>
@@ -459,7 +476,7 @@ ${chrome.footer.cities.length ? `<p>Areas: ${chrome.footer.cities.map((x) => `<a
    outside the section bands and lose the design) */
 export function serializeGutenberg(page, chrome, ctx) {
   const b = [];
-  b.push(`<!-- wp:html --><style>${designCss(ctx.accent, { hard: true })}</style><!-- /wp:html -->`);
+  b.push(`<!-- wp:html --><style>${designCss(ctx, { hard: true })}</style><!-- /wp:html -->`);
   page.sections.forEach((s) => b.push(`<!-- wp:html -->${sectionHtml(s, "")}<!-- /wp:html -->`));
   b.push(`<!-- wp:html --><script type="application/ld+json">${JSON.stringify(page.schema)}</script><!-- /wp:html -->`);
   return b.join("\n");
@@ -473,7 +490,7 @@ export function serializeElementor(page, chrome, ctx) {
   const widget = (type, settings, i) => ({ id: wid(type + i), elType: "widget", widgetType: type, settings });
   const section = (widgets, i) => ({ id: wid("sec" + i), elType: "section", settings: { layout: "full_width", gap: "no" }, elements: [{ id: wid("col" + i), elType: "column", settings: { _column_size: 100 }, elements: widgets }] });
   const data = [
-    section([widget("html", { html: `<style>${designCss(ctx.accent, { hard: true })}</style>` }, 0)], 0),
+    section([widget("html", { html: `<style>${designCss(ctx, { hard: true })}</style>` }, 0)], 0),
     ...page.sections.map((s, i) => section([widget("html", { html: sectionHtml(s, "") }, i + 1)], i + 1)),
     section([widget("html", { html: `<script type="application/ld+json">${JSON.stringify(page.schema)}</script>` }, 990)], 990),
   ];
