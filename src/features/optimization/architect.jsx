@@ -130,14 +130,31 @@ const LiveChip = ({ live, provider }) => (
   </span>
 );
 
-function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish }) {
+function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish, dnd }) {
   const [open, setOpen] = useState(true);
   const meta = PAGE_TYPE_META[node.type] || { label: node.type, color: "#64748B" };
   const hasKids = (node.children || []).length > 0;
   const done = node.seo?.content ? "content" : node.seo?.structure ? "structure" : node.seo?.primaryKw ? "keywords" : null;
+  const over = dnd?.over?.id === node.id ? dnd.over.zone : null;
   return (
     <div>
-      <div className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 hover:bg-gray-50" style={{ marginLeft: depth * 18 }}>
+      <div draggable={!!dnd}
+        onDragStart={(e) => { dnd?.start({ kind: "node", id: node.id }); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", node.id); } catch { /* older browsers */ } }}
+        onDragOver={(e) => {
+          if (!dnd?.dragging()) return;
+          e.preventDefault(); e.dataTransfer.dropEffect = "move";
+          const r = e.currentTarget.getBoundingClientRect();
+          const y = e.clientY - r.top;
+          dnd.setOver({ id: node.id, zone: y < r.height * 0.28 ? "before" : y > r.height * 0.72 ? "after" : "inside" });
+        }}
+        onDragLeave={() => { if (dnd?.over?.id === node.id) dnd.setOver(null); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dnd?.drop(node.id); }}
+        className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 hover:bg-gray-50"
+        style={{ marginLeft: depth * 18, cursor: dnd ? "grab" : undefined,
+          boxShadow: over === "inside" ? `inset 0 0 0 2px ${accent}` : undefined,
+          background: over === "inside" ? accent + "0D" : undefined,
+          borderTop: over === "before" ? `2px solid ${accent}` : "2px solid transparent",
+          borderBottom: over === "after" ? `2px solid ${accent}` : "2px solid transparent" }}>
         <button onClick={() => setOpen(!open)} className="shrink-0 text-gray-300" style={{ visibility: hasKids ? "visible" : "hidden" }}>
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
@@ -155,7 +172,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish 
         </div>
       </div>
       {open && (node.children || []).map((c) => (
-        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} />
+        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} dnd={dnd} />
       ))}
     </div>
   );
@@ -561,6 +578,58 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   })));
   const addTop = () => setTree((t) => [...t, { id: "n" + Date.now(), title: "New page", url: "/new-page", type: "service", children: [], seo: blankSeo() }]);
 
+  /* ---------- drag & drop: reorder, re-parent, and pull in live pages ------
+     Drop on a row's middle = nest under it (URL becomes parent-url/slug,
+     children rebase too); top/bottom edge = insert before/after as sibling.
+     Live pages dragged in keep their real URL at root level. ---------- */
+  const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const slugOf = (n) => n.url.split("/").filter(Boolean).pop() || slugify(n.title) || "page";
+  const rebase = (n, parentUrl) => {
+    /* parentUrl "" = root: researched pages flatten to /slug, adopted live
+       pages keep the URL they actually exist at */
+    const u = parentUrl ? parentUrl + "/" + slugOf(n) : (n.adoptedExisting ? n.url : "/" + slugOf(n));
+    return { ...n, url: u, children: (n.children || []).map((c) => rebase(c, u)) };
+  };
+  const containsId = (n, id) => n.id === id || (n.children || []).some((c) => containsId(c, id));
+  const insertAt = (list, parentUrl, dragged, targetId, zone) => list.flatMap((p) => {
+    const self = { ...p, children: insertAt(p.children || [], p.url === "/" ? "" : p.url, dragged, targetId, zone) };
+    if (p.id !== targetId) return [self];
+    if (zone === "inside") return [{ ...self, children: [...self.children, rebase(dragged, p.url === "/" ? "" : p.url)] }];
+    return zone === "before" ? [rebase(dragged, parentUrl), self] : [self, rebase(dragged, parentUrl)];
+  });
+  const dragPayload = React.useRef(null);
+  const dragOverRef = React.useRef(null);
+  const [dragOver, _setDragOver] = useState(null);
+  const dnd = {
+    over: dragOver,
+    setOver: (v) => { dragOverRef.current = v; _setDragOver(v); },
+    start: (p) => { dragPayload.current = p; },
+    dragging: () => !!dragPayload.current,
+    drop: (targetId) => {
+      const p = dragPayload.current; dragPayload.current = null;
+      const zone = targetId == null ? "root" : (dragOverRef.current?.id === targetId ? dragOverRef.current.zone : "inside");
+      dnd.setOver(null);
+      if (!p) return;
+      setTree((t) => {
+        let dragged = null;
+        if (p.kind === "node") {
+          walk(t, (n) => { if (n.id === p.id) dragged = n; });
+          if (!dragged || dragged.id === targetId || (targetId && containsId(dragged, targetId))) return t; // never drop into own subtree
+          const without = removeNode(t, p.id);
+          return zone === "root" ? [...without, rebase(dragged, "")] : insertAt(without, "", dragged, targetId, zone);
+        }
+        /* live page from the site — adopt into the map */
+        let exists = false; walk(t, (n) => { if (n.url === p.url) exists = true; });
+        if (exists) return t;
+        dragged = { id: "n" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36),
+          title: p.name || p.url, url: p.url, type: /blog|article|news/.test(p.url) ? "article" : "service",
+          adoptedExisting: true, children: [], seo: blankSeo() };
+        return zone === "root" ? [...t, dragged] : insertAt(t, "", dragged, targetId, zone);
+      });
+    },
+  };
+  const treeUrls = (() => { const s = new Set(); walk(tree, (n) => s.add(n.url)); return s; })();
+
   return (
     <div className="space-y-4">
       <Card className="space-y-3 p-5">
@@ -587,15 +656,51 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       {tree.length > 0 && (
         <Card className="p-4">
           <div className="mb-2 flex items-center justify-between">
-            <div className="ll-display text-[13.5px] font-semibold">Site architecture <span className="text-[11px] font-normal text-gray-400">{countPages(tree)} pages · click a page to research & write · "+ sub" nests parent pages (e.g. /newyork/dental-implant)</span></div>
+            <div className="ll-display text-[13.5px] font-semibold">Site architecture <span className="text-[11px] font-normal text-gray-400">{countPages(tree)} pages · click a page to research & write · drag rows to reorder, drop on a page to nest under it (URLs re-parent automatically)</span></div>
             <button onClick={addTop} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600"><Plus size={11} /> Add page</button>
           </div>
-          <div>
-            {tree.map((p) => (
-              <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
-                onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }}
-                onPublish={(n) => setDeploying({ only: n })} />
-            ))}
+          <div className="flex gap-4">
+            <div className="min-w-0 flex-1">
+              {tree.map((p) => (
+                <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
+                  onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }}
+                  onPublish={(n) => setDeploying({ only: n })} dnd={dnd} />
+              ))}
+              {/* root drop zone: drop here = top-level page */}
+              <div onDragOver={(e) => { if (dnd.dragging()) { e.preventDefault(); dnd.setOver({ id: "__root__", zone: "root" }); } }}
+                onDragLeave={() => { if (dnd.over?.id === "__root__") dnd.setOver(null); }}
+                onDrop={(e) => { e.preventDefault(); dnd.drop(null); }}
+                className="mt-1 rounded-lg border border-dashed px-2 py-1.5 text-center text-[10px] text-gray-300"
+                style={dnd.over?.id === "__root__" ? { borderColor: accent, color: accent, background: accent + "0A" } : { borderColor: "#E5E7EB" }}>
+                drop here for a top-level page
+              </div>
+            </div>
+            {/* ---- the LIVE site's pages: drag any into the map to combine
+                 existing + researched pages into the final architecture ---- */}
+            {(w.pages || []).length > 0 && (
+              <div className="hidden w-64 shrink-0 border-l border-gray-100 pl-3 lg:block">
+                <div className="text-[11.5px] font-bold text-gray-700">Live pages on the site</div>
+                <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it keeps its real URL unless you nest it under a parent.</div>
+                <div className="max-h-[440px] space-y-1 overflow-y-auto pr-1">
+                  {(w.pages || []).map((p) => {
+                    const inMap = treeUrls.has(p.url);
+                    return (
+                      <div key={p.id} draggable={!inMap}
+                        onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
+                        className={"rounded-lg border px-2 py-1.5 " + (inMap ? "border-gray-100 opacity-40" : "cursor-grab border-gray-150 hover:border-gray-300")}
+                        style={{ borderColor: "#E5E7EB" }}>
+                        <div className="flex items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
+                          {inMap && <span className="shrink-0 rounded bg-emerald-50 px-1 py-px text-[7.5px] font-bold uppercase text-emerald-700">in map</span>}
+                          {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
+                        </div>
+                        <div className="ll-mono truncate text-[9.5px] text-gray-400">{p.url}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           {/* ---- duplicate cross-check: suggested map vs the LIVE site ---- */}
           {(() => {
@@ -676,9 +781,9 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
    calls via /api/wp/*); otherwise a clearly-labeled demo simulation that
    still produces every page locally so the output can be inspected.
    ===================================================================== */
-const B_HTML = { key: "html", label: "HTML page building", desc: "Fully system-designed pages — theme layout, widths and fonts are overridden (blank canvas when available). Fastest option, ideal for Core Web Vitals.", badge: "Fastest" };
-const B_ELEMENTOR = { key: "elementor", label: "Elementor page building", desc: "Native Elementor sections/widgets on the blank Canvas template — the theme's header/footer/layout are bypassed completely; fully editable in Elementor. Needs Elementor + the companion plugin.", badge: "Editable in Elementor" };
-const B_GUTENBERG = { key: "gutenberg", label: "WordPress Block Editor", desc: "Native Gutenberg blocks, editable in the default WP editor — with a scoped reset that overrides the theme's page width, font sizes and layout defaults.", badge: "Native WP" };
+const B_HTML = { key: "html", label: "HTML page building", desc: "Pushes the designed content body only — your site's own header, footer and menu stay exactly as they are. Fastest option, ideal for Core Web Vitals.", badge: "Fastest" };
+const B_ELEMENTOR = { key: "elementor", label: "Elementor page building", desc: "Content body as Elementor sections (one per design band), editable in Elementor — the site's header, footer and menu are untouched. Needs Elementor + the companion plugin.", badge: "Editable in Elementor" };
+const B_GUTENBERG = { key: "gutenberg", label: "WordPress Block Editor", desc: "Content body as Gutenberg blocks (one editable block per design band), on the default page template — the site's header, footer and menu stay.", badge: "Native WP" };
 const B_WEBFLOW = { key: "webflowcms", label: "Webflow CMS (Collections)", desc: "The standard Webflow pattern — pages pushed as CMS Collection items (Services / Locations / Blog Posts) that drive your Collection templates, then the site is published. Fully editable in the Designer.", badge: "Native Webflow" };
 const B_EXPORT = { key: "export", label: "Static HTML export (ZIP)", desc: "Downloads every page as /path/index.html plus sitemap.xml and robots.txt. Upload the extracted folder to any host; no builder or CMS needed.", badge: "Any host" };
 const B_CUSTOM_PUSH = { key: "custompush", label: "Publish directly to the site", desc: "Pushes fully system-designed static pages & blog posts straight onto the custom-coded site through the drop-in publisher endpoint (serp-squad-publish.php in the web root). Scheduled posts auto-publish on their dates; /blog/ gets a generated index.", badge: "Live publish" };
@@ -752,8 +857,11 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
     /* WordPress builds neutralize the theme: Elementor pages go on the blank
        Canvas template (bypasses theme layout entirely); HTML/Gutenberg carry a
        scoped reset that overrides theme widths, fonts and sizes. */
-    if (builder === "html") return { ...base, content: serializeWpBody(page, chrome, ctx, { withChrome: true }), template: "elementor_canvas" };
-    if (builder === "elementor") { const e = serializeElementor(page, chrome, ctx); return { ...base, content: e.fallbackHtml, elementorData: e.elementorData, template: "elementor_canvas" }; }
+    /* WordPress builds push the CONTENT BODY ONLY on the default page
+       template — the site's own header, footer and menu stay untouched;
+       the design system styles just the content bands */
+    if (builder === "html") return { ...base, content: serializeWpBody(page, chrome, ctx, { withChrome: false }) };
+    if (builder === "elementor") { const e = serializeElementor(page, chrome, ctx); return { ...base, content: e.fallbackHtml, elementorData: e.elementorData }; }
     return { ...base, content: serializeGutenberg(page, chrome, ctx) };
   };
 

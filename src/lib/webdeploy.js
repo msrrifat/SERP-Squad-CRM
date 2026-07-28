@@ -479,7 +479,8 @@ export function serializeElementor(page, chrome, ctx) {
   ];
   return {
     elementorData: JSON.stringify(data),
-    fallbackHtml: serializeWpBody(page, chrome, ctx, { withChrome: true }),
+    /* content body only — the site's own header/footer/menu stay */
+    fallbackHtml: serializeWpBody(page, chrome, ctx, { withChrome: false }),
   };
 }
 
