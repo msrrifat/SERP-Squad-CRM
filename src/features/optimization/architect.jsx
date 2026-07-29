@@ -130,12 +130,17 @@ const LiveChip = ({ live, provider }) => (
   </span>
 );
 
-function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish, dnd }) {
+/* ---- spreadsheet-style architecture rows: Page | URL | Type | Keywords |
+   Content | Actions in aligned, resizable columns — a long URL can never
+   swallow the page name again. Rows still drag to reorder/nest. ---- */
+function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish, dnd, grid }) {
   const [open, setOpen] = useState(true);
   const meta = PAGE_TYPE_META[node.type] || { label: node.type, color: "#64748B" };
   const hasKids = (node.children || []).length > 0;
   const done = node.seo?.content ? "content" : node.seo?.structure ? "structure" : node.seo?.primaryKw ? "keywords" : null;
   const over = dnd?.over?.id === node.id ? dnd.over.zone : null;
+  const seo = node.seo || {};
+  const kws = [seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean);
   return (
     <div>
       <div draggable={!!dnd}
@@ -149,32 +154,67 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
         }}
         onDragLeave={() => { if (dnd?.over?.id === node.id) dnd.setOver(null); }}
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dnd?.drop(node.id); }}
-        className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 hover:bg-gray-50"
-        style={{ marginLeft: depth * 18, cursor: dnd ? "grab" : undefined,
+        className="group grid items-center border-b border-gray-50 hover:bg-gray-50"
+        style={{ gridTemplateColumns: grid, cursor: dnd ? "grab" : undefined,
           boxShadow: over === "inside" ? `inset 0 0 0 2px ${accent}` : undefined,
           background: over === "inside" ? accent + "0D" : undefined,
           borderTop: over === "before" ? `2px solid ${accent}` : "2px solid transparent",
-          borderBottom: over === "after" ? `2px solid ${accent}` : "2px solid transparent" }}>
-        <button onClick={() => setOpen(!open)} className="shrink-0 text-gray-300" style={{ visibility: hasKids ? "visible" : "hidden" }}>
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          borderBottom: over === "after" ? `2px solid ${accent}` : undefined }}>
+        {/* Page */}
+        <button onClick={() => onOpen(node)} className="flex min-w-0 items-center gap-1 py-1.5 pr-2 text-left" style={{ paddingLeft: 6 + depth * 16 }}>
+          <span onClick={(e) => { e.stopPropagation(); setOpen(!open); }} className="shrink-0 text-gray-300" style={{ visibility: hasKids ? "visible" : "hidden" }}>
+            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: meta.color }} />
+          <span className="truncate text-[12.5px] font-medium text-gray-800" title={node.title}>{node.title}</span>
         </button>
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: meta.color }} />
-        <button onClick={() => onOpen(node)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <span className="truncate text-[12.5px] font-medium text-gray-800">{node.title}</span>
-          <span className="ll-mono shrink-0 text-[10px] text-gray-400">{node.url}</span>
-          <span className="shrink-0 rounded px-1.5 py-px text-[8.5px] font-bold uppercase" style={{ background: meta.color + "18", color: meta.color }}>{meta.label}</span>
-          {done && <span className="shrink-0 rounded-full px-1.5 py-px text-[8.5px] font-bold uppercase" style={{ background: "#DCFCE7", color: "#166534" }}>{done}</span>}
-        </button>
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
-          <button onClick={() => onPublish(node)} title="Publish only this page to the site" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-emerald-600"><UploadCloud size={12} /></button>
-          <button onClick={() => onAddChild(node)} title="Add subpage" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Plus size={12} /></button>
-          <button onClick={() => onRemove(node)} title="Remove" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"><Trash2 size={12} /></button>
-        </div>
+        {/* URL */}
+        <span className="ll-mono min-w-0 truncate px-2 text-[10.5px] text-gray-400" title={node.url}>{node.url}</span>
+        {/* Type */}
+        <span className="px-2"><span className="rounded px-1.5 py-px text-[8.5px] font-bold uppercase" style={{ background: meta.color + "18", color: meta.color }}>{meta.label}</span></span>
+        {/* Keywords */}
+        <span className="flex min-w-0 items-center gap-1 px-2">
+          {kws.length
+            ? <><span className="truncate rounded-lg border px-1.5 py-px text-[10px] font-semibold" style={{ borderColor: accent + "44", color: accent }} title={kws.join(", ")}>{kws[0]}</span>
+                {kws.length > 1 && <span className="ll-mono shrink-0 text-[9.5px] font-bold text-gray-400">+{kws.length - 1}</span>}</>
+            : <span className="text-[10px] text-gray-300">—</span>}
+        </span>
+        {/* Content status */}
+        <span className="px-2">
+          {done
+            ? <span className="rounded-full px-1.5 py-px text-[8.5px] font-bold uppercase" style={done === "content" ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>{done}</span>
+            : <span className="text-[10px] text-gray-300">—</span>}
+        </span>
+        {/* Actions */}
+        <span className="flex items-center justify-end gap-1 py-1 pr-1.5">
+          <button onClick={() => onOpen(node)} title="Research keywords, scan competitors & generate content"
+            className="rounded-lg border px-2.5 py-1 text-[10.5px] font-bold" style={{ borderColor: accent + "66", color: accent, background: accent + "0A" }}>
+            {node.seo?.content ? "Edit content" : "Content"}
+          </button>
+          <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+            <button onClick={() => onPublish(node)} title="Publish only this page to the site" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-emerald-600"><UploadCloud size={12} /></button>
+            <button onClick={() => onAddChild(node)} title="Add subpage" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Plus size={12} /></button>
+            <button onClick={() => onRemove(node)} title="Remove" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"><Trash2 size={12} /></button>
+          </span>
+        </span>
       </div>
       {open && (node.children || []).map((c) => (
-        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} dnd={dnd} />
+        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} dnd={dnd} grid={grid} />
       ))}
     </div>
+  );
+}
+
+/* excel-style column resizer: drag the header divider to widen a column */
+function ColResizer({ onDrag }) {
+  return (
+    <span onMouseDown={(e) => {
+      e.preventDefault(); e.stopPropagation();
+      const x0 = e.clientX;
+      const move = (ev) => onDrag(ev.clientX - x0, false);
+      const up = (ev) => { onDrag(ev.clientX - x0, true); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+      window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+    }} className="absolute -right-0.5 top-0 z-10 h-full w-1.5 cursor-col-resize rounded hover:bg-gray-300" />
   );
 }
 
@@ -630,6 +670,17 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   };
   const treeUrls = (() => { const s = new Set(); walk(tree, (n) => s.add(n.url)); return s; })();
 
+  /* resizable spreadsheet columns (px) — the last Actions column flexes */
+  const [colW, setColW] = useState({ page: 250, url: 220, type: 96, kw: 180, status: 92 });
+  const colBase = React.useRef(null);
+  const resizeCol = (key) => (dx, final) => {
+    if (colBase.current == null) colBase.current = colW[key];
+    const wpx = Math.max(70, colBase.current + dx);
+    setColW((c) => ({ ...c, [key]: wpx }));
+    if (final) colBase.current = null;
+  };
+  const gridT = `${colW.page}px ${colW.url}px ${colW.type}px ${colW.kw}px ${colW.status}px minmax(170px,1fr)`;
+
   return (
     <div className="space-y-4">
       <Card className="space-y-3 p-5">
@@ -660,12 +711,23 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
             <button onClick={addTop} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600"><Plus size={11} /> Add page</button>
           </div>
           <div className="flex gap-4">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 overflow-x-auto">
+              {/* spreadsheet header — drag a divider to resize its column */}
+              <div className="grid items-center rounded-t-lg border-b border-gray-200 bg-gray-50" style={{ gridTemplateColumns: gridT, minWidth: 720 }}>
+                {[["page", "Page"], ["url", "URL"], ["type", "Type"], ["kw", "Keywords"], ["status", "Content"]].map(([k, l]) => (
+                  <div key={k} className="relative select-none px-2 py-1.5 text-[9.5px] font-bold uppercase tracking-wide text-gray-400">
+                    {l}<ColResizer onDrag={resizeCol(k)} />
+                  </div>
+                ))}
+                <div className="px-2 py-1.5 text-right text-[9.5px] font-bold uppercase tracking-wide text-gray-400">Actions</div>
+              </div>
+              <div style={{ minWidth: 720 }}>
               {tree.map((p) => (
                 <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
                   onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }}
-                  onPublish={(n) => setDeploying({ only: n })} dnd={dnd} />
+                  onPublish={(n) => setDeploying({ only: n })} dnd={dnd} grid={gridT} />
               ))}
+              </div>
               {/* root drop zone: drop here = top-level page */}
               <div onDragOver={(e) => { if (dnd.dragging()) { e.preventDefault(); dnd.setOver({ id: "__root__", zone: "root" }); } }}
                 onDragLeave={() => { if (dnd.over?.id === "__root__") dnd.setOver(null); }}
