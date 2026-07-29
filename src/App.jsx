@@ -48,6 +48,7 @@ const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "
    Overview + Website Performance, not as its own view) */
 const SELF_DATA_VIEWS = ["ranks", "geogrid"];
 const GoogleLiveData = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleLiveData");
+const GoogleSourcesConnector = lazyOf(() => import("./features/performance/googlelive.jsx"), "GoogleSourcesConnector");
 const ToolsPage = lazyOf(() => import("./features/tools/page.jsx"), "ToolsPage");
 const SharedReportView = lazyOf(() => import("./features/performance/geogrid.jsx"), "SharedReportView");
 const MarketingHome = lazyOf(() => import("./features/marketing/home.jsx"), "MarketingHome");
@@ -1129,11 +1130,18 @@ export default function App() {
           {project && !data && activeSection === "performance" && activeView === "overview" && (
             <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} liveMode />
           )}
-          {/* the web view ALWAYS renders the Google section — unconnected it
-              shows the "Connect Google" flow, so a fresh project can actually
-              be connected (previously this was unreachable until connected) */}
+          {/* the web view ALWAYS offers the Google integration — unconnected it
+              shows the "Connect Google" flow right here (it used to hide in the
+              admin-only project-settings modal, unreachable for most members
+              and for OAuth reviewers); connected it shows the live dashboards */}
           {project && !data && activeSection === "performance" && activeView === "web" && (
-            <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
+            googleConnected
+              ? <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
+              : <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+                  <div className="ll-display mb-1 text-[15px] font-semibold">Connect Google — Search Console &amp; Analytics</div>
+                  <div className="mb-3 text-[11.5px] text-gray-400">Connect a Google account to pull this project's live Search Console and GA4 data into the dashboard. Read-only access; disconnect any time.</div>
+                  <Lazy><GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={updateProject} /></Lazy>
+                </div>
           )}
           {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView)
             && activeView !== "overview"
