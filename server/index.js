@@ -2186,8 +2186,9 @@ async function handleGenerate(body) {
   if (!apiKey) return [503, { error: "not_configured", hint: "Add the provider's API key in Company Settings → API settings" }];
   if (!prompt) return [400, { error: "prompt required" }];
   const mdl = model || AI_DEFAULT_MODELS[provider];
-  const max = Math.min(8000, Math.max(256, +maxTokens || 4000));
-  let text;
+  const CAPS = { openai: 16000, deepseek: 8192, claude: 16000, gemini: 16000 };
+  const max = Math.min(CAPS[provider] || 8000, Math.max(256, +maxTokens || 4000));
+  let text, finish = "";
   try {
     if (provider === "claude") {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -2198,18 +2199,28 @@ async function handleGenerate(body) {
       const d = await r.json();
       if (!r.ok) throw new Error(`Anthropic ${r.status}: ${d.error?.message || JSON.stringify(d).slice(0, 200)}`);
       text = (d.content || []).map((c) => c.text || "").join("");
+      finish = d.stop_reason || "";
     } else if (provider === "gemini") {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ...(system ? { system_instruction: { parts: [{ text: system }] } } : {}),
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: max, ...(json ? { responseMimeType: "application/json" } : {}) },
+          /* Gemini 2.5+ "thinking" models spend maxOutputTokens on internal
+             reasoning FIRST — without headroom + a bounded thinking budget
+             they burn the whole allowance and return zero text parts
+             ("provider returned empty output" on hard JSON tasks) */
+          generationConfig: {
+            maxOutputTokens: max + 8192,
+            ...(json ? { responseMimeType: "application/json" } : {}),
+            ...(/gemini-[23]/.test(mdl) ? { thinkingConfig: { thinkingBudget: 4096 } } : {}),
+          },
         }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(`Gemini ${r.status}: ${d.error?.message || JSON.stringify(d).slice(0, 200)}`);
       text = (d.candidates?.[0]?.content?.parts || []).map((pt) => pt.text || "").join("");
+      finish = d.candidates?.[0]?.finishReason || "";
     } else { // openai | deepseek — OpenAI-compatible chat completions
       const base = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
       const r = await fetch(base + "/v1/chat/completions", {
@@ -2224,11 +2235,13 @@ async function handleGenerate(body) {
       const d = await r.json();
       if (!r.ok) throw new Error(`${provider} ${r.status}: ${d.error?.message || JSON.stringify(d).slice(0, 200)}`);
       text = d.choices?.[0]?.message?.content || "";
+      finish = d.choices?.[0]?.finish_reason || "";
     }
   } catch (e) {
     return [502, { error: "provider_error", detail: String(e.message || e).slice(0, 400) }];
   }
-  if (!text.trim()) return [502, { error: "provider_error", detail: "provider returned empty output" }];
+  if (!text.trim()) return [502, { error: "provider_error",
+    detail: `provider returned empty output${finish ? ` (finish reason: ${finish}${/max_tokens|MAX_TOKENS|length/i.test(finish) ? " — the model spent its whole token budget, likely on internal reasoning; retrying usually works" : ""})` : ""}` }];
   return [200, { live: true, provider, model: mdl, text }];
 }
 

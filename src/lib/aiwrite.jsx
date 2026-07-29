@@ -5,7 +5,7 @@
 import React, { useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 
-export async function aiGenerate(ai, { system, prompt, json = false, maxTokens }) {
+export async function aiGenerate(ai, { system, prompt, json = false, maxTokens }, _retried = false) {
   if (!ai?.key) { const e = new Error("no AI provider configured"); e.code = 503; throw e; }
   const res = await fetch("/api/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -14,6 +14,12 @@ export async function aiGenerate(ai, { system, prompt, json = false, maxTokens }
   });
   if (res.ok) return (await res.json()).text;
   const err = await res.json().catch(() => ({}));
+  /* "empty output" is almost always transient (reasoning models burning the
+     token budget) — one automatic retry with a beat of backoff fixes it */
+  if (!_retried && res.status === 502 && /empty output/i.test(err.detail || "")) {
+    await new Promise((r) => setTimeout(r, 1800));
+    return aiGenerate(ai, { system, prompt, json, maxTokens }, true);
+  }
   const e = new Error(err.detail || err.hint || err.error || `HTTP ${res.status}`);
   e.code = res.status;
   throw e;

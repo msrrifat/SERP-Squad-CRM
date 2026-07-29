@@ -302,7 +302,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     let list = null, live = false;
     try {
       const text = await aiGenerate(aiConfig, {
-        system: SYS_POSTS_ARCHITECT, json: true, maxTokens: 4000,
+        system: SYS_POSTS_ARCHITECT, json: true, maxTokens: 6000,
         prompt: `Business: ${brand} (${project.website}). Niche: ${w.architecture?.niche || project.name}. Market: ${market}.\nServices (each MUST get blog + answer coverage; use the EXACT serviceUrl given):\n${svcList.map((s) => `- ${s.name} → ${s.url}`).join("\n")}\n${gscQs?.length ? `\nREAL Search Console queries from this site's last 180 days (turn genuine questions into "answer" posts):\n${gscQs.join("\n")}` : ""}\nExisting posts (do NOT duplicate their topics):\n${liveBlogs.slice(0, 30).map((b) => "- " + b.title).join("\n") || "(none)"}\n\nDesign 2-3 "blog" + 3-4 "answer" posts per service. Local proximity: this business serves ${market} — weave the location into topics where locals search locally.`,
       });
       const parsed = parseJsonLoose(text);
