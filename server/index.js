@@ -699,12 +699,14 @@ const rfc2047 = (s) => String(s).replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_
 });
 const decodeBody = (raw) => {
   let s = raw;
-  if (/=\r?\n|=[0-9A-F]{2}/i.test(s) && !/[<>]/.test(s.slice(0, 200))) // quoted-printable
+  if (/=\r?\n|=[0-9A-F]{2}/i.test(s)) // quoted-printable (HTML bodies use it too)
     s = s.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
   else if (/^[A-Za-z0-9+/=\r\n]+$/.test(s.trim()) && s.trim().length > 40) {
     try { const dec = Buffer.from(s.replace(/\s/g, ""), "base64").toString("utf8"); if (/[ a-z]/i.test(dec)) s = dec; } catch { /* keep raw */ }
   }
-  return s.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/[ \t]+/g, " ").trim();
+  /* snippet use: drop style/script blocks BEFORE tag-stripping so CSS text
+     never leaks into the preview line */
+  return s.replace(/<(style|script)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/[ \t]+/g, " ").trim();
 };
 /* parse FETCH responses: header-fields literal + first-part literal per message */
 function parseImapFetch(raw) {
@@ -750,6 +752,62 @@ async function handleMailInbox(body) {
     return [502, { error: "provider_error", detail: "IMAP: " + String(e?.message || e).slice(0, 160) }];
   }
 }
+/* ---- full-message fetch: MIME-parse ONE message so the inbox renders the
+   real HTML email (exact graphics) instead of raw quoted-printable source.
+   Handles nested multiparts, quoted-printable + base64 transfer encodings
+   and utf-8 charsets — no dependencies. ---- */
+const mimeBytes = (bodyLatin1, cte) =>
+  cte === "base64" ? Buffer.from(bodyLatin1.replace(/[^A-Za-z0-9+/=]/g, ""), "base64")
+  : cte === "quoted-printable" ? Buffer.from(bodyLatin1.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))), "latin1")
+  : Buffer.from(bodyLatin1, "latin1");
+function mimeWalk(raw, out, depth = 0) {
+  if (depth > 6) return;
+  const ix = raw.search(/\r?\n\r?\n/);
+  if (ix < 0) return;
+  const headers = raw.slice(0, ix);
+  const bodyPart = raw.slice(ix).replace(/^\r?\n\r?\n?/, "");
+  const ctypeLine = (headers.match(/^content-type:[^\r\n]*(?:\r?\n[ \t][^\r\n]*)*/im) || [""])[0];
+  const boundary = (ctypeLine.match(/boundary="?([^";\r\n]+)"?/i) || [])[1];
+  if (boundary) {
+    bodyPart.split("--" + boundary).slice(1).forEach((p) => {
+      if (!p.startsWith("--")) mimeWalk(p.replace(/^\r?\n/, ""), out, depth + 1);
+    });
+    return;
+  }
+  const ctype = ((ctypeLine.match(/content-type:\s*([^;\r\n]+)/i) || [])[1] || "text/plain").trim().toLowerCase();
+  if (ctype.startsWith("image/") || ctype.includes("application/")) return; // attachments aren't rendered
+  const cte = ((headers.match(/^content-transfer-encoding:\s*([^\r\n;]+)/im) || [])[1] || "").trim().toLowerCase();
+  const charset = ((ctypeLine.match(/charset="?([\w.-]+)"?/i) || [])[1] || "utf-8").toLowerCase();
+  const bytes = mimeBytes(bodyPart, cte);
+  const text = /utf-?8|us-ascii/.test(charset) ? bytes.toString("utf8") : bytes.toString("latin1");
+  if (ctype === "text/html") out.html += text;
+  else if (ctype === "text/plain") out.text += text;
+}
+async function handleMailMessage(body) {
+  const imap = body?.imap, seq = Math.max(0, +body?.seq || 0);
+  if (!imap?.host || !imap?.user || !imap?.pass) return [503, { error: "not_configured", detail: "This email account has no IMAP settings." }];
+  if (!seq) return [400, { error: "bad_request", detail: "seq required" }];
+  let conn;
+  try {
+    conn = await imapConnect(imap);
+    await conn.cmd(`LOGIN "${qEsc(imap.user)}" "${qEsc(imap.pass)}"`);
+    await conn.cmd("SELECT INBOX");
+    /* first 256KB covers any real email body; attachments past it are not rendered anyway */
+    const raw = (await conn.cmd(`FETCH ${seq} (BODY.PEEK[]<0.262144>)`)).toString("latin1");
+    conn.end();
+    const lm = raw.match(/\{(\d+)\}\r\n/);
+    if (!lm) return [502, { error: "provider_error", detail: "IMAP returned no message body" }];
+    const msg = raw.slice(lm.index + lm[0].length, lm.index + lm[0].length + +lm[1]);
+    const out = { html: "", text: "" };
+    mimeWalk(msg, out);
+    if (!out.html && !out.text) out.text = decodeBody(msg.slice(msg.search(/\r?\n\r?\n/) + 4));
+    return [200, { live: true, html: out.html || null, text: out.text.trim() || null }];
+  } catch (e) {
+    try { conn?.end(); } catch { /* closed */ }
+    return [502, { error: "provider_error", detail: "IMAP: " + String(e?.message || e).slice(0, 160) }];
+  }
+}
+
 async function handleMailTest(body) {
   const out = { smtp: null, imap: null };
   const smtp = body?.smtp;
@@ -2321,7 +2379,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2365,6 +2423,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
         : req.url === "/api/mail/test" ? await handleMailTest(body)
         : req.url === "/api/mail/inbox" ? await handleMailInbox(body)
+        : req.url === "/api/mail/message" ? await handleMailMessage(body)
         : req.url === "/api/track/stats" ? handleTrackStats(body)
         : req.url === "/api/kw/volume" ? await handleKwVolume(body)
         : req.url === "/api/kw/research" ? await handleKwResearch(body)

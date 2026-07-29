@@ -12,7 +12,7 @@
    by the API server), inbox is real (minimal IMAP client) — or an honest
    error. Nothing simulated silently.
    ===================================================================== */
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AtSign, BarChart3, CalendarClock, CheckCircle2, ChevronRight, Inbox, Mail, MailOpen,
   MousePointerClick, Plus, RefreshCw, Reply, Send, Sparkles, Trash2, X,
@@ -764,6 +764,24 @@ function MailboxTab({ accent, company, store, commit, setSuiteTab, setOpenId }) 
   const [replyBusy, setReplyBusy] = useState(false);
   const acct = allAccounts.find((a) => a.id === acctId) || accounts[0];
 
+  /* opening a message fetches the FULL body and MIME-parses it server-side,
+     so HTML emails render with their exact graphics (sandboxed, no scripts);
+     the list's plain-text snippet is only the fallback */
+  const [msgFull, setMsgFull] = useState(null);
+  useEffect(() => {
+    if (!openMsg || !acct?.imap?.host) { setMsgFull(null); return; }
+    let alive = true;
+    setMsgFull({ loading: true });
+    fetch("/api/mail/message", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({ imap: acct.imap, seq: openMsg.seq }),
+    })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => { if (alive) setMsgFull(ok ? d : { text: openMsg.text }); })
+      .catch(() => { if (alive) setMsgFull({ text: openMsg.text }); });
+    return () => { alive = false; };
+  }, [openMsg?.seq]); // eslint-disable-line
+
   const contactOf = (email) => contacts.find((c) => (c.email || "").toLowerCase() === String(email || "").toLowerCase());
 
   const refresh = async () => {
@@ -898,9 +916,21 @@ function MailboxTab({ accent, company, store, commit, setSuiteTab, setOpenId }) 
       )}
 
       {openMsg && (
-        <Modal title={openMsg.subject || "(no subject)"} sub={`${openMsg.from} · ${openMsg.date}`} onClose={() => setOpenMsg(null)}>
+        <Modal title={openMsg.subject || "(no subject)"} sub={`${openMsg.from} · ${openMsg.date}`} onClose={() => setOpenMsg(null)} wide>
           <div className="space-y-3">
-            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[12.5px] leading-relaxed text-gray-700">{openMsg.text || "(no text content)"}</div>
+            {msgFull?.loading ? (
+              <div className="flex h-40 items-center justify-center rounded-xl bg-gray-50 text-[12px] text-gray-400">
+                <RefreshCw size={14} className="mr-2 animate-spin" /> Loading the full message…
+              </div>
+            ) : msgFull?.html ? (
+              /* the real email, exact graphics — sandboxed (no scripts, no
+                 same-origin), links open in a new tab */
+              <iframe title="email" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer"
+                srcDoc={'<base target="_blank">' + msgFull.html}
+                className="h-[52vh] w-full rounded-xl border border-gray-200 bg-white" />
+            ) : (
+              <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[12.5px] leading-relaxed text-gray-700">{msgFull?.text || openMsg.text || "(no text content)"}</div>
+            )}
             {contactOf(openMsg.fromEmail) && <div className="rounded-lg bg-violet-50 px-3 py-1.5 text-[11px] font-semibold text-violet-700">This sender is in your list — their sequence is stopped automatically.</div>}
             <Labeled label={`Reply as ${acct?.email || "—"}`}>
               <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={5} placeholder="Write your reply…" autoFocus className={inputCls + " resize-y"} />
