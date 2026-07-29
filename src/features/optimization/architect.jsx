@@ -610,7 +610,17 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   };
 
   const tree = arch?.tree || [];
-  const patchNode = (id, patch) => setTree((t) => updateNode(t, id, patch));
+  /* changing a page's URL re-parents every descendant: each child keeps its
+     own slug but follows the new parent path (recursively) */
+  const rebaseChildren = (children, parentUrl) => (children || []).map((c) => {
+    const u = (parentUrl === "/" ? "" : parentUrl) + "/" + (c.url.split("/").filter(Boolean).pop() || "page");
+    return { ...c, url: u, children: rebaseChildren(c.children, u) };
+  });
+  const patchNode = (id, patch) => setTree((t) => updateNode(t, id, (p) => {
+    const np = typeof patch === "function" ? patch(p) : patch;
+    if (np.url !== undefined && np.url !== p.url) return { ...np, children: rebaseChildren(np.children ?? p.children, np.url) };
+    return np;
+  }));
   const openNode = (() => { let found = null; walk(tree, (p) => { if (p.id === openId) found = p; }); return found; })();
 
   const addChild = (parent) => setTree((t) => updateNode(t, parent.id, (p) => ({
