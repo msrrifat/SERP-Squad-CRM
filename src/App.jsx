@@ -1129,12 +1129,15 @@ export default function App() {
           {project && !data && activeSection === "performance" && activeView === "overview" && (
             <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} liveMode />
           )}
-          {project && !data && activeSection === "performance" && activeView === "web" && googleConnected && (
+          {/* the web view ALWAYS renders the Google section — unconnected it
+              shows the "Connect Google" flow, so a fresh project can actually
+              be connected (previously this was unreachable until connected) */}
+          {project && !data && activeSection === "performance" && activeView === "web" && (
             <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
           )}
           {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView)
             && activeView !== "overview"
-            && !(activeView === "web" && googleConnected) && <NoDataPanel project={project} accent={accent} />}
+            && activeView !== "web" && <NoDataPanel project={project} accent={accent} />}
           {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
             <>
               {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
