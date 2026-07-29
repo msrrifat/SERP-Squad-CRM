@@ -85,6 +85,37 @@ export function mdToWpHtml(md) {
   return out.join("\n");
 }
 
+/* ---------- one post → WordPress (live) + Posts-tab mirror ----------
+   Shared by the bulk publish modal and the per-row Publish now / Schedule
+   buttons. A date of today (or none) publishes immediately; a future date
+   deploys as WordPress "scheduled" and auto-publishes that day. */
+async function pushArchitectedPost(p, whenISO, { live, credStr, project, setOpt }) {
+  const when = new Date((whenISO || new Date().toISOString().slice(0, 10)) + "T09:00:00");
+  const scheduled = when.getTime() > Date.now();
+  if (live) {
+    const r = await fetch("/api/wp/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({ site: project.website, credential: credStr, payload: {
+        kind: "post", slug: p.slug, title: p.title, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
+        content: mdToWpHtml(p.content.markdown.replace(/^#\s.*\n/, "")),
+        categories: [p.category === "answer" ? "Answer" : "Blog"],
+        ...(scheduled ? { status: "future", date: when.toISOString() } : { status: "publish" }),
+      } }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  } else await new Promise((r) => setTimeout(r, 250));
+  /* mirror into the Posts tab list (labeled demo when not live) */
+  setOpt("website", (cur) => ({
+    blogs: [
+      { id: "pb" + Date.now(), title: p.title, slug: p.slug, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
+        content: mdToBlocks(p.content.markdown), categories: [p.category === "answer" ? "Answer" : "Blog"],
+        ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: Date.now() }),
+        createdAt: Date.now(), demo: !live },
+      ...(cur.blogs || []).filter((b) => b.slug !== p.slug),
+    ],
+  }));
+  return { scheduled, when: when.getTime() };
+}
+
 /* ---------- anchor-text intelligence ----------
    Site-wide memory of which anchors + anchor TYPES were already used per
    target URL (opt.website.linkMemory). Each new post gets the LEAST-used
@@ -294,6 +325,23 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     postsPlan: { ...(cur?.postsPlan || {}), posts: (cur?.postsPlan?.posts || []).map((p) => p.id === id ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p) },
   }));
 
+  /* per-row instant publish / schedule (same engine as the bulk modal) */
+  const credStr = typeof w.credential === "string" ? w.credential : (w.credential?.value || "");
+  const canLive = w.platform === "wordpress" && /:/.test(credStr);
+  const [rowBusy, setRowBusy] = useState(null);   // post id being pushed
+  const [rowErr, setRowErr] = useState(null);     // { id, msg }
+  const [schedFor, setSchedFor] = useState(null); // { id, date } — open date picker
+  const publishRow = async (p, whenISO) => {
+    setRowBusy(p.id); setRowErr(null);
+    try {
+      const res = await pushArchitectedPost(p, whenISO, { live: canLive, credStr, project, setOpt });
+      patchPost(p.id, res.scheduled ? { status: "scheduled", scheduledAt: res.when } : { status: "published", publishedAt: Date.now() });
+      work?.("website", "postsPublished", { detail: `${p.title}${res.scheduled ? " (scheduled)" : ""}` });
+      log?.(`${res.scheduled ? "Scheduled" : "Published"} post "${p.title}"${canLive ? "" : " (demo)"}`, project.website);
+    } catch (e) { setRowErr({ id: p.id, msg: String(e?.message || e) }); }
+    setRowBusy(null); setSchedFor(null);
+  };
+
   const architect = async () => {
     if (!svcList.length) { setGenErr("No services found — generate the Website Mapping first, or type services below."); return; }
     setBusy(true); setGenErr(null); setGscNote(null);
@@ -387,15 +435,50 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                   </div>
                   <div className="space-y-1">
                     {list.map((p) => (
-                      <div key={p.id} className="group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50">
-                        <CatChip cat={p.category} />
-                        <button onClick={() => setOpenId(p.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                          <span className="truncate text-[12.5px] font-medium text-gray-800">{p.title}</span>
-                          <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">→ {p.serviceUrl}</span>
-                          {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">possible duplicate</span>}
-                          {p.content && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">{p.status === "published" ? "published" : "written"}</span>}
-                        </button>
-                        <button onClick={() => patchPost(p.id, { status: "removed" })} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
+                      <div key={p.id}>
+                        <div className="group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50">
+                          <CatChip cat={p.category} />
+                          <button onClick={() => setOpenId(p.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                            <span className="truncate text-[12.5px] font-medium text-gray-800">{p.title}</span>
+                            <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">→ {p.serviceUrl}</span>
+                            {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">possible duplicate</span>}
+                            {/* status: published / scheduled · date / written */}
+                            {p.status === "published"
+                              ? <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">published</span>
+                              : p.status === "scheduled"
+                              ? <span className="ll-mono shrink-0 rounded-full bg-blue-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-blue-700">scheduled · {new Date(p.scheduledAt).toISOString().slice(0, 10)}</span>
+                              : p.content && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">written</span>}
+                          </button>
+                          {/* right-side actions once the content is written */}
+                          {p.content && p.status !== "published" && (
+                            schedFor?.id === p.id ? (
+                              <span className="flex shrink-0 items-center gap-1">
+                                <input type="date" value={schedFor.date} min={new Date().toISOString().slice(0, 10)}
+                                  onChange={(e) => setSchedFor({ id: p.id, date: e.target.value })}
+                                  className={"ll-mono " + inputCls + " w-auto py-0.5 text-[10.5px]"} />
+                                <button onClick={() => publishRow(p, schedFor.date)} disabled={rowBusy === p.id}
+                                  className="rounded-lg px-2 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
+                                  {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : "Set"}
+                                </button>
+                                <button onClick={() => setSchedFor(null)} className="rounded p-1 text-gray-300 hover:text-gray-500"><X size={12} /></button>
+                              </span>
+                            ) : (
+                              <span className="flex shrink-0 items-center gap-1">
+                                <button onClick={() => publishRow(p, null)} disabled={!!rowBusy} title={canLive ? "Publish to WordPress right now" : "WordPress not connected — demo publish into the Posts tab"}
+                                  className="rounded-lg px-2.5 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
+                                  {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : p.status === "scheduled" ? "Publish now" : "Publish"}
+                                </button>
+                                <button onClick={() => setSchedFor({ id: p.id, date: new Date(Date.now() + 864e5).toISOString().slice(0, 10) })}
+                                  disabled={!!rowBusy}
+                                  className="rounded-lg border px-2.5 py-1 text-[10.5px] font-bold disabled:opacity-50" style={{ borderColor: accent + "66", color: accent }}>
+                                  {p.status === "scheduled" ? "Reschedule" : "Schedule"}
+                                </button>
+                              </span>
+                            )
+                          )}
+                          <button onClick={() => patchPost(p.id, { status: "removed" })} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
+                        </div>
+                        {rowErr?.id === p.id && <div className="pl-9 text-[10px] text-red-600">{rowErr.msg}</div>}
                       </div>
                     ))}
                   </div>
@@ -448,9 +531,11 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
           onPatch={(patch) => patchPost(openPost.id, patch)} onClose={() => setOpenId(null)} />
       )}
       {publishing && (
-        <PublishPostsModal posts={activePosts.filter((p) => p.content && p.status !== "published")} opt={opt} setOpt={setOpt}
-          accent={accent} project={project} log={log} onDone={(ids, live) => {
-            ids.forEach((id) => patchPost(id, { status: "published" }));
+        <PublishPostsModal posts={activePosts.filter((p) => p.content && p.status !== "published" && p.status !== "scheduled")} opt={opt} setOpt={setOpt}
+          accent={accent} project={project} log={log} onDone={(rows) => {
+            rows.forEach((r) => patchPost(r.id, r.scheduled
+              ? { status: "scheduled", scheduledAt: r.when }
+              : { status: "published", publishedAt: Date.now() }));
           }} onClose={() => setPublishing(false)} />
       )}
     </div>
@@ -627,35 +712,11 @@ function PublishPostsModal({ posts, opt, setOpt, accent, project, log, onDone, o
     for (let i = 0; i < posts.length; i++) {
       const p = posts[i];
       mark(i, "creating");
-      const when = new Date((dates[i] || start) + "T09:00:00");
-      const scheduled = when.getTime() > Date.now();
-      if (live) {
-        try {
-          const r = await fetch("/api/wp/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
-            body: JSON.stringify({ site: project.website, credential: credStr, payload: {
-              kind: "post", slug: p.slug, title: p.title, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
-              content: mdToWpHtml(p.content.markdown.replace(/^#\s.*\n/, "")),
-              categories: [p.category === "answer" ? "Answer" : "Blog"],
-              ...(scheduled ? { status: "future", date: when.toISOString() } : { status: "publish" }),
-            } }) });
-          const d = await r.json().catch(() => ({}));
-          if (r.ok) { mark(i, "done", scheduled ? "scheduled " + when.toISOString().slice(0, 10) : "published"); doneIds.push(p.id); }
-          else { mark(i, "error", d.detail || `HTTP ${r.status}`); continue; }
-        } catch (e) { mark(i, "error", String(e?.message || e)); continue; }
-      } else {
-        await new Promise((r) => setTimeout(r, 120));
-        mark(i, "done", "demo"); doneIds.push(p.id);
-      }
-      /* mirror into the Posts tab list */
-      setOpt("website", (cur) => ({
-        blogs: [
-          { id: "pb" + Date.now() + i, title: p.title, slug: p.slug, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
-            content: mdToBlocks(p.content.markdown), categories: [p.category === "answer" ? "Answer" : "Blog"],
-            ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: Date.now() }),
-            createdAt: Date.now(), demo: !live },
-          ...(cur.blogs || []).filter((b) => b.slug !== p.slug),
-        ],
-      }));
+      try {
+        const res = await pushArchitectedPost(p, dates[i] || start, { live, credStr, project, setOpt });
+        mark(i, "done", res.scheduled ? "scheduled " + new Date(res.when).toISOString().slice(0, 10) : (live ? "published" : "demo"));
+        doneIds.push({ id: p.id, scheduled: res.scheduled, when: res.when });
+      } catch (e) { mark(i, "error", String(e?.message || e)); continue; }
     }
     onDone?.(doneIds, live);
     work?.("website", "postsPublished", { detail: `${doneIds.length}/${posts.length}${live ? "" : " (demo)"}` });
