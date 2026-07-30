@@ -30,10 +30,18 @@ jobs:
           script_stop: true
           script: |
             cd /var/www/serpsquad
+            echo "--- host before deploy ---"; free -m | head -2; df -h / | tail -1
             git fetch origin main
             git reset --hard origin/main
-            npm ci
-            npm run build
+            npm ci --no-audit --no-fund
+            # the Vite build is the memory-hungry step on a small VPS; give the
+            # heap headroom and add temporary swap when RAM is tight, so a build
+            # can never half-fail and leave stale code serving
+            if [ "$(free -m | awk '/^Mem:/{print $7}')" -lt 900 ] && [ ! -f /swapfile ]; then
+              fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo "temporary swap enabled"
+            fi
+            NODE_OPTIONS=--max-old-space-size=2048 npm run build
+            test -s dist/index.html || { echo "BUILD PRODUCED NO dist/index.html — refusing to restart"; exit 1; }
             pm2 restart serpsquad-api --update-env
             echo "deployed $(git rev-parse --short HEAD)"
       - name: Retry after transient failure
@@ -46,10 +54,18 @@ jobs:
           script_stop: true
           script: |
             cd /var/www/serpsquad
+            echo "--- host before deploy ---"; free -m | head -2; df -h / | tail -1
             git fetch origin main
             git reset --hard origin/main
-            npm ci
-            npm run build
+            npm ci --no-audit --no-fund
+            # the Vite build is the memory-hungry step on a small VPS; give the
+            # heap headroom and add temporary swap when RAM is tight, so a build
+            # can never half-fail and leave stale code serving
+            if [ "$(free -m | awk '/^Mem:/{print $7}')" -lt 900 ] && [ ! -f /swapfile ]; then
+              fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo "temporary swap enabled"
+            fi
+            NODE_OPTIONS=--max-old-space-size=2048 npm run build
+            test -s dist/index.html || { echo "BUILD PRODUCED NO dist/index.html — refusing to restart"; exit 1; }
             pm2 restart serpsquad-api --update-env
             echo "deployed $(git rev-parse --short HEAD) (retry)"
       # One-time (idempotent) web-server tuning from the PageSpeed audit: the
