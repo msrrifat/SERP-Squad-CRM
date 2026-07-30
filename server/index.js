@@ -25,7 +25,7 @@
    per directory through the SERP API, then NAP checks against the result's
    title/snippet. Cost: one live SERP request per directory scanned. */
 import http from "node:http";
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
@@ -598,7 +598,8 @@ function handleAppTwofa(body) {
 }
 function handleStateGet(req) {
   if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
-  return [200, { live: true, state: loadState() }]; // null on first run → client seeds it
+  const st = loadState();
+  return [200, { live: true, state: st, exists: !!st }]; // exists:false = genuine first run (client may seed)
 }
 function handleStateSave(req, body) {
   const sess = sessionFromReq(req);
@@ -607,8 +608,55 @@ function handleStateSave(req, body) {
   if (!body?.state || typeof body.state !== "object") return [400, { error: "bad_request", detail: "state object required." }];
   const raw = JSON.stringify(body.state);
   if (raw.length > 60_000_000) return [413, { error: "too_large", detail: "State exceeds 60 MB — trim large embedded images." }];
+  /* ---- CATASTROPHIC-OVERWRITE GUARD -------------------------------------
+     A browser that failed to load the server state falls back to the seeded
+     demo workspace; its next autosave would replace real client data with
+     seed data. Refuse any write that drops most of the existing clients or
+     collapses the payload, unless it is explicitly forced (restore flow). */
+  try {
+    const prev = loadState();
+    if (prev && !body.force) {
+      const prevRaw = JSON.stringify(prev);
+      const prevClients = (prev.clients || []).length, nextClients = (body.state.clients || []).length;
+      const lostClients = prevClients >= 1 && nextClients < prevClients;
+      const collapsed = prevRaw.length > 20_000 && raw.length < prevRaw.length * 0.35;
+      if (lostClients && collapsed) {
+        return [409, { error: "refused_overwrite",
+          detail: `Refused: this save would drop ${prevClients - nextClients} of ${prevClients} client(s) and ${Math.round((1 - raw.length / prevRaw.length) * 100)}% of the stored data. The browser probably failed to load the server state — reload the app. Nothing was changed.` }];
+      }
+    }
+  } catch { /* guard must never block a legitimate save */ }
   try { saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now() }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+}
+/* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
+function handleStateBackups(req) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const bdir = new URL("./data/backups/", import.meta.url);
+  try {
+    const files = readdirSync(bdir).filter((f) => /^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse();
+    return [200, { live: true, backups: files.map((f) => {
+      let clients = null, bytes = null;
+      try { const j = JSON.parse(readFileSync(new URL(f, bdir), "utf8")); clients = (j.clients || []).length; bytes = statSync(new URL(f, bdir)).size; } catch { /* unreadable */ }
+      return { file: f, day: f.slice(11, 21), clients, bytes };
+    }) }];
+  } catch { return [200, { live: true, backups: [] }]; }
+}
+function handleStateRestore(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const file = String(body?.file || "");
+  if (!/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
+  const src = new URL("./data/backups/" + file, import.meta.url);
+  if (!existsSync(src)) return [404, { error: "not_found", detail: file + " does not exist." }];
+  try {
+    const restored = JSON.parse(readFileSync(src, "utf8"));
+    /* keep the pre-restore state recoverable too */
+    if (existsSync(STATE_FILE)) copyFileSync(STATE_FILE, new URL("./data/backups/app-state-before-restore.json", import.meta.url));
+    saveState(restored);
+    return [200, { ok: true, restoredFrom: file, clients: (restored.clients || []).length }];
+  } catch (e) { return [500, { error: "restore_failed", detail: String(e?.message || e).slice(0, 140) }]; }
 }
 function handleAppLogout(req) {
   const th = sha(String(req.headers["x-ss-token"] || ""));
@@ -2490,6 +2538,7 @@ http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
     if (req.method === "GET" && req.url.startsWith("/api/oauth/google/callback")) {
       const html = await handleOAuthCallback(req.url);
@@ -2518,7 +2567,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2575,6 +2624,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
+        : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)
         : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)

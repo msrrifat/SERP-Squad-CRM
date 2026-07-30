@@ -80,7 +80,10 @@ export default function App() {
      Signed-in visitors skip both and land in the app. */
   const [screen, setScreen] = useState(() => (localStorage.getItem("ss_token") ? "app"
     : window.location.pathname === "/login" ? "login" : "home")); // "app" | "login" | "home"
-  const [hydrated, setHydrated] = useState(false); // true once state is loaded from the server (or first-run decided)
+  const [hydrated, setHydrated] = useState(false);
+  /* "loading" | "loaded" | "empty" | "failed" — gates the autosave so a failed
+     load can never overwrite the stored workspace with seed data */
+  const [stateSync, setStateSync] = useState("loading"); 
   const [accountView, setAccountView] = useState(null); // null | "settings" | "assignments" | "chat" | "team" — personal screens in the main area
   const [archOpen, setArchOpen] = useState(false); // "Archived projects" sidebar section
   const [pmJump, setPmJump] = useState(null);            // { recordId, k } — deep link from My assignments
@@ -196,16 +199,23 @@ export default function App() {
       try {
         const r = await fetch("/api/state", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(20000) });
         if (r.status === 401) { localStorage.removeItem("ss_token"); setScreen("login"); setHydrated(true); return; }
+        if (!r.ok) throw new Error("HTTP " + r.status);
         const d = await r.json();
         if (d.state?.company) setCompany(d.state.company);
         if (d.state?.clients) setClients(d.state.clients);
+        /* DATA-SAFETY GATE: only allow the autosave to run once we KNOW what
+           the server holds. "loaded" = real state came back; "empty" = the
+           server confirmed there is none yet (genuine first run, seeding is
+           correct). Anything else leaves saving disabled so a failed load can
+           never overwrite a real workspace with seed data. */
+        setStateSync(d.state ? "loaded" : d.exists === false ? "empty" : "failed");
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
            "assignments" here would stomp a /project/… or /chat reload */
         if (idn?.kind === "team") setTeamSession({ memberId: idn.id });
         else if (idn?.kind === "client") setSession({ clientId: idn.id });
         else { localStorage.removeItem("ss_token"); setScreen("login"); }
-      } catch { /* server unreachable — keep the login gate, data will sync once reachable */ setScreen("login"); }
+      } catch { /* server unreachable — never save over the stored workspace */ setStateSync("failed"); setScreen("login"); }
       finally { setHydrated(true); }
     })();
   }, []); // eslint-disable-line
@@ -244,6 +254,11 @@ export default function App() {
   const [saveWarn, setSaveWarn] = useState(null);
   useEffect(() => {
     if (!hydrated || !teamSession) return;
+    /* never write until the server's workspace is accounted for */
+    if (stateSync !== "loaded" && stateSync !== "empty") {
+      setSaveWarn("Your workspace couldn't be loaded from the server, so saving is paused to protect it — reload the page. Nothing has been overwritten.");
+      return;
+    }
     const token = localStorage.getItem("ss_token");
     if (!token) return;
     clearTimeout(saveTimer.current);
@@ -256,7 +271,7 @@ export default function App() {
       } catch { setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     }, 1200);
     return () => clearTimeout(saveTimer.current);
-  }, [company, clients, hydrated, teamSession]);
+  }, [company, clients, hydrated, teamSession, stateSync]);
 
   const logActivity = (action, target = "") =>
     setCompany((c) => {
