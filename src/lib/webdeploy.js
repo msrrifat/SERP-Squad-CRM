@@ -364,31 +364,31 @@ function designCss(ctx, { hard = false } = {}) {
   const tint = okHex(c.sectionTint) || "#f5f8fa";
   const sh = okHex(c.cardShadow) || "#0f1e32";
   return `
-.ss-sec{box-sizing:border-box;width:100%${i};max-width:none${i};margin:0${i};padding:56px 5vw;background:${pageBg};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif${i};line-height:1.7}
+.ss-sec{box-sizing:border-box;width:100%${i};max-width:none${i};margin:0${i};padding:56px 5vw;background:${pageBg}${i};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif${i};line-height:1.7}
 .ss-sec *{box-sizing:border-box}
 .ss-sec .wrap{max-width:1060px;margin:0 auto}
-.ss-sec.bg-tint{background:${tint}}
-.ss-sec h1,.ss-sec h2,.ss-sec h3{font-family:inherit${i};letter-spacing:-.01em${i};text-transform:none${i};color:${ink};line-height:1.2${i}}
+.ss-sec.bg-tint{background:${tint}${i}}
+.ss-sec h1,.ss-sec h2,.ss-sec h3{font-family:inherit${i};letter-spacing:-.01em${i};text-transform:none${i};color:${ink}${i};line-height:1.2${i}}
 .ss-sec h1{font-size:clamp(30px,4.4vw,46px)${i};font-weight:800${i};margin:0 0 16px${i}}
 .ss-sec h2{font-size:clamp(23px,3vw,32px)${i};font-weight:750${i};margin:0 0 20px${i}}
 .ss-sec h3{font-size:clamp(16.5px,2.2vw,20px)${i};font-weight:700${i};margin:22px 0 8px${i}}
-.ss-sec p{font-size:16.5px${i};margin:0 0 14px${i};color:${mut};line-height:1.75${i}}
-.ss-sec a{color:${link}}
+.ss-sec p{font-size:16.5px${i};margin:0 0 14px${i};color:${mut}${i};line-height:1.75${i}}
+.ss-sec a{color:${link}${i}}
 .ss-sec img{max-width:100%${i};height:auto${i};border-radius:16px;display:block}
 .ss-sec figure{margin:18px 0}.ss-sec figcaption{font-size:12.5px;color:${mut};margin-top:8px;text-align:center}
 .ss-sec ul,.ss-sec ol{margin:0 0 16px;padding-left:22px}.ss-sec li{font-size:16px${i};color:${mut};margin:6px 0}
 .ss-sec blockquote{border-left:4px solid ${acc};margin:16px 0;padding:10px 18px;background:${accT};border-radius:0 12px 12px 0}
-.ss-sec .btn{display:inline-block;background:${btn};color:${btnTx}${i};padding:14px 26px;border-radius:12px;text-decoration:none${i};font-weight:700;font-size:15.5px}
+.ss-sec .btn{display:inline-block;background:${btn}${i};color:${btnTx}${i};padding:14px 26px;border-radius:12px;text-decoration:none${i};font-weight:700;font-size:15.5px}
 .ss-sec .hbtns{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
 /* hero + CTA brand bands */
-.ss-sec.sec-hero{background:linear-gradient(130deg,${accD},${band});padding:64px 5vw}
+.ss-sec.sec-hero{background:linear-gradient(130deg,${accD},${band})${i};padding:64px 5vw}
 .ss-sec.sec-hero h1,.ss-sec.sec-cta h2{color:#fff${i}}
 .ss-sec.sec-hero p,.ss-sec.sec-cta p{color:rgba(255,255,255,.86)${i};font-size:17.5px${i}}
 .ss-sec.sec-hero .hgrid{display:grid;gap:36px;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));align-items:center}
 .ss-sec.sec-hero .hmedia img{box-shadow:0 22px 50px rgba(0,0,0,.28)}
-.ss-sec .btn.light{background:#fff;color:${accD}${i}}
+.ss-sec .btn.light{background:#fff${i};color:${accD}${i}}
 .ss-sec .btn.ghost{background:transparent;color:#fff${i};border:1.5px solid rgba(255,255,255,.65)}
-.ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${band});text-align:center;padding:60px 5vw}
+.ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${band})${i};text-align:center;padding:60px 5vw}
 .ss-sec.sec-cta .hbtns{justify-content:center}
 /* researched-content layouts */
 .ss-sec .split{display:grid;gap:32px;grid-template-columns:1.5fr 1fr;align-items:start}
@@ -397,7 +397,7 @@ function designCss(ctx, { hard = false } = {}) {
 .ss-sec .imgslot .ph{font-size:30px;opacity:.7}
 .ss-sec .imgslot.hero{min-height:280px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:rgba(255,255,255,.85)}
 .ss-sec ul.checks{list-style:none;padding:0;display:grid;gap:10px 22px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
-.ss-sec ul.checks li{position:relative;padding-left:30px}
+.ss-sec ul.checks li{position:relative;padding-left:30px;list-style:none${i}}
 .ss-sec ul.checks li:before{content:"✓";position:absolute;left:0;top:1px;width:21px;height:21px;border-radius:50%;background:${sec};color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
 .ss-sec ol.steps{list-style:none;padding:0;counter-reset:step}
 .ss-sec ol.steps li{counter-increment:step;position:relative;padding:0 0 14px 44px}
@@ -405,20 +405,20 @@ function designCss(ctx, { hard = false } = {}) {
 /* cards, grids, pricing, chips */
 .ss-sec .grid3{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr))}
 .ss-sec .grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
-.ss-sec .card{background:${pageBg === "#fff" ? "#fff" : pageBg};border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px ${hexRgba(sh,0.05)};margin:0}
+.ss-sec .card{background:${pageBg === "#fff" ? "#fff" : pageBg}${i};border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px ${hexRgba(sh,0.05)};margin:0}
 .ss-sec.bg-tint .card{box-shadow:0 6px 22px ${hexRgba(sh,0.07)}}
 .ss-sec .card h3{margin-top:0${i}}
-.ss-sec table.price{width:100%;border-collapse:collapse;background:#fff;border:1px solid ${line};border-radius:16px;overflow:hidden}
-.ss-sec table.price td{padding:14px 18px;border-bottom:1px solid ${line};font-size:15.5px${i};color:${mut}}
+.ss-sec table.price{width:100%;border-collapse:collapse;background:#fff${i};border:1px solid ${line};border-radius:16px;overflow:hidden}
+.ss-sec table.price td{padding:14px 18px;border-bottom:1px solid ${line};font-size:15.5px${i};color:${mut}${i}}
 .ss-sec table.price tr:last-child td{border-bottom:0}
 .ss-sec table.price td:last-child{text-align:right;font-weight:800;color:${acc}}
-.ss-sec .chips span,.ss-sec .chips a{display:inline-block;background:#fff;border:1px solid ${line};border-radius:999px;padding:5px 13px;margin:0 6px 8px 0;font-size:13.5px;text-decoration:none;color:${ink}}
+.ss-sec .chips span,.ss-sec .chips a{display:inline-block;background:#fff${i};border:1px solid ${line};border-radius:999px;padding:5px 13px;margin:0 6px 8px 0;font-size:13.5px;text-decoration:none;color:${ink}}
 .ss-sec.bg-plain .chips span,.ss-sec.bg-plain .chips a{background:${tint}}
 /* reviews, FAQ, NAP */
 .ss-sec .card.rev .stars{color:#F59E0B;font-size:15px;letter-spacing:2px}
 .ss-sec .card.rev footer{margin-top:10px;font-size:13px;font-weight:700;color:${ink}}
-.ss-sec .faq details{background:#fff;border:1px solid ${line};border-radius:14px;padding:0;margin:0 0 10px;overflow:hidden}
-.ss-sec .faq summary{cursor:pointer;list-style:none;padding:16px 20px;font-weight:700;font-size:16px;color:${ink};position:relative}
+.ss-sec .faq details{background:#fff${i};border:1px solid ${line};border-radius:14px;padding:0;margin:0 0 10px;overflow:hidden}
+.ss-sec .faq summary{cursor:pointer;list-style:none;padding:16px 20px;font-weight:700;font-size:16px;color:${ink}${i};position:relative}
 .ss-sec .faq summary:after{content:"+";position:absolute;right:18px;top:12px;font-size:22px;color:${acc};font-weight:400}
 .ss-sec .faq details[open] summary:after{content:"–"}
 .ss-sec .faq details p{padding:0 20px 16px;margin:0}
@@ -426,7 +426,14 @@ function designCss(ctx, { hard = false } = {}) {
 .ss-sec .napmap iframe{width:100%;min-height:280px;border:0;border-radius:16px}
 .ss-sec .hours{padding:0}.ss-sec .hours li{display:flex;justify-content:space-between;max-width:300px;list-style:none}
 .ss-sec .note{font-size:13px${i};margin-top:12px}
-@media(max-width:760px){.ss-sec{padding:40px 5vw}.ss-sec .split,.ss-sec .split.rev{grid-template-columns:1fr}.ss-sec .split.rev .ctext{order:0}.ss-sec .btn{display:block;text-align:center}}`;
+@media(max-width:760px){.ss-sec{padding:40px 5vw}.ss-sec .split,.ss-sec .split.rev{grid-template-columns:1fr}.ss-sec .split.rev .ctext{order:0}.ss-sec .btn{display:block;text-align:center}}${hard ? `
+/* WP embed mode (LAST so its !important wins the order fight): sections
+   BREAK OUT of the theme's boxed content container to true full-bleed
+   bands, the horizontal-scroll side effect is guarded, and the theme's own
+   page title is hidden so the hero H1 is the one and only title */
+html,body{overflow-x:hidden}
+h1.entry-title,.page-header h1.page-title,h1.page-title,.elementor-page-title{display:none!important}
+.ss-sec{position:relative;width:100vw!important;left:50%!important;right:50%!important;margin-left:-50vw!important;margin-right:-50vw!important}` : ""}`;
 }
 
 /* WordPress body variant: no doctype/head — the scoped design system + full

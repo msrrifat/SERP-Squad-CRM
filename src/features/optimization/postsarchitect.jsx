@@ -415,6 +415,25 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     setMoreBusy(null);
   };
 
+  /* ---- manual topics: type your own blog topic / question, pick the
+     service it supports, and it joins the plan like any architected post ---- */
+  const [manualDraft, setManualDraft] = useState({});
+  const addManual = (cat) => {
+    const d = manualDraft[cat] || {};
+    const title = String(d.title || "").trim();
+    if (!title) return;
+    const svc = svcList.find((s) => s.url === d.svc) || svcList[0] || { name: "", url: "" };
+    const p = {
+      id: "pa" + Date.now().toString(36) + "x", category: cat, title: title.slice(0, 140), slug: slugify(title),
+      primaryKw: title.toLowerCase().replace(/[?!.]/g, "").slice(0, 80), service: svc.name, serviceUrl: svc.url,
+      note: "added manually", status: "planned", content: null,
+      dup: findDuplicate({ title, slug: slugify(title) }, [], liveBlogs),
+    };
+    setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), p] } }));
+    setManualDraft((cur) => ({ ...cur, [cat]: { ...d, title: "" } }));
+    log?.(`Added manual ${cat} topic "${title}"`, project.name);
+  };
+
   const openPost = posts.find((p) => p.id === openId);
   const activePosts = posts.filter((p) => p.status !== "removed" && !p.useExisting);
   const dupPosts = posts.filter((p) => p.dup && p.status !== "removed" && !p.useExisting && !p.dupResolved);
@@ -515,13 +534,29 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                       </div>
                     ))}
                   </div>
-                  {/* extend this category with fresh, non-overlapping topics */}
-                  <button onClick={() => architectMore(cat)} disabled={busy || !!moreBusy}
-                    className="mt-2 flex items-center gap-1.5 rounded-lg border border-dashed px-3 py-1.5 text-[11px] font-bold disabled:opacity-40"
-                    style={{ borderColor: accent + "66", color: accent }}>
-                    {moreBusy === cat ? <><RefreshCw size={11} className="animate-spin" /> Generating more…</>
-                      : <><Plus size={11} /> {cat === "blog" ? "Generate more blogs" : "Generate more questions"}</>}
-                  </button>
+                  {/* add your own topic + extend with fresh AI topics */}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <input value={manualDraft[cat]?.title || ""}
+                      onChange={(e) => setManualDraft((cur) => ({ ...cur, [cat]: { ...(cur[cat] || {}), title: e.target.value } }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") addManual(cat); }}
+                      placeholder={cat === "blog" ? "Add your own blog topic…" : "Add your own question…"}
+                      className={"min-w-[200px] flex-1 " + inputCls} />
+                    <select value={manualDraft[cat]?.svc || svcList[0]?.url || ""}
+                      onChange={(e) => setManualDraft((cur) => ({ ...cur, [cat]: { ...(cur[cat] || {}), svc: e.target.value } }))}
+                      title="Service page this post supports" className="ll-mono max-w-[160px] rounded-lg border border-gray-200 px-2 py-2 text-[10.5px] text-gray-600">
+                      {svcList.map((s) => <option key={s.url} value={s.url}>{s.name}</option>)}
+                    </select>
+                    <button onClick={() => addManual(cat)} disabled={!(manualDraft[cat]?.title || "").trim()}
+                      className="rounded-lg px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
+                      <Plus size={11} className="mr-0.5 inline" /> Add
+                    </button>
+                    <button onClick={() => architectMore(cat)} disabled={busy || !!moreBusy}
+                      className="flex items-center gap-1.5 rounded-lg border border-dashed px-3 py-2 text-[11px] font-bold disabled:opacity-40"
+                      style={{ borderColor: accent + "66", color: accent }}>
+                      {moreBusy === cat ? <><RefreshCw size={11} className="animate-spin" /> Generating more…</>
+                        : <><Sparkles size={11} /> {cat === "blog" ? "Generate more blogs" : "Generate more questions"}</>}
+                    </button>
+                  </div>
                 </Card>
               );
             })}
