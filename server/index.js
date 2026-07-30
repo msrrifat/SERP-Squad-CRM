@@ -1155,7 +1155,7 @@ async function handleWpContent(body) {
         content: toBlocks(p.content?.rendered || ""), modified: p.modified,
       })),
       posts: posts.map((p) => ({
-        wpId: p.id, slug: p.slug, url: pathOf(p.link),
+        wpId: p.id, slug: p.slug, url: pathOf(p.link), origUrl: p.link,
         title: stripTags(p.title?.rendered) || p.slug,
         body: stripTags(p.excerpt?.rendered).slice(0, 400),
         ...metaOf(p),

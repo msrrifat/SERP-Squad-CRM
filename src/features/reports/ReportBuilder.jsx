@@ -554,11 +554,19 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const th = "px-3 py-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400 text-left";
     const td = "px-3 py-2 border-b border-gray-50";
     const cap = (arr) => (b.limit && b.limit !== "all" ? arr.slice(0, +b.limit) : arr);
-    if (b.kind === "rank") return (
+    if (b.kind === "rank") {
+      /* best CURRENT position first — the report leads with what's winning;
+         unranked keywords (no position) sink to the bottom */
+      const ranked = [...tracking].sort((a, b2) => {
+        const pa = a.stats?.cur, pb = b2.stats?.cur;
+        const va = pa == null || pa > 100 ? 1e6 : pa, vb = pb == null || pb > 100 ? 1e6 : pb;
+        return va - vb || (a.keyword || "").localeCompare(b2.keyword || "");
+      });
+      return (
       <div>
         <table className="w-full text-[12.5px]">
           <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th><th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
-          <tbody>{cap(tracking).map((t) => (
+          <tbody>{cap(ranked).map((t) => (
             <tr key={t.id}><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
@@ -569,10 +577,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           ))}</tbody>
         </table>
         {b.limit && b.limit !== "all" && tracking.length > +b.limit && (
-          <div className="pt-1.5 text-[10.5px] text-gray-400">Showing {b.limit} of {tracking.length} tracked keywords.</div>
+          <div className="pt-1.5 text-[10.5px] text-gray-400">Showing the top {b.limit} of {tracking.length} tracked keywords, best current position first.</div>
         )}
       </div>
-    );
+      );
+    }
     if (b.kind === "gscQueries") return (
       <table className="w-full text-[12.5px]">
         <thead><tr className="border-b border-gray-100"><th className={th}>Query</th><th className={th}>Clicks</th><th className={th}>Impressions</th><th className={th}>Position</th></tr></thead>

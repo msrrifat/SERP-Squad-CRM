@@ -1659,6 +1659,14 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
       : { id: uid(), kind: "text", text: "Write something…", links: [] }],
   });
   const autoSlug = p.slug || p.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  /* the post's REAL permalink base — an "answer" post lives at /answer/slug,
+     so read the base from its live URL instead of assuming /blog/ */
+  const postBase = (() => {
+    const u = String(p.url || initial?.url || initial?.origUrl || "");
+    const path = /^https?:\/\//.test(u) ? (() => { try { return new URL(u).pathname; } catch { return ""; } })() : u;
+    const m = path.match(/^(\/.*\/)[^/]*$/);
+    return m ? m[1] : "/blog/";
+  })();
   const save = () => onSave({
     ...initial, ...p,
     slug: autoSlug || "post",
@@ -1707,7 +1715,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
             <input value={p.title} onChange={(e) => set({ title: e.target.value })} placeholder="Add title"
               className="ll-display w-full border-0 bg-transparent text-[26px] font-bold tracking-tight outline-none placeholder:text-gray-300" />
             <div className="ll-mono mt-1 flex items-center gap-1 text-[11.5px] text-gray-400">
-              {siteHost}/blog/
+              {siteHost}{postBase}
               {slugsEditable
                 ? <input value={p.slug} onChange={(e) => set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") })} placeholder={autoSlug || "url-slug"} className="min-w-0 flex-1 border-0 bg-transparent outline-none" style={{ color: accent }} />
                 : <span>{autoSlug || "url-slug"}</span>}
@@ -1893,7 +1901,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
               </div>
               <div className="mt-2 rounded-lg bg-gray-50 p-2">
                 <div className="truncate text-[12px] font-medium" style={{ color: "#1a0dab" }}>{p.metaTitle || p.title || "Post title"}</div>
-                <div className="ll-mono truncate text-[9.5px] text-emerald-700">{siteHost}/blog/{autoSlug || "slug"}</div>
+                <div className="ll-mono truncate text-[9.5px] text-emerald-700">{siteHost}{postBase}{autoSlug || "slug"}</div>
                 <div className="line-clamp-2 text-[10.5px] leading-snug text-gray-500">{p.metaDesc || p.excerpt || "Meta description preview…"}</div>
               </div>
             </div>)}
@@ -2140,10 +2148,25 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     return /^https?:\/\//.test(u) ? u : siteBase + (u.startsWith("/") ? u : "/" + u);
   };
   const postUrl = (b) => {
-    if (b.origUrl && /^https?:\/\//.test(b.origUrl)) return b.origUrl;
+    if (b.absUrl && /^https?:\/\//.test(b.absUrl)) return b.absUrl;            // sitemap crawl
+    if (b.origUrl && /^https?:\/\//.test(b.origUrl)) return b.origUrl;          // WP permalink
     const path = b.url || "/blog/" + b.slug;
     return /^https?:\/\//.test(path) ? path : siteBase + (path.startsWith("/") ? path : "/" + path);
   };
+  /* the EXACT live path to display — never a guessed /blog/ prefix: WP and
+     sitemap entries carry their real permalink (an "answer" post lives at
+     /answer/slug, not /blog/slug), so derive the path from it */
+  const livePath = (u) => { try { return new URL(u).pathname.replace(/\/+$/, "") || "/"; } catch { return u; } };
+  const postPath = (b) => livePath(postUrl(b));
+  const pagePath = (pg) => livePath(pageUrl(pg));
+  /* open-in-new-tab icon shown beside every page/post URL */
+  const LiveLink = ({ href }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+      title={"Open the live page — " + href}
+      className="ml-1 inline-flex shrink-0 items-center rounded p-0.5 align-middle text-gray-300 hover:bg-gray-100 hover:text-gray-600">
+      <Globe size={11} />
+    </a>
+  );
   /* on-demand single-URL recheck (the buttons beside each page/post name) —
      same real /api/check-index call, never fabricated */
   const recheckOne = async (kind, item) => {
@@ -2731,7 +2754,10 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                     <span className="truncate text-[12.5px] font-medium text-gray-800">{pg.name || pg.metaTitle || pg.url}</span>
                     {pg.dirty && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-600">Pending</span>}
                   </div>
-                  <div className="ll-mono truncate text-[10px] text-gray-400" style={pg.depth ? { paddingLeft: pg.depth * 18 + 18 } : undefined}>{pg.url}</div>
+                  <div className="ll-mono flex items-center text-[10px] text-gray-400" style={pg.depth ? { paddingLeft: pg.depth * 18 + 18 } : undefined}>
+                    <span className="truncate" title={pageUrl(pg)}>{pagePath(pg)}</span>
+                    <LiveLink href={pageUrl(pg)} />
+                  </div>
                   <div className="mt-1 flex items-center gap-1.5" style={pg.depth ? { paddingLeft: pg.depth * 18 + 18 } : undefined}>
                     <IndexTag idx={pg.index} checking={(idxChecking && indexStale(pg.index)) || idxBusy["page" + pg.id]} />
                     <RecheckBtn kind="page" item={pg} />
@@ -2769,7 +2795,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <LivePageEditor page={w.pages.find((p) => p.id === openPage)} accent={accent}
             project={project} aiProviders={aiProviders}
             sitePages={[...w.pages.map((x) => ({ url: x.origUrl || x.url, title: x.name || x.metaTitle || x.url })), ...w.blogs.map((x) => ({ url: "/blog/" + x.slug, title: x.title }))]}
-            slugsEnabled={slugsEnabled} siteHost={project.website}
+            slugsEnabled={slugsEnabled} siteHost={String(project.website || "").replace(/^https?:\/\//, "").replace(/\/+$/, "")}
             onPatch={(p) => patchPage(openPage, p)} onClose={() => setOpenPage(null)} />
         )}
         <button onClick={() => set({ pages: [...w.pages, { id: "pg" + Date.now(), url: "/new-page", name: "New page", metaTitle: "", metaDesc: "", dirty: true, content: [{ id: "cb" + Date.now(), kind: "heading", level: 1, text: "New page heading" }, { id: "ct" + Date.now(), kind: "text", text: "Click to edit this text.", links: [] }] }] })}
@@ -2863,7 +2889,11 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                     {b.featured && <img src={b.featured} alt="" className="h-6 w-6 shrink-0 rounded object-cover" />}
                     <span className="truncate text-[12.5px] font-medium text-gray-800">{b.title}</span>
                   </div>
-                  <div className="ll-mono truncate text-[10px] text-gray-400">/blog/{b.slug}{(b.categories || []).length ? ` \u00b7 ${b.categories.join(", ")}` : ""}</div>
+                  <div className="ll-mono flex items-center text-[10px] text-gray-400">
+                    <span className="truncate" title={postUrl(b)}>{postPath(b)}</span>
+                    <LiveLink href={postUrl(b)} />
+                    {(b.categories || []).length ? <span className="ml-1 shrink-0 truncate">\u00b7 {b.categories.join(", ")}</span> : null}
+                  </div>
                   <div className="mt-1 flex items-center gap-1.5">
                     <IndexTag idx={b.index} checking={(idxChecking && indexStale(b.index)) || idxBusy["post" + b.id]} />
                     {b.status === "published" && <RecheckBtn kind="post" item={b} />}
@@ -2909,7 +2939,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           initial={openPost === "new" ? {} : w.blogs.find((x) => x.id === openPost) || {}}
           project={project} aiProviders={aiProviders}
           sitePages={[...w.pages.map((x) => ({ url: x.origUrl || x.url, title: x.name || x.metaTitle || x.url })), ...w.blogs.map((x) => ({ url: "/blog/" + x.slug, title: x.title }))]}
-          siteHost={project.website} slugsEditable={slugsEnabled || w.platform === "wordpress"} accent={accent}
+          siteHost={String(project.website || "").replace(/^https?:\/\//, "").replace(/\/+$/, "")} slugsEditable={slugsEnabled || w.platform === "wordpress"} accent={accent}
           onSave={(post) => {
             if (openPost === "new") {
               set({ blogs: [{ ...post, id: "bl" + Date.now(), createdAt: Date.now() }, ...w.blogs] });
