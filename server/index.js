@@ -26,6 +26,7 @@
    title/snippet. Cost: one live SERP request per directory scanned. */
 import http from "node:http";
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { gzip } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
@@ -2493,7 +2494,23 @@ async function handleGenerate(body) {
 /* ---- tiny http layer ---- */
 http.createServer(async (req, res) => {
   const CORS = { ...corsFor(req), ...SEC_HEADERS };
-  const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json", ...CORS, ...(PIXEL_ROUTES.includes((req.url || "").split("?")[0]) ? { "Access-Control-Allow-Origin": "*" } : {}) }); res.end(JSON.stringify(obj)); };
+  /* gzip JSON responses when the client accepts it — the workspace state runs
+     to double-digit megabytes and JSON compresses ~10x, turning a load that
+     timed out (and made the app fall back to seed data) into a fast one */
+  const send = (code, obj) => {
+    const headers = { "Content-Type": "application/json", ...CORS, ...(PIXEL_ROUTES.includes((req.url || "").split("?")[0]) ? { "Access-Control-Allow-Origin": "*" } : {}) };
+    const body = JSON.stringify(obj);
+    if (body.length > 4096 && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+      gzip(Buffer.from(body), (err, buf) => {
+        if (err) { res.writeHead(code, headers); res.end(body); return; }
+        res.writeHead(code, { ...headers, "Content-Encoding": "gzip", "Content-Length": buf.length, Vary: "Accept-Encoding" });
+        res.end(buf);
+      });
+      return;
+    }
+    res.writeHead(code, headers);
+    res.end(body);
+  };
   if (req.method === "OPTIONS") { const px = PIXEL_ROUTES.includes((req.url || "").split("?")[0]); res.writeHead(204, px ? { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } : corsFor(req)); return res.end(); }
   const ip = req.socket.remoteAddress || "?";
   if (rateLimited(ip, "all", 240, 60e3)) return send(429, { error: "rate_limited", detail: "Too many requests — slow down." });

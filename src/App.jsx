@@ -197,7 +197,7 @@ export default function App() {
     if (!token) { setHydrated(true); return; }
     (async () => {
       try {
-        const r = await fetch("/api/state", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(20000) });
+        const r = await fetch("/api/state", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(180000) }); // large workspaces (10MB+) need real time to arrive
         if (r.status === 401) { localStorage.removeItem("ss_token"); setScreen("login"); setHydrated(true); return; }
         if (!r.ok) throw new Error("HTTP " + r.status);
         const d = await r.json();
