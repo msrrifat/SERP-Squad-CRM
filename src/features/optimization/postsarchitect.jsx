@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Card, Labeled, Modal, Toggle, inputCls, CharCount } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
+import { parseAiJson } from "../../lib/jsonrepair.js";
 import { useWork } from "../../lib/worklog.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { escHtml } from "../../lib/text.jsx";
@@ -24,7 +25,7 @@ import { escHtml } from "../../lib/text.jsx";
 
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 70);
 const cap = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
-const parseJsonLoose = (text) => { const m = String(text).match(/\{[\s\S]*\}/); return JSON.parse(m ? m[0] : text); };
+const parseJsonLoose = (text) => parseAiJson(text);   /* repairs near-valid model JSON */
 
 /* ---------- markdown → editor blocks (Posts tab full editor) ----------
    Markdown links stay inline in text blocks — the editor renders them as

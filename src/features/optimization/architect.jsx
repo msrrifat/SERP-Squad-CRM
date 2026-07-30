@@ -6,6 +6,7 @@ import {
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { KwBankPicker } from "../tools/kwbank.jsx";
+import { parseAiJson } from "../../lib/jsonrepair.js";
 import { OptimizeControls, ResearchChecklist, defaultOptimizeSpec, optimizeRulesBlock } from "../../lib/optimizespec.jsx";
 import { useWork } from "../../lib/worklog.jsx";
 import { realDfs } from "./indexcheck.jsx";
@@ -26,11 +27,25 @@ import { findDuplicate } from "./postsarchitect.jsx";
    never silently replaced. Competitor scans hit the real Google SERP,
    geo-targeted to the project's market. */
 
-/* ---- AI plumbing ---- */
-const parseJsonLoose = (text) => {
-  const m = String(text).match(/\{[\s\S]*\}/);
-  return JSON.parse(m ? m[0] : text);
-};
+/* ---- AI plumbing ----
+   Models emit near-valid JSON (fences, a dropped comma, a truncated array).
+   parseAiJson repairs those instead of failing the whole generation. */
+const parseJsonLoose = (text) => parseAiJson(text);
+
+/* one AI call that MUST return JSON: repair what comes back, and if it still
+   can't be parsed, ask the model once to re-emit it correctly (models fix
+   their own syntax reliably when told what broke) before giving up */
+async function aiJson(ai, opts) {
+  const text = await aiGenerate(ai, opts);
+  try { return parseAiJson(text); }
+  catch (e) {
+    const retry = await aiGenerate(ai, {
+      ...opts,
+      prompt: `${opts.prompt}\n\nIMPORTANT: your previous reply was NOT valid JSON (${String(e.message).slice(0, 120)}). Return the SAME content again as STRICT, complete, valid JSON only — no prose, no markdown fences, every array element comma-separated, every string closed. Keep it concise enough to finish within the token budget.`,
+    });
+    return parseAiJson(retry); // still bad → caller falls back to the local draft
+  }
+}
 
 /* ---- technical-SEO prompts (the tool's expertise lives here) ---- */
 const SYS_ARCHITECT = `You are a senior technical SEO information architect. You design site structures that rank.
@@ -342,11 +357,11 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
 
   const genStructure = () => runStage("structure",
     async () => {
-      const text = await aiGenerate(ai, {
-        system: SYS_STRUCTURE, json: true, maxTokens: 3000,
+      const parsedStruct = await aiJson(ai, {
+        system: SYS_STRUCTURE, json: true, maxTokens: 6000,
         prompt: `Page: "${node.title}" (${node.url}) — type: ${node.type}.\nNiche: ${niche}. Market: ${locationName}.\nPrimary keyword: "${seo.primaryKw}". Secondary keywords: ${seo.secondaryKws || "(none)"}.\n\n${optimizeRulesBlock(spec)}\n\nTop-ranking competitors for the primary keyword:\n${competitorBlock()}\n\nSITE MAP (use EXACT urls for internalLinks):\n${siteLinks.map((l) => `${l.url} — ${l.title} (${l.type})`).join("\n")}\n\nBuild the content structure that beats this SERP and satisfies every optimization rule above (the structure must contain the sections those rules require).`,
       });
-      const st = normalizeStructure(parseJsonLoose(text), (seo.competitors || []).length);
+      const st = normalizeStructure(parsedStruct, (seo.competitors || []).length);
       st.live = true; st.provider = ai.provider;
       setSeo({ structure: st, audit: null, content: null });
     },
@@ -354,11 +369,10 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
 
   const audit = () => runStage("audit",
     async () => {
-      const text = await aiGenerate(ai, {
-        system: SYS_AUDIT, json: true, maxTokens: 2000,
+      const a = await aiJson(ai, {
+        system: SYS_AUDIT, json: true, maxTokens: 4000,
         prompt: `Primary keyword: "${seo.primaryKw}" (page type: ${node.type}, market: ${locationName}).\nContent structure to audit:\n${JSON.stringify(seo.structure, null, 1)}`,
       });
-      const a = parseJsonLoose(text);
       if (!Array.isArray(a.issues)) throw new Error("schema: issues missing");
       setSeo({ audit: { auditedAt: Date.now(), live: true, provider: ai.provider, score: Math.max(0, Math.min(100, +a.score || 0)), summary: String(a.summary || ""), issues: a.issues.map((i) => ({ sev: ["high", "med", "low"].includes(i.sev) ? i.sev : "med", text: String(i.text || ""), fix: String(i.fix || "") })) } });
     },
@@ -366,11 +380,11 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
 
   const adjust = () => runStage("adjust",
     async () => {
-      const text = await aiGenerate(ai, {
-        system: SYS_ADJUST, json: true, maxTokens: 3000,
+      const parsedAdjust = await aiJson(ai, {
+        system: SYS_ADJUST, json: true, maxTokens: 6000,
         prompt: `Structure:\n${JSON.stringify(seo.structure, null, 1)}\n\nAudit issues to fix:\n${JSON.stringify(seo.audit.issues, null, 1)}`,
       });
-      const st = normalizeStructure(parseJsonLoose(text), seo.structure?.fromCompetitors || 0);
+      const st = normalizeStructure(parsedAdjust, seo.structure?.fromCompetitors || 0);
       st.live = true; st.provider = ai.provider; st.adjustedAt = Date.now();
       setSeo({ structure: st, audit: null });
     },
@@ -624,11 +638,10 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     setBusy(true); setGenErr(null);
     let tree = null, live = false;
     try {
-      const text = await aiGenerate(aiConfig, {
-        system: SYS_ARCHITECT, json: true, maxTokens: 3500,
+      const parsed = await aiJson(aiConfig, {
+        system: SYS_ARCHITECT, json: true, maxTokens: 7000,
         prompt: `Business: ${project.name} (${project.website}). Niche: ${niche}.\nServices: ${services || "(infer sensible ones from the niche)"}.\nLocations: ${locations || "(none — skip location pages)"}.\nBrand positioning: ${brandVoice.tagline || "(none)"}.\nDesign the complete site architecture.`,
       });
-      const parsed = parseJsonLoose(text);
       const nodes = nodesFromAi(parsed.pages);
       if (!nodes.length) throw new Error("empty architecture");
       tree = nodes; live = true;
