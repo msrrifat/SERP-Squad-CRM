@@ -1425,6 +1425,47 @@ const htmlToContentMd = (html) => {
   }
   return out.join("\n\n").slice(0, 24000);
 };
+/* ---- batch meta scrape: the GROUND TRUTH for meta title/description ----
+   Reads what the page actually renders in <head>, so it works no matter which
+   SEO plugin is installed (Yoast, Rank Math, SEOPress, none) and for sites
+   with no API access at all. Falls back to og: tags, never to the page name —
+   a page with no meta description reports an empty one, honestly. */
+/* decode the entities real pages carry (&amp; &#8211; &quot; &#039; …) so the
+   CRM shows the meta as a human reads it in the SERP, not as raw source */
+const decodeEntities = (s) => String(s || "")
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+  .replace(/&quot;/gi, '"').replace(/&apos;|&#039;/gi, "'")
+  .replace(/&(hellip|mdash|ndash|rsquo|lsquo|rdquo|ldquo);/gi, (_, e) =>
+    ({ hellip: "…", mdash: "—", ndash: "–", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" }[e.toLowerCase()] || ""));
+const metaFromHtml = (html) => {
+  const title = decodeEntities(((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "")).replace(/\s+/g, " ").trim();
+  const desc = decodeEntities(metaContent(html, "description") || metaContent(html, "og:description") || "");
+  return {
+    metaTitle: title || decodeEntities(metaContent(html, "og:title") || ""),
+    metaDesc: String(desc).replace(/\s+/g, " ").trim().slice(0, 320),
+    h1: decodeEntities(stripTags(([...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)][0] || [])[1] || "")),
+    noindex: /<meta[^>]+robots[^>]+noindex/i.test(html),
+    canonical: ((html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i) || [])[1] || ""),
+  };
+};
+async function handleCrawlMeta(body) {
+  const urls = (Array.isArray(body?.urls) ? body.urls : []).map(String).filter((u) => /^https?:\/\//.test(u)).slice(0, 120);
+  if (!urls.length) return [400, { error: "bad_request", detail: "urls[] required (absolute http/https)." }];
+  let challenged = 0;
+  const results = await pool(urls, async (u) => {
+    try {
+      const { text, status } = await crawlFetch(u, 15000);
+      if (/sgcaptcha|cf-chl|challenge-platform|_Incapsula_|Just a moment/i.test(text) || status === 202) { challenged++; return { url: u, error: "blocked" }; }
+      if (status >= 400) return { url: u, error: `HTTP ${status}` };
+      return { url: u, ...metaFromHtml(text) };
+    } catch (e) { return { url: u, error: String(e?.message || e).slice(0, 60) }; }
+  }, 8);
+  const ok = results.filter((r) => !r.error).length;
+  if (!ok && challenged) return [502, { error: "provider_error", detail: "The site's bot firewall blocked every request — whitelist your CRM server's IP, or retry later." }];
+  return [200, { live: true, scanned: results.length, ok, results }];
+}
 async function handleCrawlPage(body) {
   let url = String(body?.url || "").trim();
   if (!url) return [400, { error: "bad_request", detail: "A page URL is required." }];
@@ -2477,7 +2518,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2515,6 +2556,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/audit/website" ? await handleAuditWebsite(body)
         : req.url === "/api/crawl/sitemap" ? await handleCrawlSitemap(body)
         : req.url === "/api/crawl/page" ? await handleCrawlPage(body)
+        : req.url === "/api/crawl/meta" ? await handleCrawlMeta(body)
         : req.url === "/api/audit/profile" ? await handleAuditProfile(body)
         : req.url === "/api/leads/search" ? await handleLeadsSearch(body)
         : req.url === "/api/scrape-email" ? await handleScrapeEmail(body)

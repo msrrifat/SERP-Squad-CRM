@@ -1977,7 +1977,24 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           }),
         };
       });
-      setSmNote(`Crawled ${d.total} URLs from ${d.host} — ${d.pages.length} pages and ${d.posts.length} posts listed. Open any of them to re-optimize the content.`);
+      /* read each crawled URL's REAL <head> meta straight away, so the
+         Pages/Posts columns show the site's actual titles & descriptions */
+      const urls = [...d.pages, ...d.posts].map((p) => p.url).slice(0, 120);
+      if (urls.length) {
+        setSmNote(`Crawled ${d.total} URLs from ${d.host} — reading live meta…`);
+        try {
+          const mr = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000), body: JSON.stringify({ urls }) });
+          const md = await mr.json();
+          if (mr.ok) {
+            const byUrl = new Map((md.results || []).map((x) => [x.url, x]));
+            setOpt("website", (cur) => ({
+              pages: (cur.pages || []).map((p) => { const h = byUrl.get(p.absUrl); return h && !h.error ? { ...p, metaTitle: h.metaTitle || "", metaDesc: h.metaDesc || "", liveH1: h.h1, metaScrapedAt: Date.now() } : p; }),
+              blogs: (cur.blogs || []).map((b) => { const h = byUrl.get(b.absUrl); return h && !h.error ? { ...b, metaTitle: h.metaTitle || "", metaDesc: h.metaDesc || "", liveH1: h.h1, metaScrapedAt: Date.now() } : b; }),
+            }));
+          }
+        } catch { /* meta is an enhancement — the crawl itself already succeeded */ }
+      }
+      setSmNote(`Crawled ${d.total} URLs from ${d.host} — ${d.pages.length} pages and ${d.posts.length} posts listed with their live meta. Open any of them to re-optimize the content.`);
       work?.("website", "siteCrawled", { detail: `${d.total} URLs from sitemap` });
       log?.(`Crawled sitemap for ${d.host} (${d.pages.length} pages, ${d.posts.length} posts)`, project.website);
     } catch (e) { setSmErr("API server unreachable — " + (e?.message || e)); }
@@ -2167,6 +2184,51 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       <Globe size={11} />
     </a>
   );
+  /* ---- LIVE META SCRAPE ------------------------------------------------
+     The ground truth for meta title/description is what the page actually
+     renders in <head>. WordPress only exposes Yoast fields over REST (Rank
+     Math, SEOPress and friends stay invisible), so a synced page used to
+     fall back to its NAME as the meta title. This reads the real tags for
+     every listed page/post — works on any stack, connected or not. */
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaNote, setMetaNote] = useState(null);
+  const fetchLiveMeta = async () => {
+    const pages = w.pages.map((p) => ({ id: p.id, kind: "page", url: pageUrl(p) })).filter((x) => /^https?:\/\//.test(x.url));
+    const posts = w.blogs.filter((b) => b.status === "published").map((b) => ({ id: b.id, kind: "post", url: postUrl(b) })).filter((x) => /^https?:\/\//.test(x.url));
+    const all = [...pages, ...posts].slice(0, 120);
+    if (!all.length) { setMetaNote("Nothing to scan yet — crawl or sync the site first."); return; }
+    setMetaBusy(true); setMetaNote(null);
+    try {
+      const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
+        body: JSON.stringify({ urls: all.map((x) => x.url) }) });
+      const d = await r.json();
+      if (!r.ok) { setMetaNote(d.detail || d.error); setMetaBusy(false); return; }
+      const byUrl = new Map((d.results || []).map((x) => [x.url, x]));
+      let updated = 0, missingDesc = 0;
+      set((cur) => ({
+        pages: cur.pages.map((p) => {
+          const hit = byUrl.get(pageUrl(p));
+          if (!hit || hit.error) return p;
+          updated++;
+          if (!hit.metaDesc) missingDesc++;
+          /* local unsaved edits win — a scrape must never clobber pending work */
+          return p.dirty ? p : { ...p, metaTitle: hit.metaTitle || "", metaDesc: hit.metaDesc || "", liveH1: hit.h1, metaScrapedAt: Date.now() };
+        }),
+        blogs: cur.blogs.map((b) => {
+          const hit = byUrl.get(postUrl(b));
+          if (!hit || hit.error) return b;
+          updated++;
+          if (!hit.metaDesc) missingDesc++;
+          return b.dirty ? b : { ...b, metaTitle: hit.metaTitle || "", metaDesc: hit.metaDesc || "", liveH1: hit.h1, metaScrapedAt: Date.now() };
+        }),
+      }));
+      const failed = (d.results || []).filter((x) => x.error).length;
+      setMetaNote(`Live meta read from ${d.ok} of ${d.scanned} URLs${failed ? ` · ${failed} unreachable` : ""}${missingDesc ? ` · ${missingDesc} have no meta description on the site` : ""}.`);
+      log?.(`Scraped live meta for ${d.ok} URLs`, project.website);
+    } catch (e) { setMetaNote("API server unreachable — " + (e?.message || e)); }
+    setMetaBusy(false);
+  };
+
   /* on-demand single-URL recheck (the buttons beside each page/post name) —
      same real /api/check-index call, never fabricated */
   const recheckOne = async (kind, item) => {
@@ -2685,6 +2747,11 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-600 disabled:opacity-40">
             {idxChecking ? <><RefreshCw size={12} className="animate-spin" /> Checking…</> : <><Search size={12} /> Re-check indexing</>}
           </button>
+          <button onClick={fetchLiveMeta} disabled={metaBusy}
+            title="Read the real <title> and meta description each page renders — works with Rank Math, Yoast, SEOPress or no plugin at all"
+            className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-600 disabled:opacity-40">
+            {metaBusy ? <><RefreshCw size={12} className="animate-spin" /> Reading meta…</> : <><Globe size={12} /> Fetch live meta</>}
+          </button>
           {/* recrawl + deploy are connection-only (nothing to push in sitemap mode) */}
           {!sitemapOnly && (<>
           <button onClick={() => crawlSite()} disabled={crawling || !w.verified}
@@ -2714,6 +2781,12 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
             <span className="min-w-0 flex-1">{idxErr}</span>
             <button onClick={() => setIdxErr(null)} className="shrink-0 font-bold">✕</button>
+          </div>
+        )}
+        {metaNote && (
+          <div className="mb-2 flex items-start gap-2 rounded-xl bg-gray-50 px-3 py-2 text-[11.5px] text-gray-600">
+            <span className="min-w-0 flex-1">{metaNote}</span>
+            <button onClick={() => setMetaNote(null)} className="shrink-0 font-bold">✕</button>
           </div>
         )}
         {deployErr && (
