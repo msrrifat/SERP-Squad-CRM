@@ -2648,7 +2648,9 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <div>
             <div className="ll-display text-[15px] font-semibold">Pages</div>
             <div className="text-[11.5px] text-gray-400">
-              {w.crawled
+              {sitemapOnly
+                ? <>Crawled from the sitemap{w.sitemapCrawledAt ? ` · ${relTime(w.sitemapCrawledAt)}` : ""} — click a page to re-optimize its content. Live editing needs a connected site.</>
+                : w.crawled
                 ? <>Auto-crawled from {project.website}{w.lastCrawl ? ` · last crawl ${relTime(w.lastCrawl)}` : ""} — click a page to live-edit.</>
                 : "Pages are crawled and listed automatically once the pixel is verified."}
             </div>
@@ -2660,6 +2662,8 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-600 disabled:opacity-40">
             {idxChecking ? <><RefreshCw size={12} className="animate-spin" /> Checking…</> : <><Search size={12} /> Re-check indexing</>}
           </button>
+          {/* recrawl + deploy are connection-only (nothing to push in sitemap mode) */}
+          {!sitemapOnly && (<>
           <button onClick={() => crawlSite()} disabled={crawling || !w.verified}
             className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-semibold disabled:opacity-40" style={{ borderColor: accent, color: accent }}>
             {crawling ? <><RefreshCw size={12} className="animate-spin" /> Crawling…</> : <><RefreshCw size={12} /> Recrawl site</>}
@@ -2671,13 +2675,14 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               : deployState === "done" || deployState === "done-meta" ? <><CheckCircle2 size={13} /> Deployed</>
               : <><Rocket size={13} /> Deploy {dirtyCount > 0 ? `${dirtyCount} change${dirtyCount > 1 ? "s" : ""}` : "changes"}</>}
           </button>
+          </>)}
         </div>
         {crawling && (
           <div className="ll-fade mb-2 flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-2.5 text-[12px] font-medium text-blue-700">
             <RefreshCw size={13} className="animate-spin" /> Crawling {project.website} — reading sitemap, pulling titles, meta, headings, images and old posts…
           </div>
         )}
-        {!w.crawled && !crawling && (
+        {!w.crawled && !crawling && !sitemapOnly && (
           <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2.5 text-[12px] text-amber-700">
             Waiting for pixel verification — once verified, your site is crawled and every page appears here automatically.
           </div>
@@ -2781,7 +2786,9 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <div>
             <div className="ll-display text-[15px] font-semibold">Existing posts</div>
             <div className="text-[11px] text-gray-400">
-              {caps.blogs === true
+              {sitemapOnly
+                ? "Crawled from the sitemap — click any post to re-optimize its content. Live editing needs a connected site."
+                : caps.blogs === true
                 ? <>Click any post to edit in the full editor. Updates push back via {w.platform === "wordpress" ? "wp/v2/posts" : w.platform === "webflow" ? "the Webflow CMS API" : "the Shopify Admin API"}.</>
                 : "Publishing is unavailable on this platform — see the note below."}
             </div>
@@ -2789,22 +2796,28 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
           <span className="flex items-center gap-2">
             <input value={postSearch} onChange={(e) => setPostSearch(e.target.value)} placeholder="Search posts…"
               className="w-40 rounded-lg border border-gray-200 px-3 py-2 text-[12px] no-print" />
-            <button onClick={() => setOpenPost("new")} disabled={!blogsEnabled}
-              className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-              <Plus size={13} /> Publish a new post
-            </button>
+            {!sitemapOnly && (
+              <button onClick={() => setOpenPost("new")} disabled={!blogsEnabled}
+                className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+                <Plus size={13} /> Publish a new post
+              </button>
+            )}
           </span>
         </div>
-        {caps.blogs !== true && (
+        {/* plat is null in sitemap mode — never dereference it there */}
+        {sitemapOnly ? (
           <div className="mt-3 rounded-lg bg-amber-50 p-3 text-[11.5px] leading-relaxed text-amber-700">
-            NOT AVAILABLE on {plat.label} — {w.platform === "wix" ? "Wix has no public third-party blog-publish API." : "there's no CMS on a custom site to publish into."} We can export post HTML for your developer instead.
+            Sitemap mode — publishing and live edits need a connected site. Re-optimizing content, index checks and meta drafting all work here.
           </div>
-        )}
-        {caps.blogs === true && !blogsEnabled && (
+        ) : caps.blogs !== true ? (
+          <div className="mt-3 rounded-lg bg-amber-50 p-3 text-[11.5px] leading-relaxed text-amber-700">
+            NOT AVAILABLE on {plat?.label || "this platform"} — {w.platform === "wix" ? "Wix has no public third-party blog-publish API." : "there's no CMS on a custom site to publish into."} We can export post HTML for your developer instead.
+          </div>
+        ) : !blogsEnabled ? (
           <div className="mt-3 rounded-lg bg-amber-50 p-3 text-[11.5px] text-amber-700">
-            Add and test your {plat.credential.type} in the Connector tab to unlock publishing.
+            Add and test your {plat?.credential?.type || "credential"} in the Connector tab to unlock publishing.
           </div>
-        )}
+        ) : null}
         {idxErr && (
           <div className="mb-2 mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
             <span className="min-w-0 flex-1">{idxErr}</span>
