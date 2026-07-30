@@ -103,6 +103,22 @@ async function scanCompetitorsApi(keyword, dfs, locationName) {
 
 /* ---- tree utilities (pure) ---- */
 function walk(tree, fn) { tree.forEach((p) => { fn(p); walk(p.children || [], fn); }); }
+/* URL HIERARCHY INVARIANT: every nested page lives under its parent's path —
+   child keeps its own slug (last segment), the prefix is always the parent's
+   URL. Root-level pages keep their full URL as-is (adopted live pages stay
+   at their real address). Applied at generation time and self-heals older
+   maps on load. */
+const slugSeg = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+export function normalizeTreeUrls(nodes, parentUrl = null) {
+  return (nodes || []).map((n) => {
+    let url = n.url;
+    if (parentUrl !== null) {
+      const seg = (n.url || "").split("/").filter(Boolean).pop() || slugSeg(n.title) || "page";
+      url = (parentUrl === "/" ? "" : parentUrl) + "/" + seg;
+    }
+    return { ...n, url, children: normalizeTreeUrls(n.children || [], url) };
+  });
+}
 function updateNode(tree, id, patch) {
   return tree.map((p) => p.id === id ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : { ...p, children: updateNode(p.children || [], id, patch) });
 }
@@ -603,6 +619,8 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       await new Promise((r) => setTimeout(r, 1100));
       tree = genSiteArchitecture(niche, services, project.name, locations);
     }
+    /* enforce the URL hierarchy: children always slug under their parent */
+    tree = normalizeTreeUrls(tree);
     setOpt("website", (cur) => ({ architecture: { ...(cur?.architecture || {}), tree, niche, services, locations, live, generatedAt: Date.now() } }));
     work?.("website", "archGenerated", { detail: `${countPages(tree)} pages` });
     log?.(`Generated website architecture (${countPages(tree)} pages${live ? ", AI" : ", draft"})`, project.name);
@@ -610,6 +628,13 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   };
 
   const tree = arch?.tree || [];
+  /* self-heal older maps: enforce the parent/child URL hierarchy on load so
+     pre-existing trees (children generated on foreign paths) fix themselves */
+  React.useEffect(() => {
+    if (!tree.length) return;
+    const norm = normalizeTreeUrls(tree);
+    if (JSON.stringify(norm) !== JSON.stringify(tree)) setTree(norm);
+  }, [arch?.generatedAt]); // eslint-disable-line
   /* changing a page's URL re-parents every descendant: each child keeps its
      own slug but follows the new parent path (recursively) */
   const rebaseChildren = (children, parentUrl) => (children || []).map((c) => {
