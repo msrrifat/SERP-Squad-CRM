@@ -9,7 +9,7 @@ import {
   Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
   MousePointerClick, BarChart3, Smartphone, Monitor, RefreshCw, Clock,
   Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
-  LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
+  LogIn, LogOut, ChevronUp, Copy, Settings2, Sparkles, Type, AlignLeft, Table2,
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
@@ -31,6 +31,7 @@ import { IndexCheckerTab, IndexTag, checkIndexApi, indexStale } from "./indexche
 import { BrandVoiceTab } from "./brandvoice.jsx";
 import { WebsiteMappingTab } from "./architect.jsx";
 import { PostsArchitectTab } from "./postsarchitect.jsx";
+import { ReoptimizePanel } from "./reoptimize.jsx";
 import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keywordUsage, oppFromRows, pageTextParts, regenSuggestion, relevancy } from "../../lib/seo.js";
 
 export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send };
@@ -1924,6 +1925,56 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
   const [postPush, setPostPush] = useState(null); // { slug, status: "busy" | "done" }
   const [credDraft, setCredDraft] = useState("");
   const [testingCred, setTestingCred] = useState(false);
+  /* re-optimize wizard target: { kind:"page"|"post", id } — right sidebar */
+  const [reoptId, setReoptId] = useState(null);
+  const reoptTarget = reoptId
+    ? (reoptId.kind === "page" ? w.pages.find((p) => p.id === reoptId.id) : w.blogs.find((b) => b.id === reoptId.id)) || null
+    : null;
+  /* sitemap mode (unconnected sites): crawl the sitemap into Pages/Posts */
+  const [smDraft, setSmDraft] = useState("");
+  const [smBusy, setSmBusy] = useState(false);
+  const [smErr, setSmErr] = useState(null);
+  const [smNote, setSmNote] = useState(null);
+  const crawlSitemap = async () => {
+    setSmBusy(true); setSmErr(null); setSmNote(null);
+    try {
+      const r = await fetch("/api/crawl/sitemap", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
+        body: JSON.stringify({ sitemapUrl: smDraft.trim() || project.website }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setSmErr(d.detail || d.error); setSmBusy(false); return; }
+      const now = Date.now();
+      const name = (p) => (p.path === "/" ? "Homepage" : p.path.split("/").filter(Boolean).pop().replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()));
+      setOpt("website", (cur) => {
+        /* keep anything already crawled/re-optimized for the same URL */
+        const oldPages = new Map((cur.pages || []).map((p) => [p.url, p]));
+        const oldBlogs = new Map((cur.blogs || []).map((b) => ["/" + (b.slug || ""), b]));
+        return {
+          sitemapCrawledAt: now, sitemapHost: d.host,
+          pages: d.pages.map((p, i) => ({
+            ...(oldPages.get(p.path) || {}),
+            id: oldPages.get(p.path)?.id || "sm" + now + i,
+            url: p.path, absUrl: p.url, name: oldPages.get(p.path)?.name || name(p),
+            scraped: true, dirty: false,
+          })),
+          blogs: d.posts.map((p, i) => {
+            const slug = p.path.split("/").filter(Boolean).pop() || "post";
+            return {
+              ...(oldBlogs.get("/" + slug) || {}),
+              id: oldBlogs.get("/" + slug)?.id || "sb" + now + i,
+              slug, url: p.path, absUrl: p.url, title: oldBlogs.get("/" + slug)?.title || name(p),
+              status: "published", scraped: true,
+            };
+          }),
+        };
+      });
+      setSmNote(`Crawled ${d.total} URLs from ${d.host} — ${d.pages.length} pages and ${d.posts.length} posts listed. Open any of them to re-optimize the content.`);
+      work?.("website", "siteCrawled", { detail: `${d.total} URLs from sitemap` });
+      log?.(`Crawled sitemap for ${d.host} (${d.pages.length} pages, ${d.posts.length} posts)`, project.website);
+    } catch (e) { setSmErr("API server unreachable — " + (e?.message || e)); }
+    setSmBusy(false);
+  };
 
   const plat = w.platform ? WEB_PLATFORMS[w.platform] : null;
   const caps = plat ? plat.caps : {};
@@ -2352,18 +2403,29 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
 
 
 
-  /* ---------- not connected: Connect website ---------- */
-  if (!w.connected) return (
+  /* ---------- not connected: connect, OR work from the sitemap ----------
+     Unconnected sites still get Pages, Posts, Website Mapping, Posts
+     Architect and Media — the sitemap crawl lists the real pages/posts
+     read-only (no live edit) and the Re-optimize wizard rewrites them. */
+  if (!w.connected && !w.sitemapMode) return (
     <>
       <Card className="p-8 text-center">
         <Globe size={28} className="mx-auto text-gray-300" />
         <div className="ll-display mt-2 text-[16px] font-semibold">Connect your website</div>
         <p className="mx-auto mt-1 max-w-md text-[12.5px] text-gray-400">Pick your platform, follow the access guide, drop in one script — then push meta, headings, image alt and content edits straight from this dashboard.</p>
-        <div className="mt-4 flex justify-center">
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
           <button onClick={() => setConnectStep("pick")} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-semibold text-white" style={{ background: accent }}>
             <Link2 size={14} /> Connect website
           </button>
+          <button onClick={() => { set({ sitemapMode: true }); setSub("pages"); }}
+            className="flex items-center gap-1.5 rounded-lg border px-4 py-2 text-[13px] font-semibold" style={{ borderColor: accent, color: accent }}>
+            <Search size={14} /> Work from the sitemap instead
+          </button>
         </div>
+        <p className="mx-auto mt-3 max-w-lg text-[11px] leading-relaxed text-gray-400">
+          No pixel, plugin or REST access? Crawl the site's <b>sitemap.xml</b> to list every page and post, then research keywords,
+          re-optimize content, plan the architecture and check indexing. Everything works except pushing live edits back to the site.
+        </p>
       </Card>
 
       {connectStep && (
@@ -2436,9 +2498,10 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     </>
   );
 
-  /* ---------- connected ---------- */
+  /* ---------- connected (or sitemap mode) ---------- */
+  const sitemapOnly = !w.connected && !!w.sitemapMode;   // read-only: no live edits
   const SUBS = [
-    { key: "connection", label: "Connector", icon: Link2, note: plat.label + (w.verified ? " \u00b7 verified" : " \u00b7 awaiting pixel") },
+    { key: "connection", label: "Connector", icon: Link2, note: sitemapOnly ? "sitemap mode \u00b7 not connected" : plat.label + (w.verified ? " \u00b7 verified" : " \u00b7 awaiting pixel") },
     { key: "pages", label: "Pages", icon: Globe, note: `${w.pages.length} tracked${dirtyCount ? ` \u00b7 ${dirtyCount} pending` : ""}` },
     { key: "posts", label: "Posts", icon: FileTextIcon, note: `${w.blogs.length} post${w.blogs.length === 1 ? "" : "s"}` },
     { key: "mapping", label: "Website Mapping & Content", icon: Network, note: w.architecture?.tree?.length ? `${w.architecture.tree.length} top pages` : "AI site architecture" },
@@ -2462,7 +2525,35 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         ))}
       </div>
 
-      {sub === "connection" && (
+      {/* ---- sitemap mode banner + crawl control (unconnected sites) ---- */}
+      {sitemapOnly && (
+        <Card className="space-y-3 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Search size={15} style={{ color: accent }} />
+            <div className="ll-display text-[14px] font-semibold">Sitemap mode <span className="text-[11px] font-normal text-gray-400">— {project.website} isn't connected</span></div>
+            <button onClick={() => { set({ sitemapMode: false }); setSub("connection"); setConnectStep("pick"); }}
+              className="ml-auto rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-600">Connect properly instead</button>
+          </div>
+          <div className="text-[11.5px] leading-relaxed text-gray-400">
+            Pages and posts are crawled from the sitemap, so everything <b>read-only</b> works: keyword research, content re-optimization,
+            index checking, meta drafting, site architecture and post planning. Live edits and publishing need a real connection.
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <Labeled label="Sitemap URL (or just the domain)">
+              <input value={smDraft} onChange={(e) => setSmDraft(e.target.value)} placeholder={`${project.website}/sitemap.xml`} className={"ll-mono w-72 " + inputCls} />
+            </Labeled>
+            <button onClick={crawlSitemap} disabled={smBusy}
+              className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+              {smBusy ? <><RefreshCw size={13} className="animate-spin" /> Crawling…</> : <><RefreshCw size={13} /> Crawl site &amp; list pages/posts</>}
+            </button>
+            {w.sitemapCrawledAt && <span className="text-[10.5px] text-gray-400">last crawl {relTime(w.sitemapCrawledAt)} · {w.pages.length} pages · {w.blogs.length} posts</span>}
+          </div>
+          {smErr && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{smErr}</div>}
+          {smNote && <div className="rounded-xl bg-emerald-50 px-3 py-2 text-[11.5px] text-emerald-700">{smNote}</div>}
+        </Card>
+      )}
+
+      {sub === "connection" && !sitemapOnly && (
         <Card className="p-4">
           <div className="ll-display mb-1 text-[13.5px] font-semibold">How to place the pixel / connect publishing</div>
           <ol className="list-decimal space-y-1.5 pl-5 text-[12px] leading-relaxed text-gray-600">
@@ -2474,9 +2565,10 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
         </Card>
       )}
 
-      {/* selected feature window */}
+      {/* selected feature window — with the re-optimize wizard as a right sidebar */}
+      <div className={reoptTarget ? "grid gap-4 lg:grid-cols-[1fr,360px]" : ""}>
       <div className="min-w-0 space-y-4">
-      {sub === "connection" && (<>
+      {sub === "connection" && !sitemapOnly && (<>
       {/* connection, verification & credentials (n8n-style) */}
       <Card className="space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-2">
@@ -2625,7 +2717,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               <tr><td colSpan={6} className="py-6 text-center text-[12px] text-gray-400">No pages match “{pgSearch}”.</td></tr>
             )}
             {pageRows.map((pg, i) => (
-              <tr key={pg.id} onClick={() => setOpenPage(pg.id)} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
+              <tr key={pg.id} onClick={() => (pg.scraped ? setReoptId({ kind: "page", id: pg.id }) : setOpenPage(pg.id))} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
                 <td className="ll-mono py-2.5 pr-1 text-[10px] text-gray-300">{i + 1}</td>
                 <td className="min-w-0 py-2.5 pr-2">
                   {/* tree indent: children sit visibly under their parent */}
@@ -2652,9 +2744,16 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 </td>
                 <td className="py-2.5">
                   <OppBadge projectId={project.id} url={pg.origUrl || pg.url} tracking={trackedKws} brand={project.name} google={project.google} demo={project.demoMode !== false} />
-                  <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
-                    <Settings2 size={11} /> Live edit & re-optimize
-                  </span>
+                  {/* scraped (sitemap-mode) pages can't be live-edited — they
+                     get the re-optimize wizard in the right sidebar instead */}
+                  {pg.scraped
+                    ? <button onClick={(e) => { e.stopPropagation(); setReoptId({ kind: "page", id: pg.id }); }}
+                        className="mt-1 flex w-fit items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] font-bold text-white" style={{ background: accent }}>
+                        <Sparkles size={11} /> {pg.reopt?.content ? "Re-optimized ✓" : "Re-optimize content"}
+                      </button>
+                    : <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
+                        <Settings2 size={11} /> Live edit &amp; re-optimize
+                      </span>}
                 </td>
               </tr>
             ))}
@@ -2744,7 +2843,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               <tr><td colSpan={7} className="py-6 text-center text-[12px] text-gray-400">No posts match “{postSearch}”.</td></tr>
             )}
             {postRows.map((b, i) => (
-              <tr key={b.id} onClick={() => blogsEnabled && setOpenPost(b.id)} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
+              <tr key={b.id} onClick={() => (b.scraped ? setReoptId({ kind: "post", id: b.id }) : blogsEnabled && setOpenPost(b.id))} className="cursor-pointer border-b border-gray-50 align-top hover:bg-gray-50">
                 <td className="ll-mono py-2.5 pr-1 text-[10px] text-gray-300">{i + 1}</td>
                 <td className="min-w-0 py-2.5 pr-2">
                   <div className="flex items-center gap-1.5">
@@ -2769,9 +2868,14 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 </td>
                 <td className="py-2.5 pr-2">
                   <OppBadge projectId={project.id} url={(project.demoMode === false && b.url) || "/blog/" + (b.slug || "")} tracking={trackedKws} brand={project.name} google={project.google} demo={project.demoMode !== false} />
-                  <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
-                    <Settings2 size={11} /> Live edit & re-optimize
-                  </span>
+                  {b.scraped
+                    ? <button onClick={(e) => { e.stopPropagation(); setReoptId({ kind: "post", id: b.id }); }}
+                        className="mt-1 flex w-fit items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] font-bold text-white" style={{ background: accent }}>
+                        <Sparkles size={11} /> {b.reopt?.content ? "Re-optimized ✓" : "Re-optimize content"}
+                      </button>
+                    : <span className="mt-1 flex w-fit items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold" style={{ borderColor: accent, color: accent }}>
+                        <Settings2 size={11} /> Live edit &amp; re-optimize
+                      </span>}
                 </td>
                 <td className="py-2.5 pr-2">
                   <span className="rounded-full px-1.5 py-px text-[8.5px] font-bold uppercase"
@@ -2836,6 +2940,18 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       {sub === "mapping" && <WebsiteMappingTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} aiConfig={aiConfig} />}
       {sub === "postsmap" && <PostsArchitectTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiConfig={aiConfig} />}
       {sub === "media" && <WebsiteMediaTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} />}
+      </div>
+      {/* ---- right sidebar: the re-optimize wizard for a scraped page/post ---- */}
+      {reoptTarget && (
+        <Card className="h-fit p-3 lg:sticky lg:top-4">
+          <ReoptimizePanel item={reoptTarget} kind={reoptId.kind} project={project} opt={opt} setOpt={setOpt}
+            accent={accent} ai={aiConfig} dfs={dfs}
+            onPatch={(patch) => (reoptId.kind === "page"
+              ? set({ pages: w.pages.map((p) => (p.id === reoptId.id ? { ...p, ...patch } : p)) })
+              : set({ blogs: w.blogs.map((b) => (b.id === reoptId.id ? { ...b, ...patch } : b)) }))}
+            onClose={() => setReoptId(null)} />
+        </Card>
+      )}
       </div>
     </div>
   );

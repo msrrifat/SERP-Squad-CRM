@@ -1345,6 +1345,101 @@ function analyzePage(url, html, status, ms, host) {
   };
 }
 
+/* ================= sitemap crawl for UNCONNECTED sites =================
+   No pixel, no REST API, no plugin — the sitemap alone lists the site.
+   /api/crawl/sitemap → classified page/post URL lists
+   /api/crawl/page    → one page's meta + H1 + structured content (markdown)
+   Powers the read-only Pages/Posts lists and the Re-optimize wizard. */
+const crawlFetch = (url, ms = 15000) => fetch(url, { headers: BROWSER_HEADERS, redirect: "follow", signal: AbortSignal.timeout(ms) }).then(async (res) => ({ status: res.status, finalUrl: res.url, text: Buffer.from((await res.arrayBuffer()).slice(0, 900_000)).toString("utf8") }));
+async function handleCrawlSitemap(body) {
+  let sm = String(body?.sitemapUrl || "").trim();
+  if (!sm) return [400, { error: "bad_request", detail: "A sitemap URL is required." }];
+  if (!/^https?:\/\//i.test(sm)) sm = "https://" + sm;
+  /* bare domain → try the standard sitemap locations */
+  const candidates = /\.xml(\?|$)/i.test(sm) ? [sm]
+    : [sm.replace(/\/$/, "") + "/sitemap.xml", sm.replace(/\/$/, "") + "/sitemap_index.xml", sm.replace(/\/$/, "") + "/wp-sitemap.xml"];
+  try {
+    let text = "", finalUrl = "", challenged = false;
+    for (const cand of candidates) {
+      try {
+        const r = await crawlFetch(cand);
+        if (/sgcaptcha|cf-chl|challenge-platform|_Incapsula_|Just a moment/i.test(r.text) || r.status === 202 || r.status === 403) { challenged = true; continue; }
+        if (/<(urlset|sitemapindex)/i.test(r.text)) { text = r.text; finalUrl = r.finalUrl; break; }
+      } catch { /* try next */ }
+    }
+    if (!text && challenged) return [502, { error: "provider_error", detail: "The site's bot firewall (SiteGround/Cloudflare protection) challenged the crawler. Whitelist your CRM server's IP in the site's security settings, or retry in a few minutes." }];
+    if (!text) return [502, { error: "provider_error", detail: "No sitemap found — paste the exact sitemap.xml URL." }];
+    /* collect locs; a sitemap index dives one level, tagging each child's kind */
+    const tagged = []; // { url, hint }
+    const push = (locs, hint) => locs.forEach((u) => tagged.push({ url: u, hint }));
+    const locsOf = (t) => [...t.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
+    if (/<sitemapindex/i.test(text)) {
+      for (const kid of locsOf(text).slice(0, 12)) {
+        const hint = /post|blog|news|article/i.test(kid) ? "post" : /page/i.test(kid) ? "page" : "";
+        try { const r = await crawlFetch(kid); push(locsOf(r.text), hint); } catch { /* skip child */ }
+        if (tagged.length >= 800) break;
+      }
+    } else push(locsOf(text), "");
+    if (!tagged.length) return [502, { error: "provider_error", detail: `No <loc> URLs found at ${finalUrl}.` }];
+    const host = new URL(tagged[0].url).hostname.replace(/^www\./, "");
+    const seen = new Set();
+    const pages = [], posts = [];
+    tagged.forEach(({ url, hint }) => {
+      try {
+        const u = new URL(url);
+        if (u.hostname.replace(/^www\./, "") !== host) return;
+        if (/\.(jpe?g|png|gif|webp|pdf|mp4|svg)$/i.test(u.pathname)) return;
+        if (/\/(tag|category|author|wp-content|feed)\//i.test(u.pathname)) return;
+        const path = u.pathname.replace(/\/$/, "") || "/";
+        if (seen.has(path)) return;
+        seen.add(path);
+        const isPost = hint === "post" || (!hint && /\/(blog|news|articles?)\/.|\/\d{4}\/\d{2}\//i.test(u.pathname));
+        (isPost ? posts : pages).push({ url: u.href, path });
+      } catch { /* bad url */ }
+    });
+    return [200, { live: true, host, total: pages.length + posts.length, pages: pages.slice(0, 300), posts: posts.slice(0, 300) }];
+  } catch (e) { return [502, { error: "provider_error", detail: "Sitemap crawl failed: " + String(e?.message || e).slice(0, 160) }]; }
+}
+/* structured content extraction: heading/paragraph/list flow → markdown */
+const htmlToContentMd = (html) => {
+  let b = (html.match(/<body[\s\S]*?<\/body>/i) || [html])[0];
+  b = b.replace(/<(script|style|noscript|svg|iframe|form|select)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<(nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const out = [];
+  const re = /<(h1|h2|h3|h4|p|li|blockquote)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while ((m = re.exec(b))) {
+    const tag = m[1].toLowerCase();
+    const txt = stripTags(m[2]);
+    if (!txt || txt.length < 3) continue;
+    if (tag === "h1") out.push("# " + txt);
+    else if (tag === "h2") out.push("## " + txt);
+    else if (tag === "h3" || tag === "h4") out.push("### " + txt);
+    else if (tag === "li") { if (txt.split(/\s+/).length >= 3) out.push("- " + txt); } // short li = leftover menu items
+    else if (tag === "blockquote") out.push("> " + txt);
+    else out.push(txt);
+  }
+  return out.join("\n\n").slice(0, 24000);
+};
+async function handleCrawlPage(body) {
+  let url = String(body?.url || "").trim();
+  if (!url) return [400, { error: "bad_request", detail: "A page URL is required." }];
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try {
+    const { text: html, status } = await crawlFetch(url, 15000);
+    if (/sgcaptcha|cf-chl|challenge-platform|_Incapsula_|Just a moment/i.test(html) || status === 202)
+      return [502, { error: "provider_error", detail: "The site's bot firewall challenged the crawler — whitelist your CRM server's IP or retry in a few minutes." }];
+    if (status >= 400) return [502, { error: "provider_error", detail: `The page answered HTTP ${status}.` }];
+    const title = ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "").replace(/\s+/g, " ").trim();
+    const h1 = stripTags(([...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)][0] || [])[1] || "");
+    const markdown = htmlToContentMd(html);
+    const headings = markdown.split("\n").filter((l) => /^#{1,3} /.test(l)).slice(0, 40);
+    return [200, { live: true, url, metaTitle: title, metaDesc: metaContent(html, "description"), h1,
+      markdown, headings, words: markdown ? markdown.split(/\s+/).length : 0 }];
+  } catch (e) { return [502, { error: "provider_error", detail: "Page fetch failed: " + String(e?.message || e).slice(0, 160) }]; }
+}
+
 async function handleAuditWebsite(body) {
   let sm = String(body?.sitemapUrl || "").trim();
   if (!sm) return [400, { error: "bad_request", detail: "A sitemap URL is required." }];
@@ -2379,7 +2474,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2415,6 +2510,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/pixel/status" ? handlePixelStatus(body)
         : req.url === "/api/pixel/check" ? await handlePixelCheck(body)
         : req.url === "/api/audit/website" ? await handleAuditWebsite(body)
+        : req.url === "/api/crawl/sitemap" ? await handleCrawlSitemap(body)
+        : req.url === "/api/crawl/page" ? await handleCrawlPage(body)
         : req.url === "/api/audit/profile" ? await handleAuditProfile(body)
         : req.url === "/api/leads/search" ? await handleLeadsSearch(body)
         : req.url === "/api/scrape-email" ? await handleScrapeEmail(body)

@@ -6,6 +6,7 @@ import {
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { KwBankPicker } from "../tools/kwbank.jsx";
+import { OptimizeControls, ResearchChecklist, defaultOptimizeSpec, optimizeRulesBlock } from "../../lib/optimizespec.jsx";
 import { useWork } from "../../lib/worklog.jsx";
 import { realDfs } from "./indexcheck.jsx";
 import {
@@ -64,7 +65,8 @@ Description: <meta description, ≤160 chars, primary keyword + concrete benefit
 - INTERNAL LINKING (critical): use the provided LINK PLAN — every listed URL must appear at least once as a markdown link [descriptive anchor](exact-url), woven into sentences naturally. Descriptive anchors only (never "click here"). Link the parent hub early, siblings/related services mid-page, cross-city pages in a service-area block, a supporting article from the FAQ, and the contact page in the closing CTA.
 - Include 1-2 image suggestions as ![alt text](suggested: description) with keyword-bearing alt text.
 - Weave required entities naturally; never keyword-stuff. FAQ: bold question + genuinely useful 2-4 sentence answer.
-- Meet or exceed the word target. Follow the brand voice block exactly.`;
+- Meet or exceed the word target. Follow the brand voice block exactly.
+- The OPTIMIZATION RULES block in the prompt is a HARD CONTRACT: satisfy every rule in it (research depth, local mode, required sections, structure handling and the per-section character targets). Output that ignores any rule is a failed output.`;
 
 /* validate + normalize an AI structure payload */
 function normalizeStructure(raw, fromCompetitors) {
@@ -300,6 +302,10 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
   const [busy, setBusy] = useState(null);
   const [stageErr, setStageErr] = useState(null);
   const [compDraft, setCompDraft] = useState("");
+  /* per-page optimization spec (research depth, local mode, tasks, lengths) —
+     persisted on the node so it survives close/reopen and drives every stage */
+  const spec = seo.spec || defaultOptimizeSpec(locationName.split(",")[0] || "");
+  const setSpec = (s) => setSeo({ spec: s });
 
   const scan = async () => {
     if (!seo.primaryKw?.trim()) return;
@@ -338,7 +344,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
     async () => {
       const text = await aiGenerate(ai, {
         system: SYS_STRUCTURE, json: true, maxTokens: 3000,
-        prompt: `Page: "${node.title}" (${node.url}) — type: ${node.type}.\nNiche: ${niche}. Market: ${locationName}.\nPrimary keyword: "${seo.primaryKw}". Secondary keywords: ${seo.secondaryKws || "(none)"}.\n\nTop-ranking competitors for the primary keyword:\n${competitorBlock()}\n\nSITE MAP (use EXACT urls for internalLinks):\n${siteLinks.map((l) => `${l.url} — ${l.title} (${l.type})`).join("\n")}\n\nBuild the content structure that beats this SERP.`,
+        prompt: `Page: "${node.title}" (${node.url}) — type: ${node.type}.\nNiche: ${niche}. Market: ${locationName}.\nPrimary keyword: "${seo.primaryKw}". Secondary keywords: ${seo.secondaryKws || "(none)"}.\n\n${optimizeRulesBlock(spec)}\n\nTop-ranking competitors for the primary keyword:\n${competitorBlock()}\n\nSITE MAP (use EXACT urls for internalLinks):\n${siteLinks.map((l) => `${l.url} — ${l.title} (${l.type})`).join("\n")}\n\nBuild the content structure that beats this SERP and satisfies every optimization rule above (the structure must contain the sections those rules require).`,
       });
       const st = normalizeStructure(parseJsonLoose(text), (seo.competitors || []).length);
       st.live = true; st.provider = ai.provider;
@@ -375,7 +381,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
       const plan = linkPlanRows(buildLinkPlan(node.url, siteLinks, node.type));
       const text = await aiGenerate(ai, {
         system: SYS_WRITER, maxTokens: 8000,
-        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
+        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\n${optimizeRulesBlock(spec)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
       });
       /* parse the structured output; tolerate providers that skip markers */
       const metaM = text.match(/---META---([\s\S]*?)---CONTENT---/);
@@ -442,6 +448,8 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
                   onPick={(k) => setSeo((cur) => cur.primaryKw?.trim()
                     ? { secondaryKws: [...new Set([...String(cur.secondaryKws || "").split(",").map((s) => s.trim()).filter(Boolean), k.keyword])].join(", ") }
                     : { primaryKw: k.keyword })} />}
+            {/* research depth the writer must apply for THIS page */}
+            <ResearchChecklist spec={spec} onChange={setSpec} accent={accent} />
           </Card>
 
           <Card className="space-y-3 p-4">
@@ -472,6 +480,16 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
               <button onClick={addManual} className="rounded-lg border border-gray-200 px-3 text-[12px] font-semibold text-gray-600">Add</button>
             </div>
             {scanNote && <div className="rounded-lg bg-gray-50 px-3 py-2 text-[11px] text-gray-500">{scanNote}</div>}
+          </Card>
+
+          {/* ---- local optimization + optimization rules: the STRICT contract
+               the structure generator and writer must follow for this page ---- */}
+          <Card className="space-y-3 p-4">
+            <div className="ll-display flex items-center gap-2 text-[13.5px] font-semibold"><Sparkles size={14} style={{ color: accent }} /> Local optimization &amp; content rules</div>
+            <div className="text-[11px] text-gray-400">
+              These rules are enforced on every generation for this page — the writer treats them as a hard contract, not a suggestion.
+            </div>
+            <OptimizeControls spec={spec} onChange={setSpec} accent={accent} />
           </Card>
 
           <Card className="space-y-3 p-4">
