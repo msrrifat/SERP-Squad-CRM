@@ -697,7 +697,7 @@ function sendMail(cfg, to, subject, text, opts = {}) {
       send(`MAIL FROM:<${cfg.fromAddr || cfg.user}>`); await expect(250);
       send(`RCPT TO:<${to}>`); await expect(250);
       send("DATA"); await expect(354);
-      const head = `From: ${cfg.from || cfg.user}\r\nTo: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nDate: ${new Date().toUTCString()}`;
+      const head = `From: ${cfg.from || cfg.user}\r\nTo: ${to}\r\n${cfg.replyTo ? `Reply-To: ${cfg.replyTo}\r\n` : ""}Subject: ${subject}\r\nMIME-Version: 1.0\r\nDate: ${new Date().toUTCString()}`;
       const body = opts.html
         ? `Content-Type: multipart/alternative; boundary="ssb0"\r\n\r\n--ssb0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${stuff(text)}\r\n--ssb0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${stuff(opts.html)}\r\n--ssb0--`
         : `Content-Type: text/plain; charset=utf-8\r\n\r\n${stuff(text)}`;
@@ -874,6 +874,110 @@ async function handleMailTest(body) {
     catch (e) { try { conn?.end(); } catch { /* closed */ } out.imap = { ok: false, detail: String(e?.message || e).slice(0, 140) }; }
   } else out.imap = { ok: false, detail: "IMAP not configured (optional — needed for the Inbox)." };
   return [200, { live: true, ...out }];
+}
+
+/* =====================================================================
+   LEAD FORMS on deployed pages
+
+   Pages built by the deploy engine carry a hero contact form. The form
+   lives on the CLIENT's domain, so it posts back here: /api/form/submit is
+   the one public, any-origin POST route besides the pixel.
+
+   Registration (/api/form/register, called by the app at publish time) is
+   what makes a formKey real — it records WHERE leads go. Nothing about the
+   recipient is embedded in the deployed page, so a submission can never be
+   redirected by editing the published HTML, and changing the notification
+   address doesn't require redeploying the site.
+
+   Mail goes out over the agency's own SMTP (Company Settings → API settings
+   → Email SMTP), read server-side from the persisted workspace. Every
+   submission is also appended to the form's own file, capped, so a lead is
+   never lost when SMTP is down or unconfigured.
+   ===================================================================== */
+const FORMS_FILE = new URL("./data/lead-forms.json", import.meta.url);
+const loadForms = () => { try { return JSON.parse(readFileSync(FORMS_FILE, "utf8")); } catch { return {}; } };
+const saveForms = (d) => {
+  mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+  const tmp = new URL("./data/lead-forms.json.tmp", import.meta.url);
+  writeFileSync(tmp, JSON.stringify(d));
+  renameSync(tmp, FORMS_FILE);
+};
+const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+const escHtml = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/* the agency SMTP the app already uses for sign-in codes */
+const agencySmtp = () => {
+  const v = loadState()?.company?.apis?.smtp?.values;
+  if (v?.host && v?.user) return v;
+  if (process.env.SMTP_HOST && process.env.SMTP_USER) return { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER, pass: process.env.SMTP_PASS, from: process.env.SMTP_FROM };
+  return null;
+};
+function handleFormRegister(body) {
+  const key = String(body?.key || "").trim();
+  const to = String(body?.to || "").trim().toLowerCase();
+  if (!/^[a-z0-9]{4,40}$/.test(key)) return [400, { error: "bad_request", detail: "A form key is required." }];
+  if (!isEmail(to)) return [400, { error: "bad_request", detail: "A valid notification email is required — set Brand Voice → Business information → Email." }];
+  const forms = loadForms();
+  const prev = forms[key] || {};
+  forms[key] = { ...prev, key, to, cc: isEmail(body?.cc) ? String(body.cc).trim().toLowerCase() : "",
+    site: String(body?.site || "").slice(0, 120), brand: String(body?.brand || "").slice(0, 120),
+    updatedAt: Date.now(), leads: prev.leads || [] };
+  saveForms(forms);
+  return [200, { ok: true, key, to, smtp: !!agencySmtp() }];
+}
+async function handleFormSubmit(body, ip) {
+  const key = String(body?.formKey || body?.key || "").trim();
+  const forms = loadForms();
+  const cfg = forms[key];
+  /* an unregistered key means the page was deployed before the form was set
+     up (or the key was tampered with) — never guess a recipient */
+  if (!cfg?.to) return [404, { error: "unknown_form", detail: "This form isn't connected yet — please call us instead." }];
+  /* the honeypot is invisible to people and irresistible to bots: a filled
+     one is accepted with a 200 so the bot doesn't learn, but nothing is sent */
+  if (String(body?.company_url || "").trim()) return [200, { ok: true, spam: true }];
+  const name = String(body?.name || "").trim().slice(0, 120);
+  const email = String(body?.email || "").trim().slice(0, 160);
+  const phone = String(body?.phone || "").trim().slice(0, 60);
+  const message = String(body?.message || "").trim().slice(0, 4000);
+  if (!name || !isEmail(email) || !phone) return [400, { error: "bad_request", detail: "Name, a valid email and a phone number are required." }];
+  const page = String(body?.page || "").slice(0, 200);
+  const lead = { at: Date.now(), name, email, phone, message, page, ip: String(ip || "").slice(0, 45) };
+  cfg.leads = [lead, ...(cfg.leads || [])].slice(0, 500);
+  forms[key] = cfg;
+  saveForms(forms);
+
+  const smtp = agencySmtp();
+  if (!smtp) return [200, { ok: true, emailed: false, detail: "Received." }];
+  const subject = `New ${cfg.brand || "website"} enquiry — ${name}`;
+  const text = [`New enquiry from ${cfg.site || "the website"}${page ? " (" + page + ")" : ""}`, "",
+    `Name:    ${name}`, `Email:   ${email}`, `Phone:   ${phone}`, "", "Message:", message || "(none)", "",
+    `Received: ${new Date().toUTCString()}`].join("\n");
+  const esc2 = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = `<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#141b24">
+<h2 style="margin:0 0 4px">New enquiry — ${esc2(name)}</h2>
+<p style="margin:0 0 16px;color:#667"><a href="https://${esc2(cfg.site)}${esc2(page)}">${esc2(cfg.site)}${esc2(page)}</a></p>
+<table cellpadding="6" style="border-collapse:collapse;font-size:15px">
+<tr><td style="color:#667">Name</td><td><b>${esc2(name)}</b></td></tr>
+<tr><td style="color:#667">Email</td><td><a href="mailto:${esc2(email)}">${esc2(email)}</a></td></tr>
+<tr><td style="color:#667">Phone</td><td><a href="tel:${esc2(phone.replace(/[^+\d]/g, ""))}">${esc2(phone)}</a></td></tr>
+</table>${message ? `<p style="margin:16px 0 0;white-space:pre-wrap;border-left:3px solid #ddd;padding-left:12px">${esc2(message)}</p>` : ""}
+<p style="margin:20px 0 0;font-size:12px;color:#889">Sent by SERP Squad Studio · replying goes straight to the enquirer.</p></div>`;
+  try {
+    /* the visitor's own address as Reply-To so hitting reply answers them */
+    await sendMail({ ...smtp, replyTo: email }, cfg.to, subject, text, { html });
+    if (cfg.cc) { try { await sendMail({ ...smtp, replyTo: email }, cfg.cc, subject, text, { html }); } catch { /* cc is best-effort */ } }
+    return [200, { ok: true, emailed: true }];
+  } catch (e) {
+    /* the lead is already stored — report success to the visitor, and the
+       failure reason where the agency can see it */
+    console.error("[form] SMTP send failed:", String(e?.message || e));
+    return [200, { ok: true, emailed: false }];
+  }
+}
+function handleFormLeads(body) {
+  const key = String(body?.key || "").trim();
+  const cfg = loadForms()[key];
+  if (!cfg) return [200, { live: true, leads: [], registered: false }];
+  return [200, { live: true, registered: true, to: cfg.to, smtp: !!agencySmtp(), leads: (cfg.leads || []).slice(0, 100) }];
 }
 
 /* ---- open/click tracking: 1px gif + redirect, events in a JSON file.
@@ -2081,7 +2185,9 @@ async function handleInsightAudit(body) {
 const PIXELS_FILE = new URL("./data/pixels.json", import.meta.url);
 const loadPixels = () => { try { return JSON.parse(readFileSync(PIXELS_FILE, "utf8")); } catch { return {}; } };
 const savePixels = (d) => { mkdirSync(new URL("./data/", import.meta.url), { recursive: true }); writeFileSync(PIXELS_FILE, JSON.stringify(d)); };
-const PIXEL_ROUTES = ["/api/pixel/verify"];
+/* routes that must answer ANY origin: they are called from client websites,
+   not from the app — the pixel's verify beacon and deployed pages' lead forms */
+const PIXEL_ROUTES = ["/api/pixel/verify", "/api/form/submit"];
 /* does the site actually contain the pixel snippet? Fetches the page like a
    browser and looks for px.js + the site key — turns "not verifying" from a
    mystery into a concrete answer (not installed vs installed-but-never-visited) */
@@ -2517,6 +2623,9 @@ http.createServer(async (req, res) => {
   if (req.url.startsWith("/api/auth/") && rateLimited(ip, "auth", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many authentication attempts — try again later." });
   if ((req.url === "/api/app/login" || req.url === "/api/app/2fa") && rateLimited(ip, "applogin", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many sign-in attempts — try again in a few minutes." });
   if (req.url.startsWith("/api/pixel/verify") && rateLimited(ip, "pixel", 30, 60e3)) return send(429, { error: "rate_limited" });
+  /* deployed lead forms are public — one visitor has no reason to send more
+     than a handful of enquiries in ten minutes */
+  if (req.url === "/api/form/submit" && rateLimited(ip, "form", 8, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many submissions — please call us instead." });
   if (req.url.startsWith("/api/outreach/") && rateLimited(ip, "outreach", 60, 60 * 60e3)) return send(429, { error: "rate_limited", detail: "Outreach send limit reached (60/hour) — protects your sender reputation." });
   try {
     if (req.method === "GET" && req.url === "/api/health") return send(200, { ok: true, dfsConfigured: !!fileCreds() });
@@ -2584,13 +2693,23 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = req.url === "/api/state" ? 32e6 : 4e6;
       for await (const chunk of req) { raw += chunk; if (raw.length > bodyCap) throw new Error("payload too large"); }
-      const body = JSON.parse(raw || "{}");
+      /* deployed lead forms still submit natively when JavaScript is off — that
+         arrives as a urlencoded form post, and deserves an HTML reply */
+      const formPost = /application\/x-www-form-urlencoded/i.test(String(req.headers["content-type"] || ""));
+      const body = formPost ? Object.fromEntries(new URLSearchParams(raw)) : JSON.parse(raw || "{}");
+      if (formPost && req.url === "/api/form/submit") {
+        const [code2, payload2] = await handleFormSubmit(body, ip);
+        const ok = code2 === 200 && payload2.ok;
+        const back = /^https?:\/\/[^"'<>\s]+$/.test(String(req.headers.referer || "")) ? req.headers.referer : "";
+        res.writeHead(ok ? 200 : 400, { "Content-Type": "text/html; charset=utf-8", ...SEC_HEADERS });
+        return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${ok ? "Request received" : "Could not send"}</title><body style="font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:34em;margin:14vh auto;padding:0 6vw;color:#141b24"><h1 style="font-size:24px">${ok ? "Thanks — your request is in." : "That didn't send"}</h1><p>${ok ? "We'll reply by email shortly." : escHtml(payload2.detail || "Please check the form and try again.")}</p>${back ? `<p><a href="${escHtml(back)}">← Back to the page</a></p>` : ""}`);
+      }
       const [code, payload] = req.url === "/api/scan-listings" ? await handleScan(body)
         : req.url === "/api/check-index" ? await handleCheckIndex(body)
         : req.url === "/api/geo-grid" ? await handleGeoGrid(body)
@@ -2630,6 +2749,9 @@ http.createServer(async (req, res) => {
         : req.url === "/api/guestpost/search" ? await handleGuestSearch(body)
         : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
         : req.url === "/api/mail/test" ? await handleMailTest(body)
+        : req.url === "/api/form/register" ? handleFormRegister(body)
+        : req.url === "/api/form/submit" ? await handleFormSubmit(body, ip)
+        : req.url === "/api/form/leads" ? handleFormLeads(body)
         : req.url === "/api/mail/inbox" ? await handleMailInbox(body)
         : req.url === "/api/mail/message" ? await handleMailMessage(body)
         : req.url === "/api/track/stats" ? handleTrackStats(body)

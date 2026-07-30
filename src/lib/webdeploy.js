@@ -130,6 +130,33 @@ export const pickMedia = (media, keywords, count = 2) => {
   return scored.slice(0, count).map((x) => x.m);
 };
 
+/* ---- image choices made in the editor's "Select images" step ----
+   node.seo.images is keyed per section ("hero", "s0", "s1", …). A key set to
+   { skip:true } means the user deliberately chose NO image there, which is a
+   different answer from "not decided yet" (undefined) — the first suppresses
+   the automatic image slot, the second leaves the old auto behaviour. */
+const chosenImage = (picks, key) => {
+  const p = picks && picks[key];
+  if (!p || p.skip || !(p.url || p.src)) return null;
+  return { src: p.url || p.src, alt: p.alt || "", title: p.title || p.alt || "", caption: p.caption || "" };
+};
+const imageSkipped = (picks, key) => !!(picks && picks[key] && picks[key].skip);
+
+/* the lead form that replaces the hero image: posts to the CRM's form endpoint,
+   which emails the administrator. Disabled (image hero) when ctx opts out. */
+const leadFormCfg = (ctx) => {
+  const f = ctx && ctx.leadForm;
+  if (!f || f.enabled === false) return null;
+  if (!f.to && !f.endpoint) return null;      // nowhere to send — keep the image hero
+  return {
+    key: f.key || "", endpoint: f.endpoint || "", to: f.to || "",
+    heading: f.heading || "Request your free quote",
+    note: f.note || "Tell us what you need — a written quote comes back the same working day.",
+    button: f.button || "Send my request",
+    thanks: f.thanks || "Thanks — your request is in. We'll reply by email shortly.",
+  };
+};
+
 /* rule 9 — deterministic neighborhoods/zips for a city page (demo data,
    replaced by the AI research payload when present on the node) */
 const cityCoverage = (city) => {
@@ -165,6 +192,9 @@ export function composePage(node, ctx) {
     const m = img[idx] || media[idx];
     return m ? { src: m.url || m.src, alt: `${cap(kw)}${city ? ` in ${city}` : ""} — ${brand}`, title: `${cap(kw)} | ${brand}` } : null;
   };
+  /* explicit per-section image choices always beat keyword auto-matching */
+  const picks = node.seo?.images || null;
+  const lead = leadFormCfg(ctx);
 
   const sections = [];
   const push = (t, data) => sections.push({ t, ...data });
@@ -176,8 +206,13 @@ export function composePage(node, ctx) {
   const rc = node.seo?.content?.markdown ? parseContentMd(node.seo.content.markdown) : null;
   const hasResearched = !!(rc && rc.sections.length);
 
-  /* intro + rule 4 service description */
-  push("intro", { h1: `${cap(primary)}${city ? ` in ${city}` : ""} — ${brand}`, image: imgFor(primary, 0), phone: gbp?.phone || "",
+  /* intro + rule 4 service description — the hero carries the lead form; when
+     an image is chosen for the hero it becomes the band's background photo
+     (the form takes the media column the image used to sit in) */
+  const heroPick = chosenImage(picks, "hero");
+  push("intro", { h1: `${cap(primary)}${city ? ` in ${city}` : ""} — ${brand}`,
+    image: heroPick || (imageSkipped(picks, "hero") ? null : imgFor(primary, 0)),
+    bgImage: lead ? heroPick : null, form: lead, phone: gbp?.phone || "",
     text: (rc && rc.intro) || node.seo?.content?.intro || `Looking for ${primary}${city ? ` in ${city}` : ""}? ${brand} delivers ${primary} with transparent pricing, a written scope and results you can verify. ${brandVoice.tagline || ""}`.trim() });
 
   let hasRcFaq = false;
@@ -188,11 +223,14 @@ export function composePage(node, ctx) {
         const pairs = mdFaqPairs(sec.blocks);
         if (pairs.length) { hasRcFaq = true; push("faq", { h2: sec.h2, items: pairs.slice(0, 8) }); return; }
       }
+      const pick = chosenImage(picks, "s" + i);
       push("content", { h2: sec.h2, kind, blocks: sec.blocks,
-        /* every third section gets a labeled image slot beside the text so
-           photos can be dropped in later without breaking the layout */
-        imageSlot: !sec.blocks.some((b) => b.k === "img") && i % 3 === 1
-          ? { alt: `${cap(primary)}${city ? ` in ${city}` : ""} — ${sec.h2}`, side: i % 2 ? "left" : "right" } : null });
+        /* a picked image renders for real beside the text; "no image" is
+           honored exactly; undecided sections keep the old behaviour of
+           labeled slots on every third section */
+        image: pick ? { ...pick, side: i % 2 ? "left" : "right" } : null,
+        imageSlot: pick || imageSkipped(picks, "s" + i) || sec.blocks.some((b) => b.k === "img") || i % 3 !== 1
+          ? null : { alt: `${cap(primary)}${city ? ` in ${city}` : ""} — ${sec.h2}`, side: i % 2 ? "left" : "right" } });
     });
   }
 
@@ -257,7 +295,7 @@ export function composePage(node, ctx) {
   if (faqs.length && !hasRcFaq) push("faq", { h2: "Frequently asked questions",
     items: faqs.slice(0, 6).map((q) => ({ q, a: `Straight answer: it depends on scope — ${brand} confirms specifics in a written quote before any commitment. Call ${gbp?.phone || "us"} for a same-day answer.` })) });
 
-  push("cta", { h2: `Book ${primary}${city ? ` in ${city}` : ""} today`,
+  push("cta", { h2: `Book ${primary}${city ? ` in ${city}` : ""} today`, phone: gbp?.phone || "", hasForm: !!lead,
     text: `Written quote, transparent pricing, ${(brandVoice.toneWords || "friendly").split(",")[0].trim()} service. ${gbp?.phone ? `Call ${gbp.phone} or book` : "Book"} online in under a minute.` });
 
   /* 3 — schema graph */
@@ -316,14 +354,49 @@ const contentBlockHtml = (b) => {
     : imgSlotHtml(b.alt);
   return `<p>${mdInline(b.text)}</p>`;
 };
+const tel = (p) => String(p || "").replace(/[^+\d]/g, "");
+/* the hero lead form — plain HTML that still submits without JavaScript
+   (native POST to the endpoint, or a mailto: form when no endpoint exists),
+   progressively enhanced by one delegated listener shipped once per page */
+const leadFormHtml = (f) => {
+  const action = f.endpoint || (f.to ? `mailto:${esc(f.to)}` : "");
+  const mailto = !f.endpoint && !!f.to;
+  const fld = (name, label, type, req, extra = "") =>
+    `<label class="ff-f"><span>${esc(label)}${req ? ' <i aria-hidden="true">*</i>' : ""}</span>${type === "textarea"
+      ? `<textarea name="${name}" rows="3" ${req ? "required" : ""} placeholder="${esc(extra)}"></textarea>`
+      : `<input type="${type}" name="${name}" ${req ? "required" : ""} autocomplete="${extra}" placeholder="">`}</label>`;
+  return `<form class="leadform" id="lead-form" method="post" action="${esc(action)}"${mailto ? ' enctype="text/plain"' : ""} data-ss-form="${esc(f.key)}"${f.endpoint ? ` data-endpoint="${esc(f.endpoint)}"` : ""} data-thanks="${esc(f.thanks)}">
+<h2 class="ff-h">${esc(f.heading)}</h2><p class="ff-note">${esc(f.note)}</p>
+${fld("name", "Your name", "text", true, "name")}${fld("email", "Email", "email", true, "email")}${fld("phone", "Phone number", "tel", true, "tel")}${fld("message", "Message", "textarea", false, "What do you need help with?")}
+<input class="ff-hp" type="text" name="company_url" tabindex="-1" autocomplete="off" aria-hidden="true">
+<button class="btn ff-submit" type="submit">${esc(f.button)}</button>
+<p class="ff-msg" role="status" aria-live="polite"></p></form>`;
+};
+/* one delegated submit handler for every lead form on the page */
+const leadFormJs = `<script>(function(){if(window.__ssLeadForm)return;window.__ssLeadForm=1;document.addEventListener("submit",function(e){var f=e.target;if(!f||!f.getAttribute||!f.getAttribute("data-ss-form"))return;var ep=f.getAttribute("data-endpoint");if(!ep)return;e.preventDefault();var m=f.querySelector(".ff-msg"),b=f.querySelector(".ff-submit"),t=b?b.innerHTML:"";var d={};new FormData(f).forEach(function(v,k){d[k]=v});d.formKey=f.getAttribute("data-ss-form");d.page=location.pathname;d.pageTitle=document.title;if(b){b.disabled=true;b.innerHTML="Sending\\u2026"}if(m){m.className="ff-msg";m.textContent=""}fetch(ep,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)}).then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{ok:r.ok,j:j}})}).then(function(x){if(m){m.className="ff-msg "+(x.ok?"ok":"err");m.textContent=x.ok?(f.getAttribute("data-thanks")||"Thanks \\u2014 your request is in."):(x.j.detail||"Could not send right now \\u2014 please call us instead.")}if(x.ok)f.reset()}).catch(function(){if(m){m.className="ff-msg err";m.textContent="Network error \\u2014 please call us instead."}}).then(function(){if(b){b.disabled=false;b.innerHTML=t}})})})();<\/script>`;
 const sectionHtml = (s, base) => {
   const cls = `ss-sec sec-${s.t}${s.bg ? " bg-" + s.bg : ""}`;
   const wrap = (inner, extra = "") => `<section class="${cls}${extra}"><div class="wrap">${inner}</div></section>`;
   const a = (l, txt) => l ? `<a href="${base}${l.url}"${l.citySpecific ? ' data-city-specific="1"' : ""}>${esc(txt || l.title)}</a>` : esc(txt || "");
+  /* every band pairs a quote action with a call action — the two things a
+     visitor actually does; the quote button jumps to the hero form when the
+     page carries one, and falls back to the contact page when it doesn't */
+  const ctaBtns = (quoteLabel, hasForm) =>
+    `<p class="hbtns"><a class="btn light" href="${hasForm ? "#lead-form" : base + "/contact"}">${esc(quoteLabel)}</a>${s.phone ? `<a class="btn ghost call" href="tel:${esc(tel(s.phone))}">☎ Call ${esc(s.phone)}</a>` : ""}</p>`;
   switch (s.t) {
-    case "intro": return `<section class="ss-sec sec-hero"><div class="wrap hgrid"><div class="htext"><h1>${esc(s.h1)}</h1><p>${mdInline(s.text)}</p><p class="hbtns"><a class="btn light" href="${base}/contact">Get a free written quote</a>${s.phone ? `<a class="btn ghost" href="tel:${esc(String(s.phone).replace(/[^+\d]/g, ""))}">☎ ${esc(s.phone)}</a>` : ""}</p></div><div class="hmedia">${s.image ? `<img src="${esc(s.image.src)}" alt="${esc(s.image.alt)}" title="${esc(s.image.title)}" loading="eager">` : imgSlotHtml(s.h1, "hero")}</div></div></section>`;
+    case "intro": {
+      const bg = s.bgImage ? ` style="background-image:url('${esc(s.bgImage.src)}')"` : "";
+      const media = s.form
+        ? leadFormHtml(s.form)
+        : s.image ? `<img src="${esc(s.image.src)}" alt="${esc(s.image.alt)}" title="${esc(s.image.title)}" loading="eager">` : imgSlotHtml(s.h1, "hero");
+      return `<section class="ss-sec sec-hero${s.bgImage ? " has-bg" : ""}"${bg}><div class="wrap hgrid"><div class="htext"><h1>${esc(s.h1)}</h1><p>${mdInline(s.text)}</p>${ctaBtns("Request a free quote", !!s.form)}</div><div class="hmedia">${media}</div></div>${s.form && s.form.endpoint ? leadFormJs : ""}</section>`;
+    }
     case "content": {
       const body = s.blocks.map(contentBlockHtml).join("");
+      if (s.image) {
+        const fig = `<figure class="side"><img src="${esc(s.image.src)}" alt="${esc(s.image.alt)}" title="${esc(s.image.title)}" loading="lazy">${s.image.caption ? `<figcaption>${esc(s.image.caption)}</figcaption>` : ""}</figure>`;
+        return wrap(`<h2>${mdInline(s.h2)}</h2><div class="split${s.image.side === "left" ? " rev" : ""}"><div class="ctext">${body}</div>${fig}</div>`);
+      }
       return s.imageSlot
         ? wrap(`<h2>${mdInline(s.h2)}</h2><div class="split${s.imageSlot.side === "left" ? " rev" : ""}"><div class="ctext">${body}</div>${imgSlotHtml(s.imageSlot.alt, "side")}</div>`)
         : wrap(`<h2>${mdInline(s.h2)}</h2>${body}`);
@@ -337,7 +410,7 @@ const sectionHtml = (s, base) => {
     case "reviews": return wrap(`<h2>${esc(s.h2)}</h2><div class="grid3">${s.items.map((r) => `<blockquote class="card rev"><span class="stars">★★★★★</span><p>“${esc(r.text)}”</p><footer>${esc(r.author)}</footer></blockquote>`).join("")}</div>${s.source ? `<p class="note"><a href="${esc(s.source)}" rel="nofollow noopener" target="_blank">Read all Google reviews →</a></p>` : ""}`);
     case "napMap": return wrap(`<h2>${esc(s.h2)}</h2><div class="napgrid"><div class="card napinfo"><p><strong>${esc(s.nap.name)}</strong></p><p>${esc(s.nap.address || "")}</p><p>☎ <a href="tel:${esc((s.nap.phone || "").replace(/[^+\d]/g, ""))}">${esc(s.nap.phone || "")}</a></p>${s.nap.email ? `<p>✉ <a href="mailto:${esc(s.nap.email)}">${esc(s.nap.email)}</a></p>` : ""}<p><a href="${esc(s.nap.website || "#")}">${esc((s.nap.website || "").replace(/https?:\/\//, ""))}</a></p>${Object.keys(s.nap.hours || {}).length ? `<h3>Business hours</h3><ul class="hours">${Object.entries(s.nap.hours).map(([d, h]) => `<li><span>${esc(d)}</span> ${esc(h)}</li>`).join("")}</ul>` : ""}</div><div class="napmap"><iframe src="https://www.google.com/maps?q=${s.mapQuery}&output=embed" title="Map — ${esc(s.nap.name)}" loading="lazy" width="100%" height="300" style="border:0" referrerpolicy="no-referrer-when-downgrade"></iframe></div></div>`);
     case "faq": return wrap(`<h2>${esc(s.h2)}</h2><div class="faq">${s.items.map((f) => `<details><summary>${mdInline(f.q)}</summary><p>${mdInline(f.a)}</p></details>`).join("")}</div>`);
-    case "cta": return `<section class="ss-sec sec-cta"><div class="wrap"><h2>${esc(s.h2)}</h2><p>${esc(s.text)}</p><p class="hbtns"><a class="btn light" href="${base}/contact">Get my written quote</a></p></div></section>`;
+    case "cta": return `<section class="ss-sec sec-cta"><div class="wrap"><h2>${esc(s.h2)}</h2><p>${esc(s.text)}</p>${ctaBtns("Get my written quote", !!s.hasForm)}</div></section>`;
     default: return "";
   }
 };
@@ -407,12 +480,32 @@ function designCss(ctx, { hard = false } = {}) {
 .ss-sec.sec-hero .hgrid{display:grid;gap:36px;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));align-items:center}
 .ss-sec.sec-hero .hmedia img{box-shadow:0 22px 50px rgba(0,0,0,.28)}
 .ss-sec .btn.light{background:${bandBtn}${i};color:${bandBtnTx}${i}}
-.ss-sec .btn.ghost{background:transparent;color:#fff${i};border:1.5px solid rgba(255,255,255,.65)}
+.ss-sec .btn.ghost{background:transparent${i};color:#fff${i};border:1.5px solid rgba(255,255,255,.65)}
+/* hero photo as the band background — the form takes the media column */
+.ss-sec.sec-hero.has-bg{background-size:cover${i};background-position:center${i};position:relative;isolation:isolate}
+.ss-sec.sec-hero.has-bg:before{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(130deg,${hexRgba(accD, 0.94)},${hexRgba(band, 0.82)})}
+/* hero lead form */
+.ss-sec .leadform{background:${surface}${i};border:1px solid ${line};border-radius:18px;padding:24px;box-shadow:0 22px 50px rgba(0,0,0,.22);display:grid;gap:12px;text-align:left}
+.ss-sec .leadform .ff-h{font-size:clamp(19px,2.4vw,23px)${i};font-weight:800${i};margin:0${i};color:${ink}${i}}
+.ss-sec .leadform .ff-note{font-size:13.5px${i};margin:-4px 0 2px${i};color:${mut}${i};line-height:1.55${i}}
+.ss-sec .leadform .ff-f{display:grid;gap:5px}
+.ss-sec .leadform .ff-f>span{font-size:12px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:${mut}}
+.ss-sec .leadform .ff-f>span i{color:${acc};font-style:normal}
+.ss-sec .leadform input,.ss-sec .leadform textarea{width:100%${i};box-sizing:border-box;font-family:inherit${i};font-size:15px${i};line-height:1.5${i};color:${ink}${i};background:${darkPage ? hexRgba(pageBg, 0.55) : "#fff"}${i};border:1.5px solid ${line}${i};border-radius:10px${i};padding:11px 13px${i};margin:0${i};outline:none;resize:vertical}
+.ss-sec .leadform ::placeholder{color:${hexRgba(mut, 0.75)};opacity:1}
+.ss-sec .leadform input:focus,.ss-sec .leadform textarea:focus{border-color:${acc}${i};box-shadow:0 0 0 3px ${hexRgba(acc, 0.16)}}
+.ss-sec .leadform .ff-hp{position:absolute${i};left:-9999px${i};width:1px${i};height:1px${i};opacity:0${i}}
+.ss-sec .leadform .ff-submit{border:0;cursor:pointer;width:100%;text-align:center;font-family:inherit${i};font-size:15.5px${i};font-weight:700${i};padding:15px 26px${i}}
+.ss-sec .leadform .ff-submit[disabled]{opacity:.6;cursor:progress}
+.ss-sec .leadform .ff-msg{font-size:13.5px${i};margin:0${i};min-height:0}
+.ss-sec .leadform .ff-msg.ok{color:#15803d${i};font-weight:700}
+.ss-sec .leadform .ff-msg.err{color:#b91c1c${i};font-weight:700}
 .ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${band})${i};text-align:center;padding:60px 5vw}
 .ss-sec.sec-cta .hbtns{justify-content:center}
 /* researched-content layouts */
 .ss-sec .split{display:grid;gap:32px;grid-template-columns:1.5fr 1fr;align-items:start}
 .ss-sec .split.rev{grid-template-columns:1fr 1.5fr}.ss-sec .split.rev .ctext{order:2}
+.ss-sec figure.side{margin:0}.ss-sec figure.side img{width:100%${i};border-radius:16px;box-shadow:0 8px 26px ${hexRgba(sh, 0.12)}}
 .ss-sec .imgslot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:220px;border:2px dashed ${hexRgba(acc,0.33)};border-radius:16px;background:${accT};color:${mut};font-size:13px;text-align:center;padding:18px}
 .ss-sec .imgslot .ph{font-size:30px;opacity:.7}
 .ss-sec .imgslot.hero{min-height:280px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:rgba(255,255,255,.85)}

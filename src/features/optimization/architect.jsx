@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import {
-  ChevronDown, ChevronRight, FileText, Layers, Network, Plus, RefreshCw, Search,
+  ChevronDown, ChevronRight, FileText, Image as ImageIcon, Layers, Network, Plus, RefreshCw, Search,
   Sparkles, Target, Trash2, TriangleAlert, UploadCloud, Wand2, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { KwBankPicker } from "../tools/kwbank.jsx";
 import { parseAiJson } from "../../lib/jsonrepair.js";
+import { hashStr } from "../../lib/rng.js";
 import { OptimizeControls, ResearchChecklist, defaultOptimizeSpec, optimizeRulesBlock } from "../../lib/optimizespec.jsx";
 import { useWork } from "../../lib/worklog.jsx";
 import { realDfs } from "./indexcheck.jsx";
@@ -15,7 +16,7 @@ import {
   genContentStructure, genPageContent, genSiteArchitecture, linkPlanRows,
 } from "../../lib/architect.js";
 import { CharCount, Toggle } from "../../ui/primitives.jsx";
-import { buildDeployPlan, demoReviews, exportSiteZip, scheduleDates, serializeElementor, serializeGutenberg, serializeHtml, serializeWpBody, webflowItems } from "../../lib/webdeploy.js";
+import { buildDeployPlan, demoReviews, exportSiteZip, parseContentMd, scheduleDates, serializeElementor, serializeGutenberg, serializeHtml, serializeWpBody, webflowItems } from "../../lib/webdeploy.js";
 import { findDuplicate } from "./postsarchitect.jsx";
 
 /* ================= Website Mapping & Content Architect =================
@@ -306,10 +307,151 @@ function ServiceKeywordsBox({ node, project, seo, setSeo, accent }) {
   );
 }
 
+/* =====================================================================
+   IMAGE SELECTION — the step between "generate content" and publishing.
+
+   The writer produces sections; this is where a human decides which of them
+   carry a photo. Every section is listed with a keyword search over the
+   media library (pre-seeded from that section's own heading), and three
+   possible answers: pick an image, choose "no image", or leave it undecided
+   — undecided keeps the engine's automatic slot behaviour, so opening this
+   step is never destructive.
+   ===================================================================== */
+const IMG_OK = (m) => m.type === "image" || (m.mime || "").startsWith("image/") || m.demo || /\.(jpe?g|png|webp|gif|avif)$/i.test(m.url || m.src || "");
+const mediaSearch = (media, q) => {
+  const terms = String(q || "").toLowerCase().split(/[\s,]+/).map((t) => t.replace(/[^a-z0-9]/g, "")).filter((t) => t.length > 2);
+  const imgs = (media || []).filter(IMG_OK);
+  if (!terms.length) return imgs;
+  return imgs
+    .map((m) => ({ m, score: terms.reduce((n, t) => n + ([m.title, m.name, m.alt].join(" ").toLowerCase().includes(t) ? 1 : 0), 0) }))
+    .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.m);
+};
+
+function ImageStep({ node, media, accent, primaryKw, brand, onPatch, onClose }) {
+  const work = useWork();
+  const sections = React.useMemo(() => {
+    const md = node.seo?.content?.markdown || "";
+    const rc = md ? parseContentMd(md) : null;
+    return [
+      { key: "hero", label: "Hero band", hint: "Used as the hero's background photo behind the headline and the enquiry form.", seed: [primaryKw, node.title].filter(Boolean).join(" ") },
+      ...((rc?.sections || []).map((s, i) => ({ key: "s" + i, label: s.h2, hint: `Section ${i + 1} — sits beside the text.`, seed: s.h2 }))),
+    ];
+  }, [node.seo?.content?.markdown, node.title, primaryKw]);
+  const picks = node.seo?.images || {};
+  const setPick = (key, val) => onPatch((cur) => ({ seo: { ...(cur.seo || {}), images: { ...((cur.seo || {}).images || {}), [key]: val } } }));
+  const clearPick = (key) => onPatch((cur) => {
+    const next = { ...((cur.seo || {}).images || {}) };
+    delete next[key];
+    return { seo: { ...(cur.seo || {}), images: next } };
+  });
+  const [queries, setQueries] = useState({});
+  const q = (s) => (queries[s.key] === undefined ? s.seed : queries[s.key]);
+  const images = (media || []).filter(IMG_OK);
+  const chosen = sections.filter((s) => picks[s.key] && !picks[s.key].skip).length;
+  const skipped = sections.filter((s) => picks[s.key]?.skip).length;
+
+  return (
+    <Modal title="Select images for each section" onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 text-[11.5px] text-gray-500">
+          <ImageIcon size={13} style={{ color: accent }} />
+          <b className="text-gray-700">{images.length}</b> images in the library ·
+          <b className="text-emerald-600">{chosen}</b> chosen ·
+          <b className="text-gray-600">{skipped}</b> set to no image ·
+          <b className="text-gray-600">{sections.length - chosen - skipped}</b> undecided
+          <span className="ml-auto text-[10.5px] text-gray-400">Undecided sections keep the automatic image slots — nothing is forced.</span>
+        </div>
+        {images.length === 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
+            The media library is empty — sync it first in <b>Optimization Studio → Business website → Media</b>, then come back.
+          </div>
+        )}
+        {sections.map((s) => {
+          const pick = picks[s.key];
+          const matches = mediaSearch(media, q(s));
+          /* a heading rarely matches filenames word-for-word — rather than an
+             empty strip, an unedited search that finds nothing falls back to
+             the whole library (an empty result is only shown once the user
+             has typed their own keyword) */
+          const typed = queries[s.key] !== undefined;
+          const fellBack = !matches.length && !typed && images.length > 0;
+          const shown = (fellBack ? images : matches).slice(0, 24);
+          return (
+            <div key={s.key} className="space-y-2 rounded-xl border border-gray-100 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="ll-mono rounded px-1.5 py-px text-[9px] font-bold uppercase" style={{ background: accent + "14", color: accent }}>{s.key === "hero" ? "hero" : s.key}</span>
+                <b className="min-w-0 flex-1 truncate text-[12.5px] text-gray-800">{s.label}</b>
+                <button onClick={() => (pick?.skip ? clearPick(s.key) : setPick(s.key, { skip: true }))}
+                  className={"rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold " + (pick?.skip ? "border-gray-800 bg-gray-800 text-white" : "border-gray-200 text-gray-500 hover:border-gray-300")}>
+                  {pick?.skip ? "✓ No image" : "No image"}
+                </button>
+              </div>
+              <div className="text-[10.5px] text-gray-400">{s.hint}</div>
+              {!pick?.skip && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Search size={12} className="shrink-0 text-gray-300" />
+                    <input value={q(s)} onChange={(e) => setQueries((cur) => ({ ...cur, [s.key]: e.target.value }))}
+                      placeholder="Search the media library by keyword…" className={inputCls + " py-1.5 text-[11.5px]"} />
+                    <span className="ll-mono shrink-0 text-[10px] text-gray-400">
+                      {fellBack ? `no keyword match — all ${images.length}` : `${matches.length} match${matches.length === 1 ? "" : "es"}`}
+                    </span>
+                  </div>
+                  {shown.length === 0
+                    ? <div className="py-3 text-center text-[11px] text-gray-300">No image matches “{q(s)}” — clear the box to browse everything.</div>
+                    : (
+                      <div className="flex gap-2 overflow-x-auto pb-1.5">
+                        {shown.map((m) => {
+                          const url = m.url || m.src;
+                          const on = pick && !pick.skip && (pick.url === url);
+                          return (
+                            <button key={m.id || url} onClick={() => (on ? clearPick(s.key)
+                              : setPick(s.key, { id: m.id, url, alt: m.alt || `${m.title || m.name} — ${brand}`, title: m.title || m.name, caption: pick?.caption || "" }))}
+                              title={m.title || m.name}
+                              className="group relative w-[112px] shrink-0 overflow-hidden rounded-lg border-2 text-left"
+                              style={{ borderColor: on ? accent : "transparent" }}>
+                              <img src={url} alt="" loading="lazy" className="h-[72px] w-full bg-gray-50 object-cover" />
+                              <span className="block truncate px-1 py-1 text-[9.5px] text-gray-500">{m.title || m.name}</span>
+                              {on && <span className="absolute right-1 top-1 rounded-full px-1 py-px text-[9px] font-bold text-white" style={{ background: accent }}>✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  {pick && !pick.skip && (
+                    <div className="ll-fade grid gap-2 rounded-lg bg-gray-50 p-2 sm:grid-cols-2">
+                      <Labeled label="Alt text (what the image shows)">
+                        <input value={pick.alt || ""} onChange={(e) => setPick(s.key, { ...pick, alt: e.target.value })} className={inputCls + " py-1.5 text-[11.5px]"} />
+                      </Labeled>
+                      <Labeled label="Caption (optional, shows under the image)">
+                        <input value={pick.caption || ""} onChange={(e) => setPick(s.key, { ...pick, caption: e.target.value })}
+                          placeholder={s.key === "hero" ? "Captions aren't shown on the hero" : "e.g. Finished damp-proof course in Leeds"} disabled={s.key === "hero"}
+                          className={inputCls + " py-1.5 text-[11.5px] disabled:bg-gray-100 disabled:text-gray-400"} />
+                      </Labeled>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+        <div className="flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+          <button onClick={onClose} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[12px] font-semibold text-gray-600">Close</button>
+          <button onClick={() => { work?.("website", "imagesSelected", { detail: `${node.title} · ${chosen} image${chosen === 1 ? "" : "s"}` }); onClose(); }}
+            className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
+            Done — {chosen} image{chosen === 1 ? "" : "s"} selected
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ---- per-page content pipeline editor ---- */
-function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, locationName, siteLinks = [], onPatch, onPublish, onClose }) {
+function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, media = [], locationName, siteLinks = [], onPatch, onPublish, onClose }) {
   const work = useWork();
   const seo = node.seo || {};
+  const [imgStep, setImgStep] = useState(false);
   /* functional through to project state — concurrent stages can't clobber each other */
   const setSeo = (patch) => onPatch((cur) => ({ seo: { ...(cur.seo || {}), ...(typeof patch === "function" ? patch(cur.seo || {}) : patch) } }));
   const [scanning, setScanning] = useState(false);
@@ -413,6 +555,8 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
     },
     () => { setSeo({ content: { ...genPageContent(node, seo.structure, brandVoice, project.name, niche, siteLinks), live: false } }); work?.("website", "contentWritten", { detail: node.title }); });
 
+  const imgCount = Object.values(seo.images || {}).filter((p) => p && !p.skip && p.url).length;
+
   const Btn = ({ on, disabled, icon: Icon, label, busyKey, primary }) => (
     <button onClick={on} disabled={disabled || busy}
       className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12.5px] font-semibold disabled:opacity-40"
@@ -513,6 +657,8 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
               {seo.structure && <Btn on={audit} icon={TriangleAlert} label="Content audit & suggestions" busyKey="audit" />}
               {seo.audit && <Btn on={adjust} icon={Wand2} label="Adjust to suggestions" busyKey="adjust" />}
               {seo.structure && <Btn on={generate} icon={FileText} label="Generate content" busyKey="content" primary />}
+              {/* the step between writing and publishing: which sections carry a photo */}
+              {seo.content && <Btn on={() => setImgStep(true)} icon={ImageIcon} label={imgCount ? `Section images (${imgCount} chosen)` : "Select section images"} busyKey="images" primary={!imgCount} />}
             </div>
             {stageErr && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{stageErr}</div>}
 
@@ -593,11 +739,27 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
                       rows={5} className={"ll-mono " + inputCls + " resize-y text-[10.5px] leading-snug"} />
                   </Labeled>
                 )}
+                {/* what the image step decided — visible without reopening it */}
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-50 pt-2 text-[10.5px]">
+                  <span className="font-semibold uppercase tracking-wider text-gray-400">Section images</span>
+                  {Object.keys(seo.images || {}).length === 0
+                    ? <span className="text-gray-400">not chosen yet — the engine places automatic slots</span>
+                    : Object.entries(seo.images).map(([k, p]) => (
+                        <span key={k} className={"rounded px-1.5 py-px " + (p?.skip ? "bg-gray-100 text-gray-500" : "bg-emerald-50 text-emerald-700")}>
+                          {k === "hero" ? "hero" : k} {p?.skip ? "· none" : "✓"}
+                        </span>
+                      ))}
+                  <button onClick={() => setImgStep(true)} className="ml-auto font-bold" style={{ color: accent }}>Edit images</button>
+                </div>
               </div>
             )}
           </Card>
         </div>
       </div>
+      {imgStep && (
+        <ImageStep node={node} media={media} accent={accent} primaryKw={seo.primaryKw || node.title}
+          brand={project.name.split(" — ")[0]} onPatch={onPatch} onClose={() => setImgStep(false)} />
+      )}
     </div>
   );
 
@@ -887,7 +1049,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
         walk(tree, (p) => siteLinks.push({ title: p.title, url: p.url, type: p.type, primaryKw: p.seo?.primaryKw || "" }));
         return (
           <PageEditor node={openNode} project={project} brandVoice={brandVoice} brandProps={opt.branding?.properties || null} niche={arch?.niche || niche || project.name}
-            accent={accent} dfs={dfs} ai={aiConfig} locationName={locationName} siteLinks={siteLinks}
+            accent={accent} dfs={dfs} ai={aiConfig} media={w.media || []} locationName={locationName} siteLinks={siteLinks}
             onPatch={(patch) => patchNode(openNode.id, patch)} onPublish={() => setDeploying({ only: openNode })} onClose={() => setOpenId(null)} />
         );
       })()}
@@ -935,6 +1097,9 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
   const [schedEvery, setSchedEvery] = useState(3);
   const [progress, setProgress] = useState(null); // [{url, status, note}]
   const [done, setDone] = useState(false);
+  /* hero enquiry form — on by default, needs a notification address */
+  const [leadForm, setLeadForm] = useState(true);
+  const [formNote, setFormNote] = useState(null);
 
   /* credentials may be a raw string (legacy) or the connector's {value,…} object */
   const credStr = typeof w.credential === "string" ? w.credential : (w.credential?.value || "");
@@ -954,8 +1119,16 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
     ...Object.values(props).filter((v) => typeof v === "string" && /^https?:\/\//.test(v)),
     ...((opt.social?.accounts || []).filter((a) => a.connected && a.url).map((a) => a.url)),
   ];
+  /* ---- the hero lead form: where enquiries land ----
+     The deployed page never carries the address — it carries a key that this
+     app registers against the recipient, so leads can't be redirected by
+     editing the published HTML and the address can change without a redeploy. */
+  const leadTo = String(brandVoice?.biz?.email || gbp.email || "").trim();
+  const formKey = "f" + hashStr(String(project.website || project.id)).toString(36);
+  const formApi = (/localhost|127\.0\.0\.1/.test(window.location.hostname) ? window.location.origin : "https://app.serpsquad.com") + "/api/form/submit";
   const ctx = {
     sameAs,
+    leadForm: { enabled: leadForm && !!leadTo, to: leadTo, key: formKey, endpoint: formApi },
     /* Brand Voice → Brand colors drive the deployed pages' design palette */
     brandColors: brandVoice?.colors || null,
     tree, brand: project.name.split(" — ")[0], niche: arch?.niche || project.name,
@@ -995,11 +1168,27 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
     return { ...base, content: serializeGutenberg(page, chrome, ctx) };
   };
 
+  /* tell the API server where this site's enquiries go — done before any page
+     ships so the very first submission has somewhere to land */
+  const registerForm = async () => {
+    if (!ctx.leadForm.enabled) return;
+    try {
+      const r = await fetch("/api/form/register", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({ key: formKey, to: leadTo, site: project.website, brand: project.name.split(" — ")[0] }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setFormNote(`⚠ Enquiry form not connected — ${d.detail || "HTTP " + r.status}. Pages still publish; leads won't be emailed until this is fixed.`); return; }
+      setFormNote(d.smtp
+        ? `✓ Enquiry form connected — submissions email ${leadTo}.`
+        : `⚠ Enquiry form connected to ${leadTo}, but no SMTP is configured (Company Settings → API settings → Email SMTP). Leads are stored on the server until it is.`);
+    } catch (e) { setFormNote(`⚠ Enquiry form not connected — API server unreachable (${e?.message || e}).`); }
+  };
+
   const deploy = async () => {
     const rows = plan.map((x) => ({ url: x.node.url, status: "pending", note: "" }));
     setProgress([...rows]);
     const mark = (i, status, note = "") => { rows[i] = { ...rows[i], status, note }; setProgress([...rows]); };
     const auth = { site: project.website, credential: credStr };
+    await registerForm();
 
     /* CUSTOM-CODED: static export — a real ZIP download, no builder */
     if (builder === "export") {
@@ -1192,6 +1381,15 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
             · reviews: {reviewSource ? "Google review source connected" : "demo reviews (add the review link in Branding & Automation → Properties)"}
             · NAP: {gbp.bizName ? gbp.bizName : "⚠ no GBP business info"} · media: {media.length ? `${media.length} synced items` : "none synced (Media tab) — pages deploy without images"}
             <br />Every page ships: meta ≤60/≤160 · single H1 + section H2/H3 · JSON-LD graph · smart sub-service links (city page first) · pricing · signs-you-need · why-{ctx.brand} · cities/neighborhood coverage · NAP + embedded map · FAQ schema · semantic header/footer — <b>fully responsive</b>, with CMS/theme layout, page-width and font defaults overridden so the design is 100% system-controlled.
+          </div>
+          {/* hero enquiry form: on the page, off the page, and where it lands */}
+          <div className="space-y-2">
+            <Toggle on={ctx.leadForm.enabled} onChange={() => leadTo && setLeadForm((v) => !v)}
+              label="Hero enquiry form (name · email · phone · message)"
+              desc={leadTo
+                ? `Replaces the hero image with a real form — submissions are emailed to ${leadTo} and stored on the server as a backup.`
+                : "⚠ No notification email — add one in Brand Voice → Business information → Email, then this turns on. Until then heroes ship with an image."} />
+            {formNote && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600">{formNote}</div>}
           </div>
           {w.platform === "webflow" && builder === "webflowcms" && (
             <div className="rounded-xl border border-gray-100 p-3">

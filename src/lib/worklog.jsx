@@ -66,6 +66,7 @@ export const WORK_EVENTS = {
   archGenerated:      { one: "Website architecture generated", many: "website architectures generated" },
   serpScanned:        { one: "Competitor SERP scan run", many: "competitor SERP scans run" },
   contentWritten:     { one: "Page content researched & written", many: "pages of content researched & written" },
+  imagesSelected:     { one: "Section images selected for a page", many: "pages had section images selected" },
   siteDeployed:       { one: "Full website built & deployed from the site map", many: "full website deploys from the site map" },
   pagePublished:      { one: "Single page published from the site map", many: "single pages published from the site map" },
   /* posts architect (blog + answer topical authority) */
