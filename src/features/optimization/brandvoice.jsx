@@ -130,17 +130,31 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
         {(() => {
           const colors = bv.colors || {};
           const setColor = (k) => (v) => set((cur) => ({ colors: { ...(cur.colors || {}), [k]: v } }));
+          /* a dark page background needs dark card surfaces and light borders —
+             defaults follow the page background so nothing renders as an
+             unexplained white box on a dark theme */
+          const isDark = (hex) => {
+            const h = String(hex || "").replace("#", "");
+            if (h.length < 6) return false;
+            const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+            return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
+          };
+          const darkPage = isDark(colors.pageBg || "#ffffff");
           const FIELDS = [
             ["primary", "Primary brand color", accent],
             ["secondary", "Secondary color (badges, checks, steps)", accent],
             ["pageBg", "Page background", "#ffffff"],
-            ["sectionTint", "Alternate section background", "#f5f8fa"],
-            ["heading", "Heading color", "#141b24"],
-            ["text", "Body text color", "#46525f"],
+            ["sectionTint", "Alternate section background", darkPage ? "#161622" : "#f5f8fa"],
+            ["surface", "Card / FAQ / table surface", darkPage ? "#1b1b28" : "#ffffff"],
+            ["border", "Border & divider color", darkPage ? "#2c2c3d" : "#e5eaef"],
+            ["heading", "Heading color", darkPage ? "#ffffff" : "#141b24"],
+            ["text", "Body text color", darkPage ? "#c7c9d4" : "#46525f"],
             ["link", "Link / anchor text color", accent],
             ["button", "Button color", accent],
             ["buttonText", "Button text color", "#ffffff"],
             ["ctaBg", "CTA & hero band color", accent],
+            ["bandBtnBg", "Button on hero/CTA band", "#ffffff"],
+            ["bandBtnText", "Text on hero/CTA band button", accent],
             ["cardShadow", "Text block / card shadow color", "#0f1e32"],
           ];
           const val = (k, fb) => colors[k] || fb;
@@ -164,16 +178,18 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
               <div className="overflow-hidden rounded-xl border border-gray-100">
                 <div className="px-4 py-3" style={{ background: `linear-gradient(130deg, ${val("ctaBg", accent)}dd, ${val("ctaBg", accent)})` }}>
                   <div className="text-[13px] font-bold text-white">Hero &amp; CTA band</div>
-                  <span className="mt-1 inline-block rounded-lg px-3 py-1 text-[10.5px] font-bold" style={{ background: val("buttonText", "#ffffff"), color: val("ctaBg", accent) }}>Light button</span>
+                  <span className="mt-1 inline-block rounded-lg px-3 py-1 text-[10.5px] font-bold" style={{ background: val("bandBtnBg", "#ffffff"), color: val("bandBtnText", accent) }}>Band button</span>
                 </div>
                 <div className="px-4 py-3" style={{ background: val("pageBg", "#ffffff") }}>
-                  <div className="text-[12.5px] font-bold" style={{ color: val("heading", "#141b24") }}>Section heading</div>
-                  <div className="text-[11px]" style={{ color: val("text", "#46525f") }}>Body text with a <span style={{ color: val("link", accent), textDecoration: "underline" }}>link anchor</span> inside.</div>
+                  <div className="text-[12.5px] font-bold" style={{ color: val("heading", darkPage ? "#ffffff" : "#141b24") }}>Section heading</div>
+                  <div className="text-[11px]" style={{ color: val("text", darkPage ? "#c7c9d4" : "#46525f") }}>Body text with a <span style={{ color: val("link", accent), textDecoration: "underline" }}>link anchor</span> inside.</div>
                   <span className="mt-1.5 inline-block rounded-lg px-3 py-1 text-[10.5px] font-bold" style={{ background: val("button", accent), color: val("buttonText", "#ffffff") }}>Button</span>
                 </div>
-                <div className="px-4 py-2.5" style={{ background: val("sectionTint", "#f5f8fa") }}>
-                  <span className="inline-block rounded-lg border border-gray-100 bg-white px-2.5 py-1 text-[10.5px]" style={{ boxShadow: `0 4px 14px ${val("cardShadow", "#0f1e32")}22`, color: val("text", "#46525f") }}>
-                    Card on alternate band <span style={{ color: val("secondary", accent) }}>✓</span>
+                <div className="px-4 py-2.5" style={{ background: val("sectionTint", darkPage ? "#161622" : "#f5f8fa") }}>
+                  <span className="inline-block rounded-lg border px-2.5 py-1 text-[10.5px]"
+                    style={{ background: val("surface", darkPage ? "#1b1b28" : "#ffffff"), borderColor: val("border", darkPage ? "#2c2c3d" : "#e5eaef"),
+                      boxShadow: `0 4px 14px ${val("cardShadow", "#0f1e32")}22`, color: val("text", darkPage ? "#c7c9d4" : "#46525f") }}>
+                    Card / FAQ surface <span style={{ color: val("secondary", accent) }}>✓</span>
                   </span>
                 </div>
               </div>

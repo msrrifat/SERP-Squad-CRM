@@ -348,6 +348,12 @@ const sectionHtml = (s, base) => {
    for hero/CTA, alternating white/tinted content bands, cards, checklists,
    numbered process steps, styled pricing, FAQ accordion and labeled image
    slots. `hard` adds !important so any WordPress theme is overridden. */
+const isDarkHexPre = (hex) => {
+  const h = String(hex || "").replace("#", "");
+  if (h.length < 6) return false;
+  const [r, g, b] = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16));
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
+};
 function designCss(ctx, { hard = false } = {}) {
   const i = hard ? "!important" : "";
   /* the palette comes from Brand Voice → Brand colors; anything unset falls
@@ -360,9 +366,23 @@ function designCss(ctx, { hard = false } = {}) {
   const accD = shade(band, -26), accT = hexRgba(acc, 0.07);
   const ink = okHex(c.heading) || "#141b24", mut = okHex(c.text) || "#46525f";
   const link = okHex(c.link) || acc, btn = okHex(c.button) || acc, btnTx = okHex(c.buttonText) || "#fff";
-  const pageBg = okHex(c.pageBg) || "#fff", line = "#e5eaef";
+  const pageBg = okHex(c.pageBg) || "#fff";
+  const line = okHex(c.border) || (isDarkHexPre(okHex(c.pageBg)) ? "#2c2c3d" : "#e5eaef");
   const tint = okHex(c.sectionTint) || "#f5f8fa";
   const sh = okHex(c.cardShadow) || "#0f1e32";
+  /* surfaces (cards, FAQ rows, pricing table, chips) and the inverse button on
+     the brand bands are their own controls — on a dark page background they
+     must not fall back to white, so the defaults follow the page luminance */
+  const isDarkHex = (hex) => {
+    const h = String(hex || "").replace("#", "");
+    if (h.length < 6) return false;
+    const [r2, g2, b2] = [0, 2, 4].map((k2) => parseInt(h.slice(k2, k2 + 2), 16));
+    return (0.299 * r2 + 0.587 * g2 + 0.114 * b2) / 255 < 0.5;
+  };
+  const darkPage = isDarkHex(pageBg);
+  const surface = okHex(c.surface) || (darkPage ? shade(pageBg, 60) || "#1b1b28" : "#fff");
+  const bandBtn = okHex(c.bandBtnBg) || "#fff";
+  const bandBtnTx = okHex(c.bandBtnText) || accD;
   return `
 .ss-sec{box-sizing:border-box;width:100%${i};max-width:none${i};margin:0${i};padding:56px 5vw;background:${pageBg}${i};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif${i};line-height:1.7}
 .ss-sec *{box-sizing:border-box}
@@ -386,7 +406,7 @@ function designCss(ctx, { hard = false } = {}) {
 .ss-sec.sec-hero p,.ss-sec.sec-cta p{color:rgba(255,255,255,.86)${i};font-size:17.5px${i}}
 .ss-sec.sec-hero .hgrid{display:grid;gap:36px;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));align-items:center}
 .ss-sec.sec-hero .hmedia img{box-shadow:0 22px 50px rgba(0,0,0,.28)}
-.ss-sec .btn.light{background:#fff${i};color:${accD}${i}}
+.ss-sec .btn.light{background:${bandBtn}${i};color:${bandBtnTx}${i}}
 .ss-sec .btn.ghost{background:transparent;color:#fff${i};border:1.5px solid rgba(255,255,255,.65)}
 .ss-sec.sec-cta{background:linear-gradient(130deg,${accD},${band})${i};text-align:center;padding:60px 5vw}
 .ss-sec.sec-cta .hbtns{justify-content:center}
@@ -405,19 +425,19 @@ function designCss(ctx, { hard = false } = {}) {
 /* cards, grids, pricing, chips */
 .ss-sec .grid3{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr))}
 .ss-sec .grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
-.ss-sec .card{background:${pageBg === "#fff" ? "#fff" : pageBg}${i};border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px ${hexRgba(sh,0.05)};margin:0}
+.ss-sec .card{background:${surface}${i};border:1px solid ${line};border-radius:16px;padding:22px;box-shadow:0 4px 18px ${hexRgba(sh,0.05)};margin:0}
 .ss-sec.bg-tint .card{box-shadow:0 6px 22px ${hexRgba(sh,0.07)}}
 .ss-sec .card h3{margin-top:0${i}}
-.ss-sec table.price{width:100%;border-collapse:collapse;background:#fff${i};border:1px solid ${line};border-radius:16px;overflow:hidden}
+.ss-sec table.price{width:100%;border-collapse:collapse;background:${surface}${i};border:1px solid ${line};border-radius:16px;overflow:hidden}
 .ss-sec table.price td{padding:14px 18px;border-bottom:1px solid ${line};font-size:15.5px${i};color:${mut}${i}}
 .ss-sec table.price tr:last-child td{border-bottom:0}
 .ss-sec table.price td:last-child{text-align:right;font-weight:800;color:${acc}}
-.ss-sec .chips span,.ss-sec .chips a{display:inline-block;background:#fff${i};border:1px solid ${line};border-radius:999px;padding:5px 13px;margin:0 6px 8px 0;font-size:13.5px;text-decoration:none;color:${ink}}
+.ss-sec .chips span,.ss-sec .chips a{display:inline-block;background:${surface}${i};border:1px solid ${line};border-radius:999px;padding:5px 13px;margin:0 6px 8px 0;font-size:13.5px;text-decoration:none;color:${ink}}
 .ss-sec.bg-plain .chips span,.ss-sec.bg-plain .chips a{background:${tint}}
 /* reviews, FAQ, NAP */
 .ss-sec .card.rev .stars{color:#F59E0B;font-size:15px;letter-spacing:2px}
 .ss-sec .card.rev footer{margin-top:10px;font-size:13px;font-weight:700;color:${ink}}
-.ss-sec .faq details{background:#fff${i};border:1px solid ${line};border-radius:14px;padding:0;margin:0 0 10px;overflow:hidden}
+.ss-sec .faq details{background:${surface}${i};border:1px solid ${line};border-radius:14px;padding:0;margin:0 0 10px;overflow:hidden}
 .ss-sec .faq summary{cursor:pointer;list-style:none;padding:16px 20px;font-weight:700;font-size:16px;color:${ink}${i};position:relative}
 .ss-sec .faq summary:after{content:"+";position:absolute;right:18px;top:12px;font-size:22px;color:${acc};font-weight:400}
 .ss-sec .faq details[open] summary:after{content:"–"}
