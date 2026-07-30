@@ -139,6 +139,36 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     };
     return { ...build(M[12], []), label: "window" };
   };
+  /* ---- LIVE Search Console for the EXACT selected window ----------------
+     Real projects carry a zero mock series on purpose, so KPI blocks looked
+     empty for every range. When Google is connected we fetch the selected
+     window (and the comparison window) from Search Console and use those
+     real numbers; when it isn't, a banner says so instead of showing zeros
+     that look like a broken date picker. */
+  const isReal = project.demoMode === false;
+  const g = project.google || {};
+  const gscReady = !!(g.connectionId && g.gscSite);
+  const [gsc, setGsc] = useState(null);   // { cur:{...}, prev:{...} } | { error }
+  const [gscBusy, setGscBusy] = useState(false);
+  useEffect(() => {
+    if (!isReal || !gscReady) { setGsc(null); return; }
+    let alive = true;
+    setGscBusy(true);
+    const q = (s, e) => fetch("/api/google/gsc/query", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({ connectionId: g.connectionId, siteUrl: g.gscSite, startDate: isoD(s), endDate: isoD(e) }),
+    }).then((r) => r.json().then((d) => ({ ok: r.ok, d })));
+    Promise.all([q(startD, endD), hasPrev ? q(prevStartD, prevEndD) : Promise.resolve({ ok: true, d: null })])
+      .then(([a, b2]) => {
+        if (!alive) return;
+        if (!a.ok) { setGsc({ error: a.d?.detail || a.d?.error || "Search Console request failed" }); return; }
+        setGsc({ cur: a.d.totals, prev: b2.ok && b2.d ? b2.d.totals : null, queries: a.d.queries || [], pages: a.d.pages || [], byDate: a.d.byDate || [] });
+      })
+      .catch((e) => { if (alive) setGsc({ error: String(e?.message || e) }); })
+      .finally(() => { if (alive) setGscBusy(false); });
+    return () => { alive = false; };
+  }, [isReal, gscReady, g.connectionId, g.gscSite, range.start, range.end]); // eslint-disable-line
+
   const fmtD2 = (d) => d.toLocaleDateString("en", { month: "short", day: "numeric" });
   const rangeLabel = `${fmtD2(startD)} – ${fmtD2(endD)}, ${endD.getFullYear()}`;
   const prevLabel = hasPrev ? `${fmtD2(prevStartD)} – ${fmtD2(prevEndD)}` : null;
@@ -156,10 +186,15 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   const [saved, setSaved] = useState(null); // "report" | "template" toast
   const [brandMode, setBrandMode] = useState(wlBrand ? "wl" : "agency"); // "agency" | "wl" | "custom"
   const [customBrand, setCustomBrand] = useState({ name: "", logo: null });
-  const [preparedFor, setPreparedFor] = useState(project.name);
+  const [preparedFor, setPreparedFor] = useState(project.name);   /* project, not client */
   const [showCover, setShowCover] = useState(true);
-  const [coverBusiness, setCoverBusiness] = useState(clientInfo?.companyName || project.name);
-  const [coverAddress, setCoverAddress] = useState(clientInfo?.address || "");
+  /* "Prepared for" is always the PROJECT's identity (its name, address,
+     website and logo) — never the parent client's company record, because a
+     client can own several projects with different addresses and sites */
+  const projAddress = project.opt?.gbp?.address || project.address || project.opt?.brandVoice?.biz?.address || "";
+  const [coverBusiness, setCoverBusiness] = useState(project.name);
+  const [coverAddress, setCoverAddress] = useState(projAddress);
+  const [coverSite, setCoverSite] = useState(project.website || "");
   const [coverDuration, setCoverDuration] = useState(template === "work" ? new Date().toLocaleDateString("en", { month: "long", year: "numeric" }) : `${LABELS[0]} – ${LABELS[12]}`);
   const [coverBadge, setCoverBadge] = useState(template === "work" ? "Work Report" : "SEO Report");
   const [coverLogo, setCoverLogo] = useState(null); // overrides the project icon on the cover
@@ -255,7 +290,20 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       appleWebsiteTaps: add("appleWebsiteTaps", "Website taps", "APPLE", (m) => m.apple?.websiteTaps || 0, project.integrations.apple),
       gaUsers: add("gaUsers", "Website users", "GA4", (m) => m.ga.users, project.integrations.ga),
       gaConversions: add("gaConversions", "Conversions", "GA4", (m) => m.ga.conversions, project.integrations.ga),
-      gscClicks: add("gscClicks", "Search clicks", "GSC", (m) => m.gsc.clicks, project.integrations.gsc),
+      /* GSC KPIs read the LIVE window when Google is connected (real projects),
+         so the numbers always match the selected date range exactly */
+      gscClicks: gsc?.cur
+        ? { label: "Search clicks", src: "GSC", val: () => gsc.cur.clicks, prev: () => gsc.prev?.clicks ?? null, show: true, live: true }
+        : add("gscClicks", "Search clicks", "GSC", (m) => m.gsc.clicks, project.integrations.gsc),
+      gscImpressions: gsc?.cur
+        ? { label: "Search impressions", src: "GSC", val: () => gsc.cur.impressions, prev: () => gsc.prev?.impressions ?? null, show: true, live: true }
+        : add("gscImpressions", "Search impressions", "GSC", (m) => m.gsc?.impressions || 0, project.integrations.gsc),
+      gscCtr: gsc?.cur
+        ? { label: "Search CTR", src: "GSC", val: () => +(gsc.cur.ctr * 100).toFixed(2), prev: () => (gsc.prev ? +(gsc.prev.ctr * 100).toFixed(2) : null), suffix: "%", show: true, live: true }
+        : { label: "Search CTR", src: "GSC", val: () => 0, prev: () => null, suffix: "%", show: false },
+      gscPosition: gsc?.cur
+        ? { label: "Avg. search position", src: "GSC", val: () => +gsc.cur.position.toFixed(1), prev: () => (gsc.prev ? +gsc.prev.position.toFixed(1) : null), invert: true, isRank: true, show: true, live: true }
+        : { label: "Avg. search position", src: "GSC", val: () => 0, prev: () => null, show: false },
       avgRank: { label: "Avg. position", src: "Ranks", val: () => rankAvgAt(endD), prev: () => (hasPrev ? rankAvgAt(prevEndD) : null), invert: true, isRank: true, show: tracking.length > 0 },
       top3: { label: "Keywords in top 3", src: "Ranks", val: () => tierAtD(3, endD), prev: () => (hasPrev ? tierAtD(3, prevEndD) : null), show: tracking.length > 0 },
       top10: { label: "Keywords in top 10", src: "Ranks", val: () => tierAtD(10, endD), prev: () => (hasPrev ? tierAtD(10, prevEndD) : null), show: tracking.length > 0 },
@@ -1479,6 +1527,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                       <input value={coverAddress} onChange={(e) => setCoverAddress(e.target.value)} placeholder="Business address…"
                         className="w-full border-0 bg-transparent text-[12px] text-gray-400 outline-none" />
                     </div>
+                    <div className="flex items-center gap-1 text-[12px] text-gray-400">
+                      <Globe size={11} className="shrink-0" />
+                      <input value={coverSite} onChange={(e) => setCoverSite(e.target.value)} placeholder="website.com"
+                        className="ll-mono w-full border-0 bg-transparent text-[11.5px] text-gray-400 outline-none" />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1528,13 +1581,20 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                             <ArrowDownRight size={9} /> starts on a new page
                           </div>
                         )}
-                        {openId === b.id && b.type === "geoReport" && (
-                          <div className="no-print ll-fade mb-3 rounded-xl border border-gray-200 bg-white p-4">{renderSettings(b)}</div>
+                        {/* settings pop up ANCHORED UNDER THE EDIT ICON — they
+                            float over the section instead of pushing it down,
+                            so editing a tall block never means scrolling to
+                            the end of it. Toggled by the same gear icon. */}
+                        {openId === b.id && b.type !== "divider" && (
+                          <div className="no-print ll-fade absolute right-2 top-6 z-20 max-h-[65vh] w-[min(420px,calc(100%-1rem))] overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 shadow-xl">
+                            <div className="mb-2 flex items-center justify-between gap-2 border-b border-gray-100 pb-1.5">
+                              <span className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Edit section</span>
+                              <button onClick={() => setOpenId(null)} title="Close" className="rounded p-0.5 text-gray-400 hover:bg-gray-100"><X size={13} /></button>
+                            </div>
+                            {renderSettings(b)}
+                          </div>
                         )}
                         {renderBlock(b)}
-                        {openId === b.id && b.type !== "divider" && b.type !== "geoReport" && (
-                          <div className="no-print ll-fade mt-3 rounded-xl border border-gray-200 bg-white p-4">{renderSettings(b)}</div>
-                        )}
                       </div>
                     );
                   })}
@@ -1586,6 +1646,16 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 <b className="text-gray-600">{rangeLabel}</b> · {lenDays}d{hasPrev ? <> · deltas vs <b className="text-gray-600">{prevLabel}</b></> : " · no earlier data to compare"}
                 <br />Work records &amp; geo-grid sections stay manual.
               </div>
+              {/* where the numbers come from — never leave zeros unexplained */}
+              {isReal && (
+                <div className="mt-1.5 rounded-lg px-2 py-1.5 text-[9.5px] leading-relaxed"
+                  style={gsc?.cur ? { background: "#ECFDF5", color: "#065F46" } : { background: "#FFFBEB", color: "#92400E" }}>
+                  {gscBusy ? <>Loading Search Console for this exact window…</>
+                    : gsc?.cur ? <><b>Live Search Console</b> for {rangeLabel} — clicks, impressions, CTR and position are the real numbers for these dates.</>
+                    : gsc?.error ? <><b>Search Console error:</b> {gsc.error}</>
+                    : <><b>No data source connected.</b> This is a real project, so nothing is invented — connect Google in Performance Studio → Website Performance to populate search KPIs for any date range. GBP/GA4 blocks need their own connections.</>}
+                </div>
+              )}
             </div>
             {(() => {
               const picked = clientProjects.filter((cp) => pickedProjIds.has(cp.project.id));

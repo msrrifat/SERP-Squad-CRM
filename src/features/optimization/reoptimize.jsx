@@ -24,6 +24,7 @@ import { Card, Labeled, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { OptimizeControls, ResearchChecklist, defaultOptimizeSpec, optimizeRulesBlock } from "../../lib/optimizespec.jsx";
 import { realDfs } from "./indexcheck.jsx";
+import { useWork } from "../../lib/worklog.jsx";
 
 const SYS_REOPT = `You are a senior SEO content strategist and writer who rewrites existing pages to outrank the current SERP.
 You write for humans first: concrete, specific, zero filler, no AI-sounding openers.
@@ -101,6 +102,7 @@ const StepShell = ({ n, title, done, open, locked, onToggle, children, accent })
 );
 
 export function ReoptimizePanel({ item, kind = "page", project, opt, setOpt, accent, ai, dfs, onPatch, onClose }) {
+  const work = useWork();
   const ro = item.reopt || {};
   const [step, setStep] = useState(ro.content ? 6 : ro.scrape ? 2 : 1);
   const [spec, setSpec] = useState(ro.spec || defaultOptimizeSpec(project.tracking?.[0]?.city?.city || ""));
@@ -122,6 +124,7 @@ export function ReoptimizePanel({ item, kind = "page", project, opt, setOpt, acc
       const d = await r.json();
       if (!r.ok) { setErr(d.detail || d.error); setBusy(null); return; }
       saveRo({ scrape: { at: Date.now(), metaTitle: d.metaTitle, metaDesc: d.metaDesc, h1: d.h1, markdown: d.markdown, headings: d.headings, words: d.words } });
+      work?.("website", "pageScraped", { detail: item.url });
       setStep(2);
     } catch (e) { setErr("API server unreachable — " + (e?.message || e)); }
     setBusy(null);
@@ -188,6 +191,7 @@ export function ReoptimizePanel({ item, kind = "page", project, opt, setOpt, acc
           words: md.split(/\s+/).length,
         },
       });
+      work?.("website", "contentReoptimized", { detail: item.url });
       setStep(7);
     } catch (e) {
       setErr(e.code === 503 ? "No AI provider connected — add a key in Company Settings → API settings. Nothing is generated without one." : String(e?.message || e));

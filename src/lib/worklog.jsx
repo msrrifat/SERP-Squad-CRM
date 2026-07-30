@@ -68,9 +68,19 @@ export const WORK_EVENTS = {
   contentWritten:     { one: "Page content researched & written", many: "pages of content researched & written" },
   siteDeployed:       { one: "Full website built & deployed from the site map", many: "full website deploys from the site map" },
   pagePublished:      { one: "Single page published from the site map", many: "single pages published from the site map" },
+  /* posts architect (blog + answer topical authority) */
+  postsArchitected:   { one: "Blog & answer post architecture built", many: "blog & answer post architectures built" },
+  postWritten:        { one: "Blog/answer post researched & written", many: "blog/answer posts researched & written" },
+  postsPublished:     { one: "Architected post published/scheduled", many: "architected posts published/scheduled" },
+  /* content re-optimization (crawled / unconnected sites) */
+  contentReoptimized: { one: "Existing page content re-optimized", many: "existing pages of content re-optimized" },
+  pageScraped:        { one: "Live page content scraped for re-optimization", many: "live pages scraped for re-optimization" },
+  /* media metadata */
+  mediaMetaUpdated:   { one: "Image alt/title updated in the media library", many: "image alt/title updates in the media library" },
 
   /* brand voice */
   bvUpdated:          { one: "Brand voice guidelines updated", many: "brand voice guideline updates" },
+  bvSaved:            { one: "Brand voice & brand colors saved", many: "brand voice saves" },
   bvFileAdded:        { one: "Brand guideline file added", many: "brand guideline files added" },
 
   /* listings / branding / index checker */

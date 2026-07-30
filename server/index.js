@@ -408,8 +408,11 @@ async function handleGscSites(body) {
 async function handleGscQuery(body) {
   if (!body?.connectionId || !body?.siteUrl) return [400, { error: "bad_request", detail: "connectionId and siteUrl required." }];
   const days = Math.min(Math.max(+body?.days || 28, 1), 480); // GSC keeps ~16 months
-  const startDate = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
-  const endDate = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
+  /* explicit window wins (report builder passes the exact selected range);
+     otherwise fall back to the trailing `days` window */
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  const startDate = isDate(body?.startDate) ? body.startDate : new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const endDate = isDate(body?.endDate) ? body.endDate : new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
   const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(body.siteUrl)}/searchAnalytics/query`;
   try { const { accessToken } = await googleAccess(body.connectionId);
     /* pull EVERY row, not a top-20 sample — GSC pages at 25k rows/request */
