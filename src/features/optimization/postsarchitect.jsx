@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   BookOpen, FileText, ImagePlus, ListTree, MessageCircleQuestion,
-  RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
+  Plus, RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, Toggle, inputCls, CharCount } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
@@ -342,6 +342,15 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     setRowBusy(null); setSchedFor(null);
   };
 
+  /* shared shape guard for AI-returned posts */
+  const normalizePosts = (raw) => (Array.isArray(raw) ? raw : []).map((p) => ({
+    category: p.category === "answer" ? "answer" : "blog",
+    title: String(p.title || "").slice(0, 140), slug: slugify(p.slug || p.title),
+    primaryKw: String(p.primaryKw || "").slice(0, 80), service: String(p.service || ""),
+    serviceUrl: svcList.find((s) => s.url === p.serviceUrl)?.url || svcList.find((s) => s.name.toLowerCase() === String(p.service).toLowerCase())?.url || svcList[0]?.url || "",
+    note: String(p.note || ""),
+  })).filter((p) => p.title);
+
   const architect = async () => {
     if (!svcList.length) { setGenErr("No services found — generate the Website Mapping first, or type services below."); return; }
     setBusy(true); setGenErr(null); setGscNote(null);
@@ -354,14 +363,8 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         prompt: `Business: ${brand} (${project.website}). Niche: ${w.architecture?.niche || project.name}. Market: ${market}.\nServices (each MUST get blog + answer coverage; use the EXACT serviceUrl given):\n${svcList.map((s) => `- ${s.name} → ${s.url}`).join("\n")}\n${gscQs?.length ? `\nREAL Search Console queries from this site's last 180 days (turn genuine questions into "answer" posts):\n${gscQs.join("\n")}` : ""}\nExisting posts (do NOT duplicate their topics):\n${liveBlogs.slice(0, 30).map((b) => "- " + b.title).join("\n") || "(none)"}\n\nDesign 2-3 "blog" + 3-4 "answer" posts per service. Local proximity: this business serves ${market} — weave the location into topics where locals search locally.`,
       });
       const parsed = parseJsonLoose(text);
-      if (!Array.isArray(parsed.posts) || !parsed.posts.length) throw new Error("empty architecture");
-      list = parsed.posts.map((p) => ({
-        category: p.category === "answer" ? "answer" : "blog",
-        title: String(p.title || "").slice(0, 140), slug: slugify(p.slug || p.title),
-        primaryKw: String(p.primaryKw || "").slice(0, 80), service: String(p.service || ""),
-        serviceUrl: svcList.find((s) => s.url === p.serviceUrl)?.url || svcList.find((s) => s.name.toLowerCase() === String(p.service).toLowerCase())?.url || svcList[0]?.url || "",
-        note: String(p.note || ""),
-      })).filter((p) => p.title);
+      list = normalizePosts(parsed.posts);
+      if (!list.length) throw new Error("empty architecture");
       live = true;
     } catch (e) {
       if (e.code === 502) { setGenErr("AI provider error: " + e.message); setBusy(false); return; }
@@ -380,6 +383,36 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     work?.("website", "postsArchitected", { detail: `${withDup.length} posts${dups ? `, ${dups} possible duplicates` : ""}` });
     log?.(`Architected ${withDup.length} blog/answer posts${live ? " (AI)" : " (draft)"}${dups ? ` — ${dups} duplicate warnings` : ""}`, project.name);
     setBusy(false);
+  };
+
+  /* ---- extend the plan: more guides / more questions, one category at a
+     time — the AI sees every existing title so nothing repeats ---- */
+  const [moreBusy, setMoreBusy] = useState(null); // "blog" | "answer"
+  const architectMore = async (cat) => {
+    if (!svcList.length || busy || moreBusy) return;
+    setMoreBusy(cat); setGenErr(null);
+    const existing = [...posts.filter((p) => p.status !== "removed").map((p) => p.title), ...liveBlogs.map((b) => b.title)];
+    try {
+      const text = await aiGenerate(aiConfig, {
+        system: SYS_POSTS_ARCHITECT, json: true, maxTokens: 5000,
+        prompt: `Business: ${brand} (${project.website}). Niche: ${w.architecture?.niche || project.name}. Market: ${market}.\nServices (use the EXACT serviceUrl given):\n${svcList.map((s) => `- ${s.name} → ${s.url}`).join("\n")}\n\nEXTEND the existing topical map with ${cat === "blog" ? '5-8 MORE "blog" guide posts (fresh pillar/cluster angles: comparisons, mistakes, checklists, seasonal, local-proximity topics)' : '6-10 MORE "answer" question posts (real questions from Reddit, Quora, People-Also-Ask, AnswerThePublic and autocomplete that are NOT covered yet)'}.\nCategory must be "${cat}" for every post.\n\nAlready planned or published (do NOT duplicate or closely overlap ANY of these):\n${existing.map((t) => "- " + t).join("\n") || "(none)"}`,
+      });
+      const parsed = parseJsonLoose(text);
+      const fresh = normalizePosts(parsed.posts).map((p) => ({ ...p, category: cat }))
+        /* belt & braces: drop anything the model still overlapped */
+        .filter((p) => !existing.some((t) => jaccard(t, p.title) >= 0.6));
+      if (!fresh.length) throw new Error("no new topics came back — try again");
+      const withDup = fresh.map((p, i) => ({
+        id: "pa" + Date.now().toString(36) + "m" + i, ...p, status: "planned", content: null,
+        dup: findDuplicate(p, [], liveBlogs),
+      }));
+      setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), ...withDup] } }));
+      work?.("website", "postsArchitected", { detail: `+${withDup.length} more ${cat} posts` });
+      log?.(`Generated ${withDup.length} more ${cat === "blog" ? "blog topics" : "questions"}`, project.name);
+    } catch (e) {
+      setGenErr(e.code === 503 ? "Connect an AI provider (API settings) to generate more topics." : "Generate more failed: " + (e?.message || e));
+    }
+    setMoreBusy(null);
   };
 
   const openPost = posts.find((p) => p.id === openId);
@@ -482,6 +515,13 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                       </div>
                     ))}
                   </div>
+                  {/* extend this category with fresh, non-overlapping topics */}
+                  <button onClick={() => architectMore(cat)} disabled={busy || !!moreBusy}
+                    className="mt-2 flex items-center gap-1.5 rounded-lg border border-dashed px-3 py-1.5 text-[11px] font-bold disabled:opacity-40"
+                    style={{ borderColor: accent + "66", color: accent }}>
+                    {moreBusy === cat ? <><RefreshCw size={11} className="animate-spin" /> Generating more…</>
+                      : <><Plus size={11} /> {cat === "blog" ? "Generate more blogs" : "Generate more questions"}</>}
+                  </button>
                 </Card>
               );
             })}
