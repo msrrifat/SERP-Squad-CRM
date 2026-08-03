@@ -296,6 +296,9 @@ export default function App() {
      per-project section grants: turning it off takes the dashboards away
      everywhere, which is the only thing an account-level switch can mean. */
   const canViewData = isAdmin || !!perms.viewData;
+  /* a non-admin who lands on /company or /tools (typed, bookmarked, or shared)
+     is put back on the app rather than left on a URL that renders nothing */
+  useEffect(() => { if (!isAdmin && (screen === "company" || screen === "tools")) setScreen("app"); }, [isAdmin, screen]);
   const pmPerms = {
     admin: isAdmin,
     create: !!perms.manageTasks,
@@ -322,8 +325,14 @@ export default function App() {
     const autoKeys = ROLE_AUTO_SECTIONS[currentUser?.role] || [];
     return clients.map((c) => ({
       ...c,
-      /* privacy: non-admins see the client alias (if set), never the real name */
-      name: c.alias?.trim() ? c.alias.trim() : c.name,
+      /* privacy: a non-admin never learns WHO the client is — they work on
+         projects. An alias, when set, is the label the agency chose to expose;
+         without one the client is simply "Client". Masked here at the source so
+         no downstream view can leak the real name by rendering c.name.
+         (companyName is deliberately left alone — it seeds the deterministic
+         demo data generator, so changing it per viewer would change the
+         numbers everyone sees.) */
+      name: c.alias?.trim() ? c.alias.trim() : "Client",
       projects: c.projects.filter((p) => {
         if (p.archived) return false;
         if (!(assignedAll || ids.has(p.id))) return false;
@@ -671,7 +680,9 @@ export default function App() {
      client's brand when white label is on; otherwise SERP Squad */
   const wl = activeClient?.whiteLabel;
   const brand = clientView && wl?.enabled
-    ? { name: wl.name || activeClient.companyName || activeClient.name, logo: wl.logo, website: wl.website, accent }
+    /* the white-label name is what the CLIENT is shown, so it may be the
+       client's own company — non-admins fall back to the project instead */
+    ? { name: wl.name || (isAdmin ? (activeClient.companyName || activeClient.name) : project?.name) || activeClient.name, logo: wl.logo, website: wl.website, accent }
     : { name: company.name, logo: company.logo, website: "", accent: company.accent };
 
   const updateCompany = (patch) => setCompany((c) => ({ ...c, ...patch }));
@@ -769,13 +780,16 @@ export default function App() {
       onUpdateProject={(pid, patch) => setClients((cs) => cs.map((c) => c.id !== sc.id ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)) }))}
       onLogout={signOut} /></Lazy>;
   }
-  if (screen === "company") {
+  /* the sidebar only offers these to admins, but the URL router will happily
+     set the screen from /company or /tools — so the GATE lives here, where it
+     can't be walked around by typing an address */
+  if (screen === "company" && isAdmin) {
     return <Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
   }
-  if (screen === "tools") {
+  if (screen === "tools" && isAdmin) {
     return <Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}
       placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs}
-      clients={clients}
+      clients={visibleClients}
       onUpdateProjectById={(cid, pid, patch) => setClients((cs) => cs.map((c) => c.id !== cid ? c : {
         ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
       }))}
@@ -788,7 +802,7 @@ export default function App() {
     const rwl = activeClient?.whiteLabel;
     const agencyBrand = { name: company.name, logo: company.logo, accent: company.accent };
     const wlBrand = rwl?.enabled
-      ? { name: rwl.name || activeClient.companyName || activeClient.name, logo: rwl.logo, accent: project.accent }
+      ? { name: rwl.name || (isAdmin ? (activeClient.companyName || activeClient.name) : project?.name) || activeClient.name, logo: rwl.logo, accent: project.accent }
       : null;
     const clientInfo = { companyName: activeClient?.companyName || activeClient?.name, address: activeClient?.address };
     /* reports are PER PROJECT — each project gets its own report, so the
@@ -905,9 +919,25 @@ export default function App() {
             )}
           </div>
           <div className="mx-4 mb-2 border-t border-gray-100" />
-          <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Client projects</div>
+          <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{isAdmin ? "Client projects" : "Projects"}</div>
           <div className="flex-1 overflow-y-auto px-2.5">
-            {visibleClients.map((c) => {
+            {/* non-admins get a FLAT project list: no client rows, no client
+                names, no client settings — they work on projects, and who the
+                client is stays with the owner and admins */}
+            {!isAdmin && visibleClients.flatMap((c) => c.projects.map((p) => (
+              <div key={p.id} className="group mb-0.5 flex items-center gap-0.5 rounded-lg hover:bg-gray-50"
+                style={p.id === project?.id ? { background: p.accent + (sbDark ? "40" : "12") } : {}}>
+                <button onClick={() => selectProject(c.id, p.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left">
+                  <ProjectMark project={p} />
+                  <span className="block min-w-0 truncate text-[12.5px] font-medium"
+                    style={{ color: p.id === project?.id ? (sbDark ? "#fff" : (sbText || p.accent)) : (sbCustom ? sbVars.soft : "#374151") }}>{p.name}</span>
+                </button>
+              </div>
+            )))}
+            {!isAdmin && visibleClients.length === 0 && (
+              <div className="px-2 py-1.5 text-[11.5px] text-gray-300">No projects assigned to you yet.</div>
+            )}
+            {isAdmin && visibleClients.map((c) => {
               const open = expanded.has(c.id);
               return (
                 <div key={c.id} className="mb-0.5">
@@ -1029,7 +1059,7 @@ export default function App() {
                 <AccountSettingsView member={currentUser} clients={visibleClients} onUpdateMember={updateMember} accent={accent} dark={dark} setDark={setDark} />
               )}
               {accountView === "assignments" && (
-                <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} />
+                <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} showClient={isAdmin} />
               )}
               {accountView === "chat" && (
                 <ChatHome me={meName} team={company.team || []} dms={company.dms || {}} dmReads={company.dmReads || {}}
@@ -1060,7 +1090,7 @@ export default function App() {
                 <div className="ll-display text-[17px] font-semibold leading-tight">{project?.name}</div>
                 <div className="flex items-center gap-2 text-[11.5px] text-gray-400">
                   <Globe size={11} /> {project?.website}
-                  {!clientView && <><span>·</span><Folder size={11} /> {activeClient?.name}</>}
+                  {!clientView && isAdmin && <><span>·</span><Folder size={11} /> {activeClient?.name}</>}
                 </div>
               </div>
             </div>

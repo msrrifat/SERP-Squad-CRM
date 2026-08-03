@@ -136,14 +136,16 @@ const tasksFor = (clients, userName) => {
 };
 
 /* one project box: header = project, rows = task + record */
-function ProjectBox({ group, colKey, accent, onOpenTask }) {
+function ProjectBox({ group, colKey, accent, onOpenTask, showClient = true }) {
   const { p, c, rows } = group;
   return (
     <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
       <div className="flex items-center gap-1.5 px-3 py-2" style={{ background: (p.accent || accent) + "10" }}>
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: p.accent || accent }} />
         <span className="truncate text-[11.5px] font-bold" style={{ color: p.accent || accent }}>{p.name}</span>
-        <span className="ll-mono ml-auto shrink-0 text-[9px] text-gray-400">{c.name}</span>
+        {/* who the client is stays with the owner and admins — everyone else
+            works on projects, so the label is simply omitted */}
+        {showClient && <span className="ll-mono ml-auto shrink-0 text-[9px] text-gray-400">{c.name}</span>}
       </div>
       <div className="divide-y divide-gray-50">
         {rows.map(({ t, r }, i) => (
@@ -173,7 +175,7 @@ const groupByProject = (cards) => {
   return Object.values(g);
 };
 
-export function AssignmentBoard({ clients, userName, accent, onOpenTask }) {
+export function AssignmentBoard({ clients, userName, accent, onOpenTask, showClient = true }) {
   const today = todayISO();
   const tasks = useMemo(() => tasksFor(clients, userName), [clients, userName]);
   return (
@@ -190,7 +192,7 @@ export function AssignmentBoard({ clients, userName, accent, onOpenTask }) {
             </div>
             <div className="space-y-2">
               {groups.length === 0 && <div className="rounded-xl border border-dashed border-gray-200 py-6 text-center text-[11px] text-gray-300">Nothing here</div>}
-              {groups.map((g) => <ProjectBox key={g.p.id} group={g} colKey={key} accent={accent} onOpenTask={onOpenTask} />)}
+              {groups.map((g) => <ProjectBox key={g.p.id} group={g} colKey={key} accent={accent} onOpenTask={onOpenTask} showClient={showClient} />)}
             </div>
           </div>
         );
@@ -199,14 +201,14 @@ export function AssignmentBoard({ clients, userName, accent, onOpenTask }) {
   );
 }
 
-export function AssignmentsView({ clients, userName, accent, onOpenTask }) {
+export function AssignmentsView({ clients, userName, accent, onOpenTask, showClient = true }) {
   return (
     <div className="ll-fade space-y-4 p-5">
       <div>
         <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><ClipboardList size={17} style={{ color: accent }} /> My assignments</div>
         <div className="text-[12px] text-gray-400">Every task assigned to <b>{userName}</b>, grouped into one box per project — click a task to jump to its record.</div>
       </div>
-      <AssignmentBoard clients={clients} userName={userName} accent={accent} onOpenTask={onOpenTask} />
+      <AssignmentBoard clients={clients} userName={userName} accent={accent} onOpenTask={onOpenTask} showClient={showClient} />
     </div>
   );
 }
