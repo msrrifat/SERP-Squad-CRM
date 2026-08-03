@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, useLayoutEffect } from "react";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -409,8 +409,15 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      identical chart widths, identical pagination. */
   const PAGE_W = 794;
   const PAGE_H = 1123;                                  // 297mm
-  const HEADER_H = 74, FOOTER_H = 40, PAD_V = 48;
-  const USABLE = PAGE_H - HEADER_H - FOOTER_H - PAD_V;  // per-page content budget
+  /* Fallbacks only. The real frame is MEASURED after the first render — these
+     constants were wrong (the header is ~99px, not 74; the footer ~20, not 40),
+     and every millimetre of error becomes overflow at the bottom of a page,
+     which the printer turns into an extra, near-empty sheet. */
+  const HEADER_H = 99, FOOTER_H = 24, PAD_V = 24;
+  const usableRef = useRef(PAGE_H - HEADER_H - FOOTER_H - PAD_V);
+  const titleHRef = useRef(90);
+  const [frameTick, setFrameTick] = useState(0);
+  const USABLE = usableRef.current;
   const blockRefs = useRef({});
   const [measureTick, setMeasureTick] = useState(0);
   const roRef = useRef(null);
@@ -418,29 +425,159 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     let t = null;
     roRef.current = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => setMeasureTick((x) => x + 1), 120); });
   }
+  /* ResizeObserver alone is not enough to drive pagination: it only reports
+     CHANGES, and a browser that is not actively rendering (a background tab —
+     which is exactly where a "download PDF" click can leave the page) may not
+     deliver it at all. Then every block keeps its 90px placeholder height, the
+     paginator packs far too much onto each sheet, and the print overflows into
+     blank pages. This pass measures after every commit and re-runs the layout
+     whenever a real height differs from what the paginator used. */
+  const heightsRef = useRef({});
+  const passRef = useRef(0);
+  useEffect(() => { passRef.current = 0; }, [blocks]);
+  useLayoutEffect(() => {
+    /* the page frame: header + footer + body padding, straight from the DOM */
+    const page = document.querySelector(".rb-a4page");
+    if (page) {
+      const head = page.querySelector(".rb-phead");
+      const body = page.querySelector(".rb-pbody");
+      const foot = page.querySelector(".rb-pfoot");
+      const title = page.querySelector(".rb-ptitle");
+      if (body) {
+        const cs = getComputedStyle(body);
+        const padV = parseFloat(cs.paddingTop || 0) + parseFloat(cs.paddingBottom || 0);
+        /* 6px of slack absorbs sub-pixel rounding, which at print DPI is the
+           difference between "fits" and "one more sheet" */
+        const next = Math.round(PAGE_H - (head?.offsetHeight || 0) - (foot?.offsetHeight || 0) - padV - 6);
+        if (next > 200 && Math.abs(next - usableRef.current) > 1) { usableRef.current = next; setFrameTick((x) => x + 1); }
+      }
+      if (title && Math.abs((title.offsetHeight + 16) - titleHRef.current) > 1) {
+        titleHRef.current = title.offsetHeight + 16; setFrameTick((x) => x + 1);
+      }
+    }
+    let changed = false;
+    Object.entries(blockRefs.current).forEach(([id, el]) => {
+      if (!el) return;
+      const h = el.offsetHeight;
+      if (Math.abs((heightsRef.current[id] ?? -1) - h) > 1) { heightsRef.current[id] = h; changed = true; }
+      /* remember the row geometry of anything that renders rows, keyed by the
+         ORIGINAL block, so a block stays measurable after it has been divided */
+      const src = id.split("#")[0];
+      const rows = [...el.querySelectorAll("tbody tr")];
+      if (rows.length) {
+        const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
+        metricsRef.current[src] = { rowH: rowsH / rows.length, overhead: Math.max(0, h - rowsH) };
+      }
+    });
+    /* layout feeds measurement feeds layout — bounded so a block whose height
+       depends on where it lands can never ping-pong forever */
+    if (changed && passRef.current < 8) { passRef.current += 1; setMeasureTick((x) => x + 1); }
+  });
   const attachBlockRef = (id) => (el) => {
     const prev = blockRefs.current[id];
     if (prev && roRef.current) roRef.current.unobserve(prev);
     blockRefs.current[id] = el;
     if (el && roRef.current) roRef.current.observe(el);
   };
+  /* Blocks that are ROWS of data can be divided across pages; everything else
+     (a chart, a KPI strip, an image) has to travel whole. A table taller than
+     one page used to be placed anyway and simply overflowed its A4 box, which
+     is what produced blank sheets around long tables in the PDF: the browser
+     tried to keep the oversized block intact, pushed it to a fresh sheet, and
+     left the rest of the previous one empty. */
+  const SPLITTABLE = { customTable: "tbody tr", table: "tbody tr", work: null };
+  /* the row count a block will render, so pagination can divide it without
+     first rendering the whole thing */
+  const totalRowsOf = (b) => {
+    if (b.type === "customTable") {
+      const rows = parsePasted(b.raw || "");
+      return Math.max(0, rows.length - (b.hasHeader ? 1 : 0));
+    }
+    if (b.type === "table") {
+      /* row counts for the data tables come from the same sources the renderer
+         uses, so they are known before anything is drawn */
+      if (b.kind === "rank") return b.limit && b.limit !== "all" ? Math.min(+b.limit, tracking.length) : tracking.length;
+      return 0;   // the remaining kinds are short by construction
+    }
+    return 0;
+  };
+  /* a rendered slice of a splittable block */
+  const sliceRows = (b, rows) => (b._rowTo != null ? rows.slice(b._rowFrom, b._rowTo) : rows);
+  /* per-block row geometry, remembered so a block stays splittable after it
+     has been split (once divided, no single element measures the whole thing) */
+  const metricsRef = useRef({});
+
+  const MIN_ROWS = 3;   // a stub of one or two rows on a page reads as a mistake
+  /* blocks measured taller than a page's content area: they cannot be kept
+     whole, so the print rules let them break instead of forcing a blank sheet */
+  const tallBlocks = useMemo(() => {
+    const set = new Set();
+    blocks.forEach((b) => { if ((blockRefs.current[b.id]?.offsetHeight || 0) > USABLE) set.add(b.id); });
+    return set;
+  }, [blocks, measureTick]); // eslint-disable-line
+
   const pages = useMemo(() => {
     const out = [[]];
-    let used = 90; // title block on page 1
+    let used = titleHRef.current; // the report title sits on page 1
+    const newPage = () => { out.push([]); used = 0; };
+    const cur = () => out[out.length - 1];
+
     blocks.forEach((b) => {
-      const h = (blockRefs.current[b.id]?.offsetHeight || 90) + 10;
-      if ((b.pageBreak && out[out.length - 1].length > 0) || (used + h > USABLE && out[out.length - 1].length > 0)) {
-        out.push([]); used = 0;
+      const el = blockRefs.current[b.id];
+      const m = metricsRef.current[b.id];
+      const rowsTotal = totalRowsOf(b);
+      /* a divided block no longer has one element to measure — its full height
+         is reconstructed from the row geometry captured while it rendered */
+      const full = m && rowsTotal ? m.overhead + rowsTotal * m.rowH : (el?.offsetHeight || 90);
+      /* headroom on every estimate. An average row height under-predicts a
+         real part by a couple of rows (borders, line-height rounding, a cell
+         that wraps), and at the bottom of a sheet that difference is what
+         spills onto an extra, near-empty page. Three rows costs a little
+         whitespace and is worth it — measured overflow without it was ~2 rows. */
+      const HEADROOM = 3;
+      const pad = m ? m.rowH * HEADROOM : 0;
+      const h = full + 10 + pad;
+      if (b.pageBreak && cur().length > 0) newPage();
+
+      /* fits as-is (the common case) */
+      if (used + h <= USABLE || cur().length === 0) {
+        if (used + h > USABLE && cur().length === 0 && SPLITTABLE[b.type] !== undefined) {
+          /* taller than a whole page even on its own — fall through to splitting */
+        } else {
+          cur().push(b); used += h; return;
+        }
+      } else if (SPLITTABLE[b.type] === undefined) {
+        newPage(); cur().push(b); used += h; return;
       }
-      out[out.length - 1].push(b);
-      used += h;
+
+      /* ---- split this block's rows across as many pages as it needs ---- */
+      const rowCount = rowsTotal;
+      if (!m || !rowCount || rowCount < MIN_ROWS * 2) {   // not worth (or not able to) splitting
+        if (cur().length > 0) newPage();
+        cur().push(b); used += h; return;
+      }
+      let from = 0, part = 0;
+      while (from < rowCount) {
+        const budget = USABLE - used - 10;
+        let fit = Math.floor((budget - m.overhead - m.rowH * 3) / Math.max(1, m.rowH));
+        /* no room for a meaningful chunk here — start the next page */
+        if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
+        fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
+        const to = Math.min(rowCount, from + fit);
+        const partId = `${b.id}#${part}`;
+        const est = m.overhead + (to - from) * m.rowH + m.rowH * 3;
+        cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount });
+        used += est + 10;
+        from = to; part += 1;
+        if (from < rowCount) newPage();
+      }
     });
     return out;
-  }, [blocks, measureTick]); // eslint-disable-line
+  }, [blocks, measureTick, frameTick]); // eslint-disable-line
 
   /* the brand bar every page carries */
   const PageHeader = () => (
-    <div className="flex items-center justify-between border-b px-8 pb-3 pt-5" style={{ borderColor: accent + "33" }}>
+    <div className="rb-phead flex items-center justify-between border-b px-8 pb-3 pt-5" style={{ borderColor: accent + "33" }}>
       <div className="flex items-center gap-2.5">
         <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent || accent} />
         <div>
@@ -583,7 +720,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const cmpMonths = Math.max(1, +defaultCmp || 3);
     const th = "px-3 py-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400 text-left";
     const td = "px-3 py-2 border-b border-gray-50";
-    const cap = (arr) => (b.limit && b.limit !== "all" ? arr.slice(0, +b.limit) : arr);
+    /* `cap` applies the block's row limit AND, when the block has been divided
+       across pages, the slice of rows belonging to this part */
+    const cap = (arr) => sliceRows(b, b.limit && b.limit !== "all" ? arr.slice(0, +b.limit) : arr);
     if (b.kind === "rank") {
       /* best CURRENT position first — the report leads with what's winning;
          unranked keywords (no position) sink to the bottom */
@@ -699,10 +838,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const rows = parsePasted(b.raw || "");
     if (!rows.length) return <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-[12px] text-gray-400">Open this block's settings and paste cells copied from Excel or Google Sheets.</div>;
     const head = b.hasHeader ? rows[0] : null;
-    const body = b.hasHeader ? rows.slice(1) : rows;
+    const body = sliceRows(b, b.hasHeader ? rows.slice(1) : rows);
     return (
       <div>
-        {b.title && <div className="mb-2 text-[13px] font-semibold text-gray-700">{b.title}</div>}
+        {b.title && <div className="mb-2 text-[13px] font-semibold text-gray-700">{b.title}{b._part > 0 ? " (continued)" : ""}</div>}
+        {!b.title && b._part > 0 && <div className="mb-2 text-[11px] font-semibold text-gray-400">continued</div>}
         <table className="w-full text-[12.5px]">
           {head && (
             <thead><tr className="border-b border-gray-100">
@@ -713,6 +853,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <tr key={i}>{r.map((cell, j) => <td key={j} className="border-b border-gray-50 px-3 py-2">{cell}</td>)}</tr>
           ))}</tbody>
         </table>
+        {b._more && <div className="pt-1.5 text-[10px] text-gray-400">continues on the next page</div>}
       </div>
     );
   };
@@ -1562,8 +1703,21 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           /* box-shadows rasterize as dark smudges in print — none anywhere */
           .rb-a4page *, .rb-cover * { box-shadow: none !important; text-shadow: none !important; }
           /* compact geo cards: two keyword snapshots per A4 page */
-          /* keep a section (and its map) whole on one page */
+          /* Keep a section whole on one page — but ONLY when it can fit one.
+             A block taller than a sheet cannot honour this, and the browser
+             responds by shunting it to a fresh sheet and leaving the rest of
+             the current one blank. Oversized blocks opt out and break normally;
+             their rows and header are handled by the rules below. */
           .rb-block { break-inside: avoid; page-break-inside: avoid; }
+          .rb-block.rb-tall { break-inside: auto; page-break-inside: auto; }
+          /* a divided table repeats its header on each sheet and never splits
+             through the middle of a row */
+          .rb-block thead { display: table-header-group; }
+          .rb-block tr, .rb-block img, .rb-block figure { break-inside: avoid; page-break-inside: avoid; }
+          /* the page box must never be TALLER than the sheet it prints on:
+             at exactly 297mm any rounding at the printer's DPI spills a hairline
+             onto the next sheet, which then reads as a blank page */
+          .rb-a4page { min-height: 296mm !important; }
           .gg-page { break-inside: avoid; page-break-inside: avoid; }
           /* charts scale to the page; map tiles (256px, absolutely positioned) must NOT be constrained */
           .recharts-wrapper, .recharts-surface { max-width: 100% !important; }
@@ -1737,10 +1891,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <div key={pi} className="rb-a4page mx-auto mb-5 flex flex-col rounded-2xl bg-white shadow-sm"
               style={{ minHeight: PAGE_H, width: PAGE_W }}>
               {showBrand && <PageHeader />}
-              <div className="flex-1 px-8 pt-4">
+              <div className="rb-pbody flex-1 px-8 pt-4">
                 {pi === 0 && (
                   <input value={title} onChange={(e) => setTitle(e.target.value)}
-                    className="ll-display mb-4 w-full border-0 bg-transparent text-[24px] font-bold tracking-tight outline-none"
+                    className="rb-ptitle ll-display mb-4 w-full border-0 bg-transparent text-[24px] font-bold tracking-tight outline-none"
                     style={{ color: accent }} />
                 )}
                 <div className="space-y-1">
@@ -1748,7 +1902,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                     const i = blocks.findIndex((x) => x.id === b.id);
                     return (
                       <div key={b.id} ref={attachBlockRef(b.id)}
-                        className="rb-block group relative rounded-xl px-2 py-2 hover:bg-gray-50/80"
+                        className={"rb-block group relative rounded-xl px-2 py-2 hover:bg-gray-50/80" + (tallBlocks.has(b._srcId || b.id) ? " rb-tall" : "")}
                         style={flashId === b.id ? { boxShadow: `0 0 0 2px ${accent}`, background: accent + "0A", transition: "box-shadow .3s" } : {}}>
                         {/* hover toolbar */}
                         <div className="no-print absolute -top-2.5 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm opacity-50 transition-opacity group-hover:opacity-100">
@@ -1789,7 +1943,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   )}
                 </div>
               </div>
-              <div className="flex items-center justify-between border-t border-gray-100 px-8 py-2.5 text-[10.5px] text-gray-400">
+              <div className="rb-pfoot flex items-center justify-between border-t border-gray-100 px-8 py-2.5 text-[10.5px] text-gray-400">
                 <span>{brand.name} · {title}</span>
                 <span className="ll-mono">Page {pi + 1 + (showCover ? 1 : 0)} of {pages.length + (showCover ? 1 : 0)}</span>
               </div>
