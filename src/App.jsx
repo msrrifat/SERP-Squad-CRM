@@ -291,6 +291,11 @@ export default function App() {
   const canClients = isAdmin || !!perms.manageClients;   // add/edit clients & projects, client settings
   const canKeywords = isAdmin || !!perms.manageKeywords; // add/delete/rerun tracked keywords
   const canReports = isAdmin || !!perms.createReports;   // open the report builder
+  /* "View dashboards" (Company Settings → Team) is the ACCOUNT-level switch over
+     every Performance Studio data view — Overview included. It outranks the
+     per-project section grants: turning it off takes the dashboards away
+     everywhere, which is the only thing an account-level switch can mean. */
+  const canViewData = isAdmin || !!perms.viewData;
   const pmPerms = {
     admin: isAdmin,
     create: !!perms.manageTasks,
@@ -298,6 +303,13 @@ export default function App() {
     complete: !!perms.manageTasks,
     comment: true,
   };
+
+  /* "View dashboards" off ⇒ the Performance Studio grants are inert, wherever
+     they came from (role auto or an explicit per-project grant). Applied to the
+     SAME access object every gate reads, so a project with nothing left to show
+     disappears from the sidebar instead of opening on a blank Performance tab. */
+  const PERF_KEYS = ["gbp", "web", "ranks", "geogrid"];
+  const maskPerf = (eff) => { if (!canViewData) PERF_KEYS.forEach((k) => { if (k in eff) eff[k] = false; }); return eff; };
 
   /* a signed-in member only sees projects they're assigned to AND have at least
      one granted section on (Project settings → Team); admins see everything */
@@ -319,10 +331,11 @@ export default function App() {
         const manual = (p.teamAccess || {})[currentUser?.id] || {};
         const eff = Object.fromEntries(autoKeys.map((k) => [k, true]));
         Object.entries(manual).forEach(([k, v]) => { eff[k] = !!v; });
+        maskPerf(eff);
         return Object.values(eff).some(Boolean);
       }),
     })).filter((c) => c.projects.length > 0);
-  }, [clients, isAdmin, currentUser]);
+  }, [clients, isAdmin, currentUser, canViewData]);
 
   /* archived projects, flat — admin-managed from the sidebar section */
   const archivedProjects = useMemo(
@@ -355,7 +368,7 @@ export default function App() {
     const manual = (p?.teamAccess || {})[currentUser?.id] || {};
     const eff = Object.fromEntries((roleAuto === "all" ? [] : roleAuto).map((k) => [k, true]));
     Object.entries(manual).forEach(([k, v]) => { eff[k] = !!v; });
-    return eff;
+    return maskPerf(eff);
   };
   const access = isAdmin || roleAuto === "all" ? null : effAccessFor(project);
   const hasAccess = (k) => !access || !!access[k];
@@ -807,8 +820,15 @@ export default function App() {
   const visibleNav = NAV.filter((n) => {
     /* the ads-performance view rides on the Ads & Paid Marketing grant */
     if (n.key === "adsperf") return (!access || !!access.adsperf) && (project?.ads?.campaigns || []).length > 0;
+    /* no "View dashboards" permission → none of the Performance Studio data
+       views, Overview included (it IS the project dashboard) */
+    if (!canViewData) return false;
+    /* Overview summarizes the other performance views, so it needs at least
+       one of them granted — otherwise a member with no performance section at
+       all still landed on a full dashboard */
+    if (n.key === "overview") return !access || ["gbp", "web", "ranks", "geogrid"].some((k) => access[k]);
     /* live Google view has its own connect gate; ride on the website-data grant */
-    if (n.key !== "overview" && !hasAccess(n.key)) return false;
+    if (!hasAccess(n.key)) return false;
     /* Business Profiles + both rank trackers are always available — the rank
        trackers are third-party (DataForSEO) and need no Google connection, and
        Business Profiles shows its own connect/empty state until GBP is linked. */
@@ -821,15 +841,20 @@ export default function App() {
     ["optimization", "Optimization Studio", Zap],
     ...(canReports ? [["reports", "Report builder", FileTextIcon]] : []),
   ].filter(([key]) => {
+    /* Performance Studio is exactly its views: with none of them visible there
+       is no section to show (this used to fall through to "always show the
+       Overview", which handed every member a dashboard) */
+    if (key === "performance") return visibleNav.length > 0;
     if (!access) return true;
     if (key === "adsmgr") return !!access.ads;
     if (key === "management") return !!(access.records || access.wiki || access.chat);
     if (key === "optimization") return ["ogbp", "obing", "oapple", "webConnection", "webPages", "webPosts", "olistings", "social", "oindex"].some((k) => access[k]);
-    return true; // performance always shows at least the Overview
+    return true;
   });
-  /* never render a section/view the current user has no grant for on this project */
-  const activeSection = visibleSections.some(([k]) => k === section) ? section : "performance";
-  const activeView = visibleNav.some((n) => n.key === view) ? view : "overview";
+  /* never render a section/view the current user has no grant for on this
+     project — and fall back to a section they CAN see, not to Performance */
+  const activeSection = visibleSections.some(([k]) => k === section) ? section : (visibleSections[0]?.[0] || "none");
+  const activeView = visibleNav.some((n) => n.key === view) ? view : (visibleNav[0]?.key || "overview");
 
   return (
     <div className={`ll-root ${dark ? "ll-dark" : ""} flex min-h-screen items-stretch bg-[#F5F6F8]`} style={{ "--accent": accent }}>
@@ -1102,6 +1127,17 @@ export default function App() {
                 </button>
               )}
               <div className="mt-4 text-[11px] text-gray-400">Or open the agency <b>Tools</b> in the sidebar — Keyword Finder, audits and outreach work without a project.</div>
+            </div>
+          )}
+          {/* every section revoked — say so, rather than falling through to a
+              Performance Studio the member isn't allowed to see */}
+          {project && visibleSections.length === 0 && (
+            <div className="ll-fade mx-auto mt-10 max-w-lg rounded-2xl border border-gray-200 bg-white p-8 text-center">
+              <div className="ll-display text-[16px] font-bold">No sections enabled here</div>
+              <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-gray-500">
+                Your account doesn't have access to any section of this project yet. An admin can grant sections in
+                <b> Project settings → Team</b>{!canViewData && <>, and dashboards additionally need <b>View dashboards</b> in Company settings → Team</>}.
+              </p>
             </div>
           )}
           {project && activeSection === "optimization" && (
