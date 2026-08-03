@@ -2911,11 +2911,26 @@ http.createServer(async (req, res) => {
       return res.end();
     }
     if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
-      let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = req.url === "/api/state" ? 32e6 : 4e6;
-      for await (const chunk of req) { raw += chunk; if (raw.length > bodyCap) throw new Error("payload too large"); }
+      const chunks = [];
+      let received = 0;
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        received += buf.length;
+        if (received > bodyCap) throw new Error("payload too large");
+        chunks.push(buf);
+      }
+      /* the workspace runs to double-digit megabytes and compresses ~15x, so
+         the app sends it gzipped: an autosave that took four seconds (four
+         seconds in which a reload loses the change) lands in well under one */
+      let bodyBuf = Buffer.concat(chunks);
+      if (/\bgzip\b/i.test(String(req.headers["content-encoding"] || ""))) {
+        bodyBuf = gunzipSync(bodyBuf);
+        if (bodyBuf.length > 64e6) throw new Error("payload too large");
+      }
+      const raw = bodyBuf.toString("utf8");
       /* deployed lead forms still submit natively when JavaScript is off — that
          arrives as a urlencoded form post, and deserves an HTML reply */
       const formPost = /application\/x-www-form-urlencoded/i.test(String(req.headers["content-type"] || ""));

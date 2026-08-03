@@ -258,6 +258,8 @@ export default function App() {
   const [saveWarn, setSaveWarn] = useState(null);
   /* a save the server refused because the workspace moved on underneath us */
   const [staleState, setStaleState] = useState(false);
+  /* "pending" (debouncing) | "saving" (in flight) | "saved" | "error" */
+  const [saveState, setSaveState] = useState("saved");
   const stateRev = useRef(null);
   useEffect(() => {
     if (!hydrated || !teamSession) return;
@@ -270,29 +272,55 @@ export default function App() {
     const token = localStorage.getItem("ss_token");
     if (!token) return;
     clearTimeout(saveTimer.current);
+    /* from this moment until the POST returns, the change exists only in this
+       tab. That window used to be ~5 seconds of silence on a large workspace,
+       which is long enough to close the tab and lose the work without ever
+       being told — so it is now both visible and guarded. */
+    setSaveState("pending");
     saveTimer.current = setTimeout(async () => {
+      setSaveState("saving");
       try {
-        const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
-          body: JSON.stringify({ state: { company, clients }, baseRev: stateRev.current }) });
+        const payload = JSON.stringify({ state: { company, clients }, baseRev: stateRev.current });
+        /* gzip the upload where the browser can: the workspace compresses
+           ~15x, turning a multi-second save into a fast one */
+        let body = payload, extraHeaders = {};
+        if (typeof CompressionStream !== "undefined" && payload.length > 65536) {
+          try {
+            body = await new Response(new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+            extraHeaders = { "Content-Encoding": "gzip" };
+          } catch { body = payload; extraHeaders = {}; }
+        }
+        const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extraHeaders },
+          body });
         if (r.status === 409) {
           /* someone else's changes are already on the server. Writing this
              payload would erase them, so the server refused — stop autosaving
              and say so, rather than racing them on the next keystroke. */
           const d = await r.json().catch(() => ({}));
-          setStaleState(true);
+          setStaleState(true); setSaveState("error");
           setSaveWarn(d.detail || "Another session has saved changes — reload before continuing so nothing is overwritten.");
           return;
         }
-        if (!r.ok && r.status !== 401) setSaveWarn(`Changes are NOT saving to the server (HTTP ${r.status}) — recent work would be lost on reload.`);
+        if (!r.ok && r.status !== 401) { setSaveState("error"); setSaveWarn(`Changes are NOT saving to the server (HTTP ${r.status}) — recent work would be lost on reload.`); }
         else {
           const d = await r.json().catch(() => ({}));
           if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
-          setSaveWarn(null);
+          setSaveWarn(null); setSaveState("saved");
         }
-      } catch { setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
+      } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     }, 1200);
     return () => clearTimeout(saveTimer.current);
   }, [company, clients, hydrated, teamSession, stateSync, staleState]);
+
+  /* closing or reloading while a change is still on its way to the server is
+     exactly how a freshly-made template or report disappeared — the browser
+     now asks first */
+  useEffect(() => {
+    if (saveState !== "pending" && saveState !== "saving") return;
+    const onLeave = (e) => { e.preventDefault(); e.returnValue = ""; return ""; };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, [saveState]);
 
   const logActivity = (action, target = "") =>
     setCompany((c) => {
@@ -1261,6 +1289,13 @@ export default function App() {
         )}
       </main>
 
+      {/* a change is only safe once it is on the server — never leave that
+          invisible, because a reload in the meantime loses it silently */}
+      {!saveWarn && (saveState === "pending" || saveState === "saving") && (
+        <div className="no-print fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-[11.5px] font-semibold text-amber-800 shadow">
+          <RefreshCw size={11} className="mr-1.5 inline animate-spin" /> Saving changes… don't close this tab yet
+        </div>
+      )}
       {saveWarn && (
         <div className="no-print fixed bottom-4 left-1/2 z-50 max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12px] font-semibold text-red-700 shadow-lg">
           {saveWarn}
