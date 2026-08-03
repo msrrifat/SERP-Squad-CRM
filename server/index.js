@@ -61,13 +61,62 @@ async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "b
   return t;
 }
 
+/* ---- LIVE batch: one synchronous SERP per task, run concurrently -------
+   For a geo-grid EVERY point must come back — a point that silently fails is
+   a hole in the map that reads as "no ranking here", which is worse than no
+   scan at all. The live endpoint answers in seconds and never depends on a
+   queue draining, so each point either has data or a stated reason.
+
+   Failures are retried with backoff, because a single 429/5xx on one of 60+
+   concurrent requests is normal and must not become a blank grid cell.
+   Returns an array aligned with `tasks`: { task } or { error }. */
+async function dfsLivePool(creds, pathSeg, tasks, { concurrency = 8, attempts = 3, onProgress = null } = {}) {
+  let done = 0;
+  const run = async (task) => {
+    let lastErr = "";
+    for (let a = 0; a < attempts; a++) {
+      if (a) await new Promise((r) => setTimeout(r, 800 * 2 ** (a - 1) + Math.floor(a * 250)));
+      try {
+        const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/live/advanced`, {
+          method: "POST",
+          headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+          body: JSON.stringify([task]),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!res.ok) {
+          lastErr = `HTTP ${res.status}`;
+          /* 402/401 are account-level and will not fix themselves on retry */
+          if (res.status === 401 || res.status === 402) return { error: `DataForSEO ${res.status} — ${res.status === 402 ? "insufficient balance" : "bad credentials"}` };
+          continue;
+        }
+        const t = (await res.json()).tasks?.[0];
+        if (t?.status_code === 20000) return { task: t };
+        lastErr = `task ${t?.status_code}: ${t?.status_message}`;
+        /* 40xxx = malformed request; retrying sends the same thing again */
+        if (t?.status_code >= 40000 && t?.status_code < 50000) return { error: lastErr };
+      } catch (e) { lastErr = String(e?.message || e); }
+    }
+    return { error: lastErr || "live request failed" };
+  };
+  return pool(tasks, async (task) => {
+    const r = await run(task);
+    done += 1;
+    onProgress?.(done, tasks.length);
+    return r;
+  }, concurrency);
+}
+
 /* ---- DataForSEO standard task queue ----------------------------------
-   task_post → tasks_ready → task_get: the exact same SERP data as /live
-   at $0.0006 per SERP (standard priority) instead of $0.002+ — results
-   just arrive asynchronously (usually <1 min, worst case ~5 min).
-   Returns an array aligned with `tasks`: { task } on success, { error }
-   on creation failure / task failure / poll-budget timeout. */
-async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 420000, pollMs = 10000 } = {}) {
+   task_post → tasks_ready → task_get: the same SERP data as /live at
+   standard-priority pricing, but asynchronously. DataForSEO gives NO tight
+   completion guarantee for standard priority — the old 7-minute budget here
+   is why large grids came back mostly empty: a handful of tasks landed in
+   time and every other point was written off as "scan failed".
+   The budget is bounded so the request still answers: whatever has not
+   arrived by then is finished on the live endpoint by the caller, which is
+   what makes economy mode safe — cheap when the queue keeps up, complete
+   either way. */
+async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 480000, pollMs = 8000, onProgress = null } = {}) {
   const out = new Array(tasks.length).fill(null);
   const pending = new Map(); // DataForSEO task id → index into `tasks`
   const headers = { Authorization: authHeader(creds), "Content-Type": "application/json" };
@@ -84,7 +133,20 @@ async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 420000, pollMs = 100
       else out[idx] = { error: `task ${t.status_code}: ${t.status_message}` };
     }
   }
+  const total = tasks.length;
+  const collect = async (id) => {
+    const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_get/advanced/${id}`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(35000) });
+    if (!res.ok) return false;                       // not ready yet, or a transient error
+    const t = (await res.json()).tasks?.[0];
+    if (!t || t.status_code === 40602) return false; // 40602 = "Task In Queue"
+    const idx = pending.get(id);
+    if (idx === undefined) return true;
+    pending.delete(id);
+    out[idx] = t.status_code === 20000 ? { task: t } : { error: `task ${t.status_code}: ${t.status_message}` };
+    return true;
+  };
   const deadline = Date.now() + budgetMs;
+  let cycle = 0;
   while (pending.size && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
     let ready = [];
@@ -94,15 +156,15 @@ async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 420000, pollMs = 100
          may share the account, so collect ONLY ids this call created */
       if (res.ok) ready = ((await res.json()).tasks?.[0]?.result || []).filter((r2) => pending.has(r2.id));
     } catch { /* transient poll failure — next cycle retries */ }
-    await pool(ready, async (r2) => {
-      const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_get/advanced/${r2.id}`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(35000) });
-      if (!res.ok) return; // stays pending — it reappears in the next tasks_ready cycle
-      const t = (await res.json()).tasks?.[0];
-      const idx = pending.get(r2.id);
-      pending.delete(r2.id);
-      out[idx] = t && t.status_code === 20000 ? { task: t } : { error: `task ${t?.status_code}: ${t?.status_message}` };
-    }, 5);
+    await pool(ready.map((r2) => r2.id), collect, 5);
+    /* tasks_ready lists a completed task ONCE. If the task_get that followed
+       it failed, that id would never be offered again and the point would
+       time out holding no data — so every few cycles the still-pending ids
+       are fetched directly, which is authoritative. */
+    if (++cycle % 3 === 0 && pending.size) await pool([...pending.keys()], collect, 5);
+    onProgress?.(total - pending.size, total);
   }
+  if (pending.size) await pool([...pending.keys()], collect, 5); // one last direct sweep
   for (const idx of pending.values()) if (!out[idx]) out[idx] = { error: "queue timeout — task did not complete in time" };
   return out;
 }
@@ -2509,32 +2571,60 @@ async function handleGeoGrid(body) {
   const spacingKm = Math.min(10, Math.max(0.05, +grid?.spacingKm || 1));
   const pts = gridPoints(center, size, spacingKm, grid?.shape === "circle" ? "circle" : "square");
   const languageCode = body.language_code || "en";
-  /* every (keyword, point) task goes into ONE standard-queue batch — the
-     whole report scans in queue-latency time regardless of its size */
+  /* map zoom sent with each coordinate. Every point must be scanned at the
+     SAME zoom or the ranks aren't comparable across the grid. */
+  const zoom = Math.min(21, Math.max(3, +body.zoom || 17));
+  /* one task per (keyword, point) */
   const tasks = [];
   for (const kw of keywords) for (const pt of pts) tasks.push({
-    keyword: kw, location_coordinate: `${pt.lat},${pt.lng},17z`, language_code: languageCode, depth: 100,
+    keyword: kw, location_coordinate: `${pt.lat},${pt.lng},${zoom}z`, language_code: languageCode, depth: 100,
   });
-  const results = await dfsQueue(creds, "google/maps", tasks);
-  /* one repost round — a transient SERP error or queue timeout must not
-     leave a hole in the grid pretending to be a bad rank */
+
+  /* LIVE by default. The standard queue is cheaper per SERP, but it gives no
+     completion guarantee, and a geo-grid is only worth anything if EVERY
+     point returns — a grid where most points failed silently reports "not
+     ranking here" for places the business may well rank. Economy mode stays
+     available for anyone who prefers the price and can wait. */
+  const mode = body.mode === "queue" ? "queue" : "live";
+  const results = mode === "queue"
+    ? await dfsQueue(creds, "google/maps", tasks)
+    : await dfsLivePool(creds, "google/maps", tasks, { concurrency: Math.min(12, Math.max(4, +body.concurrency || 8)) });
+
+  /* second pass over whatever still has no data — always LIVE, whichever mode
+     ran first, because the point of the retry is to close holes for good.
+     A queue run that missed EVERYTHING still gets swept: that is the normal
+     outcome when the standard queue is backed up, and it is exactly the case
+     that used to produce a grid of failed points. (A live run that missed
+     everything is a dead provider or bad credentials — dfsLivePool already
+     retried each task and bails early on 401/402, so sweeping again would
+     only double the wait.) */
   const missIdx = results.map((r, i) => (!r?.task ? i : -1)).filter((i) => i >= 0);
-  if (missIdx.length && missIdx.length < tasks.length) {
-    const retry = await dfsQueue(creds, "google/maps", missIdx.map((i) => tasks[i]), { budgetMs: 150000 });
+  if (missIdx.length && (mode === "queue" || missIdx.length < tasks.length)) {
+    const retry = await dfsLivePool(creds, "google/maps", missIdx.map((i) => tasks[i]), { concurrency: 5, attempts: 2 });
     retry.forEach((r, j) => { if (r?.task) results[missIdx[j]] = r; });
   }
+
   const grids = {};
+  const errCounts = {};
   keywords.forEach((kw, ki) => {
     grids[kw] = pts.map((pt, pi) => {
       const r = results[ki * pts.length + pi];
-      return r?.task ? { ...pt, ...parseMapsTask(r.task, business) } : { ...pt, rank: null, error: r?.error || "scan failed", results: [] };
+      if (r?.task) return { ...pt, ...parseMapsTask(r.task, business) };
+      const error = r?.error || "scan failed";
+      errCounts[error] = (errCounts[error] || 0) + 1;
+      return { ...pt, rank: null, error, results: [] };
     });
   });
-  if (Object.values(grids).every((g) => g.every((p) => p.error))) {
-    return [502, { error: "provider_error", detail: Object.values(grids)[0].find((p) => p.error)?.error || "scan failed" }];
+  const all = Object.values(grids).flat();
+  const failed = all.filter((p) => p.error).length;
+  if (failed === all.length) {
+    return [502, { error: "provider_error", detail: Object.keys(errCounts)[0] || "scan failed" }];
   }
   /* `points` kept for single-keyword callers (older client bundles) */
-  return [200, { live: true, grids, points: grids[keywords[0]], size, spacingKm, checkedAt: Date.now() }];
+  return [200, { live: true, mode, grids, points: grids[keywords[0]], size, spacingKm, zoom,
+    /* the client shows this verbatim: a partially-failed grid must never look
+       like a complete one */
+    scanned: all.length - failed, failed, errors: errCounts, checkedAt: Date.now() }];
 }
 
 /* ---- Google Places: resolve the business location (Find Place) ---- */

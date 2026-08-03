@@ -22,7 +22,11 @@ import { startScanJob, useScanJobs } from "../../lib/scanjobs.js";
 
 /* ---------- metrics ---------- */
 export const gridMetrics = (points) => {
-  const active = points.filter((p) => !p.skipped);
+  /* A point whose scan FAILED is not evidence of anything. Counting it as
+     "not ranking" (rank 21 in ATRP, a miss in SoLV and coverage) turned a
+     broken scan into a confident report of terrible rankings — the metrics
+     only describe points that actually returned a SERP. */
+  const active = points.filter((p) => !p.skipped && !p.error);
   const found = active.filter((p) => p.rank != null);
   const arp = found.length ? found.reduce((s, p) => s + p.rank, 0) / found.length : null;
   const atrp = active.length ? active.reduce((s, p) => s + (p.rank ?? 21), 0) / active.length : null;
@@ -293,7 +297,7 @@ export const bizGrid = (pts, title) => pts.map((p) => ({
   ...p, rank: p.skipped ? null : ((p.results || []).find((r2) => normBiz(r2.title) === normBiz(title))?.rank ?? null),
 }));
 export const distFor = (pts) => {
-  const a = pts.filter((p) => !p.skipped);
+  const a = pts.filter((p) => !p.skipped && !p.error);
   return {
     p3: a.filter((p) => p.rank != null && p.rank <= 3).length,
     p10: a.filter((p) => p.rank != null && p.rank > 3 && p.rank <= 10).length,
@@ -445,6 +449,20 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
           <div className="text-[10.5px] text-gray-400">
             Effective spacing: <b className="ll-mono">{effSpacing(r)} km</b> · scan points: <b className="ll-mono">{pts}</b>{r.shape === "circle" ? ` (center + ${(r.size - 1) / 2} rings — a ${r.size}×${r.size} square would be ${r.size * r.size})` : ""}
           </div>
+          {/* how each point is fetched. The queue is cheaper per SERP but has no
+              completion guarantee, so it is opt-in and always finishes any
+              stragglers live rather than leaving blank points on the map. */}
+          <Labeled label="Scan mode">
+            <select value={r.scanMode || "live"} onChange={(e) => setR({ ...r, scanMode: e.target.value })} className={inputCls}>
+              <option value="live">Accurate — every point fetched live (finishes in about a minute)</option>
+              <option value="queue">Economy — queued SERPs, cheaper per point (can take 5–10 minutes)</option>
+            </select>
+          </Labeled>
+          <div className="text-[10.5px] text-gray-400">
+            {(r.scanMode || "live") === "live"
+              ? "Each point is a live coordinate-targeted Maps request, run several at a time and retried on failure — the grid comes back complete or tells you exactly which points didn't."
+              : "Points are queued at the cheaper standard rate. Whatever the queue hasn't returned within a few minutes is finished live, so the grid still completes — it just takes longer."}
+          </div>
 
           {/* live grid preview — the exact points the scan will hit, on the real
               map; updates instantly with size / radius / spacing / shape */}
@@ -561,6 +579,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
     startScanJob(`geogrid:${project.id}:${rp.id}`, `Geo-grid · ${project.name} — ${rp.name || rp.keywords[0]}`, async (setProgress) => {
       let grids = null;
       let live = false;
+      let scanMeta = null;   // { mode, scanned, failed, errors } from the server
       if (center) {
         /* ALL keywords go in one request — the server queues every
            (keyword × point) task at once ($0.0006/scan, standard queue),
@@ -573,9 +592,10 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             body: JSON.stringify({
               keywords: rp.keywords, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
               business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
+              mode: rp.scanMode === "queue" ? "queue" : "live",
             }),
           });
-          if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; }
+          if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; scanMeta = { mode: d.mode, scanned: d.scanned, failed: d.failed, errors: d.errors }; }
           else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
         } catch (e) {
           if (String(e?.message || "").startsWith("Live scan failed")) throw e;
@@ -592,7 +612,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
           await new Promise((r2) => setTimeout(r2, 350));
         }
       }
-      const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape };
+      /* the scan's own report card travels WITH the snapshot: a grid with
+         failed points must never be presentable as a complete one */
+      const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape, ...(scanMeta || {}) };
       patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
       return { keywords: rp.keywords.length, live };
     });
@@ -876,6 +898,27 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
       {snap && !snap.live && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11.5px] text-amber-800">
           <b>Demo snapshot.</b> Start the API server + add DataForSEO credentials for real coordinate-targeted Maps scans.
+        </div>
+      )}
+      {/* a partially-scanned grid is NOT a ranking result — the metrics below
+          would read failed points as "not ranking here", so the shortfall is
+          stated with the provider's own reason instead of a grey dot */}
+      {snap && snap.live && snap.failed > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[11.5px] text-red-800">
+          <b>{snap.failed} of {snap.failed + snap.scanned} points didn't scan.</b> They show as grey <b>!</b> markers and are
+          excluded from the metrics above — treat this snapshot as incomplete and re-run it.
+          {snap.errors && Object.keys(snap.errors).length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              {Object.entries(snap.errors).map(([e, n]) => (
+                <div key={e} className="ll-mono text-[10.5px] opacity-80">{n}× {e}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {snap && snap.live && snap.failed === 0 && snap.scanned > 0 && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-[11px] text-emerald-800">
+          <b>Complete scan.</b> All {snap.scanned} coordinate-targeted requests returned{snap.mode === "queue" ? " (economy mode)" : ""}.
         </div>
       )}
 
