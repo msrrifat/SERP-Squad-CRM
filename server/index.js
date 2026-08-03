@@ -810,6 +810,27 @@ function handleStateBackups(req) {
   } catch { /* no daily backups yet */ }
   return [200, { live: true, backups: out }];
 }
+/* ---- surgical recovery: read report templates and saved reports OUT of a
+   backup without restoring the whole workspace over newer work. Wholesale
+   restore is the wrong tool when only a couple of documents went missing —
+   it would undo everything else saved since. ---- */
+function handleStateBackupExtract(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const file = String(body?.file || "");
+  const hourly = /^app-state-\d{4}-\d{2}-\d{2}-\d{2}\.json\.gz$/.test(file);
+  if (!hourly && !/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
+  const src = new URL((hourly ? "./data/snapshots/" : "./data/backups/") + file, import.meta.url);
+  if (!existsSync(src)) return [404, { error: "not_found", detail: file + " does not exist." }];
+  try {
+    const buf = readFileSync(src);
+    const st = JSON.parse(hourly ? gunzipSync(buf).toString("utf8") : buf.toString("utf8"));
+    return [200, { live: true, file,
+      reportTemplates: (st.company?.reportTemplates || []),
+      savedReports: (st.clients || []).map((c) => ({ clientId: c.id, clientName: c.name, reports: c.savedReports || [] })).filter((x) => x.reports.length),
+    }];
+  } catch (e) { return [500, { error: "read_failed", detail: String(e?.message || e).slice(0, 140) }]; }
+}
 function handleStateRestore(req, body) {
   const sess = sessionFromReq(req);
   if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
@@ -2889,7 +2910,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       let raw = "";
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
@@ -2960,6 +2981,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
+        : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)
         : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)
