@@ -399,12 +399,35 @@ const gErr = (e) => [e?.code === 401 ? 401 : 502, { error: e?.code === 401 ? "no
 const gGet = async (accessToken, url) => { const r = await fetch(url, { headers: { Authorization: "Bearer " + accessToken }, signal: AbortSignal.timeout(30000) }); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`); return d; };
 const gPost = async (accessToken, url, body) => { const r = await fetch(url, { method: "POST", headers: { Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000), body: JSON.stringify(body) }); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`); return d; };
 
+/* Search Console lists every property the account has ANY relationship with,
+   including ones it can't read (siteUnverifiedUser). Querying those fails with
+   "User does not have sufficient permission for site …" — and the same domain
+   is usually ALSO present as a readable property in another form
+   (sc-domain:example.com vs https://www.example.com/). Rank the levels so a
+   readable property can always be found and preferred. */
+const GSC_PERM = { siteOwner: 4, siteFullUser: 3, siteRestrictedUser: 2, siteUnverifiedUser: 0 };
+const gscReadable = (level) => (GSC_PERM[level] || 0) > 0;
+const gscHost = (s) => String(s || "").replace(/^sc-domain:/, "").replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "").toLowerCase();
 async function handleGscSites(body) {
   if (!body?.connectionId) return [503, { error: "not_connected", detail: "Connect a Google account first." }];
   try { const { accessToken } = await googleAccess(body.connectionId);
     const d = await gGet(accessToken, "https://searchconsole.googleapis.com/webmasters/v3/sites");
-    return [200, { live: true, sites: (d.siteEntry || []).map((s) => ({ url: s.siteUrl, level: s.permissionLevel })) }];
+    /* readable properties first, so the obvious pick in the dropdown works */
+    const sites = (d.siteEntry || []).map((s) => ({ url: s.siteUrl, level: s.permissionLevel, readable: gscReadable(s.permissionLevel) }))
+      .sort((a, b) => (GSC_PERM[b.level] || 0) - (GSC_PERM[a.level] || 0) || a.url.localeCompare(b.url));
+    return [200, { live: true, sites }];
   } catch (e) { return gErr(e); }
+}
+/* the readable property for the same domain as `wanted`, best permission and
+   domain-properties first (a domain property covers every subdomain/protocol) */
+async function resolveGscSite(accessToken, wanted) {
+  const d = await gGet(accessToken, "https://searchconsole.googleapis.com/webmasters/v3/sites");
+  const host = gscHost(wanted);
+  const same = (d.siteEntry || [])
+    .filter((s) => gscReadable(s.permissionLevel) && gscHost(s.siteUrl) === host && s.siteUrl !== wanted)
+    .sort((a, b) => (GSC_PERM[b.permissionLevel] || 0) - (GSC_PERM[a.permissionLevel] || 0)
+      || (b.siteUrl.startsWith("sc-domain:") ? 1 : 0) - (a.siteUrl.startsWith("sc-domain:") ? 1 : 0));
+  return same[0]?.siteUrl || null;
 }
 async function handleGscQuery(body) {
   if (!body?.connectionId || !body?.siteUrl) return [400, { error: "bad_request", detail: "connectionId and siteUrl required." }];
@@ -414,8 +437,10 @@ async function handleGscQuery(body) {
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
   const startDate = isDate(body?.startDate) ? body.startDate : new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   const endDate = isDate(body?.endDate) ? body.endDate : new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10); // GSC lags ~2 days
-  const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(body.siteUrl)}/searchAnalytics/query`;
-  try { const { accessToken } = await googleAccess(body.connectionId);
+  /* the whole query, against ONE property — so a permission failure can be
+     retried against the same domain's readable property without duplication */
+  const runFor = async (accessToken, siteUrl) => {
+    const base = `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`;
     /* pull EVERY row, not a top-20 sample — GSC pages at 25k rows/request */
     const pullAll = async (dims, filter) => {
       const rows = [];
@@ -461,6 +486,28 @@ async function handleGscQuery(body) {
       pages: pages.map((r) => ({ page: r.keys[0], ...rowOf(r) })),
       byDate: (dates.rows || []).map((r) => ({ date: r.keys[0], clicks: r.clicks, impressions: r.impressions })),
     }];
+  };
+
+  try {
+    const { accessToken } = await googleAccess(body.connectionId);
+    try {
+      return await runFor(accessToken, body.siteUrl);
+    } catch (e) {
+      /* the saved property isn't readable by this account — almost always the
+         same site is verified in another form (domain property vs URL prefix,
+         www vs bare). Find that one and answer from it rather than handing the
+         user a raw Google permission error for a site they demonstrably own. */
+      if (!/permission|not found|403|404/i.test(String(e?.message || e))) throw e;
+      const alt = await resolveGscSite(accessToken, body.siteUrl);
+      if (!alt) {
+        return [403, { error: "no_permission", siteUrl: body.siteUrl,
+          detail: `This Google account can't read "${body.siteUrl}" in Search Console, and no other verified property covers ${gscHost(body.siteUrl) || "that domain"}. Open Search Console → Settings → Users and permissions and give this account at least Restricted access, then reselect the property in Website Performance.` }];
+      }
+      const out = await runFor(accessToken, alt);
+      /* tell the client which property actually answered so it can save it */
+      if (out[0] === 200) { out[1].siteUsed = alt; out[1].siteRequested = body.siteUrl; }
+      return out;
+    }
   } catch (e) { return gErr(e); }
 }
 async function handleGa4Properties(body) {

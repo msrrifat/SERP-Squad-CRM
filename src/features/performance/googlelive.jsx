@@ -191,8 +191,20 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
             {sites?.err ? <div className="text-[11px] text-amber-700">{sites.err}</div>
             : <select value={conn.gscSite || ""} onChange={(e) => setConn({ gscSite: e.target.value })} className={inputCls + " bg-white"}>
                 <option value="">{sites ? (sites.length ? "Select a site…" : "No sites on this account") : "Loading…"}</option>
-                {Array.isArray(sites) && sites.map((s) => <option key={s.url} value={s.url}>{s.url}</option>)}
+                {/* Google lists properties this account can't actually read —
+                   picking one is what produces "does not have sufficient
+                   permission" later, so they're labeled and unselectable */}
+                {Array.isArray(sites) && sites.map((s) => (
+                  <option key={s.url} value={s.url} disabled={s.readable === false}>
+                    {s.url}{s.readable === false ? "  (no read access — verify in Search Console)" : ""}
+                  </option>
+                ))}
               </select>}
+            {Array.isArray(sites) && sites.some((s) => s.readable === false) && (
+              <div className="mt-1 text-[10.5px] text-gray-400">
+                Greyed-out properties are listed by Google but not readable by {conn.email || "this account"} — it needs at least Restricted access in Search Console → Settings → Users and permissions.
+              </div>
+            )}
           </Labeled>
           <Labeled label="Google Analytics 4 property">
             {props?.err ? <div className="text-[11px] text-amber-700">{props.err}</div>

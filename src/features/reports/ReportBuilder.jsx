@@ -10,7 +10,7 @@ import {
   MousePointerClick, BarChart3, Smartphone, Monitor, RefreshCw, Clock,
   Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
   LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
-  PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
+  PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste, Image as ImageIcon,
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
@@ -162,7 +162,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       .then(([a, b2]) => {
         if (!alive) return;
         if (!a.ok) { setGsc({ error: a.d?.detail || a.d?.error || "Search Console request failed" }); return; }
-        setGsc({ cur: a.d.totals, prev: b2.ok && b2.d ? b2.d.totals : null, queries: a.d.queries || [], pages: a.d.pages || [], byDate: a.d.byDate || [] });
+        setGsc({ cur: a.d.totals, prev: b2.ok && b2.d ? b2.d.totals : null, queries: a.d.queries || [], pages: a.d.pages || [], byDate: a.d.byDate || [],
+          /* the server falls back to the readable property for the same domain
+             when the saved one isn't readable — say so rather than silently
+             reporting numbers from a different property name */
+          siteUsed: a.d.siteUsed || null, siteRequested: a.d.siteRequested || null });
       })
       .catch((e) => { if (alive) setGsc({ error: String(e?.message || e) }); })
       .finally(() => { if (alive) setGscBusy(false); });
@@ -1061,6 +1065,75 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     );
   };
 
+  /* ---- uploaded image block ----------------------------------------------
+     Reports live in the workspace state that syncs to the server, so a raw
+     4MB phone photo pasted into a report would bloat every save for everyone.
+     Uploads are re-encoded to fit the printable page width before they are
+     stored: same visible quality on screen and in print-to-PDF, a fraction of
+     the bytes. */
+  const IMG_MAX_W = 1600, IMG_MAX_H = 1600;
+  const shrinkImage = (file) => new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onerror = () => reject(new Error("That file could not be read."));
+    rd.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That file isn't a readable image."));
+      img.onload = () => {
+        const scale = Math.min(1, IMG_MAX_W / img.width, IMG_MAX_H / img.height);
+        if (scale === 1 && String(rd.result).length < 500_000) { resolve({ src: rd.result, w: img.width, h: img.height }); return; }
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+        const cx = c.getContext("2d");
+        /* PNGs with transparency keep their alpha; everything else re-encodes
+           as JPEG, which is far smaller for photos */
+        const keepAlpha = /png|webp|gif/i.test(file.type);
+        if (!keepAlpha) { cx.fillStyle = "#fff"; cx.fillRect(0, 0, c.width, c.height); }
+        cx.drawImage(img, 0, 0, c.width, c.height);
+        resolve({ src: c.toDataURL(keepAlpha ? "image/png" : "image/jpeg", 0.85), w: c.width, h: c.height });
+      };
+      img.src = String(rd.result);
+    };
+    rd.readAsDataURL(file);
+  });
+  const [imgErr, setImgErr] = useState(null);
+  const takeImage = async (blockId, file) => {
+    setImgErr(null);
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { setImgErr("Only image files can be added (JPG, PNG, WebP, GIF)."); return; }
+    if (file.size > 25e6) { setImgErr("That image is over 25MB — resize it first."); return; }
+    try {
+      const { src, w, h } = await shrinkImage(file);
+      patch(blockId, { src, natW: w, natH: h, name: file.name });
+    } catch (e) { setImgErr(String(e?.message || e)); }
+  };
+  const renderImage = (b) => {
+    const widthPct = b.width === "half" ? 50 : b.width === "third" ? 33 : 100;
+    const align = b.align || "center";
+    if (!b.src) return (
+      <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-gray-200 px-4 py-7 text-center hover:border-gray-300"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); takeImage(b.id, e.dataTransfer.files?.[0]); }}>
+        <ImageIcon size={20} className="text-gray-300" />
+        <span className="text-[12px] font-semibold text-gray-500">Upload an image from your computer</span>
+        <span className="text-[10.5px] text-gray-400">Click to choose, or drag a file here · JPG, PNG, WebP, GIF</span>
+        {imgErr && <span className="text-[10.5px] font-semibold text-red-600">{imgErr}</span>}
+        <input type="file" accept="image/*" className="hidden" onChange={(e) => takeImage(b.id, e.target.files?.[0])} />
+      </label>
+    );
+    return (
+      <figure className="m-0" style={{ textAlign: align }}>
+        <img src={b.src} alt={b.alt || ""} style={{ width: widthPct + "%", display: "inline-block", borderRadius: 10 }} />
+        {b.caption !== undefined && (
+          <figcaption className="mt-1.5">
+            <input value={b.caption || ""} onChange={(e) => patch(b.id, { caption: e.target.value })}
+              placeholder="Add a caption (optional)"
+              className="w-full border-0 bg-transparent text-center text-[11px] italic text-gray-500 outline-none placeholder:not-italic" style={{ textAlign: align }} />
+          </figcaption>
+        )}
+      </figure>
+    );
+  };
+
   const renderBlock = (b) => {
     switch (b.type) {
       case "heading": return b.level === 1
@@ -1077,6 +1150,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           className="w-full resize-none border-0 bg-transparent text-[13.5px] leading-relaxed text-gray-600 outline-none" />
       );
       case "divider": return <hr className="border-gray-200" />;
+      case "image": return renderImage(b);
       case "kpis": return renderKpis(b);
       case "chart": return b.mode === "trend" ? renderTrend(b) : renderBreakdown(b);
       case "table": return <div>{b.title && <div className="mb-2 text-[13px] font-semibold text-gray-700">{b.title}</div>}{renderTable(b)}</div>;
@@ -1169,6 +1243,30 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     );
     if (b.type === "paragraph") return (
       <Labeled label="Text"><textarea value={b.text} onChange={(e) => patch(b.id, { text: e.target.value })} rows={3} className={inputCls} /></Labeled>
+    );
+    if (b.type === "image") return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="cursor-pointer rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
+            {b.src ? "Replace image" : "Upload image"}
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => takeImage(b.id, e.target.files?.[0])} />
+          </label>
+          {b.src && <button onClick={() => patch(b.id, { src: "", name: "", natW: 0, natH: 0 })}
+            className="rounded-lg border border-gray-200 px-3 py-1.5 text-[12px] font-semibold text-gray-500 hover:text-red-500">Remove image</button>}
+          {b.src && <span className="ll-mono text-[10px] text-gray-400">{b.name || "image"} · {b.natW}×{b.natH}px</span>}
+        </div>
+        {imgErr && <div className="rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] font-semibold text-red-700">{imgErr}</div>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Labeled label="Width on the page"><Seg options={["full", "half", "third"]} value={b.width || "full"} onChange={(v) => patch(b.id, { width: v })} accent={accent} /></Labeled>
+          <Labeled label="Alignment"><Seg options={["left", "center", "right"]} value={b.align || "center"} onChange={(v) => patch(b.id, { align: v })} accent={accent} /></Labeled>
+        </div>
+        <Labeled label="Caption (printed under the image)">
+          <input value={b.caption || ""} onChange={(e) => patch(b.id, { caption: e.target.value })} placeholder="e.g. Before and after the homepage rebuild" className={inputCls} />
+        </Labeled>
+        <Labeled label="Alt text (accessibility)">
+          <input value={b.alt || ""} onChange={(e) => patch(b.id, { alt: e.target.value })} placeholder="What the image shows" className={inputCls} />
+        </Labeled>
+      </div>
     );
     if (b.type === "kpis") return (
       <div className="space-y-3">
@@ -1345,6 +1443,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     { label: "Heading", icon: Type, make: () => ({ type: "heading", text: "New heading", level: 2 }) },
     { label: "Paragraph", icon: AlignLeft, make: () => ({ type: "paragraph", text: "" }) },
     { label: "Paste table (Excel)", icon: ClipboardPaste, make: () => ({ type: "customTable", raw: "", hasHeader: true }) },
+    { label: "Image (upload)", icon: ImageIcon, make: () => ({ type: "image", src: "", caption: "", alt: "", width: "full", align: "center" }) },
     { label: "Divider", icon: Minus, make: () => ({ type: "divider" }) },
   ];
   const LIB_PERF = [
@@ -1660,8 +1759,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 <div className="mt-1.5 rounded-lg px-2 py-1.5 text-[9.5px] leading-relaxed"
                   style={gsc?.cur ? { background: "#ECFDF5", color: "#065F46" } : { background: "#FFFBEB", color: "#92400E" }}>
                   {gscBusy ? <>Loading Search Console for this exact window…</>
-                    : gsc?.cur ? <><b>Live Search Console</b> for {rangeLabel} — clicks, impressions, CTR and position are the real numbers for these dates.</>
-                    : gsc?.error ? <><b>Search Console error:</b> {gsc.error}</>
+                    : gsc?.cur ? <>
+                        <b>Live Search Console</b> for {rangeLabel} — clicks, impressions, CTR and position are the real numbers for these dates.
+                        {gsc.siteUsed && <><br />Read from <b>{gsc.siteUsed}</b> — the property saved on this project ({gsc.siteRequested}) isn't readable by the connected account, so the verified property for the same domain was used.</>}
+                      </>
+                    : gsc?.error ? <><b>Search Console:</b> {gsc.error}</>
                     : <><b>No data source connected.</b> This is a real project, so nothing is invented — connect Google in Performance Studio → Website Performance to populate search KPIs for any date range. GBP/GA4 blocks need their own connections.</>}
                 </div>
               )}
