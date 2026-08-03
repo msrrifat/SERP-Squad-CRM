@@ -121,7 +121,13 @@ export const REGION_ABBR = {
 };
 export const regionShort = (region) => REGION_ABBR[region] || region;
 export const cityKey = (c) => `${c.city}|${c.region || ""}|${c.country}`;
-export const cityLabel = (c) => c.region ? `${c.city}, ${regionShort(c.region)}` : c.city;
+/* tracking rows imported or edited by hand can carry a bare string city, or
+   none at all — a label helper must never be the thing that takes a screen down */
+export const cityLabel = (c) => {
+  if (!c) return "";
+  if (typeof c === "string") return c;
+  return c.region ? `${c.city}, ${regionShort(c.region)}` : (c.city || "");
+};
 /* the DataForSEO location_name — skips an empty region so custom cities like
    "York,United Kingdom" resolve correctly against DataForSEO's location list */
 export const cityLocationName = (c) => [c.city, c.region, c.country].filter(Boolean).join(",");

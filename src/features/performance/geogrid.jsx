@@ -597,6 +597,10 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
           });
           if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; scanMeta = { mode: d.mode, scanned: d.scanned, failed: d.failed, errors: d.errors }; }
           else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
+          /* 503 = the scan carried no usable credentials. Quietly drawing a demo
+             grid here is how a "connected" account ends up showing invented
+             rankings — the reason is reported instead. */
+          else if (res.status === 503) { const e2 = await res.json().catch(() => ({})); throw new Error(e2.detail || "DataForSEO isn't connected for this scan."); }
         } catch (e) {
           if (String(e?.message || "").startsWith("Live scan failed")) throw e;
           /* server down → demo below */

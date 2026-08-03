@@ -45,6 +45,27 @@ export function ReportBuilder(props) {
   return <ReportBuilderInner {...props} data={props.data || live} />;
 }
 
+/* ---- one failing block must not take the report (or the app) down --------
+   Report blocks render whatever the project happens to hold, and a single bad
+   value used to throw during render — which in React unmounts the entire tree
+   and leaves a white screen with no clue what happened. Each block is wrapped
+   so a failure is contained, named, and the rest of the report still prints. */
+class BlockBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error("[report block] " + (this.props.kind || "block") + " failed to render:", err, info); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[11.5px] text-red-800">
+        <b>This “{this.props.kind || "section"}” block couldn't render.</b> The rest of the report is unaffected — remove the
+        block, or change its settings, and the report prints normally.
+        <div className="ll-mono mt-1 text-[10.5px] opacity-80">{String(this.state.err?.message || this.state.err)}</div>
+      </div>
+    );
+  }
+}
+
 function ReportBuilderInner({ project, data, tracking, clientProjects = [], records = [], template = "performance", agencyBrand, wlBrand, clientInfo, defaultCmp, initialRange = null, dark, setDark, onClose, aiSummary = null, initialBlocks = null, initialTitle = null, onSave = null, onSaveTemplate = null }) {
   const today = new Date().toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" });
   const [title, setTitle] = useState(initialTitle || (template === "work" ? `${project.name} — Work Report` : `${project.name} — SEO Performance Report`));
@@ -555,6 +576,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   };
 
   const renderTable = (b) => {
+    /* the comparison window, in months. `c` used to live here and was deleted
+       with the per-block compare control — leaving two tables referencing a
+       variable that no longer existed, which is a ReferenceError at render and
+       took the whole screen white. */
+    const cmpMonths = Math.max(1, +defaultCmp || 3);
     const th = "px-3 py-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400 text-left";
     const td = "px-3 py-2 border-b border-gray-50";
     const cap = (arr) => (b.limit && b.limit !== "all" ? arr.slice(0, +b.limit) : arr);
@@ -597,10 +623,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     );
     if (b.kind === "gbpTerms") return (
       <table className="w-full text-[12.5px]">
-        <thead><tr className="border-b border-gray-100"><th className={th}>Search term</th><th className={th}>Impressions</th><th className={th}>vs {c}mo</th></tr></thead>
+        <thead><tr className="border-b border-gray-100"><th className={th}>Search term</th><th className={th}>Impressions</th><th className={th}>vs previous</th></tr></thead>
         <tbody>{cap(data.gbpTerms).map((t, i) => (
           <tr key={i}><td className={td + " font-medium"}>{t.term}</td><td className={td + " ll-mono"}>{fmt(t.impressions)}</td>
-            <td className={td}><Delta pct={pctDelta(t.impressions, t.prev(c))} /></td></tr>
+            <td className={td}><Delta pct={pctDelta(t.impressions, t.prev?.(cmpMonths))} /></td></tr>
         ))}</tbody>
       </table>
     );
@@ -630,7 +656,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     if (b.kind === "citations") {
       const scan = project.opt?.branding?.listingScan;
       if (!scan) return <div className="py-3 text-[12px] text-gray-400">No citation scan yet — run the Business Listings scanner first.</div>;
-      const rows = Object.entries(scan.results).sort(([, x], [, y]) => (x.status === "found" ? 0 : 1) - (y.status === "found" ? 0 : 1) || (y.da || 0) - (x.da || 0));
+      const rows = Object.entries(scan.results || {}).sort(([, x], [, y]) => (x.status === "found" ? 0 : 1) - (y.status === "found" ? 0 : 1) || (y.da || 0) - (x.da || 0));
       return (
         <div>
           <div className="mb-2 flex items-center gap-3 text-[12px]">
@@ -651,10 +677,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     }
     if (b.kind === "events") return (
       <table className="w-full text-[12.5px]">
-        <thead><tr className="border-b border-gray-100"><th className={th}>Event name</th><th className={th}>Count</th><th className={th}>vs {c}mo</th></tr></thead>
+        <thead><tr className="border-b border-gray-100"><th className={th}>Event name</th><th className={th}>Count</th><th className={th}>vs previous</th></tr></thead>
         <tbody>{cap(data.events).map((e, i) => (
           <tr key={i}><td className={td + " ll-mono"}>{e.name}</td><td className={td + " ll-mono font-semibold"}>{fmt(e.series[12])}</td>
-            <td className={td}><Delta pct={pctDelta(e.series[12], e.series[12 - c])} /></td></tr>
+            <td className={td}><Delta pct={pctDelta(e.series[12], e.series[12 - cmpMonths])} /></td></tr>
         ))}</tbody>
       </table>
     );
@@ -897,10 +923,26 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const cp = projOf(b.projectId);
     const tr = cp.tracking;
     const color = b.color || accent;
-    const rows = b.limit && b.limit !== "all" ? tr.slice(0, +b.limit) : tr;
-    const avg = tr.length ? tr.reduce((x, t) => x + t.stats.cur, 0) / tr.length : 0;
-    const tier = (n) => tr.filter((t) => t.stats.cur <= n).length;
-    const chips = [["Avg. position", tr.length ? "#" + avg.toFixed(1) : "–"], ["Top 3", tier(3)], ["Top 10", tier(10)], ["Top 20", tier(20)]];
+    /* best CURRENT position first — a ranking report should open with what is
+       winning; keywords with no position yet sink to the bottom rather than
+       sitting wherever they happened to be added */
+    const sorted = [...tr].sort((x, y) => {
+      const px = x.stats?.cur, py = y.stats?.cur;
+      const vx = px == null || px > 100 ? 1e6 : px, vy = py == null || py > 100 ? 1e6 : py;
+      return vx - vy || (x.keyword || "").localeCompare(y.keyword || "");
+    });
+    const rows = b.limit && b.limit !== "all" ? sorted.slice(0, +b.limit) : sorted;
+    /* averages only count keywords that actually have a position */
+    const ranked = tr.filter((t) => t.stats?.cur != null);
+    const avg = ranked.length ? ranked.reduce((x, t) => x + t.stats.cur, 0) / ranked.length : 0;
+    const tier = (n) => tr.filter((t) => t.stats?.cur != null && t.stats.cur <= n).length;
+    const tiers = Array.isArray(b.tiers) && b.tiers.length ? b.tiers : [3, 10, 20];
+    const showSummary = b.show !== "keywords";      // "both" (default) | "summary" | "keywords"
+    const showKeywords = b.show !== "summary";
+    const chips = [
+      ...(b.showAvg === false ? [] : [["Avg. position", ranked.length ? "#" + avg.toFixed(1) : "–"]]),
+      ...tiers.map((n) => [`Top ${n}`, tier(n)]),
+    ];
     const th = "px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-gray-400";
     const td = "border-b border-gray-50 px-3 py-1.5";
     return (
@@ -915,14 +957,17 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           </div>
           <SourceTag label="Keyword rankings" />
         </div>
-        <div className="mb-3 grid grid-cols-4 gap-2.5">
-          {chips.map(([label, v], i) => (
-            <div key={i} className="rounded-xl border border-gray-200 p-2.5 text-center">
-              <div className="text-[10.5px] font-medium text-gray-400">{label}</div>
-              <div className="ll-display text-[22px] font-semibold tracking-tight">{v}</div>
-            </div>
-          ))}
-        </div>
+        {showSummary && chips.length > 0 && (
+          <div className="mb-3 grid gap-2.5" style={{ gridTemplateColumns: `repeat(${Math.min(chips.length, 6)}, minmax(0, 1fr))` }}>
+            {chips.map(([label, v], i) => (
+              <div key={i} className="rounded-xl border border-gray-200 p-2.5 text-center">
+                <div className="text-[10.5px] font-medium text-gray-400">{label}</div>
+                <div className="ll-display text-[22px] font-semibold tracking-tight">{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {showKeywords && (
         <table className="w-full text-[12px]">
           <thead><tr className="border-b border-gray-100">
             <th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th>
@@ -938,8 +983,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   : <span className="text-gray-300">—</span>}</td></tr>
           ))}</tbody>
         </table>
-        {b.limit && b.limit !== "all" && tr.length > +b.limit && (
-          <div className="pt-1.5 text-[10px] text-gray-400">Showing {b.limit} of {tr.length} tracked keywords.</div>
+        )}
+        {showKeywords && b.limit && b.limit !== "all" && tr.length > +b.limit && (
+          <div className="pt-1.5 text-[10px] text-gray-400">Showing the best {b.limit} of {tr.length} tracked keywords by current position.</div>
         )}
       </div>
     );
@@ -1425,12 +1471,42 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             </Labeled>
           </>
         ) : (
-          <Labeled label="Rows to show">
-            <select value={b.limit || "10"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
-              {[3, 5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>Top {n}</option>)}
-              <option value="all">All rows</option>
-            </select>
-          </Labeled>
+          <>
+            <Labeled label="Keywords to list (best position first)">
+              <select value={b.limit || "10"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
+                {[3, 5, 10, 15, 20, 30, 50, 100].map((n) => <option key={n} value={n}>Top {n}</option>)}
+                <option value="all">All rows</option>
+              </select>
+            </Labeled>
+            <Labeled label="Show">
+              <Seg options={["Both", "Summary", "Keywords"]}
+                value={b.show === "summary" ? "Summary" : b.show === "keywords" ? "Keywords" : "Both"}
+                onChange={(v) => patch(b.id, { show: v === "Both" ? "both" : v.toLowerCase() })} accent={accent} />
+            </Labeled>
+            <div className="sm:col-span-3">
+              <Labeled label="Summary counters — how many keywords rank inside each position band">
+                <div className="flex flex-wrap gap-1.5">
+                  {[3, 5, 10, 20, 30, 50, 100].map((n) => {
+                    const on = (Array.isArray(b.tiers) && b.tiers.length ? b.tiers : [3, 10, 20]).includes(n);
+                    return (
+                      <button key={n} onClick={() => {
+                        const cur = Array.isArray(b.tiers) && b.tiers.length ? b.tiers : [3, 10, 20];
+                        patch(b.id, { tiers: (on ? cur.filter((x) => x !== n) : [...cur, n]).sort((x, y) => x - y) });
+                      }} className="rounded-lg border px-2.5 py-1 text-[11.5px] font-semibold"
+                        style={on ? { borderColor: accent, background: accent + "14", color: accent } : { borderColor: "#E5E7EB", color: "#6B7280" }}>
+                        Top {n}
+                      </button>
+                    );
+                  })}
+                  <button onClick={() => patch(b.id, { showAvg: b.showAvg === false })}
+                    className="rounded-lg border px-2.5 py-1 text-[11.5px] font-semibold"
+                    style={b.showAvg === false ? { borderColor: "#E5E7EB", color: "#6B7280" } : { borderColor: accent, background: accent + "14", color: accent }}>
+                    Avg. position
+                  </button>
+                </div>
+              </Labeled>
+            </div>
+          </>
         )}
         <div className="sm:col-span-3">{colorPick(b)}</div>
       </div>
@@ -1702,7 +1778,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                             {renderSettings(b)}
                           </div>
                         )}
-                        {renderBlock(b)}
+                        <BlockBoundary kind={b.type === "table" ? `${b.type} · ${b.kind}` : b.type}>{renderBlock(b)}</BlockBoundary>
                       </div>
                     );
                   })}

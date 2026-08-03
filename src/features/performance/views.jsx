@@ -731,7 +731,12 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })); // 101 = not in top 100
             failed.push(...data.updated.filter((u) => u.error));
             live = true;
-          } else if (res.status !== 503) throw new Error(await res.text());
+          } else if (res.status === 503) {
+            /* credentials never reached the server. On a REAL project this must
+               never turn into demo positions — say what happened instead. */
+            const d = await res.json().catch(() => ({}));
+            if (project.demoMode === false) throw new Error(d.detail || "DataForSEO credentials aren't reaching the scan.");
+          } else throw new Error(await res.text());
         } catch (e) {
           /* real projects surface the actual failure — only demo mode falls through */
           if (project.demoMode === false) throw new Error(`Scan failed at batch ${ci + 1}/${chunks.length}${applied ? ` — ${applied} of ${entries.length} keywords were already updated` : ""}. ` + String(e?.message || e).slice(0, 150));

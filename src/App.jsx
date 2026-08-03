@@ -209,6 +209,10 @@ export default function App() {
            correct). Anything else leaves saving disabled so a failed load can
            never overwrite a real workspace with seed data. */
         setStateSync(d.state ? "loaded" : d.exists === false ? "empty" : "failed");
+        /* the workspace revision this page is editing from — every save is
+           checked against it so a tab holding an older copy cannot overwrite
+           newer work saved elsewhere */
+        stateRev.current = Number.isFinite(+d.rev) ? +d.rev : null;
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
            "assignments" here would stomp a /project/… or /chat reload */
@@ -252,8 +256,12 @@ export default function App() {
      Failed saves are NEVER silent — data that didn't persist shows a banner. */
   const saveTimer = useRef(null);
   const [saveWarn, setSaveWarn] = useState(null);
+  /* a save the server refused because the workspace moved on underneath us */
+  const [staleState, setStaleState] = useState(false);
+  const stateRev = useRef(null);
   useEffect(() => {
     if (!hydrated || !teamSession) return;
+    if (staleState) return;   // a refused write stays refused until the page reloads
     /* never write until the server's workspace is accounted for */
     if (stateSync !== "loaded" && stateSync !== "empty") {
       setSaveWarn("Your workspace couldn't be loaded from the server, so saving is paused to protect it — reload the page. Nothing has been overwritten.");
@@ -265,13 +273,26 @@ export default function App() {
     saveTimer.current = setTimeout(async () => {
       try {
         const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
-          body: JSON.stringify({ state: { company, clients } }) });
+          body: JSON.stringify({ state: { company, clients }, baseRev: stateRev.current }) });
+        if (r.status === 409) {
+          /* someone else's changes are already on the server. Writing this
+             payload would erase them, so the server refused — stop autosaving
+             and say so, rather than racing them on the next keystroke. */
+          const d = await r.json().catch(() => ({}));
+          setStaleState(true);
+          setSaveWarn(d.detail || "Another session has saved changes — reload before continuing so nothing is overwritten.");
+          return;
+        }
         if (!r.ok && r.status !== 401) setSaveWarn(`Changes are NOT saving to the server (HTTP ${r.status}) — recent work would be lost on reload.`);
-        else setSaveWarn(null);
+        else {
+          const d = await r.json().catch(() => ({}));
+          if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
+          setSaveWarn(null);
+        }
       } catch { setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     }, 1200);
     return () => clearTimeout(saveTimer.current);
-  }, [company, clients, hydrated, teamSession, stateSync]);
+  }, [company, clients, hydrated, teamSession, stateSync, staleState]);
 
   const logActivity = (action, target = "") =>
     setCompany((c) => {
@@ -1241,8 +1262,15 @@ export default function App() {
       </main>
 
       {saveWarn && (
-        <div className="no-print fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-[12px] font-semibold text-red-700 shadow-lg">
+        <div className="no-print fixed bottom-4 left-1/2 z-50 max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12px] font-semibold text-red-700 shadow-lg">
           {saveWarn}
+          {staleState && (
+            <div className="mt-2 flex items-center gap-2">
+              <button onClick={() => window.location.reload()}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-[11.5px] font-semibold text-white">Reload the latest workspace</button>
+              <span className="text-[10.5px] font-normal opacity-80">Nothing on the server was changed.</span>
+            </div>
+          )}
         </div>
       )}
       {/* background scans keep running across page changes — this chip stays

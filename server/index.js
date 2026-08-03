@@ -26,7 +26,7 @@
    title/snippet. Cost: one live SERP request per directory scanned. */
 import http from "node:http";
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { gzip } from "node:zlib";
+import { gzip, gzipSync, gunzipSync } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
@@ -45,6 +45,15 @@ function fileCreds() {
   return null;
 }
 const resolveCreds = (body) => (body?.dfs?.login && body?.dfs?.password ? body.dfs : fileCreds());
+/* why a scan could not run, in the caller's terms — "not configured" on its own
+   sent people to Company settings to look at credentials that were already
+   there, when the real problem was that the browser never sent them */
+const credsMissing = (body) => {
+  const sentPartial = !!(body?.dfs && (body.dfs.login || body.dfs.password));
+  return [503, { error: "not_configured", detail: sentPartial
+    ? "The DataForSEO credentials sent with this scan were incomplete (login or password missing). Re-enter both in Company settings → API settings."
+    : "This scan carried no DataForSEO credentials and the server has none of its own. If the account IS connected in Company settings, the browser is holding an older copy of the workspace — reload the app. If this client is set to use its own DataForSEO account (Client settings), that account's login and password must be filled in." }];
+};
 const authHeader = (c) => "Basic " + Buffer.from(`${c.login}:${c.password}`).toString("base64");
 
 async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "bing/organic" | "google/maps"
@@ -260,7 +269,7 @@ async function handleCheckIndex(body) {
 /* ---- SERP top organic results for a keyword (competitor discovery) ---- */
 async function handleSerpTop(body) {
   const creds = resolveCreds(body);
-  if (!creds) return [503, { error: "not_configured" }];
+  if (!creds) return credsMissing(body);
   const keyword = String(body.keyword || "").trim();
   if (!keyword) return [400, { error: "keyword required" }];
   const location = body.location_name || "United States";
@@ -336,8 +345,28 @@ const saveDevices = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFile
    write state. Atomic writes (temp + rename) avoid partial files. ---- */
 const STATE_FILE = new URL("./data/app-state.json", import.meta.url);
 const loadState = () => { try { return JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch { return null; } };
+/* the workspace revision: bumped on every accepted write. A browser sends the
+   revision it loaded, so a tab holding an older copy can be REFUSED instead of
+   silently replacing work another session saved in the meantime. */
+const REV_FILE = new URL("./data/app-state.rev", import.meta.url);
+const loadRev = () => { try { return +readFileSync(REV_FILE, "utf8") || 0; } catch { return 0; } };
 const saveState = (state) => {
   mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+  /* HOURLY point-in-time snapshots, gzipped, alongside the daily copies.
+     Daily-only backups meant work added and lost inside the same day had
+     nothing to restore from — the day's copy predated it. */
+  try {
+    const sdir = new URL("./data/snapshots/", import.meta.url);
+    mkdirSync(sdir, { recursive: true });
+    const hour = new Date().toISOString().slice(0, 13).replace("T", "-");   // YYYY-MM-DD-HH
+    const sfile = new URL(`app-state-${hour}.json.gz`, sdir);
+    if (existsSync(STATE_FILE) && !existsSync(sfile)) {
+      writeFileSync(sfile, gzipSync(readFileSync(STATE_FILE)));
+      /* keep ~3 days of hourly history */
+      readdirSync(sdir).filter((f) => f.startsWith("app-state-")).sort().slice(0, -72)
+        .forEach((f) => rmSync(new URL(f, sdir), { force: true }));
+    }
+  } catch { /* snapshots are best-effort — never block a save */ }
   /* daily rolling backups (kept 14 days) — deploys never touch server/data,
      and even a bad write can be rolled back from data/backups/ */
   try {
@@ -354,6 +383,9 @@ const saveState = (state) => {
   const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
   writeFileSync(tmp, JSON.stringify(state));
   renameSync(tmp, STATE_FILE); // atomic swap
+  const rev = loadRev() + 1;
+  try { writeFileSync(REV_FILE, String(rev)); } catch { /* rev is advisory */ }
+  return rev;
 };
 /* bootstrap owner — lets the owner sign in on a brand-new server before any
    state exists; overridable via env so the seeded password isn't the only key */
@@ -709,7 +741,7 @@ function handleAppTwofa(body) {
 function handleStateGet(req) {
   if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
   const st = loadState();
-  return [200, { live: true, state: st, exists: !!st }]; // exists:false = genuine first run (client may seed)
+  return [200, { live: true, state: st, exists: !!st, rev: loadRev() }]; // exists:false = genuine first run (client may seed)
 }
 function handleStateSave(req, body) {
   const sess = sessionFromReq(req);
@@ -736,7 +768,17 @@ function handleStateSave(req, body) {
       }
     }
   } catch { /* guard must never block a legitimate save */ }
-  try { saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now() }]; }
+  /* ---- STALE-WRITE GUARD ------------------------------------------------
+     Every save carries the revision the browser was working from. If the
+     stored workspace has moved on since, this payload predates someone else's
+     changes and writing it would erase them — the exact way manually added
+     records and tasks disappeared. The client is told to reload instead. */
+  const cur = loadRev();
+  if (!body.force && Number.isFinite(+body.baseRev) && +body.baseRev !== cur) {
+    return [409, { error: "stale_state", rev: cur, baseRev: +body.baseRev,
+      detail: "Another session (or another browser tab) has saved changes since this page loaded. Saving now would erase them, so nothing was written — reload to continue from the latest workspace." }];
+  }
+  try { const rev = saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
@@ -744,24 +786,41 @@ function handleStateBackups(req) {
   const sess = sessionFromReq(req);
   if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
   const bdir = new URL("./data/backups/", import.meta.url);
+  const sdir = new URL("./data/snapshots/", import.meta.url);
+  const read = (dir, f) => {
+    let clients = null, bytes = null, records = null;
+    try {
+      const buf = readFileSync(new URL(f, dir));
+      const j = JSON.parse(f.endsWith(".gz") ? gunzipSync(buf).toString("utf8") : buf.toString("utf8"));
+      clients = (j.clients || []).length;
+      /* record/task counts make it obvious WHICH copy still holds the work */
+      records = (j.clients || []).reduce((n, c) => n + (c.projects || []).reduce((m, p) => m + (p.records || []).length, 0), 0);
+      bytes = statSync(new URL(f, dir)).size;
+    } catch { /* unreadable */ }
+    return { clients, bytes, records };
+  };
+  const out = [];
   try {
-    const files = readdirSync(bdir).filter((f) => /^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse();
-    return [200, { live: true, backups: files.map((f) => {
-      let clients = null, bytes = null;
-      try { const j = JSON.parse(readFileSync(new URL(f, bdir), "utf8")); clients = (j.clients || []).length; bytes = statSync(new URL(f, bdir)).size; } catch { /* unreadable */ }
-      return { file: f, day: f.slice(11, 21), clients, bytes };
-    }) }];
-  } catch { return [200, { live: true, backups: [] }]; }
+    readdirSync(sdir).filter((f) => /^app-state-\d{4}-\d{2}-\d{2}-\d{2}\.json\.gz$/.test(f)).sort().reverse()
+      .forEach((f) => out.push({ file: f, kind: "hourly", at: f.slice(10, 23), ...read(sdir, f) }));
+  } catch { /* no snapshots yet */ }
+  try {
+    readdirSync(bdir).filter((f) => /^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse()
+      .forEach((f) => out.push({ file: f, kind: "daily", at: f.slice(10, 20), day: f.slice(10, 20), ...read(bdir, f) }));
+  } catch { /* no daily backups yet */ }
+  return [200, { live: true, backups: out }];
 }
 function handleStateRestore(req, body) {
   const sess = sessionFromReq(req);
   if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
   const file = String(body?.file || "");
-  if (!/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
-  const src = new URL("./data/backups/" + file, import.meta.url);
+  const hourly = /^app-state-\d{4}-\d{2}-\d{2}-\d{2}\.json\.gz$/.test(file);
+  if (!hourly && !/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
+  const src = new URL((hourly ? "./data/snapshots/" : "./data/backups/") + file, import.meta.url);
   if (!existsSync(src)) return [404, { error: "not_found", detail: file + " does not exist." }];
   try {
-    const restored = JSON.parse(readFileSync(src, "utf8"));
+    const buf = readFileSync(src);
+    const restored = JSON.parse(hourly ? gunzipSync(buf).toString("utf8") : buf.toString("utf8"));
     /* keep the pre-restore state recoverable too */
     if (existsSync(STATE_FILE)) copyFileSync(STATE_FILE, new URL("./data/backups/app-state-before-restore.json", import.meta.url));
     saveState(restored);
@@ -2442,7 +2501,7 @@ async function handleScan(body) {
 
 async function handleRerun(body) {
   const creds = resolveCreds(body);
-  if (!creds) return [503, { error: "not_configured" }];
+  if (!creds) return credsMissing(body);
   const { entries } = body; // [{ id, keyword, city:{city,region,country}, device, engine, domain }]
   if (!Array.isArray(entries) || !entries.length) return [400, { error: "entries[] required" }];
   /* rank checks hit the country's own Google front end — google.co.uk results
@@ -2563,7 +2622,7 @@ function parseMapsTask(task, business) {
 }
 async function handleGeoGrid(body) {
   const creds = resolveCreds(body);
-  if (!creds) return [503, { error: "not_configured" }];
+  if (!creds) return credsMissing(body);
   const { center, grid, business } = body;
   const keywords = (Array.isArray(body.keywords) && body.keywords.length ? body.keywords : [body.keyword]).filter(Boolean).slice(0, 40);
   if (!keywords.length || !business?.name || !isFinite(center?.lat) || !isFinite(center?.lng)) return [400, { error: "keyword(s), business.name, center.lat/lng required" }];
