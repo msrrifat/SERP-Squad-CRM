@@ -896,6 +896,25 @@ export default function App() {
   if (screen === "login") {
     return <Lazy><LoginScreen company={company} dark={dark} onAuthed={onAuthed} /></Lazy>;
   }
+  /* The workspace is fetched in one piece and is large, so there is a real gap
+     between arriving on a page and having data. Rendering the normal shell in
+     that gap showed an empty sidebar, no clients and a blank profile — which
+     reads as "everything is gone" rather than "still loading". Say what is
+     actually happening instead. */
+  if (localStorage.getItem("ss_token") && (!hydrated || stateSync === "loading")) {
+    return (
+      <div className="ll-root flex min-h-screen flex-col items-center justify-center gap-3 bg-[#F5F6F8]" style={{ "--accent": company.accent }}>
+        <style>{FONT_CSS}</style>
+        <BrandMark name={company.name} logo={company.logo} accent={company.accent} size="lg" />
+        <div className="ll-display text-[15px] font-semibold text-gray-700">Loading your workspace…</div>
+        <div className="text-[12px] text-gray-400">Clients, projects and tracked keywords are on their way.</div>
+        <div className="mt-1 h-1 w-48 overflow-hidden rounded-full bg-gray-200">
+          <div className="h-full w-1/3 rounded-full" style={{ background: company.accent, animation: "ssload 1.1s ease-in-out infinite" }} />
+        </div>
+        <style>{"@keyframes ssload{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}"}</style>
+      </div>
+    );
+  }
   if (showReport && project) {
     const rwl = activeClient?.whiteLabel;
     const agencyBrand = { name: company.name, logo: company.logo, accent: company.accent };

@@ -174,14 +174,44 @@ export function ProjectMark({ project, size = "sm" }) {
     </span>
   );
 }
+/* A logo renders at ~48px, but a straight file read stores the original —
+   a phone-sized image can be well over a megabyte. That copy then travels in
+   EVERY workspace load and EVERY save, for the rest of the account's life.
+   Re-encoding to a sensible display size costs nothing visible and removes
+   that weight permanently. */
+const LOGO_MAX = 256;
+const shrinkLogo = (file) => new Promise((resolve, reject) => {
+  const rd = new FileReader();
+  rd.onerror = () => reject(new Error("unreadable"));
+  rd.onload = () => {
+    const img = new Image();
+    /* if anything about the image is unusable, keep the original rather than
+       losing the user's upload */
+    img.onerror = () => resolve(String(rd.result));
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, LOGO_MAX / img.width, LOGO_MAX / img.height);
+        if (scale === 1 && String(rd.result).length < 120_000) return resolve(String(rd.result));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        /* PNG keeps transparency, which logos usually rely on */
+        resolve(c.toDataURL("image/png"));
+      } catch { resolve(String(rd.result)); }
+    };
+    img.src = String(rd.result);
+  };
+  rd.readAsDataURL(file);
+});
+
 export function LogoUpload({ value, onChange, label = "Upload logo" }) {
   const ref = useRef(null);
-  const onFile = (e) => {
+  const onFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => onChange(reader.result);
-    reader.readAsDataURL(f);
+    try { onChange(await shrinkLogo(f)); }
+    catch { /* unreadable file — leave the existing logo alone */ }
   };
   return (
     <div className="flex items-center gap-3">
