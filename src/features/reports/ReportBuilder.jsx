@@ -436,7 +436,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      whenever a real height differs from what the paginator used. */
   const heightsRef = useRef({});
   const passRef = useRef(0);
-  useEffect(() => { passRef.current = 0; }, [blocks]);
+  /* a changed report is a different layout problem: start the correction from
+     scratch rather than carrying another layout's trims into it */
+  useEffect(() => { passRef.current = 0; rowTrimRef.current = {}; }, [blocks]);
   useLayoutEffect(() => {
     /* the page frame: header + footer + body padding, straight from the DOM */
     const page = document.querySelector(".rb-a4page");
@@ -535,11 +537,16 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      do not depend on how the table is currently divided. */
   const PROBE_ROWS = 8;
   /* The probe gives row height at a sample size; a real page can still come out
-     slightly taller (a wrapped cell, a chip that pushes a row). Rather than
-     guessing an ever-bigger safety margin, any page that renders past A4 feeds
-     the overflow back as slack for the block that caused it, and the layout
-     settles in a pass or two. Bounded, so it can never ping-pong. */
-  const slackRef = useRef({});
+     a row taller (a cell that wraps). The correction is expressed in ROWS, is
+     capped, and resets whenever the report changes.
+
+     It used to be an unbounded pixel "slack" that was never reset and was
+     charged to the FIRST divided part on an overflowing page — not necessarily
+     the one that overflowed it. A single misattribution therefore pushed a
+     block down to the three-row minimum and kept it there for the rest of the
+     session, which is what filled the report with near-empty pages. */
+  const MAX_ROW_TRIM = 3;
+  const rowTrimRef = useRef({});
   const probeRef = useRef(null);
   const [probeTick, setProbeTick] = useState(0);
   const probeBlocks = useMemo(
@@ -552,13 +559,22 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     probeBlocks.forEach((b) => {
       const el = root.querySelector(`[data-probe="${b.id}"]`);
       if (!el) return;
+      const elFirst = root.querySelector(`[data-probe-first="${b.id}"]`);
       const marked = el.querySelectorAll("[data-rbrow]");
       const rows = [...(marked.length ? marked : el.querySelectorAll("tbody tr"))];
       if (!rows.length) return;
       const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
-      const next = { rowH: rowsH / rows.length, overhead: Math.max(0, el.offsetHeight - rowsH) };
+      const rowH = rowsH / rows.length;
+      let overheadFirst = Math.max(0, el.offsetHeight - rowsH);
+      if (elFirst) {
+        const fr = [...(elFirst.querySelectorAll("[data-rbrow]").length
+          ? elFirst.querySelectorAll("[data-rbrow]") : elFirst.querySelectorAll("tbody tr"))];
+        if (fr.length) overheadFirst = Math.max(0, elFirst.offsetHeight - fr.reduce((n, r) => n + r.offsetHeight, 0));
+      }
+      const next = { rowH, overhead: Math.max(0, el.offsetHeight - rowsH), overheadFirst };
       const prev = metricsRef.current[b.id];
-      if (!prev || Math.abs(prev.rowH - next.rowH) > 0.5 || Math.abs(prev.overhead - next.overhead) > 1) {
+      if (!prev || Math.abs(prev.rowH - next.rowH) > 0.5 || Math.abs(prev.overhead - next.overhead) > 1
+          || Math.abs((prev.overheadFirst ?? 0) - next.overheadFirst) > 1) {
         metricsRef.current[b.id] = next; changed = true;
       }
     });
@@ -568,17 +584,19 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   /* correction: a page taller than A4 means the block divided onto it was
      under-estimated — give that block slack equal to the overflow and re-lay */
   useLayoutEffect(() => {
-    if (passRef.current >= 6) return;
+    if (passRef.current >= 4) return;
     let changed = false;
     document.querySelectorAll(".rb-a4page").forEach((pg) => {
-      const over = pg.getBoundingClientRect().height - PAGE_H;
-      if (over <= 1) return;
-      const partId = [...pg.querySelectorAll(".rb-block")]
-        .map((el) => el.getAttribute("data-block") || "").find((id) => id.includes("#"));
-      if (!partId) return;
-      const src = partId.split("#")[0];
-      const next = (slackRef.current[src] || 0) + Math.ceil(over) + 2;
-      if (next > (slackRef.current[src] || 0)) { slackRef.current[src] = next; changed = true; }
+      if (pg.getBoundingClientRect().height - PAGE_H <= 1) return;
+      /* the block that ran past the bottom is the LAST divided part on the
+         page, not the first — charging the first is how an innocent block got
+         trimmed down to nothing */
+      const parts = [...pg.querySelectorAll(".rb-block")]
+        .map((el) => el.getAttribute("data-block") || "").filter((id) => id.includes("#"));
+      if (!parts.length) return;
+      const src = parts[parts.length - 1].split("#")[0];
+      const cur = rowTrimRef.current[src] || 0;
+      if (cur < MAX_ROW_TRIM) { rowTrimRef.current[src] = cur + 1; changed = true; }
     });
     if (changed) { passRef.current += 1; setMeasureTick((x) => x + 1); }
   });
@@ -633,14 +651,17 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       let from = 0, part = 0;
       while (from < rowCount) {
         const budget = USABLE - used - 10;
-        const over = m.overhead + (slackRef.current[b.id] || 0);
-        let fit = Math.floor((budget - over - m.rowH * 3) / Math.max(1, m.rowH));
+        /* the first part carries the block's summary, a continuation does not */
+        const oh = part === 0 ? (m.overheadFirst ?? m.overhead) : m.overhead;
+        /* one row of headroom for rounding, plus any learned trim */
+        let fit = Math.floor((budget - oh - m.rowH) / Math.max(1, m.rowH))
+          - (rowTrimRef.current[b.id] || 0);
         /* no room for a meaningful chunk here — start the next page */
         if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
         fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
-        const est = over + (to - from) * m.rowH + m.rowH * 3;
+        const est = oh + (to - from) * m.rowH + m.rowH;
         cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount });
         used += est + 10;
         from = to; part += 1;
@@ -1979,6 +2000,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 same boxes, as the block it stands in for */}
             <div className="rb-pbody flex-1 px-8 pt-4">
               <div className="space-y-1">
+                {probeBlocks.map((b) => (
+                  <div key={b.id + "-first"} data-probe-first={b.id} className="rb-block group relative rounded-xl px-2 py-2">
+                    {/* a FIRST part also carries the block's own summary — the
+                        rank section's chips, for instance — so its overhead is
+                        larger than a continuation's and must be measured too */}
+                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: PROBE_ROWS, _part: 0, _more: true })}
+                  </div>
+                ))}
                 {probeBlocks.map((b) => (
                   <div key={b.id} data-probe={b.id} className="rb-block group relative rounded-xl px-2 py-2">
                     {/* measured as a MIDDLE part: it carries both the "continued" heading and
