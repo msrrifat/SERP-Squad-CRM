@@ -92,6 +92,10 @@ const mergeCompany = (a, b) => {
   return {
     ...base,
     team: unionById(a.team, b.team),
+    /* saved reports live on the company, keyed by project — union them like any
+       other collection, or a report saved in one session is dropped when
+       another session's save is merged in */
+    savedReports: unionById(a.savedReports, b.savedReports),
     reportTemplates: unionById(a.reportTemplates, b.reportTemplates),
     recordTemplates: unionById(a.recordTemplates, b.recordTemplates),
     chatGroups: unionById(a.chatGroups, b.chatGroups),
