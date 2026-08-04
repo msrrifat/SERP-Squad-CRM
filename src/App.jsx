@@ -781,9 +781,18 @@ export default function App() {
       member: currentUser?.name || "You (Owner)",
       teamNames: teamNamesFor(p.id),
     }) || {});
-  /* 1st of each month (and on load): every project gets its fresh monthly
-     work record — idempotent, so re-runs are no-ops */
+  /* Every project gets the current month's work record: on the 1st, and on any
+     load that finds it missing.
+
+     This used to key off the month alone, so it ran ONCE on mount — before the
+     workspace had arrived from the server. At that moment `clients` is still
+     the seed, so there was nothing real to add the record to, and the server
+     state that landed a moment later replaced it wholesale. The month never
+     changed afterwards, so the effect never ran again and the new month's
+     record simply never appeared. Waiting for the loaded workspace fixes that,
+     and backfills any month that was missed. */
   useEffect(() => {
+    if (!hydrated || (stateSync !== "loaded" && stateSync !== "empty")) return;
     setClients((cs) => {
       let changed = false;
       const next = cs.map((c) => ({
@@ -797,7 +806,7 @@ export default function App() {
       }));
       return changed ? next : cs;
     });
-  }, [monthKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [monthKey, hydrated, stateSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addTracking = (entries) => { updateProject({ tracking: [...project.tracking, ...entries] }); logActivity(`Added ${entries.length} keyword${entries.length > 1 ? "s" : ""}`, project?.name); };
   const deleteTracking = (id) => { updateProject((p) => ({ tracking: p.tracking.filter((t) => t.id !== id) })); logActivity("Removed a tracked keyword", project?.name); };
