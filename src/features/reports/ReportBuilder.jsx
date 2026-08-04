@@ -378,10 +378,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   const remove = (id) => setBlocks((bs) => bs.filter((b) => b.id !== id));
   const duplicate = (id) => setBlocks((bs) => {
     const i = bs.findIndex((b) => b.id === id);
+    if (i < 0) return bs;   // unknown id: never splice a hollow block into the report
     return [...bs.slice(0, i + 1), { ...bs[i], id: uid() }, ...bs.slice(i + 1)];
   });
   const move = (id, dir) => setBlocks((bs) => {
     const i = bs.findIndex((b) => b.id === id);
+    if (i < 0) return bs;
     const j = i + dir;
     if (j < 0 || j >= bs.length) return bs;
     const n = [...bs]; [n[i], n[j]] = [n[j], n[i]]; return n;
@@ -1963,7 +1965,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           {/* the hidden sample the paginator measures row geometry from: same
               renderer, same width, a fixed few rows, never visible and never
               part of the page flow */}
-          <div ref={probeRef} aria-hidden="true"
+          <div ref={probeRef} aria-hidden="true" className="no-print"
             style={{ position: "absolute", left: -99999, top: 0, width: PAGE_W, visibility: "hidden", pointerEvents: "none", height: 0, overflow: "hidden" }}>
             {/* the wrapper chain is copied from the real page on purpose: the
                 measured row height and header height are only usable if the
@@ -1995,22 +1997,29 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 )}
                 <div className="space-y-1">
                   {pageBlocks.map((b) => {
-                    const i = blocks.findIndex((x) => x.id === b.id);
+                    /* A block divided across pages renders as parts whose ids
+                       are "<blockId>#<n>". Every toolbar action, and the
+                       settings panel, must act on the REAL block — targeting a
+                       part id silently does nothing, which is what made a
+                       divided section impossible to delete, move or edit. */
+                    const src = b._srcId || b.id;
+                    const srcBlock = blocks.find((x) => x.id === src) || b;
+                    const i = blocks.findIndex((x) => x.id === src);
                     return (
                       <div key={b.id} ref={attachBlockRef(b.id)} data-block={b.id}
                         className={"rb-block group relative rounded-xl px-2 py-2 hover:bg-gray-50/80" + (tallBlocks.has(b._srcId || b.id) ? " rb-tall" : "")}
-                        style={flashId === b.id ? { boxShadow: `0 0 0 2px ${accent}`, background: accent + "0A", transition: "box-shadow .3s" } : {}}>
+                        style={flashId === src ? { boxShadow: `0 0 0 2px ${accent}`, background: accent + "0A", transition: "box-shadow .3s" } : {}}>
                         {/* hover toolbar */}
                         <div className="no-print absolute -top-2.5 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm opacity-50 transition-opacity group-hover:opacity-100">
-                          <button onClick={() => move(b.id, -1)} disabled={i === 0} className="rounded-md p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30"><ChevronUp size={13} /></button>
-                          <button onClick={() => move(b.id, 1)} disabled={i === blocks.length - 1} className="rounded-md p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30"><ChevronDown size={13} /></button>
-                          <button onClick={() => patch(b.id, { pageBreak: !b.pageBreak })} title={b.pageBreak ? "Remove page break — flow naturally" : "Move this section to the next page"}
-                            className="rounded-md p-1 hover:bg-gray-100" style={{ color: b.pageBreak ? accent : "#9CA3AF" }}><ArrowDownRight size={13} /></button>
-                          <button onClick={() => setOpenId(openId === b.id ? null : b.id)} className="rounded-md p-1 hover:bg-gray-100" style={{ color: openId === b.id ? accent : "#9CA3AF" }}><Settings2 size={13} /></button>
-                          <button onClick={() => duplicate(b.id)} className="rounded-md p-1 text-gray-400 hover:bg-gray-100"><Copy size={13} /></button>
-                          <button onClick={() => remove(b.id)} className="rounded-md p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>
+                          <button onClick={() => move(src, -1)} disabled={i <= 0} className="rounded-md p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30"><ChevronUp size={13} /></button>
+                          <button onClick={() => move(src, 1)} disabled={i < 0 || i === blocks.length - 1} className="rounded-md p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30"><ChevronDown size={13} /></button>
+                          <button onClick={() => patch(src, { pageBreak: !srcBlock.pageBreak })} title={srcBlock.pageBreak ? "Remove page break — flow naturally" : "Move this section to the next page"}
+                            className="rounded-md p-1 hover:bg-gray-100" style={{ color: srcBlock.pageBreak ? accent : "#9CA3AF" }}><ArrowDownRight size={13} /></button>
+                          <button onClick={() => setOpenId(openId === src ? null : src)} className="rounded-md p-1 hover:bg-gray-100" style={{ color: openId === src ? accent : "#9CA3AF" }}><Settings2 size={13} /></button>
+                          <button onClick={() => duplicate(src)} className="rounded-md p-1 text-gray-400 hover:bg-gray-100"><Copy size={13} /></button>
+                          <button onClick={() => remove(src)} className="rounded-md p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>
                         </div>
-                        {b.pageBreak && (
+                        {srcBlock.pageBreak && !b._part && (
                           <div className="no-print mb-1 flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider" style={{ color: accent }}>
                             <ArrowDownRight size={9} /> starts on a new page
                           </div>
@@ -2019,13 +2028,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                             float over the section instead of pushing it down,
                             so editing a tall block never means scrolling to
                             the end of it. Toggled by the same gear icon. */}
-                        {openId === b.id && b.type !== "divider" && (
+                        {openId === src && b.type !== "divider" && (
                           <div className="no-print ll-fade absolute right-2 top-6 z-20 max-h-[65vh] w-[min(420px,calc(100%-1rem))] overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 shadow-xl">
                             <div className="mb-2 flex items-center justify-between gap-2 border-b border-gray-100 pb-1.5">
                               <span className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Edit section</span>
                               <button onClick={() => setOpenId(null)} title="Close" className="rounded p-0.5 text-gray-400 hover:bg-gray-100"><X size={13} /></button>
                             </div>
-                            {renderSettings(b)}
+                            {renderSettings(srcBlock)}
                           </div>
                         )}
                         <BlockBoundary kind={b.type === "table" ? `${b.type} · ${b.kind}` : b.type}>{renderBlock(b)}</BlockBoundary>
