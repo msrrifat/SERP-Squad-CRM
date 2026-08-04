@@ -482,6 +482,22 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      left the rest of the previous one empty. */
   /* every block whose body is a LIST of rows can be divided across pages.
      Anything else (a chart, a KPI strip, a map) has to travel whole. */
+  /* The finished tasks a work block renders, flattened so pagination can
+     divide them; regrouped under their checklist when drawn.
+
+     Declared HERE, above totalRowsOf, deliberately: totalRowsOf runs during
+     render, and a `const` defined further down the component is still in its
+     temporal dead zone at that moment. Reading it threw "Cannot access ...
+     before initialization", which took the whole builder to a blank screen for
+     any report containing a work section. */
+  const workRowsOf = (b) => {
+    const rec = records.find((r) => r.id === b.recordId);
+    if (!rec) return [];
+    const exCl = new Set(b.excludedChecklists || []);
+    const exT = new Set(b.excludedTasks || []);
+    return rec.checklists.filter((c) => !exCl.has(c.id))
+      .flatMap((c) => c.tasks.filter((t) => !exT.has(t.id) && t.completedAt).map((t) => ({ cl: c, t })));
+  };
   const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1 };
   /* the row count a block will render, so pagination can divide it without
      first rendering the whole thing */
@@ -1272,16 +1288,6 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     );
   };
 
-  /* the finished tasks a work block will render, flattened so pagination can
-     divide them; they are regrouped under their checklist when drawn */
-  const workRowsOf = (b) => {
-    const rec = records.find((r) => r.id === b.recordId);
-    if (!rec) return [];
-    const exCl = new Set(b.excludedChecklists || []);
-    const exT = new Set(b.excludedTasks || []);
-    return rec.checklists.filter((c) => !exCl.has(c.id))
-      .flatMap((c) => c.tasks.filter((t) => !exT.has(t.id) && t.completedAt).map((t) => ({ cl: c, t })));
-  };
   const renderWork = (b) => {
     const rec = records.find((r) => r.id === b.recordId);
     if (!rec) return <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-[12px] text-gray-400">Pick a record in this block's settings.</div>;
