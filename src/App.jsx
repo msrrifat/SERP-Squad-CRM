@@ -21,6 +21,22 @@ import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
+
+/* The workspace is large, so every write is gzipped where the browser can do
+   it: a slow upload is a wide window for another session to save in, and the
+   recovery path below is the one that must not lose that race. */
+async function postState(token, state, baseRev) {
+  const payload = JSON.stringify({ state, baseRev });
+  let body = payload, extra = {};
+  if (typeof CompressionStream !== "undefined" && payload.length > 65536) {
+    try {
+      body = await new Response(new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+      extra = { "Content-Encoding": "gzip" };
+    } catch { body = payload; extra = {}; }
+  }
+  return fetch("/api/state", { method: "POST",
+    headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extra }, body });
+}
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
@@ -281,18 +297,7 @@ export default function App() {
     saveTimer.current = setTimeout(async () => {
       setSaveState("saving");
       try {
-        const payload = JSON.stringify({ state: { company, clients }, baseRev: stateRev.current });
-        /* gzip the upload where the browser can: the workspace compresses
-           ~15x, turning a multi-second save into a fast one */
-        let body = payload, extraHeaders = {};
-        if (typeof CompressionStream !== "undefined" && payload.length > 65536) {
-          try {
-            body = await new Response(new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
-            extraHeaders = { "Content-Encoding": "gzip" };
-          } catch { body = payload; extraHeaders = {}; }
-        }
-        const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extraHeaders },
-          body });
+        const r = await postState(token, { company, clients }, stateRev.current);
         if (r.status === 409) {
           /* Someone else's changes are already on the server, so writing this
              payload would erase them. Refusing protects THEIR work but strands
@@ -302,21 +307,30 @@ export default function App() {
              side is lost and the user carries on. */
           await r.json().catch(() => ({}));
           try {
-            const fresh = await fetch("/api/state", { headers: { "X-SS-Token": token } }).then((x) => x.json());
-            if (!fresh?.state) throw new Error("no state");
-            const merged = mergeWorkspace(fresh.state, { company, clients });
-            const sum = mergeSummary(fresh.state, { company, clients }, merged);
-            const put = await fetch("/api/state", { method: "POST",
-              headers: { "Content-Type": "application/json", "X-SS-Token": token },
-              body: JSON.stringify({ state: merged, baseRev: +fresh.rev }) });
-            if (!put.ok) throw new Error("HTTP " + put.status);
-            const pd = await put.json().catch(() => ({}));
-            if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
-            if (merged.company) setCompany(merged.company);
-            if (merged.clients) setClients(merged.clients);
+            /* Between reading the server copy and writing the merge back, a
+               third save can land — especially while another session is
+               actively working. That is an ordinary race, not a failure, so
+               it is retried rather than surfaced as "could not be merged". */
+            let ok = false, recovered = null;
+            for (let attempt = 0; attempt < 4 && !ok; attempt++) {
+              if (attempt) await new Promise((res) => setTimeout(res, 400 * attempt));
+              const fresh = await fetch("/api/state", { headers: { "X-SS-Token": token } }).then((x) => x.json());
+              if (!fresh?.state) throw new Error("no state");
+              const merged = mergeWorkspace(fresh.state, { company, clients });
+              const sum = mergeSummary(fresh.state, { company, clients }, merged);
+              const put = await postState(token, merged, +fresh.rev);
+              if (put.status === 409) continue;          // someone saved again — re-merge onto the newer copy
+              if (!put.ok) throw new Error("HTTP " + put.status);
+              const pd = await put.json().catch(() => ({}));
+              if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
+              if (merged.company) setCompany(merged.company);
+              if (merged.clients) setClients(merged.clients);
+              ok = true; recovered = sum;
+            }
+            if (!ok) throw new Error("still contended");
             setSaveState("saved");
-            setSaveWarn(sum.tasks || sum.records
-              ? `Another session had also saved changes. Both versions were merged — nothing was lost.`
+            setSaveWarn(recovered && (recovered.tasks || recovered.records)
+              ? "Another session had also saved changes. Both versions were merged — nothing was lost."
               : null);
             return;
           } catch {
