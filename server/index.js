@@ -825,6 +825,23 @@ function handleStateBackupExtract(req, body) {
   try {
     const buf = readFileSync(src);
     const st = JSON.parse(hourly ? gunzipSync(buf).toString("utf8") : buf.toString("utf8"));
+    /* a compact fingerprint of Project Management in this backup: enough to
+       tell exactly which tasks existed when, without shipping the workspace */
+    if (body?.want === "pm") {
+      const projects = [];
+      (st.clients || []).forEach((c) => (c.projects || []).forEach((p) => {
+        const recs = (p.records || []).map((r) => ({
+          id: r.id, name: r.name, autoKey: r.autoKey || null, updatedAt: r.updatedAt || null,
+          tasks: (r.checklists || []).flatMap((cl) => (cl.tasks || []).map((t) => ({
+            id: t.id, title: String(t.title || "").slice(0, 80), list: cl.name,
+            auto: !!t.workKey, createdAt: t.createdAt || null,
+          }))),
+        }));
+        const taskCount = recs.reduce((n, r) => n + r.tasks.length, 0);
+        if (recs.length || taskCount) projects.push({ client: c.name, project: p.name, projectId: p.id, records: recs.length, tasks: taskCount, detail: recs });
+      }));
+      return [200, { live: true, file, projects }];
+    }
     return [200, { live: true, file,
       reportTemplates: (st.company?.reportTemplates || []),
       savedReports: (st.clients || []).map((c) => ({ clientId: c.id, clientName: c.name, reports: c.savedReports || [] })).filter((x) => x.reports.length),
