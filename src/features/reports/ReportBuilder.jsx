@@ -460,18 +460,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       if (!el) return;
       const h = el.offsetHeight;
       if (Math.abs((heightsRef.current[id] ?? -1) - h) > 1) { heightsRef.current[id] = h; changed = true; }
-      /* remember the row geometry of anything that renders rows, keyed by the
-         ORIGINAL block, so a block stays measurable after it has been divided */
-      const src = id.split("#")[0];
-      const rows = [...el.querySelectorAll("tbody tr")];
-      if (rows.length) {
-        const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
-        metricsRef.current[src] = { rowH: rowsH / rows.length, overhead: Math.max(0, h - rowsH) };
-      }
     });
-    /* layout feeds measurement feeds layout — bounded so a block whose height
-       depends on where it lands can never ping-pong forever */
-    if (changed && passRef.current < 8) { passRef.current += 1; setMeasureTick((x) => x + 1); }
+    /* only two passes are ever needed now: placeholder heights, then measured
+       ones. Splittable blocks take their geometry from the hidden sample, so
+       nothing here can start a chase. */
+    if (changed && passRef.current < 2) { passRef.current += 1; setMeasureTick((x) => x + 1); }
   });
   const attachBlockRef = (id) => (el) => {
     const prev = blockRefs.current[id];
@@ -508,6 +501,37 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   const metricsRef = useRef({});
 
   const MIN_ROWS = 3;   // a stub of one or two rows on a page reads as a mistake
+  /* Row geometry is measured from a HIDDEN sample of each table, never from
+     the visible pages. Measuring the visible layout is circular: splitting a
+     table changes what is on screen, re-measuring that changes the split, and
+     the report visibly reflows — pages jumping up and down as the two states
+     chase each other. The sample is the same renderer at the same width with a
+     fixed handful of rows, so row height and header height are constants that
+     do not depend on how the table is currently divided. */
+  const PROBE_ROWS = 8;
+  const probeRef = useRef(null);
+  const [probeTick, setProbeTick] = useState(0);
+  const probeBlocks = useMemo(
+    () => blocks.filter((b) => SPLITTABLE[b.type] !== undefined && totalRowsOf(b) > PROBE_ROWS),
+    [blocks]); // eslint-disable-line
+  useLayoutEffect(() => {
+    const root = probeRef.current;
+    if (!root) return;
+    let changed = false;
+    probeBlocks.forEach((b) => {
+      const el = root.querySelector(`[data-probe="${b.id}"]`);
+      if (!el) return;
+      const rows = [...el.querySelectorAll("tbody tr")];
+      if (!rows.length) return;
+      const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
+      const next = { rowH: rowsH / rows.length, overhead: Math.max(0, el.offsetHeight - rowsH) };
+      const prev = metricsRef.current[b.id];
+      if (!prev || Math.abs(prev.rowH - next.rowH) > 0.5 || Math.abs(prev.overhead - next.overhead) > 1) {
+        metricsRef.current[b.id] = next; changed = true;
+      }
+    });
+    if (changed) setProbeTick((x) => x + 1);
+  }, [probeBlocks, frameTick]); // eslint-disable-line
   /* blocks measured taller than a page's content area: they cannot be kept
      whole, so the print rules let them break instead of forcing a blank sheet */
   const tallBlocks = useMemo(() => {
@@ -573,7 +597,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       }
     });
     return out;
-  }, [blocks, measureTick, frameTick]); // eslint-disable-line
+  }, [blocks, measureTick, frameTick, probeTick]); // eslint-disable-line
 
   /* the brand bar every page carries */
   const PageHeader = () => (
@@ -1887,6 +1911,29 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
               </div>
             </div>
           )}
+          {/* the hidden sample the paginator measures row geometry from: same
+              renderer, same width, a fixed few rows, never visible and never
+              part of the page flow */}
+          <div ref={probeRef} aria-hidden="true"
+            style={{ position: "absolute", left: -99999, top: 0, width: PAGE_W, visibility: "hidden", pointerEvents: "none", height: 0, overflow: "hidden" }}>
+            {/* the wrapper chain is copied from the real page on purpose: the
+                measured row height and header height are only usable if the
+                sample lays out at exactly the same width, inside exactly the
+                same boxes, as the block it stands in for */}
+            <div className="rb-pbody flex-1 px-8 pt-4">
+              <div className="space-y-1">
+                {probeBlocks.map((b) => (
+                  <div key={b.id} data-probe={b.id} className="rb-block group relative rounded-xl px-2 py-2">
+                    {/* measured as a MIDDLE part: it carries both the "continued" heading and
+                        the "continues on the next page" line, so the overhead can only
+                        ever be over-estimated, never under — under-estimating is what
+                        pushes a page past A4 and costs an extra sheet */}
+                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: PROBE_ROWS, _part: 1, _more: true })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
           {pages.map((pageBlocks, pi) => (
             <div key={pi} className="rb-a4page mx-auto mb-5 flex flex-col rounded-2xl bg-white shadow-sm"
               style={{ minHeight: PAGE_H, width: PAGE_W }}>
