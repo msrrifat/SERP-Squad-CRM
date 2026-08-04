@@ -20,6 +20,7 @@ import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
 import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
+import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
@@ -293,13 +294,38 @@ export default function App() {
         const r = await fetch("/api/state", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extraHeaders },
           body });
         if (r.status === 409) {
-          /* someone else's changes are already on the server. Writing this
-             payload would erase them, so the server refused — stop autosaving
-             and say so, rather than racing them on the next keystroke. */
-          const d = await r.json().catch(() => ({}));
-          setStaleState(true); setSaveState("error");
-          setSaveWarn(d.detail || "Another session has saved changes — reload before continuing so nothing is overwritten.");
-          return;
+          /* Someone else's changes are already on the server, so writing this
+             payload would erase them. Refusing protects THEIR work but strands
+             OURS — the tab keeps editing and saves nothing, and everything
+             since load dies at the next reload. So instead: take the server's
+             copy, merge this tab's work into it, and save the result. Neither
+             side is lost and the user carries on. */
+          await r.json().catch(() => ({}));
+          try {
+            const fresh = await fetch("/api/state", { headers: { "X-SS-Token": token } }).then((x) => x.json());
+            if (!fresh?.state) throw new Error("no state");
+            const merged = mergeWorkspace(fresh.state, { company, clients });
+            const sum = mergeSummary(fresh.state, { company, clients }, merged);
+            const put = await fetch("/api/state", { method: "POST",
+              headers: { "Content-Type": "application/json", "X-SS-Token": token },
+              body: JSON.stringify({ state: merged, baseRev: +fresh.rev }) });
+            if (!put.ok) throw new Error("HTTP " + put.status);
+            const pd = await put.json().catch(() => ({}));
+            if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
+            if (merged.company) setCompany(merged.company);
+            if (merged.clients) setClients(merged.clients);
+            setSaveState("saved");
+            setSaveWarn(sum.tasks || sum.records
+              ? `Another session had also saved changes. Both versions were merged — nothing was lost.`
+              : null);
+            return;
+          } catch {
+            /* merge itself failed — fall back to refusing, which at least
+               never erases the other session */
+            setStaleState(true); setSaveState("error");
+            setSaveWarn("Another session has saved changes and they could not be merged automatically — reload before continuing so nothing is overwritten.");
+            return;
+          }
         }
         if (!r.ok && r.status !== 401) { setSaveState("error"); setSaveWarn(`Changes are NOT saving to the server (HTTP ${r.status}) — recent work would be lost on reload.`); }
         else {
