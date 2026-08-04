@@ -478,7 +478,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      is what produced blank sheets around long tables in the PDF: the browser
      tried to keep the oversized block intact, pushed it to a fresh sheet, and
      left the rest of the previous one empty. */
-  const SPLITTABLE = { customTable: "tbody tr", table: "tbody tr", work: null };
+  /* every block whose body is a LIST of rows can be divided across pages.
+     Anything else (a chart, a KPI strip, a map) has to travel whole. */
+  const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1 };
   /* the row count a block will render, so pagination can divide it without
      first rendering the whole thing */
   const totalRowsOf = (b) => {
@@ -492,6 +494,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       if (b.kind === "rank") return b.limit && b.limit !== "all" ? Math.min(+b.limit, tracking.length) : tracking.length;
       return 0;   // the remaining kinds are short by construction
     }
+    if (b.type === "rankReport") {
+      const n = (projOf(b.projectId)?.tracking || []).length;
+      return b.show === "summary" ? 0 : (b.limit && b.limit !== "all" ? Math.min(+b.limit, n) : n);
+    }
+    if (b.type === "work") return workRowsOf(b).length;
     return 0;
   };
   /* a rendered slice of a splittable block */
@@ -509,6 +516,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      fixed handful of rows, so row height and header height are constants that
      do not depend on how the table is currently divided. */
   const PROBE_ROWS = 8;
+  /* The probe gives row height at a sample size; a real page can still come out
+     slightly taller (a wrapped cell, a chip that pushes a row). Rather than
+     guessing an ever-bigger safety margin, any page that renders past A4 feeds
+     the overflow back as slack for the block that caused it, and the layout
+     settles in a pass or two. Bounded, so it can never ping-pong. */
+  const slackRef = useRef({});
   const probeRef = useRef(null);
   const [probeTick, setProbeTick] = useState(0);
   const probeBlocks = useMemo(
@@ -521,7 +534,8 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     probeBlocks.forEach((b) => {
       const el = root.querySelector(`[data-probe="${b.id}"]`);
       if (!el) return;
-      const rows = [...el.querySelectorAll("tbody tr")];
+      const marked = el.querySelectorAll("[data-rbrow]");
+      const rows = [...(marked.length ? marked : el.querySelectorAll("tbody tr"))];
       if (!rows.length) return;
       const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
       const next = { rowH: rowsH / rows.length, overhead: Math.max(0, el.offsetHeight - rowsH) };
@@ -532,6 +546,24 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     });
     if (changed) setProbeTick((x) => x + 1);
   }, [probeBlocks, frameTick]); // eslint-disable-line
+
+  /* correction: a page taller than A4 means the block divided onto it was
+     under-estimated — give that block slack equal to the overflow and re-lay */
+  useLayoutEffect(() => {
+    if (passRef.current >= 6) return;
+    let changed = false;
+    document.querySelectorAll(".rb-a4page").forEach((pg) => {
+      const over = pg.getBoundingClientRect().height - PAGE_H;
+      if (over <= 1) return;
+      const partId = [...pg.querySelectorAll(".rb-block")]
+        .map((el) => el.getAttribute("data-block") || "").find((id) => id.includes("#"));
+      if (!partId) return;
+      const src = partId.split("#")[0];
+      const next = (slackRef.current[src] || 0) + Math.ceil(over) + 2;
+      if (next > (slackRef.current[src] || 0)) { slackRef.current[src] = next; changed = true; }
+    });
+    if (changed) { passRef.current += 1; setMeasureTick((x) => x + 1); }
+  });
   /* blocks measured taller than a page's content area: they cannot be kept
      whole, so the print rules let them break instead of forcing a blank sheet */
   const tallBlocks = useMemo(() => {
@@ -583,13 +615,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       let from = 0, part = 0;
       while (from < rowCount) {
         const budget = USABLE - used - 10;
-        let fit = Math.floor((budget - m.overhead - m.rowH * 3) / Math.max(1, m.rowH));
+        const over = m.overhead + (slackRef.current[b.id] || 0);
+        let fit = Math.floor((budget - over - m.rowH * 3) / Math.max(1, m.rowH));
         /* no room for a meaningful chunk here — start the next page */
         if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
         fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
-        const est = m.overhead + (to - from) * m.rowH + m.rowH * 3;
+        const est = over + (to - from) * m.rowH + m.rowH * 3;
         cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount });
         used += est + 10;
         from = to; part += 1;
@@ -760,7 +793,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         <table className="w-full text-[12.5px]">
           <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th><th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
           <tbody>{cap(ranked).map((t) => (
-            <tr key={t.id}><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
+            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
               <td className={td + " max-w-40 truncate text-[11.5px]"} title={t.url || ""}>
@@ -874,7 +907,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             </tr></thead>
           )}
           <tbody>{body.map((r, i) => (
-            <tr key={i}>{r.map((cell, j) => <td key={j} className="border-b border-gray-50 px-3 py-2">{cell}</td>)}</tr>
+            <tr key={i} data-rbrow>{r.map((cell, j) => <td key={j} className="border-b border-gray-50 px-3 py-2">{cell}</td>)}</tr>
           ))}</tbody>
         </table>
         {b._more && <div className="pt-1.5 text-[10px] text-gray-400">continues on the next page</div>}
@@ -1096,13 +1129,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const vx = px == null || px > 100 ? 1e6 : px, vy = py == null || py > 100 ? 1e6 : py;
       return vx - vy || (x.keyword || "").localeCompare(y.keyword || "");
     });
-    const rows = b.limit && b.limit !== "all" ? sorted.slice(0, +b.limit) : sorted;
+    const rows = sliceRows(b, b.limit && b.limit !== "all" ? sorted.slice(0, +b.limit) : sorted);
     /* averages only count keywords that actually have a position */
     const ranked = tr.filter((t) => t.stats?.cur != null);
     const avg = ranked.length ? ranked.reduce((x, t) => x + t.stats.cur, 0) / ranked.length : 0;
     const tier = (n) => tr.filter((t) => t.stats?.cur != null && t.stats.cur <= n).length;
     const tiers = Array.isArray(b.tiers) && b.tiers.length ? b.tiers : [3, 10, 20];
-    const showSummary = b.show !== "keywords";      // "both" (default) | "summary" | "keywords"
+    const showSummary = b.show !== "keywords" && !b._part;   // "both" (default) | "summary" | "keywords"
     const showKeywords = b.show !== "summary";
     const chips = [
       ...(b.showAvg === false ? [] : [["Avg. position", ranked.length ? "#" + avg.toFixed(1) : "–"]]),
@@ -1139,7 +1172,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>URL</th>
           </tr></thead>
           <tbody>{rows.map((t) => (
-            <tr key={t.id}><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
+            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
               <td className={td + " max-w-32 truncate"} title={t.url || ""}>
@@ -1237,6 +1270,16 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     );
   };
 
+  /* the finished tasks a work block will render, flattened so pagination can
+     divide them; they are regrouped under their checklist when drawn */
+  const workRowsOf = (b) => {
+    const rec = records.find((r) => r.id === b.recordId);
+    if (!rec) return [];
+    const exCl = new Set(b.excludedChecklists || []);
+    const exT = new Set(b.excludedTasks || []);
+    return rec.checklists.filter((c) => !exCl.has(c.id))
+      .flatMap((c) => c.tasks.filter((t) => !exT.has(t.id) && t.completedAt).map((t) => ({ cl: c, t })));
+  };
   const renderWork = (b) => {
     const rec = records.find((r) => r.id === b.recordId);
     if (!rec) return <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-[12px] text-gray-400">Pick a record in this block's settings.</div>;
@@ -1244,9 +1287,15 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const exT = new Set(b.excludedTasks || []);
     /* reports only ever show finished work: incomplete tasks never render */
     const totals = rec.checklists.flatMap((c) => c.tasks);
-    const cls = rec.checklists.filter((c) => !exCl.has(c.id))
-      .map((c) => ({ ...c, total: c.tasks.length, tasks: c.tasks.filter((t) => !exT.has(t.id) && t.completedAt) }))
-      .filter((c) => c.tasks.length > 0);
+    /* only the slice of tasks belonging to this page, regrouped by checklist
+       so a divided block still reads as its original sections */
+    const slice = sliceRows(b, workRowsOf(b));
+    const cls = [];
+    slice.forEach(({ cl, t }) => {
+      const last = cls[cls.length - 1];
+      if (last && last.id === cl.id) last.tasks.push(t);
+      else cls.push({ ...cl, total: cl.tasks.length, tasks: [t] });
+    });
     /* the report shows ONLY checklists and their finished tasks — no record
        name, status, dates or progress bar (add a heading block for context) */
     return (
@@ -1259,7 +1308,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   strikethrough, no assignees or dates */}
               <div className="space-y-1">
                 {c.tasks.map((t) => (
-                  <div key={t.id} className="flex items-start gap-2 border-b border-gray-50 py-1.5">
+                  <div key={t.id} data-rbrow className="flex items-start gap-2 border-b border-gray-50 py-1.5">
                     <span className="mt-0.5 flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded border-2"
                       style={{ background: POS, borderColor: POS, color: "#fff" }}>
                       <CheckCircle2 size={10} strokeWidth={3.5} />
@@ -1948,7 +1997,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   {pageBlocks.map((b) => {
                     const i = blocks.findIndex((x) => x.id === b.id);
                     return (
-                      <div key={b.id} ref={attachBlockRef(b.id)}
+                      <div key={b.id} ref={attachBlockRef(b.id)} data-block={b.id}
                         className={"rb-block group relative rounded-xl px-2 py-2 hover:bg-gray-50/80" + (tallBlocks.has(b._srcId || b.id) ? " rb-tall" : "")}
                         style={flashId === b.id ? { boxShadow: `0 0 0 2px ${accent}`, background: accent + "0A", transition: "box-shadow .3s" } : {}}>
                         {/* hover toolbar */}
