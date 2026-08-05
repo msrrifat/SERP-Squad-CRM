@@ -2542,6 +2542,76 @@ async function handleScan(body) {
   return [200, { live: true, results: clean }];
 }
 
+/* ---- DataForSEO LOCATION RESOLVER =====================================
+   A rank check is only as accurate as the place it is run from. We used to
+   send `location_name` as a string and, when DataForSEO did not recognise it,
+   silently walk down to the COUNTRY — so "deck company" meant for Newmarket,
+   Ontario was answered with national Canadian results and reported as a normal
+   check. The number looked fine and described somewhere else entirely.
+
+   DataForSEO publishes its own location list (free, and the same list the
+   matching runs against), so the target is resolved to an exact
+   `location_code` instead of hoping a string matches. The list is cached on
+   disk per country; "Newmarket" alone exists in Canada, the UK and the US, so
+   guessing is not an option.
+
+   When only a coarser match exists, the check still runs — but it reports the
+   precision it actually achieved, so a country-level number is never presented
+   as a local one. ---- */
+const LOC_DIR = new URL("./data/dfs-locations/", import.meta.url);
+const LOC_TTL = 30 * 864e5;                       // the list changes rarely
+const locMem = new Map();                          // country -> [{code,name,type}]
+const normLoc = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+async function locationsFor(creds, country) {
+  const key = normLoc(country) || "all";
+  if (locMem.has(key)) return locMem.get(key);
+  mkdirSync(LOC_DIR, { recursive: true });
+  const file = new URL(`${key.replace(/\s+/g, "-")}.json`, LOC_DIR);
+  try {
+    const st = statSync(file);
+    if (Date.now() - st.mtimeMs < LOC_TTL) {
+      const cached = JSON.parse(readFileSync(file, "utf8"));
+      locMem.set(key, cached); return cached;
+    }
+  } catch { /* not cached yet */ }
+  /* the country-scoped list keeps this to a few thousand rows instead of the
+     full ~226k, and the endpoint is free either way */
+  const res = await fetch(`${DFS_BASE}/serp/google/locations`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(120000) });
+  if (!res.ok) throw new Error(`locations HTTP ${res.status}`);
+  const all = (await res.json()).tasks?.[0]?.result || [];
+  const wanted = normLoc(country);
+  const rows = all
+    .filter((r) => !wanted || normLoc(r.location_name).endsWith(wanted))
+    .map((r) => ({ code: r.location_code, name: r.location_name, type: r.location_type }));
+  try { writeFileSync(file, JSON.stringify(rows)); } catch { /* cache is best-effort */ }
+  locMem.set(key, rows);
+  return rows;
+}
+
+/* → { code, name, precision: "city" | "region" | "country" } or null */
+async function resolveLocation(creds, city) {
+  if (!city?.country) return null;
+  let rows;
+  try { rows = await locationsFor(creds, city.country); } catch { return null; }
+  if (!rows.length) return null;
+  const exact = normLoc([city.city, city.region, city.country].filter(Boolean).join(","));
+  const cityCountry = normLoc([city.city, city.country].filter(Boolean).join(","));
+  const regionCountry = normLoc([city.region, city.country].filter(Boolean).join(","));
+  const countryOnly = normLoc(city.country);
+
+  const find = (target) => rows.find((r) => normLoc(r.name) === target);
+  /* most specific first — an exact city match is the only one that answers
+     "where does this rank in THIS town" */
+  const hit =
+    (city.city && find(exact) && { r: find(exact), precision: "city" }) ||
+    (city.city && find(cityCountry) && { r: find(cityCountry), precision: "city" }) ||
+    (city.region && find(regionCountry) && { r: find(regionCountry), precision: "region" }) ||
+    (find(countryOnly) && { r: find(countryOnly), precision: "country" }) ||
+    null;
+  return hit ? { code: hit.r.code, name: hit.r.name, precision: hit.precision } : null;
+}
+
 async function handleRerun(body) {
   const creds = resolveCreds(body);
   if (!creds) return credsMissing(body);
@@ -2569,15 +2639,31 @@ async function handleRerun(body) {
     [e.city.city, e.city.country].filter(Boolean).join(","),
     e.city.country,
   ].filter(Boolean))];
-  const buildTask = (e, engine, loc) => ({
+  /* depth is billed per 10 results, so 100 costs ten times what 10 does.
+     Rank tracking needs to see past the first page, but the caller decides how
+     far — and the cost estimate is built from the same number. */
+  const depth = [10, 20, 30, 50, 100].includes(+body.depth) ? +body.depth : 100;
+  const buildTask = (e, engine, resolved) => ({
     keyword: e.keyword,
     language_code: "en",
     device: (e.device || "Desktop").toLowerCase(),
     os: e.device === "Mobile" ? "android" : "windows",
-    depth: 100,
-    location_name: loc,
+    depth,
+    /* an exact location_code beats a location_name string: the string form
+       fails on anything DataForSEO spells differently and there are three
+       Newmarkets */
+    ...(resolved ? { location_code: resolved.code } : { location_name: variantsOf(e)[0] }),
     ...(engine === "google" && SE_DOMAIN[e.city?.country] ? { se_domain: SE_DOMAIN[e.city.country] } : {}),
   });
+  /* resolve every target ONCE up front — the list is cached, so this is a map
+     lookup after the first call for a country */
+  const resolvedFor = new Map();
+  for (const e of list) {
+    const k = `${e.city?.city}|${e.city?.region}|${e.city?.country}`;
+    if (!resolvedFor.has(k)) resolvedFor.set(k, await resolveLocation(creds, e.city || {}));
+  }
+  const locOf = (e) => resolvedFor.get(`${e.city?.city}|${e.city?.region}|${e.city?.country}`) || null;
+
   const updated = new Array(list.length);
   for (const engine of ["google", "bing"]) {
     const idxs = list.map((_, i) => i).filter((i) => ((list[i].engine || "Google").toLowerCase() === "bing" ? "bing" : "google") === engine);
@@ -2586,14 +2672,21 @@ async function handleRerun(body) {
        the failed subset down the variant ladder in follow-up rounds */
     let work = idxs.map((i) => ({ i, vi: 0 }));
     for (let round = 0; round < 3 && work.length; round++) {
-      const res = await dfsQueue(creds, engine + "/organic", work.map(({ i, vi }) => buildTask(list[i], engine, variantsOf(list[i])[vi])));
+      const res = await dfsQueue(creds, engine + "/organic", work.map(({ i }) => buildTask(list[i], engine, locOf(list[i]))));
       const next = [];
       res.forEach((r, j) => {
         const { i, vi } = work[j];
         const e = list[i];
         if (r?.task) {
           const { position, url, mapPos, packShown } = parseSerpRank(r.task, e.domain);
-          updated[i] = { id: e.id, position, url, mapPos, packShown, location: variantsOf(e)[vi] };
+          const loc = locOf(e);
+          updated[i] = { id: e.id, position, url, mapPos, packShown,
+            location: loc?.name || variantsOf(e)[vi],
+            /* "city" means this really is the local ranking; anything coarser
+               is a wider result set and is labelled as such rather than being
+               passed off as local */
+            precision: loc?.precision || "unverified",
+            locationCode: loc?.code || null };
         } else if (/location/i.test(r?.error || "") && variantsOf(e)[vi + 1]) next.push({ i, vi: vi + 1 });
         else updated[i] = { id: e.id, keyword: e.keyword, error: r?.error || "no result" };
         /* transient task failures (40101 bursts, queue timeouts) surface as

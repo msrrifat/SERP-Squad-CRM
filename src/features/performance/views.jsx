@@ -527,7 +527,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5 text-[13px] font-medium">{opt}
-                        {opt === "DataForSEO SERP API" && !disabled && kwCount > 0 && <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bingQueue" : "organicQueue"} />}
+                        {opt === "DataForSEO SERP API" && !disabled && kwCount > 0 && <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bingQueue" : "organicQueue"} depth={100} />}
                       </span>
                       <span className="block text-[11px] text-gray-400">
                         {opt === "My Own IP"
@@ -545,7 +545,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
           {scrape === "DataForSEO SERP API" && dfsConnected && kwCount > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11.5px] text-amber-800">
               <span>Initial scan of <b>{kwCount}</b> keyword{kwCount === 1 ? "" : "s"} on <b>{engine}</b>:</span>
-              <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bingQueue" : "organicQueue"} />
+              <DfsCostChip requests={kwCount} kind={engine === "Bing" ? "bingQueue" : "organicQueue"} depth={100} />
               {reportingType === "Recurring" && <span className="text-amber-700">· repeats every {rerunDays} day{rerunDays > 1 ? "s" : ""}</span>}
             </div>
           )}
@@ -945,7 +945,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[13px] font-medium text-white" style={{ background: accent }}>
                     <Plus size={14} /> Add keywords
                   </button>
-                  {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organicQueue" />}
+                  {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organicQueue" depth={100} />}
                   {selected.size > 0 && (
                     <button onClick={async () => {
                       if (!await askConfirm({ title: "Delete tracked keywords?", message: `Delete ${selected.size} tracked keyword${selected.size > 1 ? "s" : ""}?`, note: "Their scan history is removed too. This can't be undone.", confirmLabel: "Yes, delete", danger: true })) return;
