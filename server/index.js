@@ -2827,8 +2827,9 @@ async function handleRankStart(body) {
       });
     });
   }
-  saveJob(job);
   const posted = job.items.filter((x) => x.taskId).length;
+  job.billedTasks = posted;          // tasks that were actually created, i.e. paid for
+  saveJob(job);
   return [200, { live: true, jobId: job.id, total: job.items.length, posted,
     failedToPost: job.items.length - posted,
     /* how many are actually targeted at the town asked for */
@@ -2852,28 +2853,61 @@ async function handleRankStatus(body) {
   try {
     const pending = job.items.filter((x) => x.taskId && !x.result && !x.error);
     if (pending.length) {
+      /* every finished item is written the moment it lands, not once the whole
+         pass is over. A pass takes minutes; a pm2 reload (every deploy) or a
+         dropped connection in the middle of one used to discard every result
+         already fetched — and DataForSEO hands a result out ONCE, so those
+         keywords came back 40601 on the next poll and were PAID FOR AGAIN.
+         Persisting per item makes a restart cost nothing. */
+      let dirty = 0;
+      const land = (item, task) => {
+        const { position, absPos, url, mapPos, packShown } = parseSerpRank(task, item.domain);
+        item.result = { position, absPos, url, mapPos, packShown };
+        if (++dirty >= 5) { dirty = 0; saveJob(job); }
+      };
+      const requeue = [];
       await pool(pending, async (item) => {
         const got = await dfsTaskGet(creds, item.engine + "/organic", item.taskId);
         if (!got) return;                                 // still queued — ask again later
         if (got.error) {
-          /* 40601 "Task Handed" means the result was already delivered — to
-             another poll, or to anything else sharing this DataForSEO account.
-             The data cannot be fetched twice, so the only correct answer is to
-             run the check again. Once, live, so it definitely comes back. */
+          /* 40601 "Task Handed" = this result was already delivered once and
+             cannot be fetched again. The check has to be run afresh — but
+             through the STANDARD QUEUE it was posted on, not the live endpoint.
+             Live advanced is $0.002 per 10 results, so at depth 100 a "recovery"
+             cost $0.02 against a $0.006 original: recovering a batch quietly
+             tripled the bill the estimate had promised. Re-queueing costs
+             exactly what the first attempt did. */
           if (/40601|handed/i.test(got.error) && !item.recovered && item.task) {
-            item.recovered = "live";
-            try {
-              const t = await dfsLive(creds, item.engine + "/organic", item.task);
-              const { position, url, mapPos, packShown } = parseSerpRank(t, item.domain);
-              item.result = { position, url, mapPos, packShown };
-              return;
-            } catch (e2) { item.error = `recovery failed: ${String(e2?.message || e2).slice(0, 120)}`; return; }
+            item.recovered = "requeued";
+            requeue.push(item);
+            return;
           }
-          item.error = got.error; return;
+          item.error = got.error;
+          /* a task that never got created was never billed, so it is safe for
+             the client to try again; a handed/failed one has already been paid */
+          item.retryable = /4050[0-9]|internal error|timeout/i.test(got.error);
+          return;
         }
-        const { position, url, mapPos, packShown } = parseSerpRank(got.task, item.domain);
-        item.result = { position, url, mapPos, packShown };
+        land(item, got.task);
       }, 8);
+
+      /* one batched re-post for everything that was handed out from under us */
+      if (requeue.length) {
+        for (const engine of ["google", "bing"]) {
+          const mine = requeue.filter((x) => x.engine === engine);
+          if (!mine.length) continue;
+          try {
+            const posted = await dfsPost(creds, engine + "/organic", mine.map((x) => x.task));
+            mine.forEach((x, i) => {
+              const p = posted[i] || { error: "no response for this task" };
+              if (p.taskId) { x.taskId = p.taskId; job.billedTasks = (job.billedTasks || 0) + 1; }
+              else { x.error = p.error; x.retryable = true; }   // creation failures are not billed
+            });
+          } catch (e2) {
+            mine.forEach((x) => { x.error = `re-queue failed: ${String(e2?.message || e2).slice(0, 100)}`; x.retryable = true; });
+          }
+        }
+      }
       saveJob(job);
     }
   } finally { rankLocks.delete(job.id); }
@@ -2884,7 +2918,14 @@ async function handleRankStatus(body) {
     updated: job.items.filter((x) => x.result).map((x) => ({
       id: x.entryId, ...x.result, location: x.location, precision: x.precision,
     })),
-    errors: job.items.filter((x) => x.error).map((x) => ({ id: x.entryId, keyword: x.keyword, error: x.error })) }];
+    /* what this job has actually put on the DataForSEO bill, in the same units
+       the pre-scan estimate is quoted in — so the two can be compared */
+    billedTasks: job.billedTasks || 0, depth: job.depth,
+    errors: job.items.filter((x) => x.error).map((x) => ({
+      id: x.entryId, keyword: x.keyword, error: x.error,
+      /* only errors that were never billed are worth the client re-running */
+      retryable: !!x.retryable,
+    })) }];
 }
 
 /* ---- GBP geo-grid rank scan =================================

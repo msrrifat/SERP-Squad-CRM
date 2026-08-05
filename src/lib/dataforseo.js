@@ -55,8 +55,24 @@ export function parseSerpRank(taskResult, domain) {
      position among the local_pack items, matched by its website domain */
   const pack = items.filter((it) => it.type === "local_pack");
   const mapIdx = pack.findIndex(matches);
+  /* POSITION = rank_group, the position among ORGANIC results — the number
+     every rank tracker reports and the one a client recognises as "we rank #1".
+
+     We used to report rank_absolute, which counts EVERY block on the page:
+     AI overviews, ad units, product carousels, videos, People Also Ask, the
+     map pack. On a modern local SERP that is four to six blocks before the
+     first organic link, so a site sitting at organic #1 was reported as #5,
+     #7, #9 — and the more SERP features Google added, the worse the number
+     got even when nothing about the ranking had changed. Verified against a
+     live Toronto SERP: antaplumbing.com for "toilet plumbing" is
+     rank_group 1 / rank_absolute 5, and every other tracker calls that #1.
+
+     rank_absolute is still returned as `absPos` — it is genuinely useful
+     (how far down the page the listing actually sits) and nothing that reads
+     `position` is affected by its presence. */
   return {
-    position: hit ? hit.rank_absolute : null,          // rank_absolute = true SERP position; null = not in top 100
+    position: hit ? (hit.rank_group ?? hit.rank_absolute) : null,  // organic position; null = not in top `depth`
+    absPos: hit ? hit.rank_absolute : null,            // position counting ads/AI/pack/PAA — display only
     url: hit ? hit.url : null,
     mapPos: mapIdx >= 0 ? mapIdx + 1 : null,           // 1–3 inside the pack; null = not in the pack
     packShown: pack.length > 0,                        // whether Google showed a map pack for this query at all

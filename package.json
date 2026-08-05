@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-imports.mjs && vite build",
+    "check": "node scripts/check-imports.mjs && node --check server/index.js",
     "preview": "vite preview",
     "api": "node server/index.js"
   },

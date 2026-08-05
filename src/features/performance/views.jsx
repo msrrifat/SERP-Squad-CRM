@@ -9,7 +9,7 @@ import {
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
 import { ACCENTS, askConfirm, askDelete, Card, DateRangeBar, Delta, inputCls, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
-import { DfsCostChip } from "../../lib/dfsCost.jsx";
+import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
@@ -714,7 +714,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       const CHUNK = 25;
       const chunks = [];
       for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
-      let ok = 0, applied = 0, live = false;
+      let ok = 0, applied = 0, live = false, billed = 0, depthUsed = 100;
       const failed = [];
       for (let ci = 0; ci < chunks.length; ci++) {
         const chunk = chunks[ci];
@@ -751,7 +751,10 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               if (fresh.length) onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })));
               setProgress({ done: applied + st.done, total: entries.length,
                 note: st.pending ? `${st.done}/${st.total} back · ${st.pending} still in Google's queue (${Math.round(st.ageSec / 60)}m)` : undefined });
-              if (!st.pending) { failed.push(...(st.errors || [])); break; }
+              if (!st.pending) {
+                billed += st.billedTasks || 0; depthUsed = st.depth || depthUsed;
+                failed.push(...(st.errors || [])); break;
+              }
             }
             updates = [];                 // already applied above, as they arrived
             live = true;
@@ -781,14 +784,22 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         ok += updates.length;
         applied += chunk.length;
       }
-      /* second pass: DataForSEO's 40101 bursts can outlast per-row retries —
-         after the main run, failed keywords get one more full attempt */
+      /* second pass — ONLY for keywords whose task was never created.
+         A task that failed to post is not billed, so re-posting it costs the
+         one scan it should have cost. A task that WAS created and then failed
+         (handed out, provider error) has already been paid for, and the server
+         now re-queues those itself inside the same job. Re-posting them from
+         here as well is what turned a $0.19 estimate into a ~$1 charge: every
+         one of them went onto the bill a second time, at full depth-100 price,
+         for a result the job was already going to produce. */
+      const paidAlready = failed.filter((f) => !f.retryable);
       let failedFinal = failed;
-      if (live && failed.length) {
-        setProgress({ done: applied, total: entries.length, note: `retrying ${failed.length} failed` });
+      const retryable = failed.filter((f) => f.retryable);
+      if (live && retryable.length) {
+        setProgress({ done: applied, total: entries.length, note: `retrying ${retryable.length} unbilled failure${retryable.length > 1 ? "s" : ""}` });
         await new Promise((r) => setTimeout(r, 5000));
-        const retryList = entries.filter((e) => failed.some((f) => f.id === e.id));
-        failedFinal = [];
+        const retryList = entries.filter((e) => retryable.some((f) => f.id === e.id));
+        failedFinal = [...paidAlready];
         for (let i = 0; i < retryList.length; i += CHUNK) {
           const chunk = retryList.slice(i, i + CHUNK);
           try {
@@ -818,7 +829,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 fresh.forEach((u) => seen2.add(u.id));
                 if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }))); ok += fresh.length; }
                 setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
-                if (!stt.pending) { failedFinal.push(...(stt.errors || [])); break; }
+                if (!stt.pending) { billed += stt.billedTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
               }
             } else failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: `HTTP ${res.status}` })));
           } catch (e2) { failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: String(e2?.message || e2).slice(0, 100) }))); }
@@ -828,7 +839,10 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       if (!ok) throw new Error(failedFinal.length
         ? `All ${failedFinal.length} scan${failedFinal.length > 1 ? "s" : ""} failed — ${String(failedFinal[0].error || "").slice(0, 140)}`
         : "No positions came back from the scan.");
-      return { ok, failed: failedFinal.length, firstError: failedFinal[0] ? `${failedFinal[0].keyword ? failedFinal[0].keyword + ": " : ""}${String(failedFinal[0].error || "").slice(0, 120)}` : null, live };
+      return { ok, failed: failedFinal.length, firstError: failedFinal[0] ? `${failedFinal[0].keyword ? failedFinal[0].keyword + ": " : ""}${String(failedFinal[0].error || "").slice(0, 120)}` : null, live,
+        /* what DataForSEO actually charged, so it can be checked against the
+           estimate on the button instead of discovered on the invoice */
+        billed, spend: live && billed ? dfsCost(billed, "organicQueue", depthUsed) : 0 };
     });
     if (started) setSelected(new Set());
   };
@@ -1027,7 +1041,9 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 {rerunResult.error
                   ? <><X size={14} /> Rerun failed: {rerunResult.error}</>
                   : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
-                      {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}</>}
+                      {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}
+                      {/* the actual bill, next to the result — no more finding out on the invoice */}
+                      {rerunResult.spend > 0 && <span className="ll-mono ml-1 opacity-70">Charged {fmtDfsCost(rerunResult.spend)} ({rerunResult.billed} task{rerunResult.billed > 1 ? "s" : ""}).</span>}</>}
               </span>
               <button onClick={() => clearScanJob(jobKey)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
             </div>
