@@ -21,6 +21,7 @@ import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
+import { useAppOutdated } from "./lib/version.js";
 
 /* The workspace is large, so every write is gzipped where the browser can do
    it: a slow upload is a wide window for another session to save in, and the
@@ -277,6 +278,9 @@ export default function App() {
   const [staleState, setStaleState] = useState(false);
   /* "pending" (debouncing) | "saving" (in flight) | "saved" | "error" */
   const [saveState, setSaveState] = useState("saved");
+  /* a tab left open across a deploy keeps running the old code — including any
+     bug that deploy fixed. Detected, and surfaced, rather than left to rot. */
+  const appOutdated = useAppOutdated();
   const stateRev = useRef(null);
   useEffect(() => {
     if (!hydrated || !teamSession) return;
@@ -1379,6 +1383,22 @@ export default function App() {
         )}
       </main>
 
+      {appOutdated && (
+        <div className="no-print fixed bottom-16 left-1/2 z-50 w-[min(92vw,26rem)] -translate-x-1/2 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-lg">
+          <div className="text-[12.5px] font-semibold text-gray-800">A newer version of the app is available</div>
+          <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">
+            This tab is still running the version it loaded. Reload to pick up the latest — leaving it open can mean
+            fixes (including ones that protect your work) aren't active here.
+          </div>
+          <button
+            disabled={saveState === "pending" || saveState === "saving"}
+            onClick={() => window.location.reload()}
+            className="mt-2 rounded-lg px-3.5 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+            style={{ background: accent }}>
+            {saveState === "pending" || saveState === "saving" ? "Finishing save…" : "Reload now"}
+          </button>
+        </div>
+      )}
       {/* a change is only safe once it is on the server — never leave that
           invisible, because a reload in the meantime loses it silently */}
       {!saveWarn && (saveState === "pending" || saveState === "saving") && (
