@@ -454,6 +454,24 @@ export default function App() {
     setClients((cs) => cs.map((c) => (c.id !== cid ? c : { ...c, projects: c.projects.filter((p) => p.id !== pid) })));
     logActivity("Deleted archived project permanently", name);
   };
+  /* removes the client and every project beneath it. The confirmation lives in
+     the settings window; by the time this runs the decision is already made. */
+  const deleteClientHard = (cid, name) => {
+    setClients((cs) => cs.filter((c) => c.id !== cid));
+    /* anything pointing at the client has to let go, or the workspace keeps
+       showing a client that no longer exists */
+    setCompany((co) => ({
+      ...co,
+      savedReports: (co.savedReports || []).filter((r) => r.clientId !== cid),
+      finance: co.finance ? {
+        ...co.finance,
+        clientEntries: (co.finance.clientEntries || []).filter((e) => e.clientId !== cid),
+        hiddenClients: (co.finance.hiddenClients || []).filter((x) => x !== cid),
+      } : co.finance,
+    }));
+    if (activeClientId === cid) { setActiveClientId(null); setActiveProjectId(null); }
+    logActivity("Deleted client permanently", name);
+  };
 
   const activeClient = visibleClients.find((c) => c.id === activeClientId) || visibleClients[0];
   const project = activeClient?.projects.find((p) => p.id === activeProjectId) || activeClient?.projects[0];
@@ -1409,6 +1427,7 @@ export default function App() {
             onChange={(patch) => updateClient(mc.id, patch)}
             onUpdateProject={(pid, patch) => patchProjects(pid, patch)}
             onUpdateAllProjects={(patch) => patchProjects(null, patch)}
+            onDelete={isAdmin ? () => { deleteClientHard(mc.id, mc.name); setModal(null); } : null}
             onClose={() => setModal(null)} />
         );
       })()}

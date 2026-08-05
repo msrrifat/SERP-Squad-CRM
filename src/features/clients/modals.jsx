@@ -207,13 +207,46 @@ export const CLIENT_ACCESS_TREE = [
    ads, project management, reports and the agent are explicit opt-in toggles */
 export const CLIENT_DEFAULT_ON = ["canViewGbp", "canViewWeb", "canViewRanks"];
 
-export function ClientSettingsModal({ client, company, onChange, onUpdateProject, onUpdateAllProjects, dfsConnected, accent, onClose }) {
+export function ClientSettingsModal({ client, company, onChange, onUpdateProject, onUpdateAllProjects, dfsConnected, accent, onDelete, onClose }) {
+  const projects = client.projects || [];
+  const keywords = projects.reduce((n, p) => n + (p.tracking || []).length, 0);
+  const records = projects.reduce((n, p) => n + (p.records || []).length, 0);
+  /* Deleting a client takes every project beneath it with all their history —
+     the single most destructive action in the app. The confirmation therefore
+     names exactly what is about to go rather than asking a generic question,
+     and a second prompt requires the client's name to be typed, because this
+     one cannot be undone from anywhere in the interface. */
+  const removeClient = () => {
+    const parts = [
+      `${projects.length} project${projects.length === 1 ? "" : "s"}`,
+      keywords ? `${keywords} tracked keyword${keywords === 1 ? "" : "s"}` : null,
+      records ? `${records} work record${records === 1 ? "" : "s"}` : null,
+    ].filter(Boolean).join(", ");
+    if (!window.confirm(`Delete "${client.name}" and everything under it?\n\nThis removes ${parts}, along with their rankings, reports and settings.\n\nThis cannot be undone.`)) return;
+    const typed = window.prompt(`This is permanent. Type the client name to confirm:\n\n${client.name}`);
+    if ((typed || "").trim() !== client.name.trim()) return;
+    onDelete?.();
+  };
   return (
     <Modal title={`Client settings — ${client.name}`} sub="Client information, white label and portal access. Team access and data sources moved to each project's own settings (gear on the project row)." onClose={onClose} wide>
       <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
         Client details are visible to <b>admins only</b> — team members see the alias (if set) and never this window.
       </div>
       <ClientSettingsBody client={client} onChange={onChange} />
+      {onDelete && (
+        <div className="mt-5 rounded-xl border border-red-200 bg-red-50/60 p-4">
+          <div className="text-[12.5px] font-semibold text-red-700">Delete client</div>
+          <div className="mt-1 text-[11.5px] leading-relaxed text-red-600/90">
+            Removes <b>{client.name}</b> and its {projects.length} project{projects.length === 1 ? "" : "s"}
+            {keywords ? <> with {keywords} tracked keyword{keywords === 1 ? "" : "s"}</> : null}
+            {records ? <> and {records} work record{records === 1 ? "" : "s"}</> : null}. This cannot be undone.
+          </div>
+          <button onClick={removeClient}
+            className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-red-700">
+            <Trash2 size={13} /> Delete this client
+          </button>
+        </div>
+      )}
     </Modal>
   );
 }
