@@ -4,15 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
-  Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
-  Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
-  MousePointerClick, BarChart3, Smartphone, Monitor, RefreshCw, Clock,
-  Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
-  LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
-  PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
-  Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
-  Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin, Columns3,
+  Activity, AlignLeft, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardPaste, Clock, Columns3, Copy, Eye, Facebook, FileText as FileTextIcon, Folder, FolderOpen, Globe, History, ImagePlus, Instagram, KeyRound, LayoutDashboard, Link2, Linkedin, List, ListOrdered, ListTodo, Lock, LogIn, LogOut, MapPin, MessageSquare, Minus, Monitor, Moon, MousePointerClick, Music2, Navigation, Palette, Pause, Phone, PieChart as PieIcon, Pin, Play, Plus, Printer, Quote, Receipt, RefreshCw, Rocket, Search, Send, Settings, Settings2, Share2, Shield, Smartphone, Star, Sun, Table2, Target, Trash2, Twitter, Type, Upload, UserPlus, Users, Wallet, X, Youtube, Zap,
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
@@ -570,7 +562,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
   );
 }
 
-export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, readOnly = false, dfs }) {
+export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, onSetPaused = null, readOnly = false, dfs }) {
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -696,7 +688,15 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   }).filter((t) => t.hist);
 
   const toggleSelect = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleAll = () => setSelected(rows.length === selected.size && rows.every((r) => selected.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id)));
+  /* Pausing a keyword means "stop including it in scans that run over the
+     whole list", so select-all skips paused rows. Ticking one by hand still
+     works — an explicit choice should never be silently ignored. */
+  const runnable = rows.filter((r) => !r.paused);
+  const toggleAll = () => setSelected(
+    runnable.length > 0 && runnable.every((r) => selected.has(r.id)) ? new Set() : new Set(runnable.map((r) => r.id)));
+  const pausedCount = tracking.filter((t) => t.paused).length;
+  const selectedRows = [...selected].map((id) => tracking.find((t) => t.id === id)).filter(Boolean);
+  const allSelectedPaused = selectedRows.length > 0 && selectedRows.every((t) => t.paused);
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
   /* one scan runner for both flows: "Rerun now" on selected keywords AND the
@@ -941,7 +941,8 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   ? "Positions exactly as they were scanned on the selected date — every rerun is kept."
                   : tab === "cities"
                   ? "Tracked keywords grouped per city — open a city to see its keywords, or remove a whole city's tracking in one click."
-                  : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}</>}
+                  : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}
+                      {pausedCount > 0 && <> · <b className="text-gray-500">{pausedCount} paused</b> (left out of whole-list scans)</>}</>}
               </div>
             </div>
             {tab === "history" && (
@@ -987,6 +988,15 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     <Plus size={14} /> Add keywords
                   </button>
                   {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organicQueue" depth={100} />}
+                  {selected.size > 0 && onSetPaused && (
+                    <button onClick={() => { onSetPaused([...selected], !allSelectedPaused); setSelected(new Set()); }}
+                      title={allSelectedPaused
+                        ? "Resume automatic tracking for these keywords"
+                        : "Pause automatic tracking — they stay in the list with all their history, but are left out of scans that run over the whole list"}
+                      className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] font-medium text-gray-600 hover:border-gray-300">
+                      {allSelectedPaused ? <><Play size={13} /> Resume ({selected.size})</> : <><Pause size={13} /> Pause ({selected.size})</>}
+                    </button>
+                  )}
                   {selected.size > 0 && (
                     <button onClick={async () => {
                       if (!await askConfirm({ title: "Delete tracked keywords?", message: `Delete ${selected.size} tracked keyword${selected.size > 1 ? "s" : ""}?`, note: "Their scan history is removed too. This can't be undone.", confirmLabel: "Yes, delete", danger: true })) return;
@@ -1050,19 +1060,34 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   </td></tr>
                 )}
                 {rows.map((t) => (
-                  <tr key={t.id} className={`border-b border-gray-50 align-top hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""}`}>
+                  <tr key={t.id} className={`border-b border-gray-50 align-top hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""} ${t.paused ? "bg-gray-50/60" : ""} group`}>
                     <td className="px-4 py-3 no-print">
                       <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
                         className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
                     </td>
                     <td className="px-5 py-3">
-                      <div className="font-medium text-gray-800">{t.keyword}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={"font-medium " + (t.paused ? "text-gray-500" : "text-gray-800")}>{t.keyword}</span>
+                        {t.paused && (
+                          <span className="rounded-full bg-gray-200 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-gray-600">paused</span>
+                        )}
+                        {!readOnly && onSetPaused && (
+                          <button onClick={() => onSetPaused([t.id], !t.paused)}
+                            title={t.paused ? "Resume automatic tracking for this keyword" : "Pause automatic tracking — keeps the keyword and its history, but leaves it out of whole-list scans"}
+                            className="no-print rounded p-0.5 text-gray-300 opacity-0 hover:text-gray-600 group-hover:opacity-100 focus:opacity-100"
+                            style={t.paused ? { opacity: 1, color: "#6B7280" } : {}}>
+                            {t.paused ? <Play size={12} /> : <Pause size={12} />}
+                          </button>
+                        )}
+                      </div>
                       <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-gray-400">
                         <span className="inline-flex items-center gap-1"><MapPin size={11} />{cityLabel(t.city)}</span>
                         <span className="inline-flex items-center gap-1">{t.device === "Mobile" ? <Smartphone size={11} /> : <Monitor size={11} />}{t.device}</span>
                         <span className="inline-flex items-center gap-1"><Search size={11} />{t.engine}</span>
                         <span className="inline-flex items-center gap-1">
-                          {t.reportingType === "Recurring" ? <><RefreshCw size={11} />every {t.rerunDays}d</> : <><Clock size={11} />one time</>}
+                          {t.paused
+                            ? <><Pause size={11} />paused</>
+                            : t.reportingType === "Recurring" ? <><RefreshCw size={11} />every {t.rerunDays}d</> : <><Clock size={11} />one time</>}
                         </span>
                       </div>
                     </td>

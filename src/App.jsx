@@ -852,6 +852,14 @@ export default function App() {
     logActivity(`Removed ${ids.length} tracked keyword${ids.length > 1 ? "s" : ""}`, project?.name);
   };
   /* cache fetched search volumes on their tracking entries (sv: {v, monthly, t}) */
+  /* pausing a keyword keeps it and all its history — it just stops being
+     picked up by scans that run over the whole list */
+  const setTrackingPaused = (ids, paused) => {
+    const set = new Set(ids);
+    updateProject((p) => ({ tracking: p.tracking.map((t) => (set.has(t.id) ? { ...t, paused: !!paused } : t)) }));
+    logActivity(paused ? `Paused tracking for ${ids.length} keyword${ids.length === 1 ? "" : "s"}`
+                       : `Resumed tracking for ${ids.length} keyword${ids.length === 1 ? "" : "s"}`, project?.name);
+  };
   const applyVolumes = (updates) =>
     updateProject((p) => ({ tracking: p.tracking.map((t) => {
       const u = updates.find((x) => x.id === t.id);
@@ -1346,7 +1354,7 @@ export default function App() {
               regardless of the demo/aggregated `data` and need no connection. */}
           {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} readOnly={!canKeywords} dfs={activeDfs} />}
+              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} onSetPaused={setTrackingPaused} readOnly={!canKeywords} dfs={activeDfs} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
