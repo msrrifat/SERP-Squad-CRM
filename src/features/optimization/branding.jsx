@@ -795,7 +795,7 @@ function BlockEditor({ blocks, onChange, media, accent, contentType }) {
     <span className="absolute -right-1 -top-2 hidden gap-0.5 rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm group-hover:flex">
       <button onClick={() => move(b.id, -1)} className="rounded p-0.5 text-gray-400 hover:bg-gray-50"><ChevronRight size={11} style={{ transform: "rotate(-90deg)" }} /></button>
       <button onClick={() => move(b.id, 1)} className="rounded p-0.5 text-gray-400 hover:bg-gray-50"><ChevronRight size={11} style={{ transform: "rotate(90deg)" }} /></button>
-      <button onClick={() => remove(b.id)} className="rounded p-0.5 text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
+      <button onClick={() => { if (askDelete("this item")) remove(b.id); }} className="rounded p-0.5 text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
     </span>
   );
 

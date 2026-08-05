@@ -3,7 +3,7 @@ import {
   ChevronDown, ChevronRight, FileText, Image as ImageIcon, Layers, Network, Plus, RefreshCw, Search,
   Sparkles, Target, Trash2, TriangleAlert, UploadCloud, Wand2, X,
 } from "lucide-react";
-import { Card, Labeled, Modal, inputCls } from "../../ui/primitives.jsx";
+import { Card, Labeled, Modal, askDelete, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { KwBankPicker } from "../tools/kwbank.jsx";
 import { parseAiJson } from "../../lib/jsonrepair.js";
@@ -228,7 +228,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
           <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
             <button onClick={() => onPublish(node)} title="Publish only this page to the site" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-emerald-600"><UploadCloud size={12} /></button>
             <button onClick={() => onAddChild(node)} title="Add subpage" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Plus size={12} /></button>
-            <button onClick={() => onRemove(node)} title="Remove" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"><Trash2 size={12} /></button>
+            <button onClick={() => { if (askDelete(`the page "${node.title}" and everything under it`)) onRemove(node); }} title="Remove" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"><Trash2 size={12} /></button>
           </span>
         </span>
       </div>

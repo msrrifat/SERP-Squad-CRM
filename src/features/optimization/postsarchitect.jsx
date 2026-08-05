@@ -3,7 +3,7 @@ import {
   BookOpen, FileText, ImagePlus, ListTree, MessageCircleQuestion,
   Plus, RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
 } from "lucide-react";
-import { Card, Labeled, Modal, Toggle, inputCls, CharCount } from "../../ui/primitives.jsx";
+import { Card, Labeled, Modal, Toggle, askDelete, inputCls, CharCount } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { parseAiJson } from "../../lib/jsonrepair.js";
 import { useWork } from "../../lib/worklog.jsx";
@@ -529,7 +529,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                               </span>
                             )
                           )}
-                          <button onClick={() => patchPost(p.id, { status: "removed" })} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
+                          <button onClick={() => { if (askDelete(`the post "${p.title || "this post"}"`)) patchPost(p.id, { status: "removed" }); }} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
                         </div>
                         {rowErr?.id === p.id && <div className="pl-9 text-[10px] text-red-600">{rowErr.msg}</div>}
                       </div>

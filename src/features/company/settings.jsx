@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
+import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDelete, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
 import { money, relTime } from "../../lib/format.jsx";
@@ -557,6 +557,81 @@ export function CompanyBrandSection({ company, onChange, onGoApis }) {
   );
 }
 
+export /* One team member's editable record. Edits are held as a DRAFT and only
+   applied on Save: changing someone's role, password or permissions the moment
+   a key is pressed gives no chance to reconsider, and no signal that anything
+   was stored. */
+function MemberPanel({ member, company, allProjects, permMeta, accent, onSave, onRemove }) {
+  const { draft, set, dirty, reset } = useDraft(member, ["name", "email", "password", "role", "perms", "projects"]);
+  const setRoleDraft = (role) => set({ role, perms: { ...ROLE_PRESETS[role] },
+    projects: role === "Admin" ? "all" : (draft.projects === "all" ? [] : draft.projects) });
+  const toggleProj = (pid) => {
+    const cur = draft.projects === "all" ? allProjects.map((p) => p.id) : (draft.projects || []);
+    set({ projects: cur.includes(pid) ? cur.filter((x) => x !== pid) : [...cur, pid] });
+  };
+  return (
+    <div className="ll-fade space-y-4 border-t border-gray-100 p-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Labeled label="Name"><input value={draft.name || ""} onChange={(e) => set({ name: e.target.value })} className={inputCls} /></Labeled>
+        <Labeled label="Login email"><input value={draft.email || ""} onChange={(e) => set({ email: e.target.value })} className={inputCls} /></Labeled>
+        <Labeled label="Password"><input value={draft.password || ""} onChange={(e) => set({ password: e.target.value })} placeholder="Set a password" className={"ll-mono " + inputCls} /></Labeled>
+      </div>
+      <Labeled label="Role — sets a permission preset you can fine-tune below">
+        <select value={draft.role} onChange={(e) => setRoleDraft(e.target.value)} className={inputCls + " w-auto bg-white"}>
+          {Object.keys(ROLE_PRESETS).map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </Labeled>
+      {draft.role !== "Admin" && (
+        <Labeled label="Project access">
+          <div className="mb-1.5">
+            <button onClick={() => set({ projects: draft.projects === "all" ? [] : "all" })}
+              className="rounded-lg border px-3 py-1.5 text-[12px] font-medium"
+              style={draft.projects === "all" ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#E5E7EB", color: "#4B5563" }}>
+              All projects {draft.projects === "all" ? "✓" : ""}
+            </button>
+          </div>
+          <div className="mb-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[10.5px] text-gray-500">
+            Assigning a project doesn't reveal it yet — open the client's settings (gear on the client in the sidebar) → <b>Team</b> tab to grant which sections this member can access.
+          </div>
+          {draft.projects !== "all" && (
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {allProjects.map((p) => {
+                const on = (draft.projects || []).includes(p.id);
+                return (
+                  <button key={p.id} onClick={() => toggleProj(p.id)}
+                    className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[12px]"
+                    style={{ borderColor: on ? "#86EFAC" : "#E5E7EB", background: on ? "#F0FDF4" : "var(--chip-bg, #fff)" }}>
+                    <CheckCircle2 size={13} className="shrink-0" style={{ color: on ? "#16A34A" : "#D1D5DB" }} />
+                    <ProjectMark project={p} />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-gray-700">{p.name}</span>
+                      <span className="block truncate text-[10px] text-gray-400">{p.clientName}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Labeled>
+      )}
+      <Labeled label="Permissions">
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {permMeta.map(([key, label, desc]) => (
+            <Toggle key={key} label={label} desc={desc} on={!!(draft.perms || {})[key]}
+              onChange={(v) => set({ perms: { ...(draft.perms || {}), [key]: v } })} />
+          ))}
+        </div>
+      </Labeled>
+      <SaveBar dirty={dirty} onSave={() => onSave(draft)} onReset={reset} accent={accent} savedLabel="Saved" saveLabel="Save member" />
+      {onRemove && (
+        <button onClick={onRemove} className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-red-500">
+          <Trash2 size={13} /> Remove team member
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function TeamSection({ company, onChange, clients }) {
   const [openId, setOpenId] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -566,7 +641,13 @@ export function TeamSection({ company, onChange, clients }) {
 
   const patchMember = (id, p) => onChange({ team: team.map((m) => (m.id === id ? { ...m, ...p } : m)) });
   const setRole = (m, role) => patchMember(m.id, { role, perms: { ...ROLE_PRESETS[role] }, projects: role === "Admin" ? "all" : m.projects === "all" ? [] : m.projects });
-  const removeMember = (id) => onChange({ team: team.filter((m) => m.id !== id) });
+  const removeMember = (id) => {
+    /* removing a member drops their access and their assignment history —
+       always ask first */
+    const m = team.find((x) => x.id === id);
+    if (!askDelete(`${m?.name || "this team member"} from the team`)) return;
+    onChange({ team: team.filter((x) => x.id !== id) });
+  };
   const toggleProject = (m, pid) => {
     const cur = m.projects === "all" ? allProjects.map((p) => p.id) : m.projects;
     patchMember(m.id, { projects: cur.includes(pid) ? cur.filter((x) => x !== pid) : [...cur, pid] });
@@ -609,64 +690,9 @@ export function TeamSection({ company, onChange, clients }) {
                 <ChevronDown size={15} className="shrink-0 text-gray-300" style={{ transform: open ? "rotate(180deg)" : "none" }} />
               </button>
               {open && (
-                <div className="ll-fade space-y-4 border-t border-gray-100 p-4">
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <Labeled label="Name"><input value={m.name} onChange={(e) => patchMember(m.id, { name: e.target.value })} className={inputCls} /></Labeled>
-                    <Labeled label="Login email"><input value={m.email} onChange={(e) => patchMember(m.id, { email: e.target.value })} className={inputCls} /></Labeled>
-                    <Labeled label="Password"><input value={m.password} onChange={(e) => patchMember(m.id, { password: e.target.value })} placeholder="Set a password" className={"ll-mono " + inputCls} /></Labeled>
-                  </div>
-                  <Labeled label="Role — sets a permission preset you can fine-tune below">
-                    <select value={m.role} onChange={(e) => setRole(m, e.target.value)} className={inputCls + " w-auto bg-white"}>
-                      {Object.keys(ROLE_PRESETS).map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </Labeled>
-                  {m.role !== "Admin" && (
-                    <Labeled label="Project access">
-                      <div className="mb-1.5">
-                        <button onClick={() => patchMember(m.id, { projects: m.projects === "all" ? [] : "all" })}
-                          className="rounded-lg border px-3 py-1.5 text-[12px] font-medium"
-                          style={m.projects === "all" ? { background: company.accent, borderColor: company.accent, color: "#fff" } : { borderColor: "#E5E7EB", color: "#4B5563" }}>
-                          All projects {m.projects === "all" ? "✓" : ""}
-                        </button>
-                      </div>
-                      <div className="mb-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[10.5px] text-gray-500">
-                        Assigning a project doesn't reveal it yet — open the client's settings (gear on the client in the sidebar) → <b>Team</b> tab to grant which sections this member can access.
-                      </div>
-                      {m.projects !== "all" && (
-                        <div className="grid gap-1.5 sm:grid-cols-2">
-                          {allProjects.map((p) => {
-                            const on = m.projects.includes(p.id);
-                            return (
-                              <button key={p.id} onClick={() => toggleProject(m, p.id)}
-                                className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[12px]"
-                                style={{ borderColor: on ? "#86EFAC" : "#E5E7EB", background: on ? "#F0FDF4" : "var(--chip-bg, #fff)" }}>
-                                <CheckCircle2 size={13} className="shrink-0" style={{ color: on ? "#16A34A" : "#D1D5DB" }} />
-                                <ProjectMark project={p} />
-                                <span className="min-w-0">
-                                  <span className="block truncate font-medium text-gray-700">{p.name}</span>
-                                  <span className="block truncate text-[10px] text-gray-400">{p.clientName}</span>
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </Labeled>
-                  )}
-                  <Labeled label="Permissions">
-                    <div className="grid gap-1.5 sm:grid-cols-2">
-                      {PERM_META.map(([key, label, desc]) => (
-                        <Toggle key={key} label={label} desc={desc} on={m.perms[key]}
-                          onChange={(v) => patchMember(m.id, { perms: { ...m.perms, [key]: v } })} />
-                      ))}
-                    </div>
-                  </Labeled>
-                  {!m.isOwner && (
-                    <button onClick={() => removeMember(m.id)} className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-red-500">
-                      <Trash2 size={13} /> Remove team member
-                    </button>
-                  )}
-                </div>
+                <MemberPanel member={m} company={company} allProjects={allProjects} permMeta={PERM_META}
+                  accent={company.accent} onSave={(vals) => patchMember(m.id, vals)}
+                  onRemove={m.isOwner ? null : () => removeMember(m.id)} />
               )}
             </Card>
           );

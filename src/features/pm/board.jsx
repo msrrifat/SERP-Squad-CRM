@@ -52,8 +52,11 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
   };
   const mutTask = (clId, tId, fn, actText) =>
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.map((t) => (t.id === tId ? fn(t) : t)) }), actText);
-  const delTask = (clId, tId, title) =>
+  const delTask = (clId, tId, title) => {
+    /* a task is typed-in work — never remove it on a single stray click */
+    if (!askDelete(`the task "${title || "this task"}"`)) return;
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.filter((t) => t.id !== tId) }), `deleted task "${title}"`);
+  };
   const addComment = () => {
     const txt = comment.trim(); if (!txt) return;
     patch({ comments: [{ id: "c" + Date.now(), ts: Date.now(), author: currentUser, text: txt }, ...record.comments] }, "commented");
