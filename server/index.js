@@ -844,7 +844,12 @@ function handleStateBackupExtract(req, body) {
     }
     return [200, { live: true, file,
       reportTemplates: (st.company?.reportTemplates || []),
-      savedReports: (st.clients || []).map((c) => ({ clientId: c.id, clientName: c.name, reports: c.savedReports || [] })).filter((x) => x.reports.length),
+      /* saved reports live on the COMPANY, keyed by project. The per-client
+         list below is only a legacy location — reading just that one made this
+         endpoint report "no reports" for every backup ever taken, which is the
+         opposite of the truth. Both are returned now. */
+      savedReports: (st.company?.savedReports || []),
+      legacyClientReports: (st.clients || []).map((c) => ({ clientId: c.id, clientName: c.name, reports: c.savedReports || [] })).filter((x) => x.reports.length),
     }];
   } catch (e) { return [500, { error: "read_failed", detail: String(e?.message || e).slice(0, 140) }]; }
 }
