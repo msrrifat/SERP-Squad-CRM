@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { askConfirm, askDelete, AssignPicker, Ava, Card, inputCls, NEG, POS } from "../../ui/primitives.jsx";
+import { askConfirm, askDelete, askInput, AssignPicker, Ava, Card, inputCls, NEG, POS } from "../../ui/primitives.jsx";
 import { fmtDay, fmtTs2, relTime, todayISO } from "../../lib/format.jsx";
 import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
