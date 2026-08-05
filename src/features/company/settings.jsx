@@ -18,6 +18,7 @@ import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, N
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
 import { money, relTime } from "../../lib/format.jsx";
+import { AccountingSection, monthKey, monthLabel } from "./accounting.jsx";
 
 export const API_REGISTRY = [
   {
@@ -770,148 +771,6 @@ export function ActivitySection({ company }) {
   );
 }
 
-export function AccountingSection({ company, onChange, clients }) {
-  const fin = company.finance || { clientEntries: [], universal: [] };
-  const setFin = (patch) => onChange({ finance: { ...fin, ...patch } });
-  const [draftFor, setDraftFor] = useState(null); // clientId currently adding an entry
-  const [draft, setDraft] = useState({ type: "earning", label: "", amount: "" });
-  const [uniDraft, setUniDraft] = useState({ label: "", amount: "" });
-
-  const sumBy = (clientId, type) => fin.clientEntries.filter((e) => e.clientId === clientId && e.type === type).reduce((s, e) => s + +e.amount, 0);
-  const totalEarn = clients.reduce((s, c) => s + sumBy(c.id, "earning"), 0);
-  const totalClientSpend = clients.reduce((s, c) => s + sumBy(c.id, "spending"), 0);
-  const totalUniversal = fin.universal.reduce((s, e) => s + +e.amount, 0);
-  const totalSpend = totalClientSpend + totalUniversal;
-  const net = totalEarn - totalSpend;
-  const margin = totalEarn ? (net / totalEarn) * 100 : 0;
-
-  const chartData = clients.map((c) => ({
-    name: c.name.length > 14 ? c.name.slice(0, 13) + "…" : c.name,
-    Earnings: sumBy(c.id, "earning"),
-    Spendings: sumBy(c.id, "spending"),
-  }));
-
-  const ov = [
-    { label: "Total earnings", value: money(totalEarn), sub: "all clients · monthly", color: POS },
-    { label: "Total spendings", value: money(totalSpend), sub: `${money(totalClientSpend)} clients + ${money(totalUniversal)} universal`, color: NEG },
-    { label: "Net profit", value: money(net), sub: "earnings − all spendings", color: net >= 0 ? POS : NEG },
-    { label: "Profit margin", value: margin.toFixed(0) + "%", sub: "of earnings kept", color: net >= 0 ? POS : NEG },
-  ];
-
-  const addEntry = (clientId) => {
-    if (!draft.label.trim() || !+draft.amount) return;
-    setFin({ clientEntries: [...fin.clientEntries, { id: "f" + Date.now(), clientId, ...draft, amount: +draft.amount }] });
-    setDraft({ type: "earning", label: "", amount: "" }); setDraftFor(null);
-  };
-
-  return (
-    <div className="ll-fade space-y-5">
-      {/* total accounting overview */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {ov.map((o, i) => (
-          <Card key={i} className="p-4">
-            <div className="text-[12px] font-medium text-gray-500">{o.label}</div>
-            <div className="ll-display mt-1.5 text-[32px] font-semibold leading-none tracking-tight" style={{ color: o.color }}>{o.value}</div>
-            <div className="mt-1.5 text-[11px] text-gray-400">{o.sub}</div>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="p-5">
-        <div className="ll-display mb-3 text-[15px] font-semibold">Earnings vs spendings per client <span className="text-xs font-normal text-gray-400">monthly</span></div>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F4" vertical={false} />
-            <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#9CA3AF" }} tickLine={false} axisLine={false} />
-            <YAxis tick={{ fontSize: 11, fill: "#9CA3AF" }} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(v) => money(v)} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="Earnings" fill={POS} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Spendings" fill={NEG} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
-
-      {/* per-client breakdown */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        {clients.map((c) => {
-          const earn = sumBy(c.id, "earning"), spend = sumBy(c.id, "spending"), profit = earn - spend;
-          const entries = fin.clientEntries.filter((e) => e.clientId === c.id);
-          return (
-            <Card key={c.id} className="flex flex-col p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="ll-display truncate text-[14px] font-semibold">{c.name}</div>
-                <span className="ll-mono text-[16px] font-bold" style={{ color: profit >= 0 ? POS : NEG }}>{profit >= 0 ? "+" : ""}{money(profit)}</span>
-              </div>
-              <div className="mb-3 flex gap-3 text-[11.5px]">
-                <span className="text-gray-500">Earned <b className="ll-mono" style={{ color: POS }}>{money(earn)}</b></span>
-                <span className="text-gray-500">Spent <b className="ll-mono" style={{ color: NEG }}>{money(spend)}</b></span>
-              </div>
-              <div className="flex-1 space-y-1">
-                {entries.map((e) => (
-                  <div key={e.id} className="group flex items-center gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[12px]">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: e.type === "earning" ? POS : NEG }} />
-                    <span className="min-w-0 flex-1 truncate text-gray-700">{e.label}</span>
-                    <span className="ll-mono font-semibold" style={{ color: e.type === "earning" ? POS : NEG }}>
-                      {e.type === "earning" ? "+" : "−"}{money(e.amount)}
-                    </span>
-                    <button onClick={() => setFin({ clientEntries: fin.clientEntries.filter((x) => x.id !== e.id) })}
-                      className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
-                  </div>
-                ))}
-                {entries.length === 0 && <div className="py-2 text-center text-[11.5px] text-gray-300">No entries yet</div>}
-              </div>
-              {draftFor === c.id ? (
-                <div className="ll-fade mt-2 space-y-1.5 rounded-xl border border-gray-200 p-2.5">
-                  <Seg options={["earning", "spending"]} value={draft.type} onChange={(v) => setDraft({ ...draft, type: v })} accent={company.accent} />
-                  <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Label (e.g. retainer, content…)" className={inputCls} />
-                  <div className="flex gap-1.5">
-                    <input value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="Amount $" className={"ll-mono " + inputCls} />
-                    <button onClick={() => addEntry(c.id)} className="rounded-lg px-3 text-[12px] font-semibold text-white" style={{ background: company.accent }}>Add</button>
-                    <button onClick={() => setDraftFor(null)} className="rounded-lg px-2 text-gray-400 hover:text-gray-600"><X size={14} /></button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => setDraftFor(c.id)} className="mt-2 flex items-center justify-center gap-1 rounded-lg border border-dashed border-gray-300 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
-                  <Plus size={12} /> Add entry
-                </button>
-              )}
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* universal spendings */}
-      <Card className="p-5">
-        <div className="mb-1 flex items-center justify-between">
-          <div className="ll-display text-[15px] font-semibold">Universal spendings <span className="text-xs font-normal text-gray-400">monthly · not tied to one client</span></div>
-          <span className="ll-mono text-[16px] font-bold" style={{ color: NEG }}>−{money(totalUniversal)}</span>
-        </div>
-        <p className="mb-3 text-[11.5px] text-gray-400">Team salaries, software tools, hosting — costs shared across all clients. Included in total spendings above.</p>
-        <div className="grid gap-1.5 sm:grid-cols-2">
-          {fin.universal.map((e) => (
-            <div key={e.id} className="group flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-[12.5px]">
-              <span className="min-w-0 flex-1 truncate text-gray-700">{e.label}</span>
-              <input value={e.amount}
-                onChange={(ev) => setFin({ universal: fin.universal.map((x) => x.id === e.id ? { ...x, amount: +ev.target.value.replace(/[^0-9.]/g, "") || 0 } : x) })}
-                className="ll-mono w-20 rounded border border-gray-200 px-1.5 py-0.5 text-right text-[12px]" />
-              <button onClick={() => setFin({ universal: fin.universal.filter((x) => x.id !== e.id) })}
-                className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
-            </div>
-          ))}
-        </div>
-        <div className="mt-2 flex gap-1.5">
-          <input value={uniDraft.label} onChange={(e) => setUniDraft({ ...uniDraft, label: e.target.value })} placeholder="New spending (e.g. Designer salary)" className={inputCls} />
-          <input value={uniDraft.amount} onChange={(e) => setUniDraft({ ...uniDraft, amount: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="Amount $" className={"ll-mono w-28 " + inputCls.replace("w-full ", "")} />
-          <button disabled={!uniDraft.label.trim() || !+uniDraft.amount}
-            onClick={() => { setFin({ universal: [...fin.universal, { id: "g" + Date.now(), label: uniDraft.label, amount: +uniDraft.amount }] }); setUniDraft({ label: "", amount: "" }); }}
-            className="rounded-lg px-4 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: company.accent }}>Add</button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 export function InvoiceSection({ company, onChange, clients }) {
   const fin = company.finance || { clientEntries: [] };
   const [clientId, setClientId] = useState(clients[0]?.id);
@@ -934,8 +793,12 @@ export function InvoiceSection({ company, onChange, clients }) {
   const tax = subtotal * (+taxPct || 0) / 100;
   const total = subtotal + tax;
 
+  /* accounting is month-by-month now, so an import takes THIS month's earnings
+     — pulling every month at once would bill the client for the year */
+  const [importMonth, setImportMonth] = useState(monthKey(new Date()));
+  const monthOf = (e) => e.month || monthKey(new Date(+String(e.id || "").replace(/^\D+/, "") || Date.now()));
   const importFromAccounting = () => {
-    const earns = fin.clientEntries.filter((e) => e.clientId === clientId && e.type === "earning");
+    const earns = (fin.clientEntries || []).filter((e) => e.clientId === clientId && e.type === "earning" && monthOf(e) === importMonth);
     if (!earns.length) return;
     setItems(earns.map((e, i) => ({ id: "imp" + Date.now() + i, desc: e.label, qty: 1, rate: +e.amount })));
   };
@@ -950,8 +813,14 @@ export function InvoiceSection({ company, onChange, clients }) {
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <button onClick={importFromAccounting} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
-          <Wallet size={14} /> Import items from Accounting
+          <Wallet size={14} /> Import {monthLabel(importMonth)} earnings
         </button>
+        <select value={importMonth} onChange={(e) => setImportMonth(e.target.value)}
+          title="Which month's earnings to import"
+          className="rounded-xl border border-gray-200 bg-white px-2 py-2 text-[12px] font-medium text-gray-600">
+          {Array.from({ length: 12 }, (_, i) => monthKey(new Date(new Date().getFullYear(), new Date().getMonth() - i, 1)))
+            .map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
         <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: company.accent }}>
           <Printer size={14} /> Print / Download PDF
         </button>
