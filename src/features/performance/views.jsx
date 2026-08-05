@@ -721,15 +721,38 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         setProgress({ done: applied, total: entries.length, note: chunks.length > 1 ? `batch ${ci + 1}/${chunks.length}` : undefined });
         let updates = null;
         try {
-          const res = await fetch("/api/rerun", {
+          const creds = dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined;
+          /* Post the batch, then collect it. The DataForSEO queue answers when
+             it answers — there is no deadline to impose, and imposing one is
+             what turned slow keywords into "timeout" failures that were then
+             re-posted and paid for twice. */
+          const res = await fetch("/api/rank/start", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(660000), // a standard-queue batch can take a few minutes to come back
-            body: JSON.stringify({ entries: chunk, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
+            signal: AbortSignal.timeout(120000),
+            body: JSON.stringify({ entries: chunk, dfs: creds, depth: 100 }),
           });
           if (res.ok) {
-            const data = await res.json();
-            updates = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })); // 101 = not in top 100
-            failed.push(...data.updated.filter((u) => u.error));
+            const { jobId, total } = await res.json();
+            const seen = new Set();
+            for (let poll = 0; ; poll++) {
+              await new Promise((r) => setTimeout(r, poll === 0 ? 6000 : 10000));
+              const sr = await fetch("/api/rank/status", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                signal: AbortSignal.timeout(120000),
+                body: JSON.stringify({ jobId, dfs: creds }),
+              });
+              if (!sr.ok) throw new Error(await sr.text());
+              const st = await sr.json();
+              /* results land as they arrive, so a long batch fills the table
+                 progressively instead of showing nothing until the end */
+              const fresh = (st.updated || []).filter((u) => !seen.has(u.id));
+              fresh.forEach((u) => seen.add(u.id));
+              if (fresh.length) onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })));
+              setProgress({ done: applied + st.done, total: entries.length,
+                note: st.pending ? `${st.done}/${st.total} back · ${st.pending} still in Google's queue (${Math.round(st.ageSec / 60)}m)` : undefined });
+              if (!st.pending) { failed.push(...(st.errors || [])); break; }
+            }
+            updates = [];                 // already applied above, as they arrived
             live = true;
           } else if (res.status === 503) {
             /* credentials never reached the server. On a REAL project this must

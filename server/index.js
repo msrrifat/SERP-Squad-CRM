@@ -2542,6 +2542,71 @@ async function handleScan(body) {
   return [200, { live: true, results: clean }];
 }
 
+/* rank checks hit the country's own Google front end — google.co.uk results
+   differ from google.com for the same UK city, so this is a precision must */
+const SE_DOMAINS = {
+  "United States": "google.com", "United Kingdom": "google.co.uk", "Canada": "google.ca",
+  "Australia": "google.com.au", "Netherlands": "google.nl", "New Zealand": "google.co.nz",
+  "Ireland": "google.ie", "Germany": "google.de", "France": "google.fr", "Spain": "google.es",
+  "Italy": "google.it", "Belgium": "google.be", "India": "google.co.in", "Singapore": "google.com.sg",
+  "United Arab Emirates": "google.ae", "South Africa": "google.co.za",
+};
+
+/* ---- RANK CHECK JOBS ==================================================
+   A rank check used to hold an HTTP request open while the DataForSEO queue
+   drained, and give up at eight minutes. The queue has no such deadline — it
+   answers when it answers — so keywords that were merely slow came back as
+   "tracking failed due to timeout", and the client then re-posted them, paying
+   for the same keyword twice.
+
+   Posting and collecting are now separate. Posting returns immediately with a
+   job id; results are collected on demand and written into the job as they
+   arrive. Nothing is on a clock: a job left overnight is still collectable in
+   the morning, and closing the tab does not lose the tasks that were paid for.
+   (SEO Utils works the same way — it records every posted task in its own
+   database and keeps collecting in the background.) ---- */
+const RANK_DIR = new URL("./data/rank-jobs/", import.meta.url);
+const rankJobPath = (id) => new URL(`${String(id).replace(/[^a-z0-9-]/gi, "")}.json`, RANK_DIR);
+const loadJob = (id) => { try { return JSON.parse(readFileSync(rankJobPath(id), "utf8")); } catch { return null; } };
+const saveJob = (job) => {
+  mkdirSync(RANK_DIR, { recursive: true });
+  const tmp = new URL(`${job.id}.tmp`, RANK_DIR);
+  writeFileSync(tmp, JSON.stringify(job));
+  renameSync(tmp, rankJobPath(job.id));
+};
+
+/* create tasks and return their ids, aligned with `tasks` */
+async function dfsPost(creds, pathSeg, tasks) {
+  const out = new Array(tasks.length).fill(null);
+  const headers = { Authorization: authHeader(creds), "Content-Type": "application/json" };
+  for (let i = 0; i < tasks.length; i += 100) {          // API cap: 100 per POST
+    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: String(i + j) }));
+    const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_post`, {
+      method: "POST", headers, body: JSON.stringify(chunk), signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    for (const t of (await res.json()).tasks || []) {
+      const idx = +(t.data?.tag ?? -1);
+      if (!(idx >= 0 && idx < tasks.length)) continue;
+      /* 20100 = created. Anything else failed at creation, which DataForSEO
+         does not bill for — surfaced so it is not silently retried forever. */
+      out[idx] = t.status_code === 20100 ? { taskId: t.id } : { error: `task ${t.status_code}: ${t.status_message}` };
+    }
+  }
+  return out;
+}
+
+/* fetch one task if it is finished; null means "still in the queue" */
+async function dfsTaskGet(creds, pathSeg, taskId) {
+  const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_get/advanced/${taskId}`, {
+    headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(40000),
+  });
+  if (!res.ok) return null;
+  const t = (await res.json()).tasks?.[0];
+  if (!t || t.status_code === 40602) return null;        // 40602 = Task In Queue
+  return t.status_code === 20000 ? { task: t } : { error: `task ${t.status_code}: ${t.status_message}` };
+}
+
 /* ---- DataForSEO LOCATION RESOLVER =====================================
    A rank check is only as accurate as the place it is run from. We used to
    send `location_name` as a string and, when DataForSEO did not recognise it,
@@ -2601,11 +2666,26 @@ async function resolveLocation(creds, city) {
   const countryOnly = normLoc(city.country);
 
   const find = (target) => rows.find((r) => normLoc(r.name) === target);
+  /* A city stored without its region ("york", "United Kingdom") cannot match
+     DataForSEO's "York,England,United Kingdom" on the exact form, and dropping
+     to the country turns a local check into a national one. So the city name
+     is matched WITHIN the country instead: first as a City, because "York" is
+     also a county and a neighbourhood elsewhere. */
+  const cityNorm = normLoc(city.city);
+  const inCountry = (r) => normLoc(r.name).endsWith(" " + countryOnly) || normLoc(r.name) === countryOnly;
+  const byCityName = () => {
+    if (!cityNorm) return null;
+    const cands = rows.filter((r) => inCountry(r) && normLoc(r.name).startsWith(cityNorm + " "));
+    if (!cands.length) return null;
+    const rank = (t) => (/^city$/i.test(t) ? 0 : /municipality|town/i.test(t) ? 1 : /region|state|province|county/i.test(t) ? 2 : 3);
+    return [...cands].sort((a, b2) => rank(a.type) - rank(b2.type) || a.name.length - b2.name.length)[0];
+  };
   /* most specific first — an exact city match is the only one that answers
      "where does this rank in THIS town" */
   const hit =
     (city.city && find(exact) && { r: find(exact), precision: "city" }) ||
     (city.city && find(cityCountry) && { r: find(cityCountry), precision: "city" }) ||
+    (byCityName() && { r: byCityName(), precision: "city" }) ||
     (city.region && find(regionCountry) && { r: find(regionCountry), precision: "region" }) ||
     (find(countryOnly) && { r: find(countryOnly), precision: "country" }) ||
     null;
@@ -2619,13 +2699,7 @@ async function handleRerun(body) {
   if (!Array.isArray(entries) || !entries.length) return [400, { error: "entries[] required" }];
   /* rank checks hit the country's own Google front end — google.co.uk results
      differ from google.com for the same UK city, so this is a precision must */
-  const SE_DOMAIN = {
-    "United States": "google.com", "United Kingdom": "google.co.uk", "Canada": "google.ca",
-    "Australia": "google.com.au", "Netherlands": "google.nl", "New Zealand": "google.co.nz",
-    "Ireland": "google.ie", "Germany": "google.de", "France": "google.fr", "Spain": "google.es",
-    "Italy": "google.it", "Belgium": "google.be", "India": "google.co.in", "Singapore": "google.com.sg",
-    "United Arab Emirates": "google.ae", "South Africa": "google.co.za",
-  };
+  const SE_DOMAIN = SE_DOMAINS;
   /* 25 per request is the HTTP-timeout guard, NOT a scan limit — the client
      batches any keyword count into sequential 25-keyword requests.
      Checks run through the standard task queue ($0.0006/SERP vs $0.003
@@ -2697,6 +2771,87 @@ async function handleRerun(body) {
     work.forEach(({ i }) => { updated[i] = updated[i] || { id: list[i].id, keyword: list[i].keyword, error: "location not accepted by DataForSEO" }; });
   }
   return [200, { live: true, updated }];
+}
+
+/* start a rank check: post every task, remember the ids, return at once */
+async function handleRankStart(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return credsMissing(body);
+  const entries = Array.isArray(body?.entries) ? body.entries : [];
+  if (!entries.length) return [400, { error: "entries[] required" }];
+  const depth = [10, 20, 30, 50, 100].includes(+body.depth) ? +body.depth : 100;
+
+  const resolvedFor = new Map();
+  for (const e of entries) {
+    const k = `${e.city?.city}|${e.city?.region}|${e.city?.country}`;
+    if (!resolvedFor.has(k)) resolvedFor.set(k, await resolveLocation(creds, e.city || {}));
+  }
+  const engineOf = (e) => ((e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google");
+  const job = {
+    id: "rj" + Date.now().toString(36) + randomBytes(4).toString("hex"),
+    createdAt: Date.now(), depth, items: [],
+  };
+
+  for (const engine of ["google", "bing"]) {
+    const mine = entries.filter((e) => engineOf(e) === engine);
+    if (!mine.length) continue;
+    const loc = (e) => resolvedFor.get(`${e.city?.city}|${e.city?.region}|${e.city?.country}`) || null;
+    const tasks = mine.map((e) => ({
+      keyword: e.keyword, language_code: "en",
+      device: (e.device || "Desktop").toLowerCase(),
+      os: e.device === "Mobile" ? "android" : "windows",
+      depth,
+      ...(loc(e) ? { location_code: loc(e).code }
+                 : { location_name: [e.city?.city, e.city?.region, e.city?.country].filter(Boolean).join(",") }),
+      ...(engine === "google" && SE_DOMAINS[e.city?.country] ? { se_domain: SE_DOMAINS[e.city.country] } : {}),
+    }));
+    let posted;
+    try { posted = await dfsPost(creds, engine + "/organic", tasks); }
+    catch (err) { return [502, { error: "provider_error", detail: String(err?.message || err).slice(0, 200) }]; }
+    mine.forEach((e, i) => {
+      const p = posted[i] || { error: "no response for this task" };
+      job.items.push({
+        entryId: e.id, keyword: e.keyword, domain: e.domain, engine,
+        location: loc(e)?.name || null, locationCode: loc(e)?.code || null,
+        precision: loc(e)?.precision || "unverified",
+        taskId: p.taskId || null, error: p.error || null, result: null,
+      });
+    });
+  }
+  saveJob(job);
+  const posted = job.items.filter((x) => x.taskId).length;
+  return [200, { live: true, jobId: job.id, total: job.items.length, posted,
+    failedToPost: job.items.length - posted,
+    /* how many are actually targeted at the town asked for */
+    cityPrecise: job.items.filter((x) => x.precision === "city").length }];
+}
+
+/* collect whatever has finished. Safe to call repeatedly, forever. */
+async function handleRankStatus(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return credsMissing(body);
+  const job = loadJob(body?.jobId || "");
+  if (!job) return [404, { error: "unknown_job", detail: "That rank check is no longer on the server." }];
+
+  const pending = job.items.filter((x) => x.taskId && !x.result && !x.error);
+  if (pending.length) {
+    await pool(pending, async (item) => {
+      const got = await dfsTaskGet(creds, item.engine + "/organic", item.taskId);
+      if (!got) return;                                   // still queued — ask again later
+      if (got.error) { item.error = got.error; return; }
+      const { position, url, mapPos, packShown } = parseSerpRank(got.task, item.domain);
+      item.result = { position, url, mapPos, packShown };
+    }, 8);
+    saveJob(job);
+  }
+  const done = job.items.filter((x) => x.result || x.error);
+  return [200, { live: true, jobId: job.id, total: job.items.length,
+    done: done.length, pending: job.items.length - done.length,
+    ageSec: Math.round((Date.now() - job.createdAt) / 1000),
+    updated: job.items.filter((x) => x.result).map((x) => ({
+      id: x.entryId, ...x.result, location: x.location, precision: x.precision,
+    })),
+    errors: job.items.filter((x) => x.error).map((x) => ({ id: x.entryId, keyword: x.keyword, error: x.error })) }];
 }
 
 /* ---- GBP geo-grid rank scan =================================
@@ -3025,7 +3180,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = req.url === "/api/state" ? 32e6 : 4e6;
@@ -3095,6 +3250,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/outreach/send" ? await handleOutreachSend(body)
         : req.url === "/api/guestpost/search" ? await handleGuestSearch(body)
         : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
+        : req.url === "/api/rank/start" ? await handleRankStart(body)
+        : req.url === "/api/rank/status" ? await handleRankStatus(body)
         : req.url === "/api/mail/test" ? await handleMailTest(body)
         : req.url === "/api/form/register" ? handleFormRegister(body)
         : req.url === "/api/form/submit" ? await handleFormSubmit(body, ip)
