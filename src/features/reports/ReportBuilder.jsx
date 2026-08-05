@@ -32,6 +32,12 @@ export function parsePasted(raw) {
   return raw.replace(/\r/g, "").split("\n").filter((l) => l.trim().length).map((l) => l.split("\t"));
 }
 
+/* Report headings print black rather than in the project's brand colour: a
+   report is a document about the client, not a piece of the client's branding,
+   and a coloured heading on every page reads as decoration. Brand colour stays
+   where it carries meaning — charts, chips, the cover rule. */
+const TITLE_INK = "#000000";
+
 /* REAL projects open the builder without demo data — live GA4/GSC (plus real
    tracking) is pulled and mapped into the same data shape first */
 export function ReportBuilder(props) {
@@ -1453,7 +1459,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     switch (b.type) {
       case "heading": return b.level === 1
         ? <input value={b.text} onChange={(e) => patch(b.id, { text: e.target.value })} placeholder="Heading"
-            className="ll-display w-full border-0 bg-transparent text-[26px] font-bold tracking-tight outline-none" style={{ color: accent }} />
+            className="ll-display w-full border-0 bg-transparent text-[26px] font-bold tracking-tight outline-none" style={{ color: TITLE_INK }} />
         : <div className="border-b-2 pb-1" style={{ borderColor: accent + "33" }}>
             <input value={b.text} onChange={(e) => patch(b.id, { text: e.target.value })} placeholder="Heading"
               className="ll-display w-full border-0 bg-transparent text-[18px] font-semibold outline-none" />
@@ -1972,7 +1978,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 <div className="mb-3 h-1.5 w-16 rounded-full" style={{ background: accent }} />
                 <textarea value={title} onChange={(e) => setTitle(e.target.value)} rows={Math.max(1, Math.ceil(title.length / 26))}
                   className="ll-display w-full resize-none border-0 bg-transparent text-[36px] font-bold leading-tight tracking-tight outline-none"
-                  style={{ color: accent }} />
+                  style={{ color: TITLE_INK }} />
                 <div className="mt-8 flex items-center gap-3.5">
                   <label className="group relative cursor-pointer" title="Click to change the customer logo">
                     {coverLogo
@@ -2054,7 +2060,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 {pi === 0 && (
                   <input value={title} onChange={(e) => setTitle(e.target.value)}
                     className="rb-ptitle ll-display mb-4 w-full border-0 bg-transparent text-[24px] font-bold tracking-tight outline-none"
-                    style={{ color: accent }} />
+                    style={{ color: TITLE_INK }} />
                 )}
                 <div className="space-y-1">
                   {pageBlocks.map((b) => {
