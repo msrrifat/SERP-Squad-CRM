@@ -948,7 +948,11 @@ export default function App() {
        builder only ever sees the selected project (with its live data, not a
        regenerated copy; real projects report zero-series + real integrations,
        never fabricated numbers) */
-    const reportData = data || liveData;
+    /* REAL projects must pass data=null so the builder's own live hook runs.
+       Handing it the all-zero skeleton instead looked harmless, but the hook is
+       enabled by `!props.data` — a truthy skeleton switched the fetch off and
+       the report rendered zeros for every GA4 metric. */
+    const reportData = data || null;
     const clientProjects = [{ project, tracking, data: reportData }];
     const saveReport = (rep) => setCompany((c) => {
       const list = c.savedReports || [];

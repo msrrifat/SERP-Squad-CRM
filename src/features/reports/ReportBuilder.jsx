@@ -42,7 +42,12 @@ export function ReportBuilder(props) {
       <div className="text-[13px] font-medium text-gray-500">Pulling live data for this report…</div>
     </div>
   );
-  return <ReportBuilderInner {...props} data={props.data || live} />;
+  /* the resolved dataset has to reach the multi-project blocks too — they read
+     clientProjects, not the top-level data prop */
+  const resolved = props.data || live;
+  const clientProjects = (props.clientProjects || []).map((cp) =>
+    (cp.project?.id === props.project?.id ? { ...cp, data: resolved } : cp));
+  return <ReportBuilderInner {...props} data={resolved} clientProjects={clientProjects} />;
 }
 
 /* ---- one failing block must not take the report (or the app) down --------
@@ -220,7 +225,28 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   const [coverBusiness, setCoverBusiness] = useState(project.name);
   const [coverAddress, setCoverAddress] = useState(projAddress);
   const [coverSite, setCoverSite] = useState(project.website || "");
-  const [coverDuration, setCoverDuration] = useState(template === "work" ? new Date().toLocaleDateString("en", { month: "long", year: "numeric" }) : `${LABELS[0]} – ${LABELS[12]}`);
+  /* The cover's reporting period describes the SELECTED range, so it follows
+     the date picker instead of being frozen at whatever it was when the report
+     was first opened. A range covering exactly one calendar month reads as
+     "July 2026"; anything else spells out both ends. Typing over it marks it as
+     yours and the automatic updates stop. */
+  const periodFromRange = () => {
+    const startsMonth = startD.getDate() === 1;
+    const endsMonth = endD.getDate() === new Date(endD.getFullYear(), endD.getMonth() + 1, 0).getDate();
+    const sameMonth = startD.getFullYear() === endD.getFullYear() && startD.getMonth() === endD.getMonth();
+    if (sameMonth && startsMonth && endsMonth) return endD.toLocaleDateString("en", { month: "long", year: "numeric" });
+    const d = (x) => x.toLocaleDateString("en", { day: "numeric", month: "short" });
+    const sameYear = startD.getFullYear() === endD.getFullYear();
+    return sameYear
+      ? `${d(startD)} – ${d(endD)}, ${endD.getFullYear()}`
+      : `${d(startD)}, ${startD.getFullYear()} – ${d(endD)}, ${endD.getFullYear()}`;
+  };
+  const [coverDuration, setCoverDuration] = useState(periodFromRange);
+  const [coverDurationEdited, setCoverDurationEdited] = useState(false);
+  useEffect(() => {
+    if (!coverDurationEdited) setCoverDuration(periodFromRange());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.start, range.end, coverDurationEdited]);
   const [coverBadge, setCoverBadge] = useState(template === "work" ? "Work Report" : "SEO Report");
   const [coverLogo, setCoverLogo] = useState(null); // overrides the project icon on the cover
   const brand = brandMode === "wl" && wlBrand ? wlBrand
@@ -1914,7 +1940,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   <input value={coverAddress} onChange={(e) => setCoverAddress(e.target.value)} placeholder="123 Main St, City" className={inputCls + " w-52"} />
                 </Labeled>
                 <Labeled label="Cover — report duration">
-                  <input value={coverDuration} onChange={(e) => setCoverDuration(e.target.value)} className={inputCls + " w-52"} />
+                  <input value={coverDuration} onChange={(e) => { setCoverDurationEdited(true); setCoverDuration(e.target.value); }} className={inputCls + " w-52"} />
                 </Labeled>
                 <Labeled label="Cover — customer logo / icon">
                   <LogoUpload value={coverLogo} onChange={setCoverLogo} label="Upload customer logo" />
@@ -1979,7 +2005,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
               <div className="flex items-end justify-between border-t px-10 py-7" style={{ borderColor: accent + "22" }}>
                 <div>
                   <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Reporting period</div>
-                  <input value={coverDuration} onChange={(e) => setCoverDuration(e.target.value)}
+                  <input value={coverDuration} onChange={(e) => { setCoverDurationEdited(true); setCoverDuration(e.target.value); }}
                     className="ll-mono w-56 border-0 bg-transparent text-[13px] font-semibold text-gray-700 outline-none" />
                 </div>
                 <div className="text-right">
