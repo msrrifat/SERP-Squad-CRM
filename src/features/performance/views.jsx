@@ -1708,7 +1708,9 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
                 <div className="space-y-2.5">
                   {sources.map((x, i) => (
                     <div key={i} className="flex items-center gap-3">
-                      <span className="w-16 shrink-0 text-[12.5px] font-medium text-gray-700">{x.name}</span>
+                      {/* wide enough for real source names, and truncating
+                          rather than wrapping so every row stays one line */}
+                      <span className="w-28 shrink-0 truncate text-[12.5px] font-medium text-gray-700" title={x.name}>{x.name}</span>
                       <span className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
                         <span className="block h-full rounded-full" style={{ width: `${(x.value / maxSource) * 100}%`, background: x.name === "ChatGPT" ? "#7C3AED" : accent }} />
                       </span>

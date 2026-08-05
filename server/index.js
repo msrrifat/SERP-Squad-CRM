@@ -653,7 +653,11 @@ async function handleGa4Report(body) {
       requests: [
         { dateRanges: range, dimensions: [{ name: "date" }], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "conversions" }, { name: "engagementRate" }], orderBys: [{ dimension: { dimensionName: "date" } }], limit: 400 },
         { dateRanges: range, dimensions: [{ name: "sessionDefaultChannelGroup" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 8 },
-        { dateRanges: cmpRange, dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 60 },
+        /* the rows cover TWO date ranges and several source/medium pairs
+           collapse into one display name, so the fetch has to be comfortably
+           wider than the 15 that are kept or the ranking is decided by a
+           truncated list */
+        { dateRanges: cmpRange, dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }], orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 150 },
         { dateRanges: range, dimensions: [{ name: "date" }, { name: "eventName" }], metrics: [{ name: "eventCount" }], limit: 5000 },
         { dateRanges: range, dimensions: [{ name: "landingPage" }], metrics: [{ name: "activeUsers" }, { name: "conversions" }], orderBys: [{ metric: { metricName: "activeUsers" }, desc: true }], limit: 10 },
       ],
@@ -680,7 +684,9 @@ async function handleGa4Report(body) {
       if (prevPeriod) e.prev += v; else e.value += v;
       srcMap.set(name, e);
     });
-    const sources = [...srcMap.values()].sort((a, b) => b.value - a.value).slice(0, 8);
+    /* top 15 — enough that the long tail of smaller referrers is visible
+       rather than collapsing into whatever the biggest eight were */
+    const sources = [...srcMap.values()].sort((a, b) => b.value - a.value).slice(0, 15);
 
     const evMap = new Map();
     (rEvt?.rows || []).forEach((r) => {
