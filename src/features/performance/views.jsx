@@ -743,6 +743,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               });
               if (!sr.ok) throw new Error(await sr.text());
               const st = await sr.json();
+              if (st.busy) continue;                      // another pass is collecting
               /* results land as they arrive, so a long batch fills the table
                  progressively instead of showing nothing until the end */
               const fresh = (st.updated || []).filter((u) => !seen.has(u.id));
@@ -791,17 +792,34 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         for (let i = 0; i < retryList.length; i += CHUNK) {
           const chunk = retryList.slice(i, i + CHUNK);
           try {
-            const res = await fetch("/api/rerun", {
+            /* the retry goes through the SAME queue-backed path as the main
+               run — the old blocking endpoint reintroduced the eight-minute
+               deadline for exactly the keywords that were already slow */
+            const creds2 = dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined;
+            const res = await fetch("/api/rank/start", {
               method: "POST", headers: { "Content-Type": "application/json" },
-              signal: AbortSignal.timeout(660000),
-              body: JSON.stringify({ entries: chunk, dfs: dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined }),
+              signal: AbortSignal.timeout(120000),
+              body: JSON.stringify({ entries: chunk, dfs: creds2, depth: 100 }),
             });
             if (res.ok) {
-              const data = await res.json();
-              const ups = data.updated.filter((u) => !u.error).map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }));
-              if (ups.length) onRerun?.(ups);
-              ok += ups.length;
-              failedFinal.push(...data.updated.filter((u) => u.error));
+              const { jobId } = await res.json();
+              const seen2 = new Set();
+              for (let poll = 0; ; poll++) {
+                await new Promise((r) => setTimeout(r, poll === 0 ? 6000 : 10000));
+                const sr = await fetch("/api/rank/status", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  signal: AbortSignal.timeout(120000),
+                  body: JSON.stringify({ jobId, dfs: creds2 }),
+                });
+                if (!sr.ok) throw new Error(await sr.text());
+                const stt = await sr.json();
+                if (stt.busy) continue;                   // another pass is collecting
+                const fresh = (stt.updated || []).filter((u) => !seen2.has(u.id));
+                fresh.forEach((u) => seen2.add(u.id));
+                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }))); ok += fresh.length; }
+                setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
+                if (!stt.pending) { failedFinal.push(...(stt.errors || [])); break; }
+              }
             } else failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: `HTTP ${res.status}` })));
           } catch (e2) { failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: String(e2?.message || e2).slice(0, 100) }))); }
         }

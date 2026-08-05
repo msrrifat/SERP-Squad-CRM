@@ -2566,6 +2566,7 @@ const SE_DOMAINS = {
    (SEO Utils works the same way — it records every posted task in its own
    database and keeps collecting in the background.) ---- */
 const RANK_DIR = new URL("./data/rank-jobs/", import.meta.url);
+const rankLocks = new Set();          // job ids currently being collected
 const rankJobPath = (id) => new URL(`${String(id).replace(/[^a-z0-9-]/gi, "")}.json`, RANK_DIR);
 const loadJob = (id) => { try { return JSON.parse(readFileSync(rankJobPath(id), "utf8")); } catch { return null; } };
 const saveJob = (job) => {
@@ -2814,6 +2815,8 @@ async function handleRankStart(body) {
         entryId: e.id, keyword: e.keyword, domain: e.domain, engine,
         location: loc(e)?.name || null, locationCode: loc(e)?.code || null,
         precision: loc(e)?.precision || "unverified",
+        /* kept so a task whose result is lost can be re-run identically */
+        task: tasks[i],
         taskId: p.taskId || null, error: p.error || null, result: null,
       });
     });
@@ -2833,17 +2836,41 @@ async function handleRankStatus(body) {
   const job = loadJob(body?.jobId || "");
   if (!job) return [404, { error: "unknown_job", detail: "That rank check is no longer on the server." }];
 
-  const pending = job.items.filter((x) => x.taskId && !x.result && !x.error);
-  if (pending.length) {
-    await pool(pending, async (item) => {
-      const got = await dfsTaskGet(creds, item.engine + "/organic", item.taskId);
-      if (!got) return;                                   // still queued — ask again later
-      if (got.error) { item.error = got.error; return; }
-      const { position, url, mapPos, packShown } = parseSerpRank(got.task, item.domain);
-      item.result = { position, url, mapPos, packShown };
-    }, 8);
-    saveJob(job);
-  }
+  /* one collection at a time per job. Two overlapping passes would both fetch
+     the same task, and DataForSEO hands a result out ONCE — the second caller
+     gets 40601 and the keyword looks failed when it actually succeeded. */
+  if (rankLocks.has(job.id)) return [202, { live: true, jobId: job.id, busy: true, total: job.items.length,
+    done: job.items.filter((x) => x.result || x.error).length,
+    pending: job.items.filter((x) => !x.result && !x.error).length, updated: [], errors: [] }];
+  rankLocks.add(job.id);
+  try {
+    const pending = job.items.filter((x) => x.taskId && !x.result && !x.error);
+    if (pending.length) {
+      await pool(pending, async (item) => {
+        const got = await dfsTaskGet(creds, item.engine + "/organic", item.taskId);
+        if (!got) return;                                 // still queued — ask again later
+        if (got.error) {
+          /* 40601 "Task Handed" means the result was already delivered — to
+             another poll, or to anything else sharing this DataForSEO account.
+             The data cannot be fetched twice, so the only correct answer is to
+             run the check again. Once, live, so it definitely comes back. */
+          if (/40601|handed/i.test(got.error) && !item.recovered && item.task) {
+            item.recovered = "live";
+            try {
+              const t = await dfsLive(creds, item.engine + "/organic", item.task);
+              const { position, url, mapPos, packShown } = parseSerpRank(t, item.domain);
+              item.result = { position, url, mapPos, packShown };
+              return;
+            } catch (e2) { item.error = `recovery failed: ${String(e2?.message || e2).slice(0, 120)}`; return; }
+          }
+          item.error = got.error; return;
+        }
+        const { position, url, mapPos, packShown } = parseSerpRank(got.task, item.domain);
+        item.result = { position, url, mapPos, packShown };
+      }, 8);
+      saveJob(job);
+    }
+  } finally { rankLocks.delete(job.id); }
   const done = job.items.filter((x) => x.result || x.error);
   return [200, { live: true, jobId: job.id, total: job.items.length,
     done: done.length, pending: job.items.length - done.length,
