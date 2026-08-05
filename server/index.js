@@ -2597,11 +2597,41 @@ async function dfsPost(creds, pathSeg, tasks) {
       if (!(idx >= 0 && idx < tasks.length)) continue;
       /* 20100 = created. Anything else failed at creation, which DataForSEO
          does not bill for — surfaced so it is not silently retried forever. */
-      out[idx] = t.status_code === 20100 ? { taskId: t.id } : { error: `task ${t.status_code}: ${t.status_message}` };
+      /* `reused` = DataForSEO handed back an older task instead of creating one.
+         It was refunded, so it is not billed, and it will never yield a fresh
+         result — the caller has to get this keyword another way. */
+      out[idx] = t.status_code === 20100
+        ? { taskId: t.id, reused: taskAgeMin(t.id) > REUSED_AFTER_MIN }
+        : { error: `task ${t.status_code}: ${t.status_message}` };
     }
   }
   return out;
 }
+
+/* ---- DUPLICATE-TASK DETECTION ==========================================
+   DataForSEO de-duplicates SERP tasks: post one whose parameters match a task
+   posted recently and you do NOT get a new task — you get the ORIGINAL task's
+   id back, and the charge is refunded. If that original was already collected,
+   every task_get on it answers "40601: Task Handed", forever. Re-posting can
+   never fix it, because re-posting is what produces the stale id.
+
+   That is the whole of "All 32 scans failed — task 40601". Measured on the
+   live account: two tasks posted at 21:27 came back as ids created at 17:04,
+   with cost -0.00045 (a refund), and were handed within eight seconds.
+
+   A task id begins with MMDDHHMM in UTC, so the id itself says when the task
+   was really created. Anything not created just now is a re-used one. */
+function taskAgeMin(taskId) {
+  const m = /^(\d{2})(\d{2})(\d{2})(\d{2})-/.exec(String(taskId || ""));
+  if (!m) return 0;                                   // unparseable — treat as fresh
+  const [, mo, dd, hh, mi] = m.map(Number);
+  const now = new Date();
+  let t = Date.UTC(now.getUTCFullYear(), mo - 1, dd, hh, mi);
+  /* no year in the id: if that lands in the future, it belongs to last year */
+  if (t - now.getTime() > 36e5) t = Date.UTC(now.getUTCFullYear() - 1, mo - 1, dd, hh, mi);
+  return Math.round((now.getTime() - t) / 60000);
+}
+const REUSED_AFTER_MIN = 15;                          // queue tasks start within minutes
 
 /* fetch one task if it is finished; null means "still in the queue" */
 async function dfsTaskGet(creds, pathSeg, taskId) {
@@ -2824,16 +2854,22 @@ async function handleRankStart(body) {
         /* kept so a task whose result is lost can be re-run identically */
         task: tasks[i],
         taskId: p.taskId || null, error: p.error || null, result: null,
+        /* the queue gave us a stale task — only a live call can answer this one */
+        reused: !!p.reused,
       });
     });
   }
-  const posted = job.items.filter((x) => x.taskId).length;
+  const posted = job.items.filter((x) => x.taskId && !x.reused).length;
   job.billedTasks = posted;          // tasks that were actually created, i.e. paid for
+  job.liveTasks = 0;
   saveJob(job);
   return [200, { live: true, jobId: job.id, total: job.items.length, posted,
     failedToPost: job.items.length - posted,
     /* how many are actually targeted at the town asked for */
-    cityPrecise: job.items.filter((x) => x.precision === "city").length }];
+    cityPrecise: job.items.filter((x) => x.precision === "city").length,
+    /* keywords DataForSEO refused to re-queue because it had just run them —
+       they get a live check instead, which costs more and is worth saying */
+    reused: job.items.filter((x) => x.reused).length }];
 }
 
 /* collect whatever has finished. Safe to call repeatedly, forever. */
@@ -2865,23 +2901,19 @@ async function handleRankStatus(body) {
         item.result = { position, absPos, url, mapPos, packShown };
         if (++dirty >= 5) { dirty = 0; saveJob(job); }
       };
-      const requeue = [];
+      /* a keyword the queue cannot answer has to be run live. Re-POSTING it is
+         useless — DataForSEO would just hand back the same stale task again,
+         which is the loop that produced "All 32 scans failed". The live
+         endpoint always executes, so it is the only way out; it costs more,
+         so it happens at most once per keyword and is reported separately. */
+      const liveNeeded = [];
       await pool(pending, async (item) => {
+        /* a re-used task was never going to produce anything — do not even ask */
+        if (item.reused) { liveNeeded.push(item); return; }
         const got = await dfsTaskGet(creds, item.engine + "/organic", item.taskId);
         if (!got) return;                                 // still queued — ask again later
         if (got.error) {
-          /* 40601 "Task Handed" = this result was already delivered once and
-             cannot be fetched again. The check has to be run afresh — but
-             through the STANDARD QUEUE it was posted on, not the live endpoint.
-             Live advanced is $0.002 per 10 results, so at depth 100 a "recovery"
-             cost $0.02 against a $0.006 original: recovering a batch quietly
-             tripled the bill the estimate had promised. Re-queueing costs
-             exactly what the first attempt did. */
-          if (/40601|handed/i.test(got.error) && !item.recovered && item.task) {
-            item.recovered = "requeued";
-            requeue.push(item);
-            return;
-          }
+          if (/40601|handed/i.test(got.error) && !item.recovered && item.task) { liveNeeded.push(item); return; }
           item.error = got.error;
           /* a task that never got created was never billed, so it is safe for
              the client to try again; a handed/failed one has already been paid */
@@ -2891,22 +2923,18 @@ async function handleRankStatus(body) {
         land(item, got.task);
       }, 8);
 
-      /* one batched re-post for everything that was handed out from under us */
-      if (requeue.length) {
-        for (const engine of ["google", "bing"]) {
-          const mine = requeue.filter((x) => x.engine === engine);
-          if (!mine.length) continue;
+      if (liveNeeded.length) {
+        await pool(liveNeeded, async (item) => {
+          item.recovered = "live";
           try {
-            const posted = await dfsPost(creds, engine + "/organic", mine.map((x) => x.task));
-            mine.forEach((x, i) => {
-              const p = posted[i] || { error: "no response for this task" };
-              if (p.taskId) { x.taskId = p.taskId; job.billedTasks = (job.billedTasks || 0) + 1; }
-              else { x.error = p.error; x.retryable = true; }   // creation failures are not billed
-            });
+            const t = await dfsLive(creds, item.engine + "/organic", item.task);
+            job.liveTasks = (job.liveTasks || 0) + 1;
+            land(item, t);
           } catch (e2) {
-            mine.forEach((x) => { x.error = `re-queue failed: ${String(e2?.message || e2).slice(0, 100)}`; x.retryable = true; });
+            item.error = `live re-check failed: ${String(e2?.message || e2).slice(0, 110)}`;
+            item.retryable = true;                        // a failed live call is not billed
           }
-        }
+        }, 6);
       }
       saveJob(job);
     }
@@ -2920,7 +2948,7 @@ async function handleRankStatus(body) {
     })),
     /* what this job has actually put on the DataForSEO bill, in the same units
        the pre-scan estimate is quoted in — so the two can be compared */
-    billedTasks: job.billedTasks || 0, depth: job.depth,
+    billedTasks: job.billedTasks || 0, liveTasks: job.liveTasks || 0, depth: job.depth,
     errors: job.items.filter((x) => x.error).map((x) => ({
       id: x.entryId, keyword: x.keyword, error: x.error,
       /* only errors that were never billed are worth the client re-running */

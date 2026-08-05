@@ -714,7 +714,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       const CHUNK = 25;
       const chunks = [];
       for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
-      let ok = 0, applied = 0, live = false, billed = 0, depthUsed = 100;
+      let ok = 0, applied = 0, live = false, billed = 0, liveBilled = 0, depthUsed = 100;
       const failed = [];
       for (let ci = 0; ci < chunks.length; ci++) {
         const chunk = chunks[ci];
@@ -748,11 +748,21 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                  progressively instead of showing nothing until the end */
               const fresh = (st.updated || []).filter((u) => !seen.has(u.id));
               fresh.forEach((u) => seen.add(u.id));
-              if (fresh.length) onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })));
+              /* count them HERE. `updates` stays empty on this path because the
+                 rows were already applied as they arrived, so the old
+                 `ok += updates.length` below could never move off zero — a scan
+                 where 24 of 32 keywords came back perfectly still reported
+                 "All 32 scans failed" and quoted the first error as if it were
+                 every keyword's. */
+              if (fresh.length) {
+                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })));
+                ok += fresh.length;
+              }
               setProgress({ done: applied + st.done, total: entries.length,
                 note: st.pending ? `${st.done}/${st.total} back · ${st.pending} still in Google's queue (${Math.round(st.ageSec / 60)}m)` : undefined });
               if (!st.pending) {
-                billed += st.billedTasks || 0; depthUsed = st.depth || depthUsed;
+                billed += st.billedTasks || 0; liveBilled += st.liveTasks || 0;
+                depthUsed = st.depth || depthUsed;
                 failed.push(...(st.errors || [])); break;
               }
             }
@@ -829,7 +839,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 fresh.forEach((u) => seen2.add(u.id));
                 if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }))); ok += fresh.length; }
                 setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
-                if (!stt.pending) { billed += stt.billedTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
+                if (!stt.pending) { billed += stt.billedTasks || 0; liveBilled += stt.liveTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
               }
             } else failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: `HTTP ${res.status}` })));
           } catch (e2) { failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: String(e2?.message || e2).slice(0, 100) }))); }
@@ -842,7 +852,8 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       return { ok, failed: failedFinal.length, firstError: failedFinal[0] ? `${failedFinal[0].keyword ? failedFinal[0].keyword + ": " : ""}${String(failedFinal[0].error || "").slice(0, 120)}` : null, live,
         /* what DataForSEO actually charged, so it can be checked against the
            estimate on the button instead of discovered on the invoice */
-        billed, spend: live && billed ? dfsCost(billed, "organicQueue", depthUsed) : 0 };
+        billed, liveBilled,
+        spend: live ? dfsCost(billed, "organicQueue", depthUsed) + dfsCost(liveBilled, "organic", depthUsed) : 0 };
     });
     if (started) setSelected(new Set());
   };
@@ -1043,7 +1054,10 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
                       {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}
                       {/* the actual bill, next to the result — no more finding out on the invoice */}
-                      {rerunResult.spend > 0 && <span className="ll-mono ml-1 opacity-70">Charged {fmtDfsCost(rerunResult.spend)} ({rerunResult.billed} task{rerunResult.billed > 1 ? "s" : ""}).</span>}</>}
+                      {rerunResult.spend > 0 && <span className="ll-mono ml-1 opacity-70">
+                        Charged {fmtDfsCost(rerunResult.spend)} ({rerunResult.billed} queued{rerunResult.liveBilled > 0 ? ` + ${rerunResult.liveBilled} live` : ""}).</span>}
+                      {rerunResult.liveBilled > 0 && <span className="ml-1 opacity-70">
+                        {rerunResult.liveBilled} keyword{rerunResult.liveBilled > 1 ? "s were" : " was"} checked live — DataForSEO had already run the same check recently and would not queue it again.</span>}</>}
               </span>
               <button onClick={() => clearScanJob(jobKey)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
             </div>
