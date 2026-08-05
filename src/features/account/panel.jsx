@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, Camera, CheckCircle2, ClipboardList, Hash, KeyRound,
   MessageSquare, Moon, Shield, Sun, Trash2, User, Users,
 } from "lucide-react";
-import { Ava, Card, Toggle, inputCls } from "../../ui/primitives.jsx";
+import { askDelete, Ava, Card, inputCls, Toggle } from "../../ui/primitives.jsx";
 import { relTime, todayISO } from "../../lib/format.jsx";
 import { MessageThread } from "../chat/thread.jsx";
 
@@ -413,7 +413,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                       </label>
                     ))}
                   </div>
-                  <button onClick={() => { if (confirm(`Delete group "${selGrp.name}"?`)) { onDeleteGroup(selGrp.id); setSel(null); setManage(false); } }}
+                  <button onClick={async () => { if (await askDelete(`the group "${selGrp.name}"`)) { onDeleteGroup(selGrp.id); setSel(null); setManage(false); } }}
                     className="mt-2 w-full rounded-lg border border-red-200 py-1.5 text-[11px] font-semibold text-red-500 hover:bg-red-50">Delete group</button>
                 </div>
               )}

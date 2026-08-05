@@ -231,7 +231,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
                     <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                       <span className="flex items-center justify-end gap-1.5">
                         <button onClick={() => openSaved(s)} className="rounded-md px-2 py-1 text-[10.5px] font-bold" style={{ background: accent + "14", color: accent }}>Open — no credits</button>
-                        <button onClick={() => askDelete(`the saved search "${s.seed}"`) && onUpdateCompany?.({ kwSearches: (company.kwSearches || []).filter((x) => x.id !== s.id) })} className="rounded-md p-1 text-gray-300 hover:text-red-500"><X size={12} /></button>
+                        <button onClick={async () => { if (await askDelete(`the saved search "${s.seed}"`)) onUpdateCompany?.({ kwSearches: (company.kwSearches || []).filter((x) => x.id !== s.id) }); }} className="rounded-md p-1 text-gray-300 hover:text-red-500"><X size={12} /></button>
                       </span>
                     </td>
                   </tr>

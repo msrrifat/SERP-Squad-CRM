@@ -1849,7 +1849,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           </button>
           <DarkToggle dark={dark} setDark={setDark} />
           {onSaveTemplate && (
-            <button onClick={() => { const n = prompt("Save these sections as a reusable template. Template name:", title.replace(project.name + " — ", "") + " template"); if (n) { onSaveTemplate({ name: n, blocks }); setSaved("template"); setTimeout(() => setSaved(null), 2000); } }}
+            <button onClick={async () => { const n = await askInput({ title: "Save as template", message: "Save these sections as a reusable template.", value: title.replace(project.name + " — ", "") + " template", placeholder: "Template name", confirmLabel: "Save template" }); if (n) { onSaveTemplate({ name: n, blocks }); setSaved("template"); setTimeout(() => setSaved(null), 2000); } }}
               className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
               <Copy size={14} /> Save as template
             </button>

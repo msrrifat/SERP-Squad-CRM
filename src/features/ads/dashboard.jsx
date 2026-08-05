@@ -7,7 +7,7 @@ import {
   ArrowLeft, ChevronDown, ChevronRight, Copy, Megaphone, Pause, Play, Plus,
   Rocket, Sparkles, Target, Trash2, Wand2, X,
 } from "lucide-react";
-import { Card, GuideTip, Labeled, Modal, Seg, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
+import { askDelete, askDisconnect, Card, GuideTip, inputCls, Labeled, Modal, Seg, tooltipStyle } from "../../ui/primitives.jsx";
 import { API_GUIDES } from "../../data/apiGuides.js";
 import { fmt, uid } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -378,7 +378,7 @@ export function AdsView({ project, accent, onUpdate, log, company, aiConfig }) {
                         )}
                         <button title="Duplicate" onClick={() => patchAds((cur) => ({ campaigns: [{ ...c, id: uid(), name: c.name + " (copy)", status: "draft", createdAt: Date.now(), launchedAt: null }, ...cur.campaigns] }))}
                           className="rounded-lg border border-gray-200 p-1.5 text-gray-400 hover:text-gray-700"><Copy size={11} /></button>
-                        <button title="Delete" onClick={() => confirm(`Delete campaign "${c.name}"?`) && patchAds((cur) => ({ campaigns: cur.campaigns.filter((x) => x.id !== c.id) }))}
+                        <button title="Delete" onClick={async () => { if (await askDelete(`the campaign "${c.name}"`)) patchAds((cur) => ({ campaigns: cur.campaigns.filter((x) => x.id !== c.id) })); }}
                           className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
                       </div>
                     </td>
@@ -397,7 +397,7 @@ export function AdsView({ project, accent, onUpdate, log, company, aiConfig }) {
         <ConnectAdsModal platform={connecting} project={project} company={company} accent={accent}
           current={ads.accounts?.[connecting]}
           onConnect={(acct) => { patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: acct } })); setConnecting(null); log?.(`Connected ${AD_PLATFORMS[connecting].label}`, acct.name); }}
-          onDisconnect={() => { if (!askDisconnect(`the ${AD_PLATFORMS[connecting].label} ad account`)) return; patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: null } })); setConnecting(null); }}
+          onDisconnect={async () => { if (!await askDisconnect(`the ${AD_PLATFORMS[connecting].label} ad account`)) return; patchAds((cur) => ({ accounts: { ...(cur.accounts || {}), [connecting]: null } })); setConnecting(null); }}
           onClose={() => setConnecting(null)} />
       )}
       {wizard && (

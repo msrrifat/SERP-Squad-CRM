@@ -15,7 +15,7 @@ import {
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
-import { Ava, BrandMark, DarkToggle, FONT_CSS, GoTopButton, Modal, ProjectMark } from "./ui/primitives.jsx";
+import { Ava, BrandMark, DarkToggle, DialogHost, FONT_CSS, GoTopButton, Modal, ProjectMark } from "./ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
 import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
@@ -900,16 +900,16 @@ export default function App() {
      set the screen from /company or /tools — so the GATE lives here, where it
      can't be walked around by typing an address */
   if (screen === "company" && isAdmin) {
-    return <Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
+    return <><DialogHost accent={accent} /><Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy></>;
   }
   if (screen === "tools" && isAdmin) {
-    return <Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}
+    return <><DialogHost accent={accent} /><Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}
       placesKey={company.apis?.googlePlaces?.values?.apiKey} dfs={company.dfs}
       clients={visibleClients}
       onUpdateProjectById={(cid, pid, patch) => setClients((cs) => cs.map((c) => c.id !== cid ? c : {
         ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
       }))}
-      onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy>;
+      onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy></>;
   }
   if (screen === "login") {
     return <Lazy><LoginScreen company={company} dark={dark} onAuthed={onAuthed} /></Lazy>;
@@ -955,6 +955,7 @@ export default function App() {
     const saveTemplate = (tpl) => setCompany((c) => ({ ...c, reportTemplates: [{ id: "tpl" + Date.now(), name: tpl.name, blocks: tpl.blocks, createdAt: Date.now() }, ...(c.reportTemplates || [])] }));
     return (
       <>
+        <DialogHost accent={accent} />
         <Lazy><ReportBuilder key={"rb" + (reportAi?.run || 0) + (showReport.savedId || showReport.key || "new")} project={project} data={reportData} tracking={tracking} clientProjects={clientProjects} records={project.records || []} template={showReport.template || "performance"} initialBlocks={showReport.initialBlocks || null} initialTitle={showReport.initialTitle || null} initialRange={showReport.initialRange || null} agencyBrand={agencyBrand} wlBrand={wlBrand} clientInfo={clientInfo} defaultCmp={cmp} dark={dark} setDark={setDark} aiSummary={reportAi?.summary || null} onSave={saveReport} onSaveTemplate={saveTemplate} onClose={() => { setShowReport(null); setReportAi(null); }} /></Lazy>
         {agentEnabled && (
           <React.Suspense fallback={null}>
@@ -1008,6 +1009,9 @@ export default function App() {
   return (
     <div className={`ll-root ${dark ? "ll-dark" : ""} flex min-h-screen items-stretch bg-[#F5F6F8]`} style={{ "--accent": accent }}>
       <style>{FONT_CSS}</style>
+      {/* confirmations and prompts render here, inside the app, instead of as
+          the browser's own "app.serpsquad.com says" box */}
+      <DialogHost accent={accent} />
       {sbCss && <style>{sbCss}</style>}
 
       {/* Sidebar */}

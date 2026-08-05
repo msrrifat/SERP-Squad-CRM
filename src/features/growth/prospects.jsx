@@ -264,7 +264,7 @@ export function ProspectList({ accent, growth, commit, emptyHint = null }) {
                       {busyId === c.id ? <RefreshCw size={10} className="animate-spin" /> : <AtSign size={10} />} Scrape email
                     </button>
                   )}
-                  <button onClick={() => askDelete(`the prospect "${c.name}"`) && commit((g) => ({ contacts: (g.contacts || []).filter((x) => x.id !== c.id) }))} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+                  <button onClick={async () => { if (await askDelete(`the prospect "${c.name}"`)) commit((g) => ({ contacts: (g.contacts || []).filter((x) => x.id !== c.id) })); }} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                 </span>
               </div>
               <div className="mt-1 grid gap-x-4 gap-y-0.5 text-[11px] text-gray-500 sm:grid-cols-2">

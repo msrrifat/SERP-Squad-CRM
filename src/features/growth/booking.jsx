@@ -106,7 +106,7 @@ export function BookingsTab({ accent, company, store, commit }) {
               </span>
               <span className="ml-auto flex items-center gap-2 text-[11px]">
                 {b.date && <span className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700">{new Date(b.date).toLocaleDateString("en", { month: "short", day: "numeric" })} · {b.slot?.split(" (")[0]}</span>}
-                <span onClick={(e) => { e.stopPropagation(); if (askDelete("this booking")) commit({ bookings: bookings.filter((x) => x.id !== b.id) }); }} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></span>
+                <span onClick={async (e) => { e.stopPropagation(); if (await askDelete("this booking")) commit({ bookings: bookings.filter((x) => x.id !== b.id) }); }} className="rounded-md p-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></span>
               </span>
             </button>
           ))}

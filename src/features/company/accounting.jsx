@@ -361,7 +361,7 @@ function MonthView({ month, fin, setFin, clients, visibleClients, hidden, accent
                 <div className="flex shrink-0 items-center gap-1.5">
                   <span className="ll-mono text-[16px] font-bold" style={{ color: profit >= 0 ? POS : NEG }}>{profit >= 0 ? "+" : ""}{money(profit)}</span>
                   <button title="Remove this client from accounting"
-                    onClick={() => { if (askDelete(`${c.name} from accounting (its recorded entries stay)`)) setFin({ hiddenClients: [...(fin.hiddenClients || []), c.id] }); }}
+                    onClick={async () => { if (await askDelete(`${c.name} from accounting (its recorded entries stay)`)) setFin({ hiddenClients: [...(fin.hiddenClients || []), c.id] }); }}
                     className="text-gray-300 opacity-0 hover:text-red-500 group-hover/card:opacity-100"><X size={13} /></button>
                 </div>
               </div>
@@ -377,7 +377,7 @@ function MonthView({ month, fin, setFin, clients, visibleClients, hidden, accent
                     <span className="ll-mono font-semibold" style={{ color: e.type === "earning" ? POS : NEG }}>
                       {e.type === "earning" ? "+" : "−"}{money(e.amount)}
                     </span>
-                    <button onClick={() => { if (askDelete(`the entry "${e.label}"`)) setFin((f) => ({ clientEntries: f.clientEntries.filter((x) => x.id !== e.id) })); }}
+                    <button onClick={async () => { if (await askDelete(`the entry "${e.label}"`)) setFin((f) => ({ clientEntries: f.clientEntries.filter((x) => x.id !== e.id) })); }}
                       className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
                   </div>
                 ))}
@@ -435,14 +435,14 @@ function MonthView({ month, fin, setFin, clients, visibleClients, hidden, accent
               <CategoryBlock key={cat.id} cat={cat} items={items} total={catTotal} accent={accent}
                 renaming={renaming === cat.id} onRename={(v) => { saveCategories(categories.map((x) => x.id === cat.id ? { ...x, name: v } : x)); setRenaming(null); }}
                 onStartRename={() => setRenaming(cat.id)} onCancelRename={() => setRenaming(null)}
-                onRemove={() => {
-                  if (!askDelete(`the section "${cat.name}"${items.length ? ` and its ${items.length} entr${items.length === 1 ? "y" : "ies"} this month` : ""}`)) return;
+                onRemove={async () => {
+                  if (!await askDelete(`the section "${cat.name}"${items.length ? ` and its ${items.length} entr${items.length === 1 ? "y" : "ies"} this month` : ""}`)) return;
                   saveCategories(categories.filter((x) => x.id !== cat.id));
                   setFin((f) => ({ universal: (f.universal || []).filter((e) => (e.categoryId || categories[0]?.id) !== cat.id) }));
                 }}
                 onAdd={(label, amount) => addUniversal(cat.id, label, amount)}
                 onPatch={(id, patch) => setFin((f) => ({ universal: f.universal.map((x) => x.id === id ? { ...x, ...patch } : x) }))}
-                onDelete={(id, label) => { if (askDelete(`the spending "${label}"`)) setFin((f) => ({ universal: f.universal.filter((x) => x.id !== id) })); }} />
+                onDelete={async (id, label) => { if (await askDelete(`the spending "${label}"`)) setFin((f) => ({ universal: f.universal.filter((x) => x.id !== id) })); }} />
             );
           })}
         </div>

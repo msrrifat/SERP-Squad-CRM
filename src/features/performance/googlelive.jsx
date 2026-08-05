@@ -141,8 +141,8 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
       const iv = setInterval(() => { if (popup?.closed) { clearInterval(iv); setConnecting(false); window.removeEventListener("message", onMsg); } }, 800);
     } catch (e) { setErr("API server unreachable — the OAuth flow runs there. " + (e?.message || "")); setConnecting(false); }
   };
-  const disconnect = () => {
-    if (!askDisconnect(`Google (Search Console & GA4${conn.email ? `, ${conn.email}` : ""}) from this project`)) return;
+  const disconnect = async () => {
+    if (!await askDisconnect(`Google (Search Console & GA4${conn.email ? `, ${conn.email}` : ""}) from this project`)) return;
     setConn({ connectionId: null, email: "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null);
   };
 

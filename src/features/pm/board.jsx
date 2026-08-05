@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { AssignPicker, Ava, Card, NEG, POS, inputCls, askDelete } from "../../ui/primitives.jsx";
+import { askConfirm, askDelete, AssignPicker, Ava, Card, inputCls, NEG, POS } from "../../ui/primitives.jsx";
 import { fmtDay, fmtTs2, relTime, todayISO } from "../../lib/format.jsx";
 import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
@@ -52,9 +52,9 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
   };
   const mutTask = (clId, tId, fn, actText) =>
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.map((t) => (t.id === tId ? fn(t) : t)) }), actText);
-  const delTask = (clId, tId, title) => {
+  const delTask = async (clId, tId, title) => {
     /* a task is typed-in work — never remove it on a single stray click */
-    if (!askDelete(`the task "${title || "this task"}"`)) return;
+    if (!await askDelete(`the task "${title || "this task"}"`)) return;
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.filter((t) => t.id !== tId) }), `deleted task "${title}"`);
   };
   const addComment = () => {
@@ -85,8 +85,8 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                     title={alreadyTemplate
                       ? "Already saved as a record template — manage it in the Record Templates tab"
                       : "Save this record's checklists & tasks as a reusable template — available in every project's Record Templates tab"}
-                    onClick={() => {
-                      const nm = prompt("Save as record template — template name:", record.name);
+                    onClick={async () => {
+                      const nm = await askInput({ title: "Save as record template", message: "Template name:", value: record.name, confirmLabel: "Save template" });
                       if (nm?.trim()) onSaveTemplate({
                         id: "tpl" + Date.now(), name: nm.trim(), savedAt: Date.now(),
                         checklists: record.checklists.map((c) => ({ name: c.name, tasks: c.tasks.map((t) => ({ title: t.title })) })),
@@ -518,11 +518,11 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
                 )}
                 {listMenu === list.id && (
                   <div className="absolute right-0 top-7 z-20 w-44 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl">
-                    <button onClick={() => { const nm = prompt("Rename list", list.name); if (nm?.trim()) setLists(lists.map((l) => (l.id === list.id ? { ...l, name: nm.trim() } : l))); setListMenu(null); }}
+                    <button onClick={async () => { const nm = await askInput({ title: "Rename list", message: "List name:", value: list.name, confirmLabel: "Rename" }); if (nm?.trim()) setLists(lists.map((l) => (l.id === list.id ? { ...l, name: nm.trim() } : l))); setListMenu(null); }}
                       className="block w-full px-3 py-1.5 text-left text-[12px] text-gray-700 hover:bg-gray-50">Rename list</button>
                     <button disabled={lists.length === 1}
-                      onClick={() => {
-                        if (!confirm(`Delete list "${list.name}"? Its records move to "${lists[0].id === list.id ? lists[1]?.name : lists[0].name}".`)) return;
+                      onClick={async () => {
+                        if (!await askConfirm({ title: "Delete list?", message: `Delete list "${list.name}"?`, note: `Its records move to "${lists[0].id === list.id ? lists[1]?.name : lists[0].name}".`, confirmLabel: "Yes, delete", danger: true })) return;
                         const fallback = (lists[0].id === list.id ? lists[1] : lists[0]).id;
                         setRecords(records.map((r) => (listIdOf(r) === list.id ? { ...r, listId: fallback } : r)));
                         setLists(lists.filter((l) => l.id !== list.id));
@@ -624,7 +624,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
                         className="shrink-0 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white" style={{ background: accent }}>Import</button>
                     )}
                     {perms.admin && onDeleteTemplate && (
-                      <button onClick={() => confirm(`Delete template "${tpl.name}" for all projects?`) && onDeleteTemplate(tpl.id)}
+                      <button onClick={async () => { if (await askConfirm({ title: "Delete template?", message: `Delete template "${tpl.name}" for all projects?`, confirmLabel: "Yes, delete", danger: true })) onDeleteTemplate(tpl.id); }}
                         title="Delete template" className="shrink-0 rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                     )}
                   </div>
@@ -649,7 +649,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
             log?.("Saved record template", tpl.name);
           } : null}
           onPatch={(patch) => setRecords(records.map((r) => (r.id === openRecord.id ? { ...r, ...patch } : r)))}
-          onDelete={() => { if (!askDelete(`the record "${openRecord.name}"`)) return; setRecords(records.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
+          onDelete={async () => { if (!await askDelete(`the record "${openRecord.name}"`)) return; setRecords(records.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
           onClose={() => setOpenId(null)} />
       )}
     </div>

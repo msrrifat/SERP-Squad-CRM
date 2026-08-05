@@ -689,7 +689,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
               {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "mapsQueue"))}</span></>}
             </button>
             <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
-            <button onClick={() => askDelete(`the report "${rp.name}" and all its snapshots`) && patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) }))} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+            <button onClick={async () => { if (await askDelete(`the report "${rp.name}" and all its snapshots`)) patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) })); }} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
           </Card>
         );
       })}
@@ -842,7 +842,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
                   a.download = `${rp.name} — snapshot ${new Date(snap.at).toISOString().slice(0, 10)}.csv`;
                   a.click();
                 }} className="block w-full px-3.5 py-2 text-left text-[12.5px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">⇓  Export current snapshot (CSV)</button>
-                <button disabled={!snap} onClick={() => { if (confirm("Delete this snapshot?")) { onDeleteSnapshot(snap.id); setSnapId(null); } }}
+                <button disabled={!snap} onClick={async () => { if (await askDelete("this snapshot")) { onDeleteSnapshot(snap.id); setSnapId(null); } }}
                   className="block w-full px-3.5 py-2 text-left text-[12.5px] text-red-500 hover:bg-red-50 disabled:opacity-40">🗑  Delete current snapshot</button>
               </div>
             )}

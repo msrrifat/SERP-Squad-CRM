@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { ACCENTS, Card, DateRangeBar, Delta, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, inputCls, tooltipStyle, useDraft, askDelete } from "../../ui/primitives.jsx";
+import { ACCENTS, askConfirm, askDelete, Card, DateRangeBar, Delta, inputCls, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
@@ -947,8 +947,8 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   </button>
                   {selected.size > 0 && !rerunning && <DfsCostChip requests={selected.size} kind="organicQueue" />}
                   {selected.size > 0 && (
-                    <button onClick={() => {
-                      if (!window.confirm(`Delete ${selected.size} tracked keyword${selected.size > 1 ? "s" : ""}? Their scan history is removed too.`)) return;
+                    <button onClick={async () => {
+                      if (!await askConfirm({ title: "Delete tracked keywords?", message: `Delete ${selected.size} tracked keyword${selected.size > 1 ? "s" : ""}?`, note: "Their scan history is removed too. This can't be undone.", confirmLabel: "Yes, delete", danger: true })) return;
                       onDeleteMany ? onDeleteMany([...selected]) : [...selected].forEach((id) => onDelete(id));
                       setSelected(new Set());
                     }}
@@ -1059,7 +1059,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
                     </td>}
                     <td className="px-3 py-3 no-print">
-                      {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`) && onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
+                      {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`).then((ok) => { if (ok) onDelete(t.id); })} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
                     </td>
                   </tr>
                 ))}
@@ -1133,8 +1133,8 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         <span className="ml-auto text-[11px] font-semibold" style={{ color: accent }}>{open ? "Hide keywords ▲" : "View keywords ▼"}</span>
                       </button>
                       {!readOnly && (
-                        <button onClick={() => {
-                          if (!window.confirm(`Delete ALL ${arr.length} tracked keyword${arr.length > 1 ? "s" : ""} for ${cl}? Their scan history is removed too.`)) return;
+                        <button onClick={async () => {
+                          if (!await askConfirm({ title: "Delete tracked keywords?", message: `Delete ALL ${arr.length} tracked keyword${arr.length > 1 ? "s" : ""} for ${cl}?`, note: "Their scan history is removed too. This can't be undone.", confirmLabel: "Yes, delete", danger: true })) return;
                           const ids = arr.map((t) => t.id);
                           onDeleteMany ? onDeleteMany(ids) : ids.forEach((id) => onDelete(id));
                           if (open) setOpenCity(null);
@@ -1165,7 +1165,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                               <td className="px-3 py-2 text-[11px] text-gray-500">{t.device}</td>
                               <td className="px-3 py-2 text-[11px] text-gray-500">{t.reportingType === "Recurring" ? `every ${t.rerunDays}d` : "one time"}</td>
                               <td className="px-3 py-2 no-print">
-                                {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`) && onDelete(t.id)} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>}
+                                {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`).then((ok) => { if (ok) onDelete(t.id); })} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>}
                               </td>
                             </tr>
                           ))}

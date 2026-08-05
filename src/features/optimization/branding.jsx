@@ -340,7 +340,7 @@ function CustomLinks({ fam, br, set, accent }) {
             placeholder="Name" className={"w-36 shrink-0 " + inputCls} />
           <input value={row.url} onChange={(e) => save(rows.map((x) => (x.id === row.id ? { ...x, url: e.target.value } : x)))}
             placeholder="https://…" className={"ll-mono flex-1 " + inputCls} />
-          <button onClick={() => askDelete("this item") && save(rows.filter((x) => x.id !== row.id))} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+          <button onClick={() => askDelete("this item").then((ok) => { if (ok) save(rows.filter((x) => x.id !== row.id)); })} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
         </div>
       ))}
       <button onClick={() => save([...rows, { id: "cl" + Date.now(), name: "", url: "" }])}
@@ -568,7 +568,7 @@ function MediaTab({ br, set, accent }) {
                 onChange={(e) => set({ media: br.media.map((x) => (x.id === m.id ? { ...x, tag: e.target.value } : x)) })}
                 className="w-full border-0 bg-transparent text-[10.5px] text-gray-500 outline-none" />
             </div>
-            <button onClick={() => askDelete(`the media file "${m.name || "this file"}"`) && set({ media: br.media.filter((x) => x.id !== m.id) })}
+            <button onClick={async () => { if (await askDelete(`the media file "${m.name || "this file"}"`)) set({ media: br.media.filter((x) => x.id !== m.id) }); }}
               className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
           </div>
         ))}
@@ -686,7 +686,7 @@ function SitesTab({ br, set, accent, log, project, brandName, opt }) {
                       <span key={l} className="rounded bg-white px-1.5 py-0.5 text-[9.5px] font-medium text-emerald-700">{l}</span>
                     ))}
                   </div>
-                  <button onClick={() => { if (askDisconnect(`the ${pl.name} Web 2.0 site`)) patchSite(pl.key, { siteCreated: false, connected: false, credential: null }); }} className="text-[10px] text-emerald-600/70 hover:text-red-500">Disconnect</button>
+                  <button onClick={async () => { if (await askDisconnect(`the ${pl.name} Web 2.0 site`)) patchSite(pl.key, { siteCreated: false, connected: false, credential: null }); }} className="text-[10px] text-emerald-600/70 hover:text-red-500">Disconnect</button>
                 </div>
               )}
             </Card>
@@ -795,7 +795,7 @@ function BlockEditor({ blocks, onChange, media, accent, contentType }) {
     <span className="absolute -right-1 -top-2 hidden gap-0.5 rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm group-hover:flex">
       <button onClick={() => move(b.id, -1)} className="rounded p-0.5 text-gray-400 hover:bg-gray-50"><ChevronRight size={11} style={{ transform: "rotate(-90deg)" }} /></button>
       <button onClick={() => move(b.id, 1)} className="rounded p-0.5 text-gray-400 hover:bg-gray-50"><ChevronRight size={11} style={{ transform: "rotate(90deg)" }} /></button>
-      <button onClick={() => { if (askDelete("this item")) remove(b.id); }} className="rounded p-0.5 text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
+      <button onClick={async () => { if (await askDelete("this item")) remove(b.id); }} className="rounded p-0.5 text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
     </span>
   );
 

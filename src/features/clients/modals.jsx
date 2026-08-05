@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, ACCENTS, Ava, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, SaveBar, Toggle, inputCls, useDraft } from "../../ui/primitives.jsx";
+import { ACCENTS, askConfirm, askDisconnect, askInput, Ava, GuideTip, inputCls, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, SaveBar, Toggle, useDraft } from "../../ui/primitives.jsx";
 import { GoogleSourcesCard, ProjectDetailsCard, WidgetsCard } from "../performance/views.jsx";
 import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
 import { ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
@@ -216,14 +216,22 @@ export function ClientSettingsModal({ client, company, onChange, onUpdateProject
      names exactly what is about to go rather than asking a generic question,
      and a second prompt requires the client's name to be typed, because this
      one cannot be undone from anywhere in the interface. */
-  const removeClient = () => {
+  const removeClient = async () => {
     const parts = [
       `${projects.length} project${projects.length === 1 ? "" : "s"}`,
       keywords ? `${keywords} tracked keyword${keywords === 1 ? "" : "s"}` : null,
       records ? `${records} work record${records === 1 ? "" : "s"}` : null,
     ].filter(Boolean).join(", ");
-    if (!window.confirm(`Delete "${client.name}" and everything under it?\n\nThis removes ${parts}, along with their rankings, reports and settings.\n\nThis cannot be undone.`)) return;
-    const typed = window.prompt(`This is permanent. Type the client name to confirm:\n\n${client.name}`);
+    if (!await askConfirm({
+      title: "Delete this client?",
+      message: `Delete "${client.name}" and everything under it?\n\nThis removes ${parts}, along with their rankings, reports and settings.`,
+      note: "This cannot be undone.", confirmLabel: "Continue", danger: true,
+    })) return;
+    const typed = await askInput({
+      title: "This is permanent",
+      message: "Type the client name to confirm:", placeholder: client.name,
+      confirmLabel: "Delete client",
+    });
     if ((typed || "").trim() !== client.name.trim()) return;
     onDelete?.();
   };
@@ -443,7 +451,7 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
                     <span className="ll-mono shrink-0 text-[10px] font-bold" style={{ color: accent }}>{i + 1}.</span>
                     <input value={l.name} onChange={(e) => patchLoc(l.id, { name: e.target.value })} placeholder="Location name — e.g. Midtown — 350 5th Ave" className={inputCls + " flex-1"} />
                     {locs.length > 1 && (
-                      <button onClick={() => { if (confirm(`Remove location group "${l.name}"? Its profile connections disconnect.`)) setLocations(locs.filter((x) => x.id !== l.id)); }}
+                      <button onClick={async () => { if (await askConfirm({ title: "Remove location group?", message: `Remove location group "${l.name}"?`, note: "Its profile connections disconnect.", confirmLabel: "Yes, remove", danger: true })) setLocations(locs.filter((x) => x.id !== l.id)); }}
                         title="Remove location" className="shrink-0 rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                     )}
                   </div>
@@ -453,12 +461,14 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
                       const on = l.integrations[k];
                       return (
                         <button key={k}
-                          onClick={() => on
-                            ? confirm(`Disconnect ${label}${prof ? ` (“${prof.name}”)` : ""} from “${l.name}”?`) && patchLoc(l.id, (cur) => ({
-                                integrations: { ...cur.integrations, [k]: false },
-                                profiles: { ...(cur.profiles || {}), [k]: null },
-                              }))
-                            : setConnecting({ locId: l.id, provider: k })}
+                          onClick={async () => {
+                            if (!on) { setConnecting({ locId: l.id, provider: k }); return; }
+                            if (!await askDisconnect(`${label}${prof ? ` (“${prof.name}”)` : ""} from “${l.name}”`)) return;
+                            patchLoc(l.id, (cur) => ({
+                              integrations: { ...cur.integrations, [k]: false },
+                              profiles: { ...(cur.profiles || {}), [k]: null },
+                            }));
+                          }}
                           className="rounded-lg border px-3 py-2 text-left text-[11.5px] font-semibold"
                           style={on ? { borderColor: "#86EFAC", background: "#F0FDF4", color: "#166534" } : { borderColor: "#E5E7EB", color: "#6B7280" }}>
                           <span className="flex items-center gap-2">

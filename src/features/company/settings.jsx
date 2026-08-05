@@ -308,8 +308,8 @@ export function ApiCard({ api, company, onChange }) {
       if (filled) fetchBalance({ login: draft.login.trim(), password: draft.password.trim() });
     } else onChange({ apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: filled } } });
   };
-  const disconnect = () => {
-    if (!askDisconnect(`the ${api.name} connection`)) return;
+  const disconnect = async () => {
+    if (!await askDisconnect(`the ${api.name} connection`)) return;
     if (api.useDfs) onChange({ dfs: { ...company.dfs, connected: false } });
     else onChange({
       apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: false } },
@@ -642,11 +642,11 @@ export function TeamSection({ company, onChange, clients }) {
 
   const patchMember = (id, p) => onChange({ team: team.map((m) => (m.id === id ? { ...m, ...p } : m)) });
   const setRole = (m, role) => patchMember(m.id, { role, perms: { ...ROLE_PRESETS[role] }, projects: role === "Admin" ? "all" : m.projects === "all" ? [] : m.projects });
-  const removeMember = (id) => {
+  const removeMember = async (id) => {
     /* removing a member drops their access and their assignment history —
        always ask first */
     const m = team.find((x) => x.id === id);
-    if (!askDelete(`${m?.name || "this team member"} from the team`)) return;
+    if (!await askDelete(`${m?.name || "this team member"} from the team`)) return;
     onChange({ team: team.filter((x) => x.id !== id) });
   };
   const toggleProject = (m, pid) => {

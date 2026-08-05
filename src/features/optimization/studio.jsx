@@ -353,7 +353,7 @@ export function ReviewsPanel({ kind, name, data, set, accent, log, project, ai, 
                         <span className="ll-mono text-[9.5px] text-gray-400">{fmtTs2(reply.at)}</span>
                         <span className="ml-auto flex gap-2">
                           <button onClick={() => startReply(rv)} className="text-[10.5px] font-semibold" style={{ color: accent }}>Edit</button>
-                          <button onClick={() => { if (askDelete("this review reply")) deleteReply(rv); }} className="text-[10.5px] font-semibold text-red-400 hover:text-red-500">Delete</button>
+                          <button onClick={async () => { if (await askDelete("this review reply")) deleteReply(rv); }} className="text-[10.5px] font-semibold text-red-400 hover:text-red-500">Delete</button>
                         </span>
                       </div>
                       <p className="mt-1 text-[11.5px] leading-relaxed text-gray-600">{reply.text}</p>
@@ -630,7 +630,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                   {p.coupon && ` · code ${p.coupon}`}
                 </div>
               </div>
-              <button onClick={() => { if (!askDelete("this post")) return; work?.("gbp", "postDeleted", { detail: p.title || p.body }); set({ posts: g.posts.filter((x) => x.id !== p.id) }); }}
+              <button onClick={async () => { if (!await askDelete("this post")) return; work?.("gbp", "postDeleted", { detail: p.title || p.body }); set({ posts: g.posts.filter((x) => x.id !== p.id) }); }}
                 className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
             </div>
           ))}
@@ -652,7 +652,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                 {ci === 0 && <div className="text-[9px] font-medium uppercase tracking-wide text-gray-400">Primary category</div>}
               </div>
               {ci > 0 && (
-                <button onClick={() => { if (!askDelete(`the service category "${cat.name}"`)) return; work?.("gbp", "catDeleted", { detail: cat.name }); set({ svcCats: g.svcCats.filter((c) => c.id !== cat.id) }); }}
+                <button onClick={async () => { if (!await askDelete(`the service category "${cat.name}"`)) return; work?.("gbp", "catDeleted", { detail: cat.name }); set({ svcCats: g.svcCats.filter((c) => c.id !== cat.id) }); }}
                   className="shrink-0 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
               )}
             </div>
@@ -742,7 +742,7 @@ export function GbpOptTab({ opt, setOpt, accent, log, project, ai = null, locId 
                 <span className="min-w-0 flex-1 truncate text-gray-600">{ph.name}</span>
                 <span className="ll-mono shrink-0 text-gray-400">{fmtTs2(ph.addedAt)}</span>
               </div>
-              <button onClick={() => { if (!askDelete("this photo")) return; work?.("gbp", "photoDeleted", { detail: ph.name }); set({ photos: g.photos.filter((x) => x.id !== ph.id) }); }}
+              <button onClick={async () => { if (!await askDelete("this photo")) return; work?.("gbp", "photoDeleted", { detail: ph.name }); set({ photos: g.photos.filter((x) => x.id !== ph.id) }); }}
                 className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
             </div>
           ))}
@@ -1747,7 +1747,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
                   <div className="absolute -left-1 top-0 z-10 hidden -translate-x-full flex-col gap-0.5 pr-1.5 group-hover:flex">
                     <button onClick={() => moveBlock(b.id, -1)} className="rounded p-0.5 text-gray-300 hover:bg-gray-100 hover:text-gray-500"><ChevronUp size={12} /></button>
                     <button onClick={() => moveBlock(b.id, 1)} className="rounded p-0.5 text-gray-300 hover:bg-gray-100 hover:text-gray-500"><ChevronDown size={12} /></button>
-                    <button onClick={() => { if (askDelete("this content block")) set({ content: p.content.filter((x) => x.id !== b.id) }); }} className="rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={12} /></button>
+                    <button onClick={async () => { if (await askDelete("this content block")) set({ content: p.content.filter((x) => x.id !== b.id) }); }} className="rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={12} /></button>
                   </div>
                   {b.kind === "heading" && (
                     <div className="flex items-start gap-2">
@@ -2667,7 +2667,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             </button>
           )}
           {verifyNote && <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">{verifyNote}</div>}
-          <button onClick={() => { if (askDisconnect(`the website connection for ${project.website} (pixel stays installed; pages/posts keep their local copies)`)) set({ connected: false, platform: null, verified: false, credential: null }); }}
+          <button onClick={async () => { if (await askDisconnect(`the website connection for ${project.website} (pixel stays installed; pages/posts keep their local copies)`)) set({ connected: false, platform: null, verified: false, credential: null }); }}
             className="ml-auto text-[11.5px] text-gray-400 hover:text-red-500">Disconnect</button>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -2691,7 +2691,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
               <div className="flex items-center gap-2 text-[12px]">
                 <span className="ll-mono rounded-lg bg-gray-50 px-2.5 py-1 text-gray-500">{w.credential.masked}</span>
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Valid</span>
-                <button onClick={() => { if (askDisconnect("the WordPress Application Password (publishing, deploys and media sync stop working until it's re-added)")) set({ credential: null }); }} className="text-[11px] text-gray-400 hover:text-red-500">Remove</button>
+                <button onClick={async () => { if (await askDisconnect("the WordPress Application Password (publishing, deploys and media sync stop working until it's re-added)")) set({ credential: null }); }} className="text-[11px] text-gray-400 hover:text-red-500">Remove</button>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
@@ -3048,7 +3048,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             }
             setOpenPost(null);
           }}
-          onDelete={openPost !== "new" ? () => { const t = w.blogs.find((x) => x.id === openPost)?.title || ""; if (!askDelete(`the post "${t || "this post"}"`)) return; set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); work?.("website", "blogDeleted", { detail: t }); log?.("Deleted blog post from website", t); } : null}
+          onDelete={openPost !== "new" ? async () => { const t = w.blogs.find((x) => x.id === openPost)?.title || ""; if (!await askDelete(`the post "${t || "this post"}"`)) return; set({ blogs: w.blogs.filter((x) => x.id !== openPost) }); work?.("website", "blogDeleted", { detail: t }); log?.("Deleted blog post from website", t); } : null}
           onClose={() => setOpenPost(null)} />
       )}
       </>)}
@@ -3370,7 +3370,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
                   <span className="min-w-0 flex-1 truncate text-gray-600">{ph.name}</span>
                   <span className="ll-mono shrink-0 text-gray-400">{fmtTs2(ph.addedAt)}</span>
                 </div>
-                <button onClick={() => { if (!askDelete(`the photo "${ph.name || "this photo"}"`)) return; work?.(kind, "photoDeleted", { detail: ph.name }); set({ photos: (pl.photos || []).filter((x) => x.id !== ph.id) }); }}
+                <button onClick={async () => { if (!await askDelete(`the photo "${ph.name || "this photo"}"`)) return; work?.(kind, "photoDeleted", { detail: ph.name }); set({ photos: (pl.photos || []).filter((x) => x.id !== ph.id) }); }}
                   className="absolute right-1.5 top-1.5 rounded-md bg-black/40 p-1 text-white opacity-0 hover:bg-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
               </div>
             ))}
@@ -3433,7 +3433,7 @@ export function PlaceOptTab({ kind, opt, setOpt, accent, log, project, ai = null
                   {sc.text && <div className="mt-0.5 line-clamp-2 text-[12px] text-gray-500">{sc.text}</div>}
                   <div className="ll-mono mt-1 text-[10px] text-gray-400">Published · {fmtTs2(sc.createdAt)}</div>
                 </div>
-                <button onClick={() => { if (!askDelete(`the showcase "${sc.title || "this showcase"}"`)) return; work?.("apple", "showcaseDeleted", { detail: sc.title }); set({ showcases: (pl.showcases || []).filter((x) => x.id !== sc.id) }); }}
+                <button onClick={async () => { if (!await askDelete(`the showcase "${sc.title || "this showcase"}"`)) return; work?.("apple", "showcaseDeleted", { detail: sc.title }); set({ showcases: (pl.showcases || []).filter((x) => x.id !== sc.id) }); }}
                   className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
               </div>
             ))}
@@ -3559,7 +3559,7 @@ export function SocialOptTab({ opt, setOpt, accent, log }) {
                   {p.status === "scheduled" ? `Scheduled · ${new Date(p.publishAt).toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : `Published · ${fmtTs2(p.createdAt)}`}
                 </div>
               </div>
-              <button onClick={() => { if (askDelete("this social post")) set({ posts: soc.posts.filter((x) => x.id !== p.id) }); }}
+              <button onClick={async () => { if (await askDelete("this social post")) set({ posts: soc.posts.filter((x) => x.id !== p.id) }); }}
                 className="text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={13} /></button>
             </div>
           ))}

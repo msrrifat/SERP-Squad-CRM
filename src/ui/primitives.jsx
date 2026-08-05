@@ -107,9 +107,89 @@ export function RankChip({ pos, muted = false }) {
   );
 }
 /* every destructive button confirms through this — one consistent dialog */
-export const askDelete = (what) => window.confirm(`Are you sure you want to delete ${what}? This can't be undone.`);
+/* =====================================================================
+   IN-APP DIALOGS
+
+   These used to be window.confirm / window.prompt, which render as the
+   browser's own chrome — a grey box titled "app.serpsquad.com says". It works,
+   but it looks like the page is malfunctioning rather than asking a question.
+
+   `askConfirm` and `askInput` return PROMISES and are driven by <DialogHost/>,
+   mounted once at the app root. Callers await them, so the dialog can be a
+   real part of the interface: styled, keyboard-driven, and able to say what is
+   about to happen instead of one flat line.
+   ===================================================================== */
+let dialogDriver = null;                    // set by <DialogHost/> on mount
+const askDialog = (opts) => (dialogDriver
+  ? dialogDriver(opts)
+  /* no host mounted (a component rendered on its own) — fall back to the
+     browser so a confirmation is never silently skipped */
+  : Promise.resolve(opts.kind === "input" ? window.prompt(opts.message, opts.value || "") : window.confirm(opts.message)));
+
+export const askConfirm = (opts) => askDialog({ kind: "confirm", ...opts });
+export const askInput = (opts) => askDialog({ kind: "input", ...opts });
+
+export const askDelete = (what) => askConfirm({
+  title: "Delete this?",
+  message: `Are you sure you want to delete ${what}?`,
+  note: "This can't be undone.",
+  confirmLabel: "Yes, delete",
+  danger: true,
+});
 /* every connector's disconnect/remove confirms through this */
-export const askDisconnect = (what) => window.confirm(`Do you want to disconnect ${what}? You can reconnect it any time.`);
+export const askDisconnect = (what) => askConfirm({
+  title: "Disconnect?",
+  message: `Do you want to disconnect ${what}?`,
+  note: "You can reconnect it any time.",
+  confirmLabel: "Yes, disconnect",
+});
+
+export function DialogHost({ accent = "#0E7C66" }) {
+  const [dlg, setDlg] = useState(null);     // { opts, resolve }
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    dialogDriver = (opts) => new Promise((resolve) => { setValue(opts.value || ""); setDlg({ opts, resolve }); });
+    return () => { dialogDriver = null; };
+  }, []);
+  if (!dlg) return null;
+  const { opts, resolve } = dlg;
+  const close = (result) => { setDlg(null); resolve(result); };
+  const isInput = opts.kind === "input";
+  const accept = () => close(isInput ? value : true);
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 p-4"
+      onClick={() => close(isInput ? null : false)}>
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
+        className="ll-fade w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") close(isInput ? null : false);
+          if (e.key === "Enter" && (isInput || !opts.danger)) accept();
+        }}>
+        <div className="ll-display text-[15.5px] font-semibold" style={opts.danger ? { color: "#B91C1C" } : {}}>
+          {opts.title || (isInput ? "Enter a value" : "Are you sure?")}
+        </div>
+        <div className="mt-1.5 whitespace-pre-line text-[13px] leading-relaxed text-gray-600">{opts.message}</div>
+        {opts.note && <div className="mt-1.5 text-[11.5px] text-gray-400">{opts.note}</div>}
+        {isInput && (
+          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)}
+            placeholder={opts.placeholder || ""}
+            className="mt-3 w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] outline-none focus:border-gray-400" />
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={() => close(isInput ? null : false)}
+            className="rounded-lg border border-gray-200 px-3.5 py-2 text-[12.5px] font-semibold text-gray-600 hover:border-gray-300">
+            {opts.cancelLabel || (isInput ? "Cancel" : "No")}
+          </button>
+          <button autoFocus={!isInput} onClick={accept}
+            className="rounded-lg px-3.5 py-2 text-[12.5px] font-semibold text-white"
+            style={{ background: opts.danger ? "#DC2626" : accent }}>
+            {opts.confirmLabel || (isInput ? "Save" : "Yes")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Card({ children, className = "", style }) {
   return <div className={`rounded-2xl border border-gray-200 bg-white ${className}`} style={style}>{children}</div>;
