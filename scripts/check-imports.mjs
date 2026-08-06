@@ -75,6 +75,38 @@ for (const f of files) {
     if (shared.has(name) && !have.has(name)) problems.push(`${relative(ROOT, f)}: uses "${name}" but never imports it`);
 }
 
+/* ---------------------------------------------------------------------
+   TEMPORAL DEAD ZONE IN HOOK DEPENDENCIES
+
+   A dependency array is evaluated DURING render. Naming a `const` that is
+   declared further down the component throws a ReferenceError on every
+   render, and the build says nothing — the app simply never paints. That has
+   now shipped twice: `workRowsOf` in the report builder, and `activeSection`
+   in App.jsx.
+
+   Line order is a sound proxy here because a hook and the consts it can see
+   live in the same function body, top to bottom.
+   --------------------------------------------------------------------- */
+for (const f of files) {
+  const lines = readFileSync(f, "utf8").split("\n");
+  const declaredAt = new Map();
+  lines.forEach((l, i) => {
+    const m = /^\s*const\s+([A-Za-z_$][\w$]*)\s*=/.exec(l);
+    if (m && !declaredAt.has(m[1])) declaredAt.set(m[1], i + 1);
+  });
+  lines.forEach((l, i) => {
+    const m = /^\s*\}(?:,\s*\[([^\]]*)\])?\s*\);\s*$/.exec(l);
+    if (!m || m[1] == null) return;                     // not a hook dep array
+    for (const raw of m[1].split(",")) {
+      const name = raw.trim().split(/[.?[(]/)[0].trim();
+      if (!name || !declaredAt.has(name)) continue;
+      if (declaredAt.get(name) > i + 1) {
+        problems.push(`${relative(ROOT, f)}:${i + 1}: hook dependency "${name}" is declared later (line ${declaredAt.get(name)}) — reading it during render throws`);
+      }
+    }
+  });
+}
+
 if (problems.length) {
   console.error("\n✗ Static import check failed:\n" + problems.map((p) => "  " + p).join("\n") + "\n");
   process.exit(1);
