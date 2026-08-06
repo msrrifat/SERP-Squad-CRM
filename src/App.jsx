@@ -344,11 +344,19 @@ export default function App() {
     } catch { return { ok: false, values }; }
     finally { setSlicesLoading(false); }
   }, []);
-  /* the report archive is left out of the initial load, so it is fetched the
-     first time a screen that reads it is opened */
+  /* The report archive is left out of the initial load, so it is fetched the
+     first time the Reports screen is opened.
+
+     This keys off `section` — the raw state — NOT the derived `activeSection`.
+     `activeSection` is computed far below, after six conditional returns, so
+     naming it here would read a `const` in its temporal dead zone (a dependency
+     array is evaluated during render, not after it) and throw on every single
+     render; and moving this hook down past those returns would break the rules
+     of hooks. `section` is the value `activeSection` is derived from, so it
+     changes at the same moment. */
   useEffect(() => {
-    if (activeSection === "reports" && unloaded.current.size) loadSlices();
-  }, [activeSection, loadSlices]);
+    if (section === "reports" && unloaded.current.size) loadSlices();
+  }, [section, loadSlices]);
 
   useEffect(() => {
     if (!hydrated || !teamSession) return;
