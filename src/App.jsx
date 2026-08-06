@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -233,7 +233,10 @@ export default function App() {
     if (!token) { setHydrated(true); return; }
     (async () => {
       try {
-        const r = await fetch("/api/state", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(180000) }); // large workspaces (10MB+) need real time to arrive
+        /* slim=1: the workspace WITHOUT the heavy report archive, so the app
+           can paint in a second or two instead of waiting on tens of megabytes
+           that nothing on screen needs yet */
+        const r = await fetch("/api/state?slim=1", { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(180000) });
         if (r.status === 401) { localStorage.removeItem("ss_token"); setScreen("login"); setHydrated(true); return; }
         if (!r.ok) throw new Error("HTTP " + r.status);
         const d = await r.json();
@@ -250,6 +253,7 @@ export default function App() {
            newer work saved elsewhere */
         stateRev.current = Number.isFinite(+d.rev) ? +d.rev : null;
         if (d.state) serverSlices.current = sliceFingerprints(d.state);
+        unloaded.current = new Set(Object.keys(d.omitted || {}));
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
            "assignments" here would stomp a /project/… or /chat reload */
@@ -268,9 +272,11 @@ export default function App() {
     if (window.location.pathname !== "/dashboard") history.replaceState(null, "", "/dashboard"); // signed in — the workspace starts at /dashboard
     setHydrated(true);
     /* pull the latest server state so a second browser sees shared data */
-    fetch("/api/state", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
+    fetch("/api/state?slim=1", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
       if (d?.state?.company) setCompany(d.state.company);
       if (d?.state?.clients) setClients(d.state.clients);
+      if (d?.state) serverSlices.current = sliceFingerprints(d.state);
+      if (d) unloaded.current = new Set(Object.keys(d.omitted || {}));
     }).catch(() => {});
     if (identity.kind === "team") {
       setTeamSession({ memberId: identity.id }); setScreen("app");
@@ -303,6 +309,47 @@ export default function App() {
   const stateRev = useRef(null);
   /* fingerprint of every KEEPABLE slice as the server currently holds it */
   const serverSlices = useRef({});
+  /* slices the server deliberately did NOT send on load (see LAZY_SLICES). They
+     exist on the server but not in this tab, so this tab has nothing to write
+     for them — every save must leave them alone until they are fetched. */
+  const unloaded = useRef(new Set());
+  const [slicesLoading, setSlicesLoading] = useState(false);
+  /* Pull any lazy slice this tab hasn't got yet and fold it into state. Called
+     when a screen actually needs one, and before any save that cannot use
+     `keep` — because a full save while a slice is missing would write nothing
+     where the reports are and destroy them. Returns false if it could not be
+     completed, which callers MUST treat as "do not save". */
+  const loadSlices = useCallback(async () => {
+    const values = {};
+    if (!unloaded.current.size) return { ok: true, values };
+    const token = localStorage.getItem("ss_token");
+    if (!token) return { ok: false, values };
+    setSlicesLoading(true);
+    try {
+      for (const path of [...unloaded.current]) {
+        const r = await fetch(`/api/state/slice?path=${encodeURIComponent(path)}`,
+          { headers: { "X-SS-Token": token }, signal: AbortSignal.timeout(180000) });
+        if (!r.ok) return { ok: false, values };
+        const d = await r.json();
+        const key = path.slice("company.".length);
+        const value = d.value ?? [];
+        values[key] = value;
+        setCompany((c) => ({ ...c, [key]: value }));
+        /* it came straight from the server, so it is by definition identical to
+           what the server holds — record that so saves can keep omitting it */
+        serverSlices.current = { ...serverSlices.current, [path]: JSON.stringify(value) };
+        unloaded.current.delete(path);
+      }
+      return { ok: true, values };
+    } catch { return { ok: false, values }; }
+    finally { setSlicesLoading(false); }
+  }, []);
+  /* the report archive is left out of the initial load, so it is fetched the
+     first time a screen that reads it is opened */
+  useEffect(() => {
+    if (activeSection === "reports" && unloaded.current.size) loadSlices();
+  }, [activeSection, loadSlices]);
+
   useEffect(() => {
     if (!hydrated || !teamSession) return;
     if (staleState) return;   // a refused write stays refused until the page reloads
@@ -322,14 +369,27 @@ export default function App() {
     saveTimer.current = setTimeout(async () => {
       setSaveState("saving");
       try {
+        /* No revision to pin `keep` against AND a slice still missing: this tab
+           cannot express a safe write at all. Fetch what's missing first rather
+           than send a payload with a hole where the reports should be. */
+        if (!Number.isFinite(stateRev.current) && unloaded.current.size) {
+          if (!(await loadSlices()).ok) {
+            setSaveState("error");
+            setSaveWarn("Saving is paused until the saved reports finish loading — nothing has been overwritten.");
+            return;
+          }
+        }
         /* leave out whatever the server already has, byte for byte */
         const full = { company, clients };
         const mine = sliceFingerprints(full);
         /* without a known revision there is nothing to pin the comparison to,
-           so the whole workspace goes up — correctness over speed */
+           so the whole workspace goes up — correctness over speed.
+           A slice that was never loaded is ALWAYS kept: this tab holds no copy
+           of it, so writing what it does hold would erase the real one. */
         const keep = Number.isFinite(stateRev.current)
-          ? KEEPABLE.filter((p) => serverSlices.current[p] !== undefined && serverSlices.current[p] === mine[p])
-          : [];
+          ? KEEPABLE.filter((p) => unloaded.current.has(p)
+              || (serverSlices.current[p] !== undefined && serverSlices.current[p] === mine[p]))
+          : KEEPABLE.filter((p) => unloaded.current.has(p));
         const send = { company: { ...company }, clients };
         for (const p of keep) {
           if (p === "clients") delete send.clients;
@@ -342,11 +402,24 @@ export default function App() {
              yet, or it was written by an older build). Nothing was saved — send
              the whole workspace instead, exactly as before this optimisation. */
           if (why?.error === "keep_unavailable") {
-            const rf = await postState(token, full, stateRev.current);
+            /* about to send the whole workspace — every lazy slice must be in
+               hand first, or the send would blank the ones that are not. The
+               fetched values are folded in explicitly: setCompany above does
+               not reach the `company` captured by this closure. */
+            const got = await loadSlices();
+            if (!got.ok) {
+              setSaveState("error");
+              setSaveWarn("Saving is paused until the saved reports finish loading — nothing has been overwritten.");
+              return;
+            }
+            const whole = { company: { ...company, ...got.values }, clients };
+            const rf = await postState(token, whole, stateRev.current);
             if (rf.ok) {
               const d = await rf.json().catch(() => ({}));
               if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
-              serverSlices.current = mine;
+              /* fingerprint what was actually SENT — `mine` predates the slices
+                 that were just fetched and would misdescribe the server */
+              serverSlices.current = sliceFingerprints(whole);
               setSaveWarn(null); setSaveState("saved");
             } else { setSaveState("error"); setSaveWarn(`Changes are NOT saving to the server (HTTP ${rf.status}) — recent work would be lost on reload.`); }
             return;
@@ -1404,7 +1477,10 @@ export default function App() {
               onDeleteTemplate={(tid) => setCompany((c) => ({ ...c, recordTemplates: (c.recordTemplates || []).filter((t) => t.id !== tid) }))}
               currentUser={currentUser?.name || "You (Owner)"} accent={accent} onUpdate={updateProject} log={logActivity} /></Lazy>
           )}
-          {project && activeSection === "reports" && (
+          {project && activeSection === "reports" && slicesLoading && (
+            <div className="px-5 py-10 text-center text-[12.5px] text-gray-400">Loading your saved reports…</div>
+          )}
+          {project && activeSection === "reports" && !slicesLoading && (
             <ReportsHome accent={accent} project={project}
               savedReports={(company.savedReports || []).filter((r) => r.projectId === project.id)}
               templates={company.reportTemplates || []}

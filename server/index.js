@@ -744,10 +744,44 @@ function handleAppTwofa(body) {
   const identity = { kind: pend.kind, id: pend.id, email };
   return [200, { ok: true, token: mintSession(identity), deviceToken: payload.deviceToken, identity }];
 }
+/* Slices big enough to dominate the initial load and NOT needed to render the
+   app. Saved reports carry their images inline and reach tens of megabytes;
+   they are only ever read on the Reports screen, but every sign-in and every
+   reload waited for all of them before showing anything at all. */
+const LAZY_SLICES = ["company.savedReports"];
+
 function handleStateGet(req) {
   if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
   const st = loadState();
-  return [200, { live: true, state: st, exists: !!st, rev: loadRev() }]; // exists:false = genuine first run (client may seed)
+  const rev = loadRev();
+  /* ?slim=1 leaves the lazy slices out and reports their size instead, so the
+     browser can render immediately and fetch them when they are first needed */
+  if (st && /[?&]slim=1(&|$)/.test(req.url)) {
+    const omitted = {};
+    const slim = { ...st, company: { ...(st.company || {}) } };
+    for (const path of LAZY_SLICES) {
+      const key = path.slice("company.".length);
+      if (!(key in (st.company || {}))) continue;
+      let bytes = 0, count = 0;
+      try { const v = st.company[key]; bytes = JSON.stringify(v).length; count = Array.isArray(v) ? v.length : 0; } catch { /* size is informational */ }
+      delete slim.company[key];
+      omitted[path] = { bytes, count };
+    }
+    return [200, { live: true, state: slim, exists: true, rev, omitted }];
+  }
+  return [200, { live: true, state: st, exists: !!st, rev }]; // exists:false = genuine first run (client may seed)
+}
+
+/* one lazy slice, on demand. `rev` comes back with it so the caller can tell
+   whether the workspace moved underneath it while the slice was in flight. */
+function handleStateSlice(req) {
+  if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  const path = decodeURIComponent((/[?&]path=([^&]+)/.exec(req.url) || [])[1] || "");
+  if (!LAZY_SLICES.includes(path)) return [400, { error: "bad_path", detail: `Not a lazy slice: ${path}` }];
+  const st = loadState();
+  if (!st) return [404, { error: "no_state" }];
+  const key = path.slice("company.".length);
+  return [200, { live: true, path, value: st.company?.[key] ?? null, rev: loadRev() }];
 }
 function handleStateSave(req, body) {
   const sess = sessionFromReq(req);
@@ -794,6 +828,27 @@ function handleStateSave(req, body) {
         }
         body.state.company = { ...(body.state.company || {}), [key]: stored.company[key] };
       }
+    }
+  }
+
+  /* ---- LAZY SLICES ARE NEVER DELETED BY ABSENCE ------------------------
+     The server itself withholds these on a slim load, so a browser can quite
+     legitimately be holding a workspace that has no `savedReports` key at all.
+     If such a tab ever saves without naming it in `keep` — one missed code
+     path, one older build still open in a tab — the write would silently
+     replace the entire report archive with nothing.
+
+     So absence is treated as "unchanged". Deleting them stays possible: an
+     empty ARRAY is an explicit, honest instruction and is written as given.
+     Only a MISSING key is refused, and a missing key is never how a client
+     asks for a deletion. */
+  if (body.state.company && typeof body.state.company === "object") {
+    let restored = null;
+    for (const path of LAZY_SLICES) {
+      const key = path.slice("company.".length);
+      if (key in body.state.company) continue;
+      restored = restored || loadState();
+      if (restored?.company && key in restored.company) body.state.company[key] = restored.company[key];
     }
   }
 
@@ -3295,7 +3350,9 @@ http.createServer(async (req, res) => {
       } catch (e) { return send(502, { error: String(e?.message || e).slice(0, 100) }); }
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
+    if (req.method === "GET" && req.url.startsWith("/api/state?")) { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url.startsWith("/api/state/slice?")) { const [c2, p2] = handleStateSlice(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
     if (req.method === "GET" && req.url.startsWith("/api/oauth/google/callback")) {

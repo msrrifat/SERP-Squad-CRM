@@ -31,8 +31,15 @@ const walk = (dir, out = []) => {
 
 const files = walk(SRC);
 
+/* React hooks are the other half of this: `useCallback` used without being
+   imported builds perfectly and throws the moment the component renders. They
+   are not project exports, so they have to be listed explicitly. */
+const REACT_HOOKS = ["useState", "useEffect", "useMemo", "useRef", "useCallback",
+  "useContext", "useReducer", "useLayoutEffect", "useImperativeHandle", "useTransition",
+  "useDeferredValue", "useId", "useSyncExternalStore"];
+
 /* every name exported from a shared module — these are the ones worth checking */
-const shared = new Set();
+const shared = new Set(REACT_HOOKS);
 for (const f of files) {
   if (!/\/(lib|ui|data)\//.test(f)) continue;
   const src = readFileSync(f, "utf8");
@@ -57,9 +64,11 @@ for (const f of files) {
   for (const m of code.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=/g))
     for (const n of m[1].split(",")) { const name = n.trim().split(":").pop().trim().split("=")[0].trim(); if (name) have.add(name); }
 
-  /* used as a call `name(` or as a JSX tag `<Name` */
+  /* used as a call `name(` or as a JSX tag `<Name`. A call preceded by a dot is
+     a METHOD — `React.useMemo(...)` needs no import of `useMemo`, and counting
+     it would bury the real findings in noise. */
   const used = new Set();
-  for (const m of code.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) used.add(m[1]);
+  for (const m of code.matchAll(/(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) used.add(m[2]);
   for (const m of code.matchAll(/<([A-Z][\w$]*)[\s/>]/g)) used.add(m[1]);
 
   for (const name of used)
