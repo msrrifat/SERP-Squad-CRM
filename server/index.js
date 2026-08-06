@@ -754,6 +754,49 @@ function handleStateSave(req, body) {
   if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
   if (sess.kind !== "team") return [403, { error: "forbidden", detail: "Only team accounts can write app state." }];
   if (!body?.state || typeof body.state !== "object") return [400, { error: "bad_request", detail: "state object required." }];
+
+  /* ---- UNCHANGED-SLICE REHYDRATION -------------------------------------
+     Saved reports carry their images inline, and they had grown to 27 MB —
+     70% of the whole workspace. Every autosave re-uploaded all of it, so
+     renaming one task pushed 23 MB (gzipped) up the wire and the "Saving…"
+     indicator sat there for the best part of a minute.
+
+     A client that knows a slice is byte-identical to what the server already
+     holds may leave it out and name it in `keep` instead. This is only safe
+     because it is paired with the baseRev check below: the omission is valid
+     at exactly the revision the browser was working from, and a write at a
+     different revision is refused outright. So the stored value it re-uses is
+     provably the same value the client would have sent.
+
+     Anything we cannot honour is REFUSED rather than written — a state saved
+     with a slice missing would be a silent data loss, which is the one
+     outcome this whole path exists to prevent. */
+  if (Array.isArray(body.keep) && body.keep.length) {
+    /* the whole safety argument rests on the baseRev check below proving the
+       stored copy is the one the client compared against. With no baseRev
+       there is nothing pinning it, so re-using stored slices is not sound. */
+    if (!Number.isFinite(+body.baseRev) || body.force) {
+      return [409, { error: "keep_unavailable", detail: "Re-using stored slices needs a baseRev — send the full workspace." }];
+    }
+    const stored = loadState();
+    if (!stored) return [409, { error: "keep_unavailable", detail: "Nothing stored to re-use — send the full workspace." }];
+    for (const path of body.keep) {
+      if (typeof path !== "string" || !/^(company\.[A-Za-z0-9_]+|clients)$/.test(path)) {
+        return [400, { error: "bad_keep", detail: `Cannot re-use "${path}".` }];
+      }
+      if (path === "clients") {
+        if (!Array.isArray(stored.clients)) return [409, { error: "keep_unavailable", detail: "No stored clients to re-use — send the full workspace." }];
+        body.state.clients = stored.clients;
+      } else {
+        const key = path.slice("company.".length);
+        if (!stored.company || !(key in stored.company)) {
+          return [409, { error: "keep_unavailable", detail: `No stored company.${key} to re-use — send the full workspace.` }];
+        }
+        body.state.company = { ...(body.state.company || {}), [key]: stored.company[key] };
+      }
+    }
+  }
+
   const raw = JSON.stringify(body.state);
   if (raw.length > 60_000_000) return [413, { error: "too_large", detail: "State exceeds 60 MB — trim large embedded images." }];
   /* ---- CATASTROPHIC-OVERWRITE GUARD -------------------------------------

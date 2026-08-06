@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, Camera, CheckCircle2, ClipboardList, Hash, KeyRound,
   MessageSquare, Moon, Shield, Sun, Trash2, User, Users,
 } from "lucide-react";
-import { askDelete, Ava, Card, inputCls, Toggle } from "../../ui/primitives.jsx";
+import { askDelete, Ava, Card, inputCls, shrinkImage, Toggle } from "../../ui/primitives.jsx";
 import { relTime, todayISO } from "../../lib/format.jsx";
 import { MessageThread } from "../chat/thread.jsx";
 
@@ -19,9 +19,11 @@ export function AccountSettingsView({ member, clients, onUpdateMember, accent, d
 
   const pickPhoto = (e) => {
     const f = e.target.files?.[0]; if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => onUpdateMember({ avatar: rd.result });
-    rd.readAsDataURL(f);
+    /* stored as a data URL inside the workspace and re-uploaded on every save,
+       so a phone photo goes in at 256px rather than at four megabytes */
+    shrinkImage(f, 256, "image/jpeg", 0.86)
+      .then((url) => onUpdateMember({ avatar: url }))
+      .catch(() => { /* unreadable file — keep the existing picture */ });
     e.target.value = "";
   };
   const saveProfile = () => {

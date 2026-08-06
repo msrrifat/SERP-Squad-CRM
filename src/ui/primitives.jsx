@@ -260,30 +260,47 @@ export function ProjectMark({ project, size = "sm" }) {
    Re-encoding to a sensible display size costs nothing visible and removes
    that weight permanently. */
 const LOGO_MAX = 256;
-const shrinkLogo = (file) => new Promise((resolve, reject) => {
-  const rd = new FileReader();
-  rd.onerror = () => reject(new Error("unreadable"));
-  rd.onload = () => {
-    const img = new Image();
-    /* if anything about the image is unusable, keep the original rather than
-       losing the user's upload */
-    img.onerror = () => resolve(String(rd.result));
-    img.onload = () => {
-      try {
-        const scale = Math.min(1, LOGO_MAX / img.width, LOGO_MAX / img.height);
-        if (scale === 1 && String(rd.result).length < 120_000) return resolve(String(rd.result));
-        const c = document.createElement("canvas");
-        c.width = Math.max(1, Math.round(img.width * scale));
-        c.height = Math.max(1, Math.round(img.height * scale));
-        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-        /* PNG keeps transparency, which logos usually rely on */
-        resolve(c.toDataURL("image/png"));
-      } catch { resolve(String(rd.result)); }
+/* Downscale a picked image before it goes into the workspace.
+
+   Everything stored here is a base64 data URL inside the JSON workspace, and
+   the WHOLE workspace is uploaded on every save — so one 4 MB phone photo
+   dropped into a profile or a report is re-uploaded on every keystroke for
+   the rest of that workspace's life. Shrinking on the way in is the only
+   place this can be fixed cheaply.
+
+   `mime` "image/png" keeps transparency (logos, avatars); "image/jpeg" is far
+   smaller and right for photographs. Any failure resolves the ORIGINAL, so a
+   file we cannot process is never lost. */
+export const shrinkImage = (file, max = LOGO_MAX, mime = "image/png", quality = 0.85) =>
+  new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onerror = () => reject(new Error("unreadable"));
+    rd.onload = () => {
+      const img = new Image();
+      /* if anything about the image is unusable, keep the original rather than
+         losing the user's upload */
+      img.onerror = () => resolve(String(rd.result));
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, max / img.width, max / img.height);
+          if (scale === 1 && String(rd.result).length < 120_000) return resolve(String(rd.result));
+          const c = document.createElement("canvas");
+          c.width = Math.max(1, Math.round(img.width * scale));
+          c.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = c.getContext("2d");
+          /* JPEG has no alpha: without a white ground, transparent pixels turn black */
+          if (mime === "image/jpeg") { ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, c.width, c.height); }
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          const out = c.toDataURL(mime, quality);
+          /* never let "shrinking" make it bigger (small PNGs re-encode badly) */
+          resolve(out.length < String(rd.result).length ? out : String(rd.result));
+        } catch { resolve(String(rd.result)); }
+      };
+      img.src = String(rd.result);
     };
-    img.src = String(rd.result);
-  };
-  rd.readAsDataURL(file);
-});
+    rd.readAsDataURL(file);
+  });
+const shrinkLogo = (file) => shrinkImage(file, LOGO_MAX, "image/png");
 
 export function LogoUpload({ value, onChange, label = "Upload logo" }) {
   const ref = useRef(null);
@@ -502,8 +519,22 @@ export function RoleBadge({ role }) {
 /* identity wall: when a provider is mounted (client portal), team avatars render
    as the agency/white-label BRAND tile instead of personal initials/photos */
 export const AvaMaskCtx = React.createContext(null);
+/* name -> profile picture, for the many places that only ever have a name.
+   Assignee chips, comment authors, chat messages and the team lists all render
+   from a plain name string, so none of them COULD pass a photo however much
+   they wanted to — which is why the same person appeared as a photo in the
+   account panel and as initials everywhere else. One directory, provided once
+   near the root, fixes every one of them without threading a prop through. */
+export const AvaDirCtx = React.createContext(null);
+/* the app has several top-level return paths (dashboard, company page, tools,
+   portal), so a provider would have to be repeated at each one and would be
+   forgotten at the next. The roster is genuinely app-global, so it is set once
+   from App during render — before any child renders — and read as a fallback. */
+let AVA_DIR = null;
+export const setAvaDirectory = (fn) => { AVA_DIR = fn; };
 export function Ava({ name, size = 22, onRemove, img = null }) {
   const mask = React.useContext(AvaMaskCtx);
+  const dir = React.useContext(AvaDirCtx) || AVA_DIR;
   if (mask && mask.match(name)) {
     return (
       <span title={name} onClick={onRemove}
@@ -514,11 +545,15 @@ export function Ava({ name, size = 22, onRemove, img = null }) {
     );
   }
   const bg = ACCENTS[hashStr(name) % ACCENTS.length].hex;
+  /* an explicit img always wins; otherwise look the person up by name. A masked
+     name ("Agency team", "Client") matches nobody, so the identity wall above
+     still decides first and no photo can leak through it. */
+  const pic = img || dir?.(name) || null;
   return (
     <span title={name + (onRemove ? " — click to remove" : "")} onClick={onRemove}
       className={`ll-display inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold text-white ${onRemove ? "cursor-pointer hover:opacity-70" : ""}`}
       style={{ width: size, height: size, fontSize: size * 0.42, background: bg }}>
-      {img ? <img src={img} alt={name} className="h-full w-full object-cover" /> : name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+      {pic ? <img src={pic} alt={name} className="h-full w-full object-cover" /> : name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
     </span>
   );
 }

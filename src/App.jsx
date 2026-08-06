@@ -15,7 +15,7 @@ import {
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
-import { Ava, BrandMark, DarkToggle, DialogHost, FONT_CSS, GoTopButton, Modal, ProjectMark } from "./ui/primitives.jsx";
+import { Ava, BrandMark, DarkToggle, DialogHost, FONT_CSS, GoTopButton, Modal, ProjectMark, setAvaDirectory } from "./ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "./lib/months.jsx";
 import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
@@ -26,8 +26,26 @@ import { useAppOutdated } from "./lib/version.js";
 /* The workspace is large, so every write is gzipped where the browser can do
    it: a slow upload is a wide window for another session to save in, and the
    recovery path below is the one that must not lose that race. */
-async function postState(token, state, baseRev) {
-  const payload = JSON.stringify({ state, baseRev });
+/* Heavy slices that change rarely but dominate the payload. Saved reports
+   embed their images, and on a working agency workspace they reach tens of
+   megabytes — re-sent on every autosave, for every unrelated edit. Any of
+   these that is byte-identical to what the server already holds is named in
+   `keep` instead of being uploaded again; the server substitutes its stored
+   copy. Safe only in combination with baseRev, which pins the revision the
+   comparison was made against. */
+const KEEPABLE = ["company.savedReports", "company.reportTemplates", "company.team", "clients"];
+const sliceOf = (state, path) => (path === "clients" ? state.clients : state.company?.[path.slice("company.".length)]);
+/* what the server holds for each slice, as JSON — compared by VALUE, not by
+   reference, so an in-place mutation somewhere can never be mistaken for "no
+   change" and silently dropped */
+function sliceFingerprints(state) {
+  const out = {};
+  for (const p of KEEPABLE) { try { out[p] = JSON.stringify(sliceOf(state, p) ?? null); } catch { /* skip */ } }
+  return out;
+}
+
+async function postState(token, state, baseRev, keep = []) {
+  const payload = JSON.stringify({ state, baseRev, keep });
   let body = payload, extra = {};
   if (typeof CompressionStream !== "undefined" && payload.length > 65536) {
     try {
@@ -231,6 +249,7 @@ export default function App() {
            checked against it so a tab holding an older copy cannot overwrite
            newer work saved elsewhere */
         stateRev.current = Number.isFinite(+d.rev) ? +d.rev : null;
+        if (d.state) serverSlices.current = sliceFingerprints(d.state);
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
            "assignments" here would stomp a /project/… or /chat reload */
@@ -282,6 +301,8 @@ export default function App() {
      bug that deploy fixed. Detected, and surfaced, rather than left to rot. */
   const appOutdated = useAppOutdated();
   const stateRev = useRef(null);
+  /* fingerprint of every KEEPABLE slice as the server currently holds it */
+  const serverSlices = useRef({});
   useEffect(() => {
     if (!hydrated || !teamSession) return;
     if (staleState) return;   // a refused write stays refused until the page reloads
@@ -301,15 +322,41 @@ export default function App() {
     saveTimer.current = setTimeout(async () => {
       setSaveState("saving");
       try {
-        const r = await postState(token, { company, clients }, stateRev.current);
+        /* leave out whatever the server already has, byte for byte */
+        const full = { company, clients };
+        const mine = sliceFingerprints(full);
+        /* without a known revision there is nothing to pin the comparison to,
+           so the whole workspace goes up — correctness over speed */
+        const keep = Number.isFinite(stateRev.current)
+          ? KEEPABLE.filter((p) => serverSlices.current[p] !== undefined && serverSlices.current[p] === mine[p])
+          : [];
+        const send = { company: { ...company }, clients };
+        for (const p of keep) {
+          if (p === "clients") delete send.clients;
+          else delete send.company[p.slice("company.".length)];
+        }
+        const r = await postState(token, send, stateRev.current, keep);
         if (r.status === 409) {
+          const why = await r.json().catch(() => ({}));
+          /* the server could not re-use a slice we left out (nothing stored
+             yet, or it was written by an older build). Nothing was saved — send
+             the whole workspace instead, exactly as before this optimisation. */
+          if (why?.error === "keep_unavailable") {
+            const rf = await postState(token, full, stateRev.current);
+            if (rf.ok) {
+              const d = await rf.json().catch(() => ({}));
+              if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
+              serverSlices.current = mine;
+              setSaveWarn(null); setSaveState("saved");
+            } else { setSaveState("error"); setSaveWarn(`Changes are NOT saving to the server (HTTP ${rf.status}) — recent work would be lost on reload.`); }
+            return;
+          }
           /* Someone else's changes are already on the server, so writing this
              payload would erase them. Refusing protects THEIR work but strands
              OURS — the tab keeps editing and saves nothing, and everything
              since load dies at the next reload. So instead: take the server's
              copy, merge this tab's work into it, and save the result. Neither
              side is lost and the user carries on. */
-          await r.json().catch(() => ({}));
           try {
             /* Between reading the server copy and writing the merge back, a
                third save can land — especially while another session is
@@ -327,6 +374,7 @@ export default function App() {
               if (!put.ok) throw new Error("HTTP " + put.status);
               const pd = await put.json().catch(() => ({}));
               if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
+              serverSlices.current = sliceFingerprints(merged);
               if (merged.company) setCompany(merged.company);
               if (merged.clients) setClients(merged.clients);
               ok = true; recovered = sum;
@@ -349,6 +397,8 @@ export default function App() {
         else {
           const d = await r.json().catch(() => ({}));
           if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
+          /* the server now holds exactly what we compared against */
+          serverSlices.current = mine;
           setSaveWarn(null); setSaveState("saved");
         }
       } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
@@ -619,13 +669,27 @@ export default function App() {
      records render as "Client"); admins/owner see everyone */
   const isOwnerUser = !teamSession || !!currentUser?.isOwner;
   const people = useMemo(() => {
+    /* Two things put a person on a project, and both have to count here.
+       `m.projects` is the member's own assignment list, but Client settings →
+       Team grants access per project through `project.teamAccess` — and only
+       the first was ever consulted, so somebody given access to a project
+       could open it, work in it, and still not be offerable as an assignee in
+       Project management. Anyone with an effective grant is a member. */
+    const grants = project?.teamAccess || {};
+    const granted = (m) => Object.values(grants[m.id] || {}).some(Boolean);
     const team = (company.team || [])
-      .filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(activeProjectId)))
+      .filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(activeProjectId)) || granted(m))
       .map((m) => ({ name: m.name, type: "team" }));
     if (!isOwnerUser) return team; // only the owner may see (and assign) the client as a person
     const cl = activeClient?.contact ? [{ name: activeClient.contact, type: "client" }] : [];
     return [...team, ...cl];
-  }, [company.team, activeProjectId, activeClient?.contact, isOwnerUser]);
+  }, [company.team, activeProjectId, activeClient?.contact, isOwnerUser, project?.teamAccess]);
+
+  /* profile pictures, resolvable from a bare name anywhere in the app */
+  useMemo(() => {
+    const byName = new Map((company.team || []).filter((m) => m.avatar).map((m) => [m.name, m.avatar]));
+    setAvaDirectory(byName.size ? (n) => byName.get(n) || null : null);
+  }, [company.team]);
   const teamNames = useMemo(() => new Set((company.team || []).map((m) => m.name)), [company.team]);
   /* identity wall: every team member (admins included) sees the client only as
      "Client" — the owner alone sees the real client identity */
