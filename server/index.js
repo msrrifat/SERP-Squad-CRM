@@ -30,6 +30,7 @@ import { gzip, gzipSync, gunzipSync } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
+import { DOMAINS, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
 
 const PORT = process.env.PORT || 8787;
 const DFS_BASE = process.env.DFS_BASE || "https://api.dataforseo.com/v3"; // override for offline tests
@@ -344,7 +345,67 @@ const saveDevices = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFile
    so passwords are verified server-side and a token is required to read or
    write state. Atomic writes (temp + rename) avoid partial files. ---- */
 const STATE_FILE = new URL("./data/app-state.json", import.meta.url);
-const loadState = () => { try { return JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch { return null; } };
+
+/* ---- PER-TOOL DOCUMENTS ------------------------------------------------
+   The workspace is stored as one file per tool (see src/lib/domains.js), so
+   a Project-management save writes a few kilobytes to data/state/pm.json and
+   physically cannot touch the report archive or the rank data. Each document
+   carries its own revision, so two people working in different tools never
+   collide.
+
+   data/app-state.json is still written — not on every save, which is the
+   whole point, but whenever a full save or a backup runs. It stays the
+   fallback this can be rolled back to, and everything that already reads it
+   (backups, restore, the extractor) keeps working untouched. */
+const STATE_DIR = new URL("./data/state/", import.meta.url);
+const domFile = (d) => new URL(`${d}.json`, STATE_DIR);
+const REVS_FILE = new URL("./data/state/revs.json", import.meta.url);
+
+const readJson = (u, fallback = null) => { try { return JSON.parse(readFileSync(u, "utf8")); } catch { return fallback; } };
+const loadRevs = () => readJson(REVS_FILE, {}) || {};
+const saveRevs = (r) => { try { mkdirSync(STATE_DIR, { recursive: true }); writeJsonAtomic(REVS_FILE, r); } catch { /* advisory */ } };
+function writeJsonAtomic(url, value) {
+  const tmp = new URL(url.pathname.split("/").pop() + ".tmp", STATE_DIR);
+  writeFileSync(tmp, JSON.stringify(value));
+  renameSync(tmp, url);
+}
+
+/* every document, migrating the single legacy file the first time */
+function loadDomains() {
+  if (existsSync(domFile("core"))) {
+    const docs = {};
+    for (const d of DOMAINS) docs[d] = readJson(domFile(d), d === "core" ? null : {}) ?? (d === "core" ? null : {});
+    if (docs.core) return docs;
+  }
+  const legacy = readJson(STATE_FILE, null);
+  if (!legacy) return null;
+  const docs = splitWorkspace(legacy);
+  try {                                        // migrate once; legacy file untouched
+    mkdirSync(STATE_DIR, { recursive: true });
+    for (const d of DOMAINS) writeJsonAtomic(domFile(d), docs[d] ?? {});
+    const rev = loadRev();
+    saveRevs(Object.fromEntries(DOMAINS.map((d) => [d, rev])));
+    console.log(`[state] migrated app-state.json into ${DOMAINS.length} per-tool documents`);
+  } catch (e) { console.warn("[state] migration failed, still serving the legacy file:", e?.message); }
+  return docs;
+}
+
+const loadState = () => { const docs = loadDomains(); return docs ? joinWorkspace(docs) : null; };
+
+/* write ONLY these documents. Returns the new per-document revisions. */
+function saveDomainDocs(partial) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const revs = loadRevs();
+  const next = loadRev() + 1;
+  for (const [d, doc] of Object.entries(partial)) {
+    if (!DOMAINS.includes(d)) continue;
+    writeJsonAtomic(domFile(d), doc ?? {});
+    revs[d] = next;
+  }
+  saveRevs(revs);
+  try { writeFileSync(REV_FILE, String(next)); } catch { /* rev is advisory */ }
+  return { revs, rev: next };
+}
 /* the workspace revision: bumped on every accepted write. A browser sends the
    revision it loaded, so a tab holding an older copy can be REFUSED instead of
    silently replacing work another session saved in the meantime. */
@@ -380,11 +441,12 @@ const saveState = (state) => {
         .forEach((f) => rmSync(new URL(f, bdir), { force: true }));
     }
   } catch { /* backups are best-effort — never block a save */ }
+  /* a FULL save rewrites every document, and also refreshes the combined
+     file so backups, restore and a rollback all keep working from it */
+  const { rev } = saveDomainDocs(splitWorkspace(state));
   const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
   writeFileSync(tmp, JSON.stringify(state));
   renameSync(tmp, STATE_FILE); // atomic swap
-  const rev = loadRev() + 1;
-  try { writeFileSync(REV_FILE, String(rev)); } catch { /* rev is advisory */ }
   return rev;
 };
 /* bootstrap owner — lets the owner sign in on a brand-new server before any
@@ -767,9 +829,58 @@ function handleStateGet(req) {
       delete slim.company[key];
       omitted[path] = { bytes, count };
     }
-    return [200, { live: true, state: slim, exists: true, rev, omitted }];
+    return [200, { live: true, state: slim, exists: true, rev, revs: loadRevs(), omitted }];
   }
-  return [200, { live: true, state: st, exists: !!st, rev }]; // exists:false = genuine first run (client may seed)
+  return [200, { live: true, state: st, exists: !!st, rev, revs: loadRevs() }]; // exists:false = genuine first run (client may seed)
+}
+
+/* ---- GRANULAR WRITE: one tool's documents, nothing else ----------------
+   The browser sends only the documents that actually changed, each with the
+   revision it was working from. A Project-management edit therefore writes
+   data/state/pm.json and touches no other file — so however wrong a tool's
+   write path might be, it cannot reach another tool's data.
+
+   Per-document revisions mean two people in different tools never collide:
+   editing rank tracking while someone else edits tasks is not a conflict, and
+   is no longer reported as one. */
+function handleStateDomains(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
+  if (sess.kind !== "team") return [403, { error: "forbidden", detail: "Only team accounts can write app state." }];
+  const docs = body?.docs;
+  if (!docs || typeof docs !== "object") return [400, { error: "bad_request", detail: "docs object required." }];
+
+  const names = Object.keys(docs);
+  const unknown = names.filter((d) => !DOMAINS.includes(d));
+  if (unknown.length) return [400, { error: "bad_domain", detail: `Unknown document(s): ${unknown.join(", ")}` }];
+  if (!existsSync(domFile("core")) && !loadDomains()) {
+    return [409, { error: "no_base", detail: "Nothing stored yet — send the full workspace first." }];
+  }
+
+  /* refuse a write built on a document that has since moved on. Only the
+     documents being written are checked; the rest are irrelevant to it. */
+  const revs = loadRevs();
+  const base = body.baseRevs || {};
+  const stale = names.filter((d) => Number.isFinite(+base[d]) && +base[d] !== +(revs[d] ?? 0));
+  if (stale.length) {
+    return [409, { error: "stale_domain", stale, revs,
+      detail: `Another session has saved ${stale.join(", ")} since this page loaded — nothing was written.` }];
+  }
+
+  /* the core document is the skeleton every other one hangs off; losing it
+     would orphan the lot, so it gets the same collapse guard as a full save */
+  if (docs.core) {
+    const prev = readJson(domFile("core"), null);
+    const prevN = (prev?.clients || []).length, nextN = (docs.core.clients || []).length;
+    if (prevN >= 1 && nextN < prevN && JSON.stringify(docs.core).length < JSON.stringify(prev).length * 0.35) {
+      return [409, { error: "refused_overwrite",
+        detail: `Refused: this save would drop ${prevN - nextN} of ${prevN} client(s). Nothing was changed — reload the app.` }];
+    }
+  }
+  try {
+    const out = saveDomainDocs(docs);
+    return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now() }];
+  } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
 
 /* one lazy slice, on demand. `rev` comes back with it so the caller can tell
@@ -882,7 +993,9 @@ function handleStateSave(req, body) {
     return [409, { error: "stale_state", rev: cur, baseRev: +body.baseRev,
       detail: "Another session (or another browser tab) has saved changes since this page loaded. Saving now would erase them, so nothing was written — reload to continue from the latest workspace." }];
   }
-  try { const rev = saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev }]; }
+  /* per-document revisions come back too, so the browser can go straight to
+     granular saves afterwards instead of failing one first */
+  try { const rev = saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev, revs: loadRevs() }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
@@ -3382,10 +3495,10 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
-      const bodyCap = req.url === "/api/state" ? 32e6 : 4e6;
+      const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6 : 4e6;
       const chunks = [];
       let received = 0;
       for await (const chunk of req) {
@@ -3469,6 +3582,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
+        : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)

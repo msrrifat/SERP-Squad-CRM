@@ -162,7 +162,9 @@ export function applyOptWork(project, { section, key, count = 1, detail = "", me
             const workDetails = [...(t.workDetails || []), detail].filter(Boolean).slice(-8);
             return {
               ...t, workCount, workDetails,
-              title: taskTitle(ev, workCount, workDetails),
+              /* a title the user has rewritten is theirs — the automation keeps
+                 counting the work, but stops overwriting what they typed */
+              title: t.titleEdited ? t.title : taskTitle(ev, workCount, workDetails),
               completedAt: t.completedAt || now,
               assignees: t.assignees.includes(member) ? t.assignees : [...t.assignees, member],
             };

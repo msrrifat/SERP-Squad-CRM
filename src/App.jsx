@@ -21,6 +21,7 @@ import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
+import { DOMAINS, splitWorkspace, domainOfCompanyKey } from "./lib/domains.js";
 import { useAppOutdated } from "./lib/version.js";
 
 /* The workspace is large, so every write is gzipped where the browser can do
@@ -252,7 +253,7 @@ export default function App() {
            checked against it so a tab holding an older copy cannot overwrite
            newer work saved elsewhere */
         stateRev.current = Number.isFinite(+d.rev) ? +d.rev : null;
-        if (d.state) serverSlices.current = sliceFingerprints(d.state);
+        if (d.state) { serverSlices.current = sliceFingerprints(d.state); noteServerDocs(d.state, d.revs); }
         unloaded.current = new Set(Object.keys(d.omitted || {}));
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
@@ -275,7 +276,7 @@ export default function App() {
     fetch("/api/state?slim=1", { headers: { "X-SS-Token": token } }).then((r) => r.ok ? r.json() : null).then((d) => {
       if (d?.state?.company) setCompany(d.state.company);
       if (d?.state?.clients) setClients(d.state.clients);
-      if (d?.state) serverSlices.current = sliceFingerprints(d.state);
+      if (d?.state) { serverSlices.current = sliceFingerprints(d.state); noteServerDocs(d.state, d.revs); }
       if (d) unloaded.current = new Set(Object.keys(d.omitted || {}));
     }).catch(() => {});
     if (identity.kind === "team") {
@@ -322,6 +323,11 @@ export default function App() {
      management, watch "Saving…", watch the task vanish a moment later.
      Refs are read at the moment of use, so a save can never resurrect a
      snapshot that has already been superseded. */
+  /* per-tool document fingerprints and revisions, as the server holds them.
+     A save sends only the documents whose contents actually changed, so a
+     Project-management edit writes pm.json and nothing else. */
+  const serverDocs = useRef({});
+  const serverRevs = useRef({});
   const companyRef = useRef(company); companyRef.current = company;
   const clientsRef = useRef(clients); clientsRef.current = clients;
   /* Pull any lazy slice this tab hasn't got yet and fold it into state. Called
@@ -329,6 +335,16 @@ export default function App() {
      `keep` — because a full save while a slice is missing would write nothing
      where the reports are and destroy them. Returns false if it could not be
      completed, which callers MUST treat as "do not save". */
+  /* record every tool document exactly as the server holds it */
+  const noteServerDocs = useCallback((state, revs) => {
+    try {
+      const docs = splitWorkspace(state || {});
+      const out = {};
+      for (const d of DOMAINS) out[d] = JSON.stringify(docs[d] ?? {});
+      serverDocs.current = out;
+    } catch { serverDocs.current = {}; }
+    if (revs) serverRevs.current = revs;
+  }, []);
   const loadSlices = useCallback(async () => {
     const values = {};
     if (!unloaded.current.size) return { ok: true, values };
@@ -399,6 +415,46 @@ export default function App() {
         }
         /* live state, not the snapshot this save was scheduled from */
         const full = { company: companyRef.current, clients: clientsRef.current };
+
+        /* ---- GRANULAR SAVE: only the tools that actually changed ---------
+           Splitting the workspace per tool means a task added in Project
+           management sends pm.json — kilobytes — instead of the whole clients
+           tree. On any failure this falls through to the full-workspace path
+           below, which is unchanged, so saving can never get *worse* than it
+           was before this existed. */
+        if (Number.isFinite(stateRev.current) && Object.keys(serverDocs.current).length) {
+          try {
+            const docs = splitWorkspace(full);
+            /* a document holding a slice this tab never loaded would be sent
+               EMPTY and wipe it — those are excluded until the slice arrives */
+            const blocked = new Set([...unloaded.current]
+              .map((p) => domainOfCompanyKey(p.slice("company.".length))));
+            const fp = {};
+            const changed = DOMAINS.filter((d) => {
+              if (blocked.has(d)) return false;
+              fp[d] = JSON.stringify(docs[d] ?? {});
+              return fp[d] !== serverDocs.current[d];
+            });
+            if (!changed.length) { setSaveWarn(null); setSaveState("saved"); return; }
+            const rd = await fetch("/api/state/domains", {
+              method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
+              body: JSON.stringify({
+                docs: Object.fromEntries(changed.map((d) => [d, docs[d] ?? {}])),
+                baseRevs: Object.fromEntries(changed.map((d) => [d, serverRevs.current[d] ?? 0])),
+              }),
+            });
+            if (rd.ok) {
+              const dj = await rd.json().catch(() => ({}));
+              changed.forEach((d) => { serverDocs.current[d] = fp[d]; });
+              if (dj.revs) serverRevs.current = dj.revs;
+              if (Number.isFinite(+dj.rev)) stateRev.current = +dj.rev;
+              setSaveWarn(null); setSaveState("saved");
+              return;
+            }
+            /* 409 (someone else saved that tool) and anything else fall
+               through to the full save + merge below, which handles it */
+          } catch { /* fall through to the full-workspace save */ }
+        }
         const mine = sliceFingerprints(full);
         /* without a known revision there is nothing to pin the comparison to,
            so the whole workspace goes up — correctness over speed.
@@ -469,6 +525,7 @@ export default function App() {
               const pd = await put.json().catch(() => ({}));
               if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
               serverSlices.current = sliceFingerprints(merged);
+              noteServerDocs(merged, pd.revs || null);
               /* the POST above took time, and anything typed during it is in
                  `cur` but not in `merged`. Applying `merged` flat would drop
                  it, so when state has moved the two are unioned instead —
@@ -501,6 +558,7 @@ export default function App() {
           if (Number.isFinite(+d.rev)) stateRev.current = +d.rev;
           /* the server now holds exactly what we compared against */
           serverSlices.current = mine;
+          noteServerDocs(full, d.revs || null);
           setSaveWarn(null); setSaveState("saved");
         }
       } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }

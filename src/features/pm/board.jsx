@@ -20,6 +20,44 @@ import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
 
 export const taskState = (t) => (t.completedAt ? "done" : t.dueDate && t.dueDate < todayISO() ? "overdue" : "open");
+
+/* Click-to-edit task title. Completing a task records when it happened; it
+   does not make the task read-only — a typo is still a typo after it is ticked
+   off, and the work log's auto-written titles are exactly the ones most worth
+   rewording. Enter or blur commits, Escape abandons. */
+function TaskTitle({ value, done, color, canEdit, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const ref = useRef(null);
+  useEffect(() => { if (editing) { ref.current?.focus(); ref.current?.select(); } }, [editing]);
+  const commit = () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next && next !== value) onCommit(next);
+    else setDraft(value);                       // empty or unchanged — leave it alone
+  };
+  if (editing) {
+    return (
+      <input ref={ref} value={draft} onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); setDraft(value); setEditing(false); }
+        }}
+        className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-[13px] font-medium text-gray-800 outline-none"
+        style={{ boxShadow: "0 0 0 2px rgba(36,86,230,.12)" }} />
+    );
+  }
+  return (
+    <div
+      onClick={canEdit ? () => { setDraft(value); setEditing(true); } : undefined}
+      title={canEdit ? "Click to edit" : undefined}
+      className={"min-w-0 flex-1 text-[13px] font-medium " + (canEdit ? "cursor-text rounded px-1 -mx-1 hover:bg-gray-100" : "")}
+      style={{ color, textDecoration: done ? "line-through" : "none", opacity: done ? 0.75 : 1 }}>
+      {value}
+    </div>
+  );
+}
 export const TASK_COLORS = { done: "#15803D", overdue: "#DC2626", open: "#1F2937" };
 export const flatTasks = (r) => (r.checklists || []).flatMap((c) => c.tasks);
 export const recordState = (r) => {
@@ -188,11 +226,11 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                               {t.completedAt && <CheckCircle2 size={11} strokeWidth={3.5} />}
                             </button>
                           </div>
-                          {/* title */}
-                          <div className="min-w-0 flex-1 text-[13px] font-medium"
-                            style={{ color: TASK_COLORS[st], textDecoration: st === "done" ? "line-through" : "none", opacity: st === "done" ? 0.75 : 1 }}>
-                            {t.title}
-                          </div>
+                          {/* title — editable whether or not the task is done */}
+                          <TaskTitle value={t.title} done={st === "done"} color={TASK_COLORS[st]}
+                            canEdit={perms.manage || (perms.complete && t.assignees.includes(currentUser))}
+                            onCommit={(next) => mutTask(cl.id, t.id, (x) => ({ ...x, title: next, titleEdited: true }),
+                              `renamed task to "${next}"`)} />
                           {/* RIGHT of task: dates + assignees */}
                           <div className="flex shrink-0 items-end gap-2.5 text-gray-400">
                             <span className="flex flex-col items-start">
