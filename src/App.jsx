@@ -314,6 +314,16 @@ export default function App() {
      for them — every save must leave them alone until they are fetched. */
   const unloaded = useRef(new Set());
   const [slicesLoading, setSlicesLoading] = useState(false);
+  /* ---- ALWAYS-CURRENT WORKSPACE ----------------------------------------
+     A save captures `company`/`clients` when it is scheduled, but it finishes
+     one to several seconds later — and on a 409 it then merges and writes back
+     what it captured. Anything typed in between existed only in the newer
+     state, so writing the captured one erased it: add a task in Project
+     management, watch "Saving…", watch the task vanish a moment later.
+     Refs are read at the moment of use, so a save can never resurrect a
+     snapshot that has already been superseded. */
+  const companyRef = useRef(company); companyRef.current = company;
+  const clientsRef = useRef(clients); clientsRef.current = clients;
   /* Pull any lazy slice this tab hasn't got yet and fold it into state. Called
      when a screen actually needs one, and before any save that cannot use
      `keep` — because a full save while a slice is missing would write nothing
@@ -387,8 +397,8 @@ export default function App() {
             return;
           }
         }
-        /* leave out whatever the server already has, byte for byte */
-        const full = { company, clients };
+        /* live state, not the snapshot this save was scheduled from */
+        const full = { company: companyRef.current, clients: clientsRef.current };
         const mine = sliceFingerprints(full);
         /* without a known revision there is nothing to pin the comparison to,
            so the whole workspace goes up — correctness over speed.
@@ -420,7 +430,7 @@ export default function App() {
               setSaveWarn("Saving is paused until the saved reports finish loading — nothing has been overwritten.");
               return;
             }
-            const whole = { company: { ...company, ...got.values }, clients };
+            const whole = { company: { ...companyRef.current, ...got.values }, clients: clientsRef.current };
             const rf = await postState(token, whole, stateRev.current);
             if (rf.ok) {
               const d = await rf.json().catch(() => ({}));
@@ -448,16 +458,27 @@ export default function App() {
               if (attempt) await new Promise((res) => setTimeout(res, 400 * attempt));
               const fresh = await fetch("/api/state", { headers: { "X-SS-Token": token } }).then((x) => x.json());
               if (!fresh?.state) throw new Error("no state");
-              const merged = mergeWorkspace(fresh.state, { company, clients });
-              const sum = mergeSummary(fresh.state, { company, clients }, merged);
+              /* read the refs INSIDE the retry loop: each attempt costs a
+                 round-trip, and work typed during it must be carried in too */
+              const localNow = { company: companyRef.current, clients: clientsRef.current };
+              const merged = mergeWorkspace(fresh.state, localNow);
+              const sum = mergeSummary(fresh.state, localNow, merged);
               const put = await postState(token, merged, +fresh.rev);
               if (put.status === 409) continue;          // someone saved again — re-merge onto the newer copy
               if (!put.ok) throw new Error("HTTP " + put.status);
               const pd = await put.json().catch(() => ({}));
               if (Number.isFinite(+pd.rev)) stateRev.current = +pd.rev;
               serverSlices.current = sliceFingerprints(merged);
-              if (merged.company) setCompany(merged.company);
-              if (merged.clients) setClients(merged.clients);
+              /* the POST above took time, and anything typed during it is in
+                 `cur` but not in `merged`. Applying `merged` flat would drop
+                 it, so when state has moved the two are unioned instead —
+                 additions always survive. */
+              if (merged.company) setCompany((cur) => (cur === localNow.company
+                ? merged.company
+                : mergeWorkspace({ company: merged.company }, { company: cur }).company));
+              if (merged.clients) setClients((cur) => (cur === localNow.clients
+                ? merged.clients
+                : mergeWorkspace({ clients: merged.clients }, { clients: cur }).clients));
               ok = true; recovered = sum;
             }
             if (!ok) throw new Error("still contended");

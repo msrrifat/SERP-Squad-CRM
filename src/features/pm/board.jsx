@@ -393,7 +393,13 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
      columns are mirrored across the All/Open/Overdue/Completed filters */
   const lists = project.lists && project.lists.length ? project.lists : [{ id: "list-default", name: "Records" }];
   const listIdOf = (r) => (lists.some((l) => l.id === r.listId) ? r.listId : lists[0].id);
-  const setLists = (ls) => onUpdate({ lists: ls });
+  /* Records and lists are ALSO written by the Optimization Studio's automatic
+     work log (applyOptWork) and by the monthly-record backfill. Computing a new
+     array from the `records` captured in this render and posting it wholesale
+     silently discards whatever those wrote in between — one tool undoing
+     another's work. Every writer below therefore derives from the CURRENT
+     project inside the updater instead. */
+  const setLists = (fn) => onUpdate((p) => ({ lists: typeof fn === "function" ? fn(p.lists || []) : fn }));
   const [newListName, setNewListName] = useState("");
   const [cardDraft, setCardDraft] = useState({});   // listId -> draft name for the inline "+ Add record"
   const [dragOver, setDragOver] = useState(null);
@@ -408,8 +414,8 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
   const [filter, setFilter] = useState("All");
   const [newName, setNewName] = useState("");
 
-  const setRecords = (recs) => onUpdate({ records: recs });
-  const patchRecord = (id, patch2) => setRecords(records.map((r) => (r.id === id ? { ...r, ...patch2, updatedAt: Date.now() } : r)));
+  const setRecords = (fn) => onUpdate((p) => ({ records: typeof fn === "function" ? fn(p.records || []) : fn }));
+  const patchRecord = (id, patch2) => setRecords((recs) => recs.map((r) => (r.id === id ? { ...r, ...patch2, updatedAt: Date.now() } : r)));
   const createRecord = (listId, name) => {
     const nm = (name ?? newName).trim(); if (!nm) return;
     const rec = {
@@ -418,13 +424,13 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
       assignees: [currentUser], checklists: [], comments: [],
       activity: [{ id: "pa" + Date.now(), ts: Date.now(), author: currentUser, text: "created this record" }],
     };
-    setRecords([rec, ...records]);
+    setRecords((recs) => [rec, ...recs]);
     log?.("Created record", `${nm} (${project.name})`);
     setNewName(""); setOpenId(rec.id);
   };
   const addList = () => {
     const nm = newListName.trim(); if (!nm) return;
-    setLists([...lists, { id: "list" + Date.now(), name: nm }]);
+    setLists((ls) => [...ls, { id: "list" + Date.now(), name: nm }]);
     setNewListName("");
     log?.("Created list", `${nm} (${project.name})`);
   };
@@ -441,7 +447,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
       })),
       activity: [{ id: "pa" + now, ts: now, author: currentUser, text: `imported from record template "${tpl.name}"` }],
     };
-    setRecords([rec, ...records]);
+    setRecords((recs) => [rec, ...recs]);
     log?.("Imported record template", `${tpl.name} → ${project.name}`);
     setOpenId(rec.id);
   };
@@ -518,14 +524,14 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
                 )}
                 {listMenu === list.id && (
                   <div className="absolute right-0 top-7 z-20 w-44 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl">
-                    <button onClick={async () => { const nm = await askInput({ title: "Rename list", message: "List name:", value: list.name, confirmLabel: "Rename" }); if (nm?.trim()) setLists(lists.map((l) => (l.id === list.id ? { ...l, name: nm.trim() } : l))); setListMenu(null); }}
+                    <button onClick={async () => { const nm = await askInput({ title: "Rename list", message: "List name:", value: list.name, confirmLabel: "Rename" }); if (nm?.trim()) setLists((ls) => ls.map((l) => (l.id === list.id ? { ...l, name: nm.trim() } : l))); setListMenu(null); }}
                       className="block w-full px-3 py-1.5 text-left text-[12px] text-gray-700 hover:bg-gray-50">Rename list</button>
                     <button disabled={lists.length === 1}
                       onClick={async () => {
                         if (!await askConfirm({ title: "Delete list?", message: `Delete list "${list.name}"?`, note: `Its records move to "${lists[0].id === list.id ? lists[1]?.name : lists[0].name}".`, confirmLabel: "Yes, delete", danger: true })) return;
                         const fallback = (lists[0].id === list.id ? lists[1] : lists[0]).id;
-                        setRecords(records.map((r) => (listIdOf(r) === list.id ? { ...r, listId: fallback } : r)));
-                        setLists(lists.filter((l) => l.id !== list.id));
+                        setRecords((recs) => recs.map((r) => (listIdOf(r) === list.id ? { ...r, listId: fallback } : r)));
+                        setLists((ls) => ls.filter((l) => l.id !== list.id));
                         setListMenu(null);
                       }}
                       className="block w-full px-3 py-1.5 text-left text-[12px] text-red-500 hover:bg-red-50 disabled:opacity-40">Delete list</button>
@@ -645,11 +651,11 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
           onSaveTemplate={onSaveTemplate ? (tpl) => {
             onSaveTemplate({ ...tpl, fromProject: project.name });
             // remember the link so the button disables (and re-enables if the template is deleted)
-            setRecords(records.map((r) => (r.id === openRecord.id ? { ...r, templateId: tpl.id } : r)));
+            setRecords((recs) => recs.map((r) => (r.id === openRecord.id ? { ...r, templateId: tpl.id } : r)));
             log?.("Saved record template", tpl.name);
           } : null}
-          onPatch={(patch) => setRecords(records.map((r) => (r.id === openRecord.id ? { ...r, ...patch } : r)))}
-          onDelete={async () => { if (!await askDelete(`the record "${openRecord.name}"`)) return; setRecords(records.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
+          onPatch={(patch) => setRecords((recs) => recs.map((r) => (r.id === openRecord.id ? { ...r, ...patch } : r)))}
+          onDelete={async () => { if (!await askDelete(`the record "${openRecord.name}"`)) return; setRecords((recs) => recs.filter((r) => r.id !== openRecord.id)); log?.("Deleted record", openRecord.name); }}
           onClose={() => setOpenId(null)} />
       )}
     </div>
