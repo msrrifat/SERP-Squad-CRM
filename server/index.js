@@ -392,6 +392,27 @@ function loadDomains() {
 
 const loadState = () => { const docs = loadDomains(); return docs ? joinWorkspace(docs) : null; };
 
+/* Keep the combined file and the rolling backups current.
+
+   Both used to be produced by saveState, which a granular save does not call —
+   so once per-tool writes became the normal path, app-state.json would have
+   frozen at the last full save and the hourly/daily backups would simply have
+   stopped. That is the safety net this whole area exists to protect, so the
+   cadence is driven from here instead. It is hourly-gated, not per-save: the
+   cost is paid once an hour, not on every keystroke. */
+let lastCombinedHour = null;
+function refreshCombined() {
+  const hour = new Date().toISOString().slice(0, 13);
+  if (lastCombinedHour === hour) return;              // already done this hour
+  const state = loadState();
+  if (!state) return;
+  lastCombinedHour = hour;
+  const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
+  writeFileSync(tmp, JSON.stringify(state));
+  renameSync(tmp, STATE_FILE);                        // the rollback fallback, kept fresh
+  writeBackups();
+}
+
 /* write ONLY these documents. Returns the new per-document revisions. */
 function saveDomainDocs(partial) {
   mkdirSync(STATE_DIR, { recursive: true });
@@ -404,6 +425,8 @@ function saveDomainDocs(partial) {
   }
   saveRevs(revs);
   try { writeFileSync(REV_FILE, String(next)); } catch { /* rev is advisory */ }
+  /* hourly-gated, so this costs nothing on a normal save */
+  try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ }
   return { revs, rev: next };
 }
 /* the workspace revision: bumped on every accepted write. A browser sends the
@@ -411,8 +434,8 @@ function saveDomainDocs(partial) {
    silently replacing work another session saved in the meantime. */
 const REV_FILE = new URL("./data/app-state.rev", import.meta.url);
 const loadRev = () => { try { return +readFileSync(REV_FILE, "utf8") || 0; } catch { return 0; } };
-const saveState = (state) => {
-  mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+/* hourly gzipped snapshots + daily rolling copies of the combined file */
+function writeBackups() {
   /* HOURLY point-in-time snapshots, gzipped, alongside the daily copies.
      Daily-only backups meant work added and lost inside the same day had
      nothing to restore from — the day's copy predated it. */
@@ -441,7 +464,12 @@ const saveState = (state) => {
         .forEach((f) => rmSync(new URL(f, bdir), { force: true }));
     }
   } catch { /* backups are best-effort — never block a save */ }
-  /* a FULL save rewrites every document, and also refreshes the combined
+}
+
+const saveState = (state) => {
+  mkdirSync(new URL("./data/", import.meta.url), { recursive: true });
+  writeBackups();
+  /* a FULL save rewrites  /* a FULL save rewrites every document, and also refreshes the combined
      file so backups, restore and a rollback all keep working from it */
   const { rev } = saveDomainDocs(splitWorkspace(state));
   const tmp = new URL("./data/app-state.json.tmp", import.meta.url);
