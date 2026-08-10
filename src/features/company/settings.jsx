@@ -17,8 +17,8 @@ import {
 import { GuideTip, Ava, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDelete, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
-import { money, relTime } from "../../lib/format.jsx";
-import { AccountingSection, monthKey, monthLabel } from "./accounting.jsx";
+import { relTime } from "../../lib/format.jsx";
+import { AccountingSection } from "./accounting.jsx";
 
 export const API_REGISTRY = [
   {
@@ -772,80 +772,162 @@ export function ActivitySection({ company }) {
   );
 }
 
+/* =====================================================================
+   INVOICES
+
+   Everything printable is driven by SAVED settings (company.invoice), not by
+   component state seeded with examples. The old version shipped a fake
+   billing address, a fake billing email, a boilerplate payment line and a
+   sample line item priced at 1500 — all of which printed on a real invoice
+   unless someone noticed and typed over them. A field with nothing behind it
+   now renders as nothing.
+
+   Money is computed in integer cents. Multiplying floats and summing them
+   drifts (0.1 + 0.2), and on an invoice that drift is a wrong number sent to
+   a client.
+   ===================================================================== */
+const CURRENCIES = ["USD", "CAD", "GBP", "EUR", "AUD", "BDT", "INR", "AED", "SGD", "NZD"];
+
 export function InvoiceSection({ company, onChange, clients }) {
-  const fin = company.finance || { clientEntries: [] };
-  const [clientId, setClientId] = useState(clients[0]?.id);
-  const client = clients.find((c) => c.id === clientId);
+  const inv = company.invoice || {};
+  const setInv = (p) => onChange({ invoice: { ...(company.invoice || {}), ...p } });
+
+  const [clientId, setClientId] = useState(clients[0]?.id || "");
+  const client = clients.find((c) => c.id === clientId) || null;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  /* A white-labelled client is billed under THAT brand — its logo and name are
+     already in Client settings, so the invoice picks them up rather than
+     asking anyone to upload the same image again. Otherwise it is the
+     agency's own branding. */
+  const wl = client?.whiteLabel?.enabled ? client.whiteLabel : null;
+  const brandName = wl?.name || inv.legalName || company.name || "";
+  const brandLogo = wl?.logo || inv.logo || company.logo || null;
+  const brandSite = wl?.website || "";
+  const accent = inv.accent || company.accent;
+
   const today = new Date();
-  const due = new Date(today.getTime() + 14 * 86400000);
-  const [invNo, setInvNo] = useState(`INV-${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}-001`);
+  const dueDays = Number.isFinite(+inv.dueDays) && +inv.dueDays >= 0 ? +inv.dueDays : 14;
   const [issueDate, setIssueDate] = useState(isoDate(today));
-  const [dueDate, setDueDate] = useState(isoDate(due));
-  const [taxPct, setTaxPct] = useState(0);
-  const [notes, setNotes] = useState("Payment due within 14 days. Thank you for your business!");
-  const [fromEmail, setFromEmail] = useState("billing@serpsquad.io");
-  const [fromAddress, setFromAddress] = useState("Dhaka, Bangladesh");
-  const [items, setItems] = useState([
-    { id: "i1", desc: "Local SEO — monthly retainer", qty: 1, rate: 1500 },
-  ]);
+  const [dueDate, setDueDate] = useState(isoDate(new Date(today.getTime() + dueDays * 86400000)));
+  const seq = String(inv.nextNumber || 1).padStart(3, "0");
+  const [invNo, setInvNo] = useState(`${inv.numberPrefix || "INV"}-${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}-${seq}`);
+  const [taxLabel, setTaxLabel] = useState(inv.taxLabel || "Tax");
+  const [taxPct, setTaxPct] = useState("");
+  const [paid, setPaid] = useState("");
+  const [notes, setNotes] = useState(inv.terms || "");
+  /* one empty row — a starting point, not a priced example */
+  const [items, setItems] = useState([{ id: "i1", desc: "", qty: "1", rate: "" }]);
 
   const setItem = (id, p) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, ...p } : x)));
-  const subtotal = items.reduce((s, x) => s + (+x.qty || 0) * (+x.rate || 0), 0);
-  const tax = subtotal * (+taxPct || 0) / 100;
-  const total = subtotal + tax;
 
-  /* accounting is month-by-month now, so an import takes THIS month's earnings
-     — pulling every month at once would bill the client for the year */
-  const [importMonth, setImportMonth] = useState(monthKey(new Date()));
-  const monthOf = (e) => e.month || monthKey(new Date(+String(e.id || "").replace(/^\D+/, "") || Date.now()));
-  const importFromAccounting = () => {
-    const earns = (fin.clientEntries || []).filter((e) => e.clientId === clientId && e.type === "earning" && monthOf(e) === importMonth);
-    if (!earns.length) return;
-    setItems(earns.map((e, i) => ({ id: "imp" + Date.now() + i, desc: e.label, qty: 1, rate: +e.amount })));
+  /* ---- integer-cent arithmetic ---- */
+  const toCents = (v) => Math.round((parseFloat(v) || 0) * 100);
+  const lineCents = (x) => Math.round((parseFloat(x.qty) || 0) * toCents(x.rate));
+  const subtotalC = items.reduce((s, x) => s + lineCents(x), 0);
+  const taxC = Math.round(subtotalC * (parseFloat(taxPct) || 0) / 100);
+  const totalC = subtotalC + taxC;
+  const paidC = toCents(paid);
+  const balanceC = totalC - paidC;
+
+  const cur = inv.currency || "USD";
+  const fmt = (c) => {
+    const n = c / 100;
+    try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n); }
+    catch { return `${cur} ${n.toFixed(2)}`; }
   };
 
   const th = "px-3 py-2 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400";
+  /* only render a line when there is something to put on it */
+  const Line = ({ children }) => (children ? <div className="text-[12px] leading-snug text-gray-500">{children}</div> : null);
 
   return (
     <div className="ll-fade space-y-4">
-      {/* controls */}
+      {/* ---------------- controls ---------------- */}
       <div className="no-print flex flex-wrap items-center gap-2">
         <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] font-medium">
+          {clients.length === 0 && <option value="">No clients yet</option>}
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <button onClick={importFromAccounting} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
-          <Wallet size={14} /> Import {monthLabel(importMonth)} earnings
+        <button onClick={() => setSettingsOpen((v) => !v)}
+          className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+          <Settings2 size={14} /> Branding &amp; footer
         </button>
-        <select value={importMonth} onChange={(e) => setImportMonth(e.target.value)}
-          title="Which month's earnings to import"
-          className="rounded-xl border border-gray-200 bg-white px-2 py-2 text-[12px] font-medium text-gray-600">
-          {Array.from({ length: 12 }, (_, i) => monthKey(new Date(new Date().getFullYear(), new Date().getMonth() - i, 1)))
-            .map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
-        <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: company.accent }}>
+        <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
           <Printer size={14} /> Print / Download PDF
         </button>
       </div>
 
-      {/* invoice paper */}
-      <div className="mx-auto max-w-3xl rounded-2xl bg-white p-9 shadow-sm">
-        {/* header: from + meta */}
-        <div className="mb-7 flex items-start justify-between gap-4 border-b pb-6" style={{ borderColor: company.accent + "33" }}>
-          <div>
-            <div className="mb-2 flex items-center gap-3">
-              <BrandMark name={company.name} logo={company.logo} accent={company.accent} size="lg" />
-              <input value={company.name} onChange={(e) => onChange({ name: e.target.value })}
-                className="ll-display border-0 bg-transparent text-[22px] font-bold tracking-tight outline-none" />
-            </div>
-            <input value={fromAddress} onChange={(e) => setFromAddress(e.target.value)} className="block w-64 border-0 bg-transparent text-[12px] text-gray-500 outline-none" />
-            <input value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} className="block w-64 border-0 bg-transparent text-[12px] text-gray-500 outline-none" />
-            <div className="no-print mt-1.5"><LogoUpload value={company.logo} onChange={(logo) => onChange({ logo })} label="Change logo" /></div>
+      {/* ---------------- branding & footer settings (saved) ---------------- */}
+      {settingsOpen && (
+        <Card className="no-print ll-fade space-y-4 p-4">
+          <div className="text-[12.5px] text-gray-400">
+            Saved once and used on every invoice. Anything left empty is simply left off the invoice.
+            {wl && <> This client is white-labelled, so its own brand name and logo are used instead of the fields below.</>}
           </div>
-          <div className="text-right">
-            <div className="ll-display text-[28px] font-bold tracking-tight" style={{ color: company.accent }}>INVOICE</div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Labeled label="Business name on invoices"><input value={inv.legalName || ""} onChange={(e) => setInv({ legalName: e.target.value })} placeholder={company.name || ""} className={inputCls} /></Labeled>
+            <Labeled label="Billing email"><input value={inv.email || ""} onChange={(e) => setInv({ email: e.target.value })} placeholder="" className={inputCls} /></Labeled>
+            <Labeled label="Phone"><input value={inv.phone || ""} onChange={(e) => setInv({ phone: e.target.value })} className={inputCls} /></Labeled>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Labeled label="Business address"><textarea rows={2} value={inv.address || ""} onChange={(e) => setInv({ address: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+            <Labeled label="Tax / VAT / registration no."><input value={inv.taxId || ""} onChange={(e) => setInv({ taxId: e.target.value })} className={inputCls} /></Labeled>
+            <Labeled label="Website shown on invoice"><input value={inv.website || ""} onChange={(e) => setInv({ website: e.target.value })} className={inputCls} /></Labeled>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Labeled label="Currency">
+              <select value={cur} onChange={(e) => setInv({ currency: e.target.value })} className={inputCls + " bg-white"}>
+                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Labeled>
+            <Labeled label="Invoice no. prefix"><input value={inv.numberPrefix || ""} onChange={(e) => setInv({ numberPrefix: e.target.value })} placeholder="INV" className={inputCls} /></Labeled>
+            <Labeled label="Next number"><input value={inv.nextNumber ?? ""} onChange={(e) => setInv({ nextNumber: e.target.value.replace(/\D/g, "") })} placeholder="1" className={"ll-mono " + inputCls} /></Labeled>
+            <Labeled label="Payment due in (days)"><input value={inv.dueDays ?? ""} onChange={(e) => setInv({ dueDays: e.target.value.replace(/\D/g, "") })} placeholder="14" className={"ll-mono " + inputCls} /></Labeled>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Labeled label="Default payment terms / notes"><textarea rows={2} value={inv.terms || ""} onChange={(e) => setInv({ terms: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+            <Labeled label="Payment details (bank, PayPal, Wise…)"><textarea rows={2} value={inv.paymentDetails || ""} onChange={(e) => setInv({ paymentDetails: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+          </div>
+          <Labeled label="Footer line — printed at the bottom of every page">
+            <input value={inv.footer || ""} onChange={(e) => setInv({ footer: e.target.value })} className={inputCls} />
+          </Labeled>
+          <div className="flex flex-wrap items-end gap-5">
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Invoice logo</div>
+              <LogoUpload value={inv.logo || null} onChange={(logo) => setInv({ logo })} label={company.logo ? "Override company logo" : "Upload logo"} />
+              <div className="mt-1 text-[10.5px] text-gray-400">{inv.logo ? "Used on invoices only." : "Falling back to the company logo."}</div>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Accent</div>
+              <div className="flex items-center gap-2">
+                <input type="color" value={accent} onChange={(e) => setInv({ accent: e.target.value })} className="h-8 w-12 cursor-pointer rounded border border-gray-200 bg-white" />
+                {inv.accent && <button onClick={() => setInv({ accent: null })} className="text-[11px] text-gray-400 hover:text-gray-600">Use company accent</button>}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ---------------- the invoice ---------------- */}
+      <div className="mx-auto max-w-3xl rounded-2xl bg-white p-9 shadow-sm">
+        <div className="mb-7 flex items-start justify-between gap-6 border-b pb-6" style={{ borderColor: accent + "33" }}>
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-3">
+              <BrandMark name={brandName || "—"} logo={brandLogo} accent={accent} size="lg" />
+              <span className="ll-display truncate text-[22px] font-bold tracking-tight">{brandName}</span>
+            </div>
+            {(inv.address || "").split("\n").filter(Boolean).map((l, i) => <Line key={i}>{l}</Line>)}
+            <Line>{inv.email}</Line>
+            <Line>{inv.phone}</Line>
+            <Line>{brandSite || inv.website}</Line>
+            <Line>{inv.taxId}</Line>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="ll-display text-[28px] font-bold tracking-tight" style={{ color: accent }}>INVOICE</div>
             <div className="mt-2 space-y-1 text-[12px]">
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">No.</span>
-                <input value={invNo} onChange={(e) => setInvNo(e.target.value)} className="ll-mono w-36 rounded border border-gray-200 px-2 py-1 text-right text-[12px]" /></div>
+                <input value={invNo} onChange={(e) => setInvNo(e.target.value)} className="ll-mono w-40 rounded border border-gray-200 px-2 py-1 text-right text-[12px]" /></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Issued</span>
                 <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Due</span>
@@ -854,20 +936,18 @@ export function InvoiceSection({ company, onChange, clients }) {
           </div>
         </div>
 
-        {/* bill to — auto-filled from the selected client */}
         <div className="mb-6">
           <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Bill to</div>
-          {client && (
-            <div className="text-[13px] leading-relaxed">
+          {client ? (
+            <div className="leading-relaxed">
               <div className="ll-display text-[16px] font-semibold">{client.companyName || client.name}</div>
-              <div className="text-gray-500">Attn: {client.contact}{client.email ? ` · ${client.email}` : ""}{client.phone ? ` · ${client.phone}` : ""}</div>
-              <div className="text-gray-500">{[client.companyWebsite, client.address].filter(Boolean).join(" · ")}</div>
+              <Line>{[client.contact && `Attn: ${client.contact}`, client.email, client.phone].filter(Boolean).join(" · ")}</Line>
+              <Line>{[client.companyWebsite, client.address].filter(Boolean).join(" · ")}</Line>
             </div>
-          )}
-          <div className="no-print mt-1 text-[10.5px] text-gray-300">Auto-filled from Client Settings — edit it there to change.</div>
+          ) : <div className="text-[12.5px] text-gray-400">Add a client to bill.</div>}
+          <div className="no-print mt-1 text-[10.5px] text-gray-300">Auto-filled from Client settings — edit it there to change.</div>
         </div>
 
-        {/* line items — detailed work */}
         <table className="w-full text-[13px]">
           <thead>
             <tr className="border-b border-gray-100">
@@ -882,50 +962,75 @@ export function InvoiceSection({ company, onChange, clients }) {
             {items.map((x) => (
               <tr key={x.id} className="border-b border-gray-50 align-top">
                 <td className="px-3 py-2">
-                  <textarea value={x.desc} onChange={(e) => setItem(x.id, { desc: e.target.value })} rows={Math.max(1, Math.ceil(x.desc.length / 55))}
+                  <textarea value={x.desc} onChange={(e) => setItem(x.id, { desc: e.target.value })} rows={Math.max(1, Math.ceil((x.desc || "").length / 55))}
                     placeholder="Describe the work…" className="w-full resize-none border-0 bg-transparent outline-none" />
                 </td>
                 <td className="px-3 py-2"><input value={x.qty} onChange={(e) => setItem(x.id, { qty: e.target.value.replace(/[^0-9.]/g, "") })} className="ll-mono w-12 rounded border border-gray-100 px-1.5 py-0.5 text-center" /></td>
-                <td className="px-3 py-2"><input value={x.rate} onChange={(e) => setItem(x.id, { rate: e.target.value.replace(/[^0-9.]/g, "") })} className="ll-mono w-24 rounded border border-gray-100 px-1.5 py-0.5 text-right" /></td>
-                <td className="ll-mono px-3 py-2 text-right font-semibold">{money((+x.qty || 0) * (+x.rate || 0))}</td>
+                <td className="px-3 py-2"><input value={x.rate} onChange={(e) => setItem(x.id, { rate: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" className="ll-mono w-24 rounded border border-gray-100 px-1.5 py-0.5 text-right" /></td>
+                <td className="ll-mono px-3 py-2 text-right font-semibold">{fmt(lineCents(x))}</td>
                 <td className="no-print px-1 py-2">
-                  <button onClick={() => setItems((xs) => xs.filter((y) => y.id !== x.id))} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+                  <button onClick={() => setItems((xs) => (xs.length > 1 ? xs.filter((y) => y.id !== x.id) : xs))}
+                    title={items.length > 1 ? "Remove line" : "An invoice needs at least one line"}
+                    className="text-gray-300 hover:text-red-500 disabled:opacity-30" disabled={items.length <= 1}><Trash2 size={13} /></button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button onClick={() => setItems((xs) => [...xs, { id: "i" + Date.now(), desc: "", qty: 1, rate: 0 }])}
+        <button onClick={() => setItems((xs) => [...xs, { id: "i" + Date.now(), desc: "", qty: "1", rate: "" }])}
           className="no-print mt-2 flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
           <Plus size={12} /> Add line item
         </button>
 
-        {/* totals */}
         <div className="mt-5 flex justify-end">
-          <div className="w-64 space-y-1.5 text-[13px]">
-            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="ll-mono">{money(subtotal)}</span></div>
+          <div className="w-72 space-y-1.5 text-[13px]">
+            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="ll-mono">{fmt(subtotalC)}</span></div>
             <div className="flex items-center justify-between text-gray-500">
-              <span className="flex items-center gap-1.5">Tax
-                <input value={taxPct} onChange={(e) => setTaxPct(e.target.value.replace(/[^0-9.]/g, ""))} className="ll-mono w-12 rounded border border-gray-200 px-1 py-0.5 text-center text-[11px]" />%
+              <span className="flex items-center gap-1.5">
+                <input value={taxLabel} onChange={(e) => setTaxLabel(e.target.value)} className="w-16 rounded border border-transparent bg-transparent px-1 text-[13px] hover:border-gray-200" />
+                <input value={taxPct} onChange={(e) => setTaxPct(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0" className="ll-mono w-12 rounded border border-gray-200 px-1 py-0.5 text-center text-[11px]" />%
               </span>
-              <span className="ll-mono">{money(tax)}</span>
+              <span className="ll-mono">{fmt(taxC)}</span>
             </div>
-            <div className="flex justify-between border-t pt-2 text-[18px] font-bold" style={{ borderColor: company.accent + "33", color: company.accent }}>
-              <span className="ll-display">Total due</span><span className="ll-mono">{money(total)}</span>
+            <div className="flex justify-between border-t pt-2 text-[18px] font-bold" style={{ borderColor: accent + "33", color: accent }}>
+              <span className="ll-display">Total</span><span className="ll-mono">{fmt(totalC)}</span>
             </div>
+            {/* only shown once something has been paid — a zero line on a fresh
+                invoice is noise, and reads as though a payment was expected */}
+            <div className="flex items-center justify-between text-gray-500">
+              <span className="no-print flex items-center gap-1.5">Amount paid
+                <input value={paid} onChange={(e) => setPaid(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0.00" className="ll-mono w-20 rounded border border-gray-200 px-1 py-0.5 text-right text-[11px]" />
+              </span>
+              {paidC > 0 && <span className="ll-mono print:block">−{fmt(paidC)}</span>}
+            </div>
+            {paidC > 0 && (
+              <div className="flex justify-between border-t pt-2 text-[15px] font-bold" style={{ borderColor: accent + "33" }}>
+                <span className="ll-display">Balance due</span><span className="ll-mono">{fmt(balanceC)}</span>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* notes */}
-        <div className="mt-7 border-t border-gray-100 pt-4">
-          <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Notes & payment terms</div>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            className="w-full resize-none border-0 bg-transparent text-[12.5px] leading-relaxed text-gray-600 outline-none" />
+        <div className="mt-7 grid gap-6 border-t border-gray-100 pt-4 sm:grid-cols-2">
+          <div>
+            <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Notes &amp; payment terms</div>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Add terms for this invoice…"
+              className="w-full resize-none border-0 bg-transparent text-[12.5px] leading-relaxed text-gray-600 outline-none" />
+          </div>
+          {inv.paymentDetails && (
+            <div>
+              <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Payment details</div>
+              <div className="whitespace-pre-line text-[12.5px] leading-relaxed text-gray-600">{inv.paymentDetails}</div>
+            </div>
+          )}
         </div>
-        <div className="mt-4 flex items-center justify-between text-[10.5px] text-gray-400">
-          <span>{company.name} · {fromEmail}</span>
-          <span>{invNo}</span>
-        </div>
+
+        {(inv.footer || invNo) && (
+          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
+            <span>{inv.footer || ""}</span>
+            <span className="ll-mono">{invNo}</span>
+          </div>
+        )}
       </div>
     </div>
   );
