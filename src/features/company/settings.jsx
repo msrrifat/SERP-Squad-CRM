@@ -775,144 +775,143 @@ export function ActivitySection({ company }) {
 /* =====================================================================
    INVOICES
 
-   Everything printable is driven by SAVED settings (company.invoice), not by
-   component state seeded with examples. The old version shipped a fake
-   billing address, a fake billing email, a boilerplate payment line and a
-   sample line item priced at 1500 — all of which printed on a real invoice
-   unless someone noticed and typed over them. A field with nothing behind it
-   now renders as nothing.
+   The tab opens on what you have already issued. Creating one is a
+   deliberate step from there, and the result is SAVED — an invoice you
+   printed and closed used to leave no record at all, so nothing knew what
+   had been billed, to whom, or whether it was paid.
+
+   Everything printable is driven by saved settings (company.invoice), never
+   by component defaults. An earlier version shipped a fake billing address,
+   a fake email and a sample line priced at 1500, all of which printed on a
+   real invoice unless someone noticed. A field with nothing behind it now
+   renders as nothing.
 
    Money is computed in integer cents. Multiplying floats and summing them
-   drifts (0.1 + 0.2), and on an invoice that drift is a wrong number sent to
-   a client.
+   drifts, and on an invoice that drift is a wrong number sent to a client.
    ===================================================================== */
 const CURRENCIES = ["USD", "CAD", "GBP", "EUR", "AUD", "BDT", "INR", "AED", "SGD", "NZD"];
+const INV_STATUS = { draft: "Draft", sent: "Sent", paid: "Paid" };
+const STATUS_TONE = {
+  draft: { bg: "#F1F5F9", fg: "#475569" },
+  sent:  { bg: "#DBEAFE", fg: "#1D4ED8" },
+  paid:  { bg: "#DCFCE7", fg: "#166534" },
+};
 
-export function InvoiceSection({ company, onChange, clients }) {
+const toCents = (v) => Math.round((parseFloat(v) || 0) * 100);
+const lineCents = (x) => Math.round((parseFloat(x.qty) || 0) * toCents(x.rate));
+const invTotals = (d) => {
+  const subtotal = (d.items || []).reduce((s, x) => s + lineCents(x), 0);
+  const tax = Math.round(subtotal * (parseFloat(d.taxPct) || 0) / 100);
+  const total = subtotal + tax;
+  const paid = toCents(d.paid);
+  return { subtotal, tax, total, paid, balance: total - paid };
+};
+const fmtMoney = (cents, cur) => {
+  const n = (cents || 0) / 100;
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(n); }
+  catch { return `${cur || ""} ${n.toFixed(2)}`.trim(); }
+};
+
+/* branding + footer: saved once, used by every invoice */
+function InvoiceSettings({ company, onChange }) {
   const inv = company.invoice || {};
   const setInv = (p) => onChange({ invoice: { ...(company.invoice || {}), ...p } });
+  const accent = inv.accent || company.accent;
+  return (
+    <Card className="no-print ll-fade space-y-4 p-4">
+      <div className="text-[12.5px] text-gray-400">
+        Saved once and used on every invoice. Anything left empty is simply left off the invoice.
+        The client's own logo comes from Client settings and appears beside their details in Bill to.
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Labeled label="Business name on invoices"><input value={inv.legalName || ""} onChange={(e) => setInv({ legalName: e.target.value })} placeholder={company.name || ""} className={inputCls} /></Labeled>
+        <Labeled label="Billing email"><input value={inv.email || ""} onChange={(e) => setInv({ email: e.target.value })} className={inputCls} /></Labeled>
+        <Labeled label="Phone"><input value={inv.phone || ""} onChange={(e) => setInv({ phone: e.target.value })} className={inputCls} /></Labeled>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Labeled label="Business address"><textarea rows={2} value={inv.address || ""} onChange={(e) => setInv({ address: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+        <Labeled label="Tax / VAT / registration no."><input value={inv.taxId || ""} onChange={(e) => setInv({ taxId: e.target.value })} className={inputCls} /></Labeled>
+        <Labeled label="Website shown on invoice"><input value={inv.website || ""} onChange={(e) => setInv({ website: e.target.value })} className={inputCls} /></Labeled>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-4">
+        <Labeled label="Currency">
+          <select value={inv.currency || "USD"} onChange={(e) => setInv({ currency: e.target.value })} className={inputCls + " bg-white"}>
+            {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Labeled>
+        <Labeled label="Invoice no. prefix"><input value={inv.numberPrefix || ""} onChange={(e) => setInv({ numberPrefix: e.target.value })} placeholder="INV" className={inputCls} /></Labeled>
+        <Labeled label="Next number"><input value={inv.nextNumber ?? ""} onChange={(e) => setInv({ nextNumber: e.target.value.replace(/\D/g, "") })} placeholder="1" className={"ll-mono " + inputCls} /></Labeled>
+        <Labeled label="Payment due in (days)"><input value={inv.dueDays ?? ""} onChange={(e) => setInv({ dueDays: e.target.value.replace(/\D/g, "") })} placeholder="14" className={"ll-mono " + inputCls} /></Labeled>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Labeled label="Default payment terms / notes"><textarea rows={2} value={inv.terms || ""} onChange={(e) => setInv({ terms: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+        <Labeled label="Payment details (bank, PayPal, Wise…)"><textarea rows={2} value={inv.paymentDetails || ""} onChange={(e) => setInv({ paymentDetails: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
+      </div>
+      <Labeled label="Footer line — printed at the bottom of every invoice">
+        <input value={inv.footer || ""} onChange={(e) => setInv({ footer: e.target.value })} className={inputCls} />
+      </Labeled>
+      <div className="flex flex-wrap items-end gap-5">
+        <div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Invoice logo</div>
+          <LogoUpload value={inv.logo || null} onChange={(logo) => setInv({ logo })} label={company.logo ? "Override company logo" : "Upload logo"} />
+          <div className="mt-1 text-[10.5px] text-gray-400">{inv.logo ? "Used on invoices only." : "Falling back to the company logo."}</div>
+        </div>
+        <div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Accent</div>
+          <div className="flex items-center gap-2">
+            <input type="color" value={accent} onChange={(e) => setInv({ accent: e.target.value })} className="h-8 w-12 cursor-pointer rounded border border-gray-200 bg-white" />
+            {inv.accent && <button onClick={() => setInv({ accent: null })} className="text-[11px] text-gray-400 hover:text-gray-600">Use company accent</button>}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
-  const [clientId, setClientId] = useState(clients[0]?.id || "");
-  const client = clients.find((c) => c.id === clientId) || null;
-  const [settingsOpen, setSettingsOpen] = useState(false);
+/* ---------------- the invoice itself ---------------- */
+function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
+  const inv = company.invoice || {};
+  const [d, setD] = useState(initial);
+  const set = (p) => setD((x) => ({ ...x, ...p }));
+  const setItem = (id, p) => setD((x) => ({ ...x, items: x.items.map((i) => (i.id === id ? { ...i, ...p } : i)) }));
 
+  const client = clients.find((c) => c.id === d.clientId) || null;
   /* Two brands appear on an invoice and they are not interchangeable: the
-     issuer at the top is YOUR company, and the client's own mark belongs
-     beside their details in Bill to. An earlier version swapped the header to
-     the client's white-label brand, which put the customer's logo where the
-     sender's should be. */
+     issuer at the top is YOUR company, the client's mark belongs beside their
+     details in Bill to. */
   const brandName = inv.legalName || company.name || "";
   const brandLogo = inv.logo || company.logo || null;
   const accent = inv.accent || company.accent;
   const clientName = client ? (client.companyName || client.name) : "";
-  /* the client's own logo, falling back to a white-label brand logo when that
-     is the only image on file */
   const clientLogo = client ? (client.logo || client.whiteLabel?.logo || null) : null;
 
-  const today = new Date();
-  const dueDays = Number.isFinite(+inv.dueDays) && +inv.dueDays >= 0 ? +inv.dueDays : 14;
-  const [issueDate, setIssueDate] = useState(isoDate(today));
-  const [dueDate, setDueDate] = useState(isoDate(new Date(today.getTime() + dueDays * 86400000)));
-  const seq = String(inv.nextNumber || 1).padStart(3, "0");
-  const [invNo, setInvNo] = useState(`${inv.numberPrefix || "INV"}-${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}-${seq}`);
-  const [taxLabel, setTaxLabel] = useState(inv.taxLabel || "Tax");
-  const [taxPct, setTaxPct] = useState("");
-  const [paid, setPaid] = useState("");
-  const [notes, setNotes] = useState(inv.terms || "");
-  /* one empty row — a starting point, not a priced example */
-  const [items, setItems] = useState([{ id: "i1", desc: "", qty: "1", rate: "" }]);
-
-  const setItem = (id, p) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, ...p } : x)));
-
-  /* ---- integer-cent arithmetic ---- */
-  const toCents = (v) => Math.round((parseFloat(v) || 0) * 100);
-  const lineCents = (x) => Math.round((parseFloat(x.qty) || 0) * toCents(x.rate));
-  const subtotalC = items.reduce((s, x) => s + lineCents(x), 0);
-  const taxC = Math.round(subtotalC * (parseFloat(taxPct) || 0) / 100);
-  const totalC = subtotalC + taxC;
-  const paidC = toCents(paid);
-  const balanceC = totalC - paidC;
-
-  const cur = inv.currency || "USD";
-  const fmt = (c) => {
-    const n = c / 100;
-    try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur }).format(n); }
-    catch { return `${cur} ${n.toFixed(2)}`; }
-  };
-
+  const cur = d.currency || inv.currency || "USD";
+  const t = invTotals(d);
+  const fmt = (c) => fmtMoney(c, cur);
   const th = "px-3 py-2 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400";
-  /* only render a line when there is something to put on it */
   const Line = ({ children }) => (children ? <div className="text-[12px] leading-snug text-gray-500">{children}</div> : null);
 
   return (
     <div className="ll-fade space-y-4">
-      {/* ---------------- controls ---------------- */}
       <div className="no-print flex flex-wrap items-center gap-2">
-        <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] font-medium">
+        <button onClick={onCancel} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+          <ArrowLeft size={14} /> All invoices
+        </button>
+        <select value={d.clientId} onChange={(e) => set({ clientId: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] font-medium">
           {clients.length === 0 && <option value="">No clients yet</option>}
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <button onClick={() => setSettingsOpen((v) => !v)}
-          className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
-          <Settings2 size={14} /> Branding &amp; footer
+        <select value={d.status} onChange={(e) => set({ status: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium">
+          {Object.entries(INV_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <button onClick={() => onSave(d)} className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
+          Save invoice
         </button>
-        <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
-          <Printer size={14} /> Print / Download PDF
+        <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+          <Printer size={14} /> Print / PDF
         </button>
       </div>
 
-      {/* ---------------- branding & footer settings (saved) ---------------- */}
-      {settingsOpen && (
-        <Card className="no-print ll-fade space-y-4 p-4">
-          <div className="text-[12.5px] text-gray-400">
-            Saved once and used on every invoice. Anything left empty is simply left off the invoice.
-            The client's own logo comes from Client settings and appears beside their details in Bill to.
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Labeled label="Business name on invoices"><input value={inv.legalName || ""} onChange={(e) => setInv({ legalName: e.target.value })} placeholder={company.name || ""} className={inputCls} /></Labeled>
-            <Labeled label="Billing email"><input value={inv.email || ""} onChange={(e) => setInv({ email: e.target.value })} placeholder="" className={inputCls} /></Labeled>
-            <Labeled label="Phone"><input value={inv.phone || ""} onChange={(e) => setInv({ phone: e.target.value })} className={inputCls} /></Labeled>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Labeled label="Business address"><textarea rows={2} value={inv.address || ""} onChange={(e) => setInv({ address: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
-            <Labeled label="Tax / VAT / registration no."><input value={inv.taxId || ""} onChange={(e) => setInv({ taxId: e.target.value })} className={inputCls} /></Labeled>
-            <Labeled label="Website shown on invoice"><input value={inv.website || ""} onChange={(e) => setInv({ website: e.target.value })} className={inputCls} /></Labeled>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-4">
-            <Labeled label="Currency">
-              <select value={cur} onChange={(e) => setInv({ currency: e.target.value })} className={inputCls + " bg-white"}>
-                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Labeled>
-            <Labeled label="Invoice no. prefix"><input value={inv.numberPrefix || ""} onChange={(e) => setInv({ numberPrefix: e.target.value })} placeholder="INV" className={inputCls} /></Labeled>
-            <Labeled label="Next number"><input value={inv.nextNumber ?? ""} onChange={(e) => setInv({ nextNumber: e.target.value.replace(/\D/g, "") })} placeholder="1" className={"ll-mono " + inputCls} /></Labeled>
-            <Labeled label="Payment due in (days)"><input value={inv.dueDays ?? ""} onChange={(e) => setInv({ dueDays: e.target.value.replace(/\D/g, "") })} placeholder="14" className={"ll-mono " + inputCls} /></Labeled>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label="Default payment terms / notes"><textarea rows={2} value={inv.terms || ""} onChange={(e) => setInv({ terms: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
-            <Labeled label="Payment details (bank, PayPal, Wise…)"><textarea rows={2} value={inv.paymentDetails || ""} onChange={(e) => setInv({ paymentDetails: e.target.value })} className={inputCls + " resize-none"} /></Labeled>
-          </div>
-          <Labeled label="Footer line — printed at the bottom of every page">
-            <input value={inv.footer || ""} onChange={(e) => setInv({ footer: e.target.value })} className={inputCls} />
-          </Labeled>
-          <div className="flex flex-wrap items-end gap-5">
-            <div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Invoice logo</div>
-              <LogoUpload value={inv.logo || null} onChange={(logo) => setInv({ logo })} label={company.logo ? "Override company logo" : "Upload logo"} />
-              <div className="mt-1 text-[10.5px] text-gray-400">{inv.logo ? "Used on invoices only." : "Falling back to the company logo."}</div>
-            </div>
-            <div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Accent</div>
-              <div className="flex items-center gap-2">
-                <input type="color" value={accent} onChange={(e) => setInv({ accent: e.target.value })} className="h-8 w-12 cursor-pointer rounded border border-gray-200 bg-white" />
-                {inv.accent && <button onClick={() => setInv({ accent: null })} className="text-[11px] text-gray-400 hover:text-gray-600">Use company accent</button>}
-              </div>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* ---------------- the invoice ---------------- */}
       <div className="mx-auto max-w-3xl rounded-2xl bg-white p-9 shadow-sm">
         <div className="mb-7 flex items-start justify-between gap-6 border-b pb-6" style={{ borderColor: accent + "33" }}>
           <div className="min-w-0">
@@ -930,11 +929,11 @@ export function InvoiceSection({ company, onChange, clients }) {
             <div className="ll-display text-[28px] font-bold tracking-tight" style={{ color: accent }}>INVOICE</div>
             <div className="mt-2 space-y-1 text-[12px]">
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">No.</span>
-                <input value={invNo} onChange={(e) => setInvNo(e.target.value)} className="ll-mono w-40 rounded border border-gray-200 px-2 py-1 text-right text-[12px]" /></div>
+                <input value={d.no} onChange={(e) => set({ no: e.target.value })} className="ll-mono w-40 rounded border border-gray-200 px-2 py-1 text-right text-[12px]" /></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Issued</span>
-                <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
+                <input type="date" value={d.issueDate} onChange={(e) => set({ issueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Due</span>
-                <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
+                <input type="date" value={d.dueDate} onChange={(e) => set({ dueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
             </div>
           </div>
         </div>
@@ -965,7 +964,7 @@ export function InvoiceSection({ company, onChange, clients }) {
             </tr>
           </thead>
           <tbody>
-            {items.map((x) => (
+            {d.items.map((x) => (
               <tr key={x.id} className="border-b border-gray-50 align-top">
                 <td className="px-3 py-2">
                   <textarea value={x.desc} onChange={(e) => setItem(x.id, { desc: e.target.value })} rows={Math.max(1, Math.ceil((x.desc || "").length / 55))}
@@ -975,43 +974,41 @@ export function InvoiceSection({ company, onChange, clients }) {
                 <td className="px-3 py-2"><input value={x.rate} onChange={(e) => setItem(x.id, { rate: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" className="ll-mono w-24 rounded border border-gray-100 px-1.5 py-0.5 text-right" /></td>
                 <td className="ll-mono px-3 py-2 text-right font-semibold">{fmt(lineCents(x))}</td>
                 <td className="no-print px-1 py-2">
-                  <button onClick={() => setItems((xs) => (xs.length > 1 ? xs.filter((y) => y.id !== x.id) : xs))}
-                    title={items.length > 1 ? "Remove line" : "An invoice needs at least one line"}
-                    className="text-gray-300 hover:text-red-500 disabled:opacity-30" disabled={items.length <= 1}><Trash2 size={13} /></button>
+                  <button onClick={() => setD((y) => (y.items.length > 1 ? { ...y, items: y.items.filter((i) => i.id !== x.id) } : y))}
+                    title={d.items.length > 1 ? "Remove line" : "An invoice needs at least one line"}
+                    className="text-gray-300 hover:text-red-500 disabled:opacity-30" disabled={d.items.length <= 1}><Trash2 size={13} /></button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button onClick={() => setItems((xs) => [...xs, { id: "i" + Date.now(), desc: "", qty: "1", rate: "" }])}
+        <button onClick={() => setD((y) => ({ ...y, items: [...y.items, { id: "i" + Date.now(), desc: "", qty: "1", rate: "" }] }))}
           className="no-print mt-2 flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
           <Plus size={12} /> Add line item
         </button>
 
         <div className="mt-5 flex justify-end">
           <div className="w-72 space-y-1.5 text-[13px]">
-            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="ll-mono">{fmt(subtotalC)}</span></div>
+            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="ll-mono">{fmt(t.subtotal)}</span></div>
             <div className="flex items-center justify-between text-gray-500">
               <span className="flex items-center gap-1.5">
-                <input value={taxLabel} onChange={(e) => setTaxLabel(e.target.value)} className="w-16 rounded border border-transparent bg-transparent px-1 text-[13px] hover:border-gray-200" />
-                <input value={taxPct} onChange={(e) => setTaxPct(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0" className="ll-mono w-12 rounded border border-gray-200 px-1 py-0.5 text-center text-[11px]" />%
+                <input value={d.taxLabel} onChange={(e) => set({ taxLabel: e.target.value })} className="w-16 rounded border border-transparent bg-transparent px-1 text-[13px] hover:border-gray-200" />
+                <input value={d.taxPct} onChange={(e) => set({ taxPct: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0" className="ll-mono w-12 rounded border border-gray-200 px-1 py-0.5 text-center text-[11px]" />%
               </span>
-              <span className="ll-mono">{fmt(taxC)}</span>
+              <span className="ll-mono">{fmt(t.tax)}</span>
             </div>
             <div className="flex justify-between border-t pt-2 text-[18px] font-bold" style={{ borderColor: accent + "33", color: accent }}>
-              <span className="ll-display">Total</span><span className="ll-mono">{fmt(totalC)}</span>
+              <span className="ll-display">Total</span><span className="ll-mono">{fmt(t.total)}</span>
             </div>
-            {/* only shown once something has been paid — a zero line on a fresh
-                invoice is noise, and reads as though a payment was expected */}
             <div className="flex items-center justify-between text-gray-500">
               <span className="no-print flex items-center gap-1.5">Amount paid
-                <input value={paid} onChange={(e) => setPaid(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0.00" className="ll-mono w-20 rounded border border-gray-200 px-1 py-0.5 text-right text-[11px]" />
+                <input value={d.paid} onChange={(e) => set({ paid: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" className="ll-mono w-20 rounded border border-gray-200 px-1 py-0.5 text-right text-[11px]" />
               </span>
-              {paidC > 0 && <span className="ll-mono print:block">−{fmt(paidC)}</span>}
+              {t.paid > 0 && <span className="ll-mono">−{fmt(t.paid)}</span>}
             </div>
-            {paidC > 0 && (
+            {t.paid > 0 && (
               <div className="flex justify-between border-t pt-2 text-[15px] font-bold" style={{ borderColor: accent + "33" }}>
-                <span className="ll-display">Balance due</span><span className="ll-mono">{fmt(balanceC)}</span>
+                <span className="ll-display">Balance due</span><span className="ll-mono">{fmt(t.balance)}</span>
               </div>
             )}
           </div>
@@ -1020,7 +1017,7 @@ export function InvoiceSection({ company, onChange, clients }) {
         <div className="mt-7 grid gap-6 border-t border-gray-100 pt-4 sm:grid-cols-2">
           <div>
             <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Notes &amp; payment terms</div>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Add terms for this invoice…"
+            <textarea value={d.notes} onChange={(e) => set({ notes: e.target.value })} rows={3} placeholder="Add terms for this invoice…"
               className="w-full resize-none border-0 bg-transparent text-[12.5px] leading-relaxed text-gray-600 outline-none" />
           </div>
           {inv.paymentDetails && (
@@ -1031,13 +1028,140 @@ export function InvoiceSection({ company, onChange, clients }) {
           )}
         </div>
 
-        {(inv.footer || invNo) && (
-          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
-            <span>{inv.footer || ""}</span>
-            <span className="ll-mono">{invNo}</span>
-          </div>
-        )}
+        <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
+          <span>{inv.footer || ""}</span>
+          <span className="ll-mono">{d.no}</span>
+        </div>
       </div>
+    </div>
+  );
+}
+
+export function InvoiceSection({ company, onChange, clients }) {
+  const inv = company.invoice || {};
+  const saved = company.invoices || [];
+  const [editing, setEditing] = useState(null);      // the invoice being edited
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filter, setFilter] = useState("all");
+
+  const accent = inv.accent || company.accent;
+  const nameOf = (cid) => { const c = clients.find((x) => x.id === cid); return c ? (c.companyName || c.name) : "—"; };
+
+  const blank = () => {
+    const today = new Date();
+    const dueDays = Number.isFinite(+inv.dueDays) && +inv.dueDays >= 0 ? +inv.dueDays : 14;
+    const n = parseInt(inv.nextNumber || 1, 10) || 1;
+    return {
+      id: "inv" + Date.now().toString(36),
+      no: `${inv.numberPrefix || "INV"}-${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}-${String(n).padStart(3, "0")}`,
+      clientId: clients[0]?.id || "",
+      status: "draft",
+      currency: inv.currency || "USD",
+      issueDate: isoDate(today),
+      dueDate: isoDate(new Date(today.getTime() + dueDays * 86400000)),
+      taxLabel: inv.taxLabel || "Tax", taxPct: "", paid: "",
+      notes: inv.terms || "",
+      items: [{ id: "i1", desc: "", qty: "1", rate: "" }],
+      createdAt: Date.now(),
+    };
+  };
+
+  const saveInvoice = (data) => {
+    const exists = saved.some((x) => x.id === data.id);
+    const t = invTotals(data);
+    /* the computed totals are stored with the invoice, so the list shows what
+       was actually issued rather than re-deriving it later */
+    const rec = { ...data, updatedAt: Date.now(), totalCents: t.total, balanceCents: t.balance };
+    const patch = { invoices: exists ? saved.map((x) => (x.id === rec.id ? rec : x)) : [rec, ...saved] };
+    if (!exists) {
+      const n = parseInt(inv.nextNumber || 1, 10) || 1;
+      patch.invoice = { ...(company.invoice || {}), nextNumber: n + 1 };
+    }
+    onChange(patch);
+    setEditing(null);
+  };
+
+  if (editing) {
+    return (
+      <div className="space-y-4">
+        {settingsOpen && <InvoiceSettings company={company} onChange={onChange} />}
+        <InvoiceEditor company={company} clients={clients} initial={editing}
+          onSave={saveInvoice} onCancel={() => setEditing(null)} />
+      </div>
+    );
+  }
+
+  const rows = saved
+    .filter((x) => filter === "all" || x.status === filter)
+    .slice()
+    .sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)) || (b.createdAt || 0) - (a.createdAt || 0));
+  const today = isoDate(new Date());
+  const sum = (st) => saved.filter((x) => (st ? x.status === st : true)).reduce((s, x) => s + (x.totalCents || 0), 0);
+
+  return (
+    <div className="ll-fade space-y-4">
+      <div className="no-print flex flex-wrap items-center gap-2">
+        <button onClick={() => setEditing(blank())} disabled={clients.length === 0}
+          title={clients.length === 0 ? "Add a client first" : "Create a new invoice"}
+          className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+          <Plus size={14} /> New invoice
+        </button>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600">
+          <option value="all">All ({saved.length})</option>
+          {Object.entries(INV_STATUS).map(([k, v]) => <option key={k} value={k}>{v} ({saved.filter((x) => x.status === k).length})</option>)}
+        </select>
+        <button onClick={() => setSettingsOpen((v) => !v)}
+          className="ml-auto flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+          <Settings2 size={14} /> Branding &amp; footer
+        </button>
+      </div>
+
+      {settingsOpen && <InvoiceSettings company={company} onChange={onChange} />}
+
+      {saved.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Card className="p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Invoiced</div><div className="ll-mono mt-0.5 text-[17px] font-bold">{fmtMoney(sum(), inv.currency)}</div></Card>
+          <Card className="p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Paid</div><div className="ll-mono mt-0.5 text-[17px] font-bold" style={{ color: POS }}>{fmtMoney(sum("paid"), inv.currency)}</div></Card>
+          <Card className="p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Outstanding</div><div className="ll-mono mt-0.5 text-[17px] font-bold">{fmtMoney(sum() - sum("paid"), inv.currency)}</div></Card>
+        </div>
+      )}
+
+      <Card className="overflow-hidden">
+        {rows.length === 0 ? (
+          <div className="p-10 text-center">
+            <Receipt size={22} className="mx-auto mb-2 text-gray-300" />
+            <div className="text-[13px] font-semibold text-gray-500">{saved.length === 0 ? "No invoices yet" : "Nothing with that status"}</div>
+            <div className="mt-1 text-[12px] text-gray-400">
+              {saved.length === 0
+                ? (clients.length === 0 ? "Add a client first, then create your first invoice." : "Create one and it will be saved here.")
+                : "Try a different filter."}
+            </div>
+          </div>
+        ) : rows.map((x) => {
+          const overdue = x.status !== "paid" && x.dueDate && x.dueDate < today;
+          const tone = STATUS_TONE[x.status] || STATUS_TONE.draft;
+          return (
+            <div key={x.id} className="flex items-center gap-3 border-b border-gray-50 px-4 py-3 last:border-0 hover:bg-gray-50">
+              <button onClick={() => setEditing(x)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                <span className="ll-mono w-40 shrink-0 truncate text-[12px] font-semibold text-gray-700">{x.no}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-gray-800">{nameOf(x.clientId)}</span>
+                <span className="ll-mono hidden shrink-0 whitespace-nowrap text-[11.5px] text-gray-400 md:block">{x.issueDate}</span>
+                <span className="ll-mono hidden w-32 shrink-0 whitespace-nowrap text-[11.5px] sm:block" style={{ color: overdue ? NEG : "#9CA3AF" }}>
+                  {overdue ? "overdue" : `due ${x.dueDate || "—"}`}
+                </span>
+                <span className="rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide" style={{ background: tone.bg, color: tone.fg }}>{INV_STATUS[x.status] || x.status}</span>
+                <span className="ll-mono w-28 shrink-0 text-right text-[13px] font-semibold">{fmtMoney(x.totalCents, x.currency)}</span>
+              </button>
+              <button title="Duplicate" onClick={() => setEditing({ ...x, ...blank(), clientId: x.clientId, items: x.items.map((i, k) => ({ ...i, id: "i" + Date.now() + k })), taxPct: x.taxPct, taxLabel: x.taxLabel, notes: x.notes })}
+                className="shrink-0 rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600"><Copy size={13} /></button>
+              <button title="Delete" onClick={async () => {
+                if (!await askDelete(`invoice ${x.no}`)) return;
+                onChange({ invoices: saved.filter((y) => y.id !== x.id) });
+              }} className="shrink-0 rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>
+            </div>
+          );
+        })}
+      </Card>
     </div>
   );
 }
