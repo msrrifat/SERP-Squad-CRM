@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { GuideTip, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDelete, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
+import { GuideTip, Ava, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDelete, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
 import { isoDate } from "../../lib/months.jsx";
 import { money, relTime } from "../../lib/format.jsx";
@@ -677,9 +677,10 @@ export function TeamSection({ company, onChange, clients }) {
           return (
             <Card key={m.id} className="overflow-hidden">
               <button onClick={() => setOpenId(open ? null : m.id)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50">
-                <span className="ll-display flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[12px] font-bold text-white" style={{ background: company.accent }}>
-                  {m.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
-                </span>
+                {/* Ava, not hand-rolled initials — this list built its own
+                    initials tile, so a member with a profile picture appeared
+                    as a photo in the account panel and as letters here. */}
+                <Ava name={m.name} img={m.avatar} size={36} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
                     <span className="truncate text-[13.5px] font-semibold text-gray-800">{m.name}</span>
@@ -755,9 +756,9 @@ export function ActivitySection({ company }) {
         {rows.length === 0 && <div className="p-8 text-center text-[13px] text-gray-400">No activity yet for this member.</div>}
         {rows.map((a) => (
           <div key={a.id} className="flex items-center gap-3 border-b border-gray-50 px-4 py-3 last:border-0">
-            <span className="ll-display flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold text-white" style={{ background: company.accent }}>
-              {a.member.split(" ").map((w) => w[0]).slice(0, 2).join("")}
-            </span>
+            {/* only a name here, so the picture comes from the shared
+                name -> avatar directory set in App */}
+            <Ava name={a.member} size={32} />
             <span className="min-w-0 flex-1 text-[13px]">
               <span className="font-semibold text-gray-800">{a.member}</span>
               <span className="text-gray-500"> — {a.action}</span>
