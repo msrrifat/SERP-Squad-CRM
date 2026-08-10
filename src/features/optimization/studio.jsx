@@ -2461,6 +2461,21 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     setVerifying(false);
   };
   const [credNote, setCredNote] = useState(null);
+  /* connection key for the companion plugin — the way in when the client's
+     firewall refuses this server and we cannot ask them to change Cloudflare */
+  const [pairKey, setPairKey] = useState(null);
+  const [pairBusy, setPairBusy] = useState(false);
+  const issuePairKey = async () => {
+    setPairBusy(true);
+    try {
+      const r = await fetch("/api/wp/agent/key", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site: project.website, projectId: project.id }) });
+      const d = await r.json();
+      setPairKey(r.ok && d.key ? d.key : null);
+      if (!r.ok) setCredNote({ ok: false, text: d.detail || "Could not create a connection key." });
+    } catch { setCredNote({ ok: false, text: "API server unreachable — the connection key is issued server-side." }); }
+    setPairBusy(false);
+  };
   const testCred = async () => {
     const val = credDraft.trim(); if (!val) return;
     setTestingCred(true); setCredNote(null);
@@ -2469,7 +2484,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       try {
         const r = await fetch("/api/wp/test", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000), body: JSON.stringify({ site: project.website, credential: val }) });
         const d = await r.json();
-        setCredNote({ ok: !!d.checks?.authenticated, text: d.detail, checks: d.checks });
+        setCredNote({ ok: !!d.checks?.authenticated, text: d.detail, checks: d.checks, needsAgent: !!d.needsAgent });
         if (d.checks?.authenticated) {
           set({ credential: { type: plat.credential.type, value: val, masked: val.split(":")[0] + ":••••••••", status: "valid", user: d.checks.user, addedAt: Date.now() } });
           setCredDraft(""); work?.("website", "wpConnected", { detail: d.checks.user }); log?.(`WordPress connected as ${d.checks.user}`, project.website);
@@ -2710,6 +2725,33 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
                 <div className={"mt-1.5 w-full rounded-lg border px-3 py-2 text-[11px] leading-relaxed " + (credNote.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>
                   {credNote.text}
                   {credNote.checks && <span className="ll-mono mt-0.5 block text-[9.5px] opacity-70">reachable {credNote.checks.reachable ? "✓" : "✕"} · REST {credNote.checks.restApi ? "✓" : "✕"} · auth {credNote.checks.authenticated ? "✓" : "✕"} · publish {credNote.checks.canPublish ? "✓" : "✕"}</span>}
+                  {/* the firewall refuses this server outright — the plugin is
+                      the way in that needs nothing from the client's host */}
+                  {credNote.needsAgent && (
+                    <div className="mt-2 border-t border-amber-200 pt-2">
+                      {!pairKey ? (
+                        <button onClick={issuePairKey} disabled={pairBusy}
+                          className="rounded-md px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
+                          {pairBusy ? "Creating…" : "Connect via the plugin instead"}
+                        </button>
+                      ) : (
+                        <div>
+                          <div className="font-semibold">Connection key — valid for 60 minutes, single use:</div>
+                          <div className="ll-mono mt-1 flex items-center gap-2">
+                            <code className="flex-1 select-all break-all rounded bg-white/70 px-2 py-1 text-[11px]">{pairKey}</code>
+                            <button onClick={() => navigator.clipboard?.writeText(pairKey)}
+                              className="rounded border border-amber-300 px-2 py-1 text-[10px] font-semibold">Copy</button>
+                          </div>
+                          <ol className="mt-1.5 list-decimal space-y-0.5 pl-4 text-[10.5px] opacity-90">
+                            <li>Install/update <b>SERP Squad Connector</b> on {project.website}</li>
+                            <li>Open <b>Settings → SERP Squad</b> in that site's wp-admin</li>
+                            <li>Paste this key and press Connect</li>
+                          </ol>
+                          <div className="mt-1 text-[10.5px] opacity-75">The site then calls out to the CRM once a minute, so the firewall blocking inbound requests stops mattering — and no Application Password is needed.</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               </div>

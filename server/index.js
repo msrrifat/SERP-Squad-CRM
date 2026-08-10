@@ -27,7 +27,7 @@
 import http from "node:http";
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { gzip, gzipSync, gunzipSync } from "node:zlib";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
@@ -1733,10 +1733,17 @@ async function handleWpMedia(body) {
     /* WP caps per_page at 100 — paginate until the library is exhausted
        (up to 2000 items) so a 450-image site syncs completely */
     const all = [];
-    for (let page = 1; page <= 20; page++) {
-      const items = await wpFetch(body, `/media?per_page=100&page=${page}&_fields=id,source_url,title,alt_text,media_type,mime_type,date`);
-      all.push(...items);
-      if (items.length < 100) break;
+    try {
+      for (let page = 1; page <= 20; page++) {
+        const items = await wpFetch(body, `/media?per_page=100&page=${page}&_fields=id,source_url,title,alt_text,media_type,mime_type,date`);
+        all.push(...items);
+        if (items.length < 100) break;
+      }
+    } catch (e) {
+      if (!e?.blocked) throw e;
+      const viaAgent = await agentExec(body.site, "media", { limit: 500 });
+      if (viaAgent?.error) return [502, { error: "provider_error", via: "agent", detail: viaAgent.detail || viaAgent.error }];
+      all.push(...(Array.isArray(viaAgent) ? viaAgent : []));
     }
     return [200, { live: true, media: all.map((m) => ({ id: m.id, url: m.source_url, name: m.title?.rendered || "", alt: m.alt_text || "", type: m.media_type, mime: m.mime_type, date: m.date })) }];
   } catch (e) { return wpErr(e); }
@@ -1791,10 +1798,27 @@ async function handleWpContent(body) {
   });
   try {
     const fields = "id,slug,link,title,excerpt,content,modified,yoast_head_json,serpsquad_seo";
-    const [pages, posts] = await Promise.all([
-      wpFetch(body, `/pages?per_page=100&status=publish&_fields=${fields}`),
-      wpFetch(body, `/posts?per_page=100&status=publish&_fields=${fields},date`),
-    ]);
+    let pages, posts;
+    try {
+      [pages, posts] = await Promise.all([
+        wpFetch(body, `/pages?per_page=100&status=publish&_fields=${fields}`),
+        wpFetch(body, `/posts?per_page=100&status=publish&_fields=${fields},date`),
+      ]);
+    } catch (e) {
+      /* the firewall refused us both ways — if the companion plugin is paired,
+         the site can send its own content outbound instead. The plugin returns
+         the same shape the REST reader produces, so everything below is
+         unchanged. */
+      if (!e?.blocked) throw e;
+      const viaAgent = await agentExec(body.site, "content", { limit: 200 });
+      if (viaAgent?.error) {
+        return [502, { error: "provider_error", via: "agent",
+          detail: viaAgent.error === "unpaired"
+            ? "This site's firewall blocks the CRM, and the SERP Squad plugin is not connected yet — install/update the plugin and paste the connection key (Settings → SERP Squad) to sync without any firewall change."
+            : `WordPress is firewalled and the connected plugin did not answer: ${viaAgent.detail || viaAgent.error}` }];
+      }
+      pages = viaAgent.pages || []; posts = viaAgent.posts || [];
+    }
     return [200, { live: true,
       pages: pages.map((p) => ({
         wpId: p.id, url: pathOf(p.link), origUrl: p.link, slug: p.slug,
@@ -2760,8 +2784,23 @@ async function handleWpTest(body) {
       const who = /error code: 10\d\d|cloudflare/i.test(bodyText) || cfRay
         ? `Cloudflare is refusing this server's IP (${cfRay ? "ray " + cfRay : "edge block"}).`
         : `The site's server/host firewall is refusing this server's IP.`;
-      return [200, { checks, blocked: true,
-        detail: `Site reached, but BOTH /wp-json and /?rest_route= returned HTTP ${ping.status}. ${who} Because the alternate route was refused too, this is not a path rule — the edge is refusing this server's IP specifically, so nothing the CRM sends can get through. Allow the CRM server IP in Cloudflare (Security → WAF → Tools → IP Access Rules) or in the hosting panel's firewall.` }];
+      /* an inbound block is final — but the companion plugin can call OUT,
+         which no firewall here is filtering. If it is already paired, say so
+         and prove it by pinging the site through it. */
+      const agent = agentForSite(body.site);
+      if (agent) {
+        const pong = await agentExec(body.site, "ping", {}, 20000);
+        if (!pong?.error) {
+          checks.restApi = true; checks.authenticated = true; checks.canPublish = true;
+          checks.user = "SERP Squad plugin";
+          return [200, { checks, via: "agent",
+            detail: `The firewall blocks inbound requests to this site, but the SERP Squad plugin is connected and answering (WordPress ${pong.wp || "?"}, plugin ${pong.agent || "?"}). Sync and deploys run through it — no Cloudflare or hosting change is needed.` }];
+        }
+        return [200, { checks, via: "agent", blocked: true,
+          detail: `Inbound is blocked (HTTP ${ping.status}) and the connected plugin has not answered: ${pong.detail || pong.error} WordPress cron only runs when the site gets traffic, so open the site once and retest.` }];
+      }
+      return [200, { checks, blocked: true, needsAgent: true,
+        detail: `Site reached, but BOTH /wp-json and /?rest_route= returned HTTP ${ping.status}. ${who} Because the alternate route was refused too, this is not a path rule — the edge is refusing this server's IP, and nothing the CRM sends inbound can get through. Fix it WITHOUT touching the client's Cloudflare: install/update the SERP Squad Connector plugin on the site, open Settings → SERP Squad, and paste a connection key from this Connector tab. The plugin then calls out to the CRM, which no firewall blocks. (The alternative is to allow the CRM server IP in Cloudflare → Security → WAF → Tools → IP Access Rules.)` }];
     }
   } catch (e) {
     return [200, { checks, detail: `Could not reach https://${body.site}/wp-json — check the domain, DNS and that the site is online. (${e?.message || e})` }];
@@ -2776,6 +2815,166 @@ async function handleWpTest(body) {
     checks.canPublish = (d.capabilities && (d.capabilities.publish_pages || d.capabilities.publish_posts)) || ["administrator", "editor"].some((r) => (d.roles || []).includes(r));
     return [200, { checks, detail: checks.canPublish ? `Connected as ${checks.user} ✓ — full-site deploys, scheduled posts and media sync are ready.` : `Authenticated as ${checks.user}, but this user can't publish pages — use an Administrator or Editor account.` }];
   } catch (e) { return [200, { checks, detail: "Auth check failed: " + (e?.message || e) }]; }
+}
+
+
+/* ======================================================================
+   WORDPRESS OUTBOUND AGENT
+
+   When a client's firewall refuses this server, no inbound request can reach
+   the site — not /wp-json, not /?rest_route=, and not any route the companion
+   plugin could add, because all of them arrive at the same edge. So the plugin
+   calls US instead: it asks for queued work, runs it locally with the
+   privileges it already has, and posts the answer back. Outbound HTTPS from
+   the site is not something Cloudflare filters.
+
+   It also retires the Application Password for these sites: the plugin acts as
+   itself, so there is no credential to store or leak.
+
+   Every agent request is signed with a secret issued at pairing —
+   HMAC-SHA256 over "<timestamp>.<raw body>" — and timestamps outside a five
+   minute window are rejected, so a captured request cannot be replayed.
+   ====================================================================== */
+const AGENT_DIR = new URL("./data/wp-agents/", import.meta.url);
+const agentFile = (id) => new URL(`${String(id).replace(/[^a-zA-Z0-9_-]/g, "")}.json`, AGENT_DIR);
+const KEYS_FILE = new URL("./data/wp-agents/_keys.json", import.meta.url);
+const loadAgent = (id) => readJson(agentFile(id), null);
+const saveAgent = (a) => { mkdirSync(AGENT_DIR, { recursive: true }); writeFileSync(agentFile(a.siteId), JSON.stringify(a)); };
+const loadKeys = () => readJson(KEYS_FILE, {}) || {};
+const saveKeys = (k) => { mkdirSync(AGENT_DIR, { recursive: true }); writeFileSync(KEYS_FILE, JSON.stringify(k)); };
+const hostOf = (u) => { try { return new URL(String(u)).host.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
+
+/* the CRM issues a short-lived, single-use key; the site owner pastes it into
+   the plugin. Nothing else can pair, and a leaked key expires by itself. */
+function handleAgentKey(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const site = hostOf("https://" + String(body?.site || "").replace(/^https?:\/\//, ""));
+  if (!site) return [400, { error: "bad_request", detail: "site required" }];
+  const keys = loadKeys();
+  for (const [k, v] of Object.entries(keys)) if (Date.now() - v.at > 36e5) delete keys[k];  // 1h
+  const key = "ssk_" + randomBytes(18).toString("hex");
+  keys[key] = { site, at: Date.now(), projectId: body?.projectId || null };
+  saveKeys(keys);
+  return [200, { ok: true, key, site, expiresInMin: 60 }];
+}
+
+function handleAgentPair(body) {
+  const key = String(body?.key || "");
+  const keys = loadKeys();
+  const rec = keys[key];
+  if (!rec) return [403, { error: "bad_key", detail: "That connection key is not valid — issue a fresh one in the CRM." }];
+  if (Date.now() - rec.at > 36e5) { delete keys[key]; saveKeys(keys); return [403, { error: "expired", detail: "That connection key has expired — issue a fresh one in the CRM." }]; }
+  const home = hostOf(body?.home);
+  if (!home) return [400, { error: "bad_request", detail: "home required" }];
+  /* the key names the site it was issued for, so a key pasted into the wrong
+     site pairs nothing */
+  if (rec.site && home !== rec.site) {
+    return [403, { error: "site_mismatch", detail: `This key was issued for ${rec.site}, but the request came from ${home}.` }];
+  }
+  delete keys[key]; saveKeys(keys);                       // single use
+  const siteId = "wpa_" + randomBytes(9).toString("hex");
+  const secret = randomBytes(32).toString("hex");
+  saveAgent({ siteId, secret, home, site: rec.site || home, projectId: rec.projectId || null,
+    pairedAt: Date.now(), lastSeen: Date.now(), agent: String(body?.agent || ""), queue: [], results: {} });
+  return [200, { ok: true, siteId, secret }];
+}
+
+/* verify the signature and return the agent record */
+function agentFromReq(req, raw) {
+  const id = String(req.headers["x-ss-site"] || "");
+  const ts = String(req.headers["x-ss-timestamp"] || "");
+  const sig = String(req.headers["x-ss-signature"] || "");
+  if (!id || !ts || !sig) return null;
+  if (Math.abs(Date.now() / 1000 - +ts) > 300) return null;          // replay window
+  const a = loadAgent(id);
+  if (!a) return null;
+  const mac = createHmac("sha256", a.secret).update(ts + "." + raw).digest("hex");
+  if (mac.length !== sig.length) return null;
+  let diff = 0;
+  for (let i = 0; i < mac.length; i++) diff |= mac.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0 ? a : null;                                      // constant-time compare
+}
+
+function handleAgentPoll(req, raw) {
+  const a = agentFromReq(req, raw);
+  if (!a) return [401, { error: "bad_signature" }];
+  a.lastSeen = Date.now();
+  a.agent = String(req.headers["x-ss-agent"] || a.agent || "");
+  const now = Date.now();
+  /* hand out what is waiting; anything not answered within two minutes is
+     handed out again rather than lost to a site that went down mid-command */
+  const due = (a.queue || []).filter((c) => !c.sentAt || now - c.sentAt > 120000);
+  due.forEach((c) => { c.sentAt = now; });
+  saveAgent(a);
+  return [200, { ok: true, commands: due.map(({ id, op, args }) => ({ id, op, args })) }];
+}
+
+function handleAgentResult(req, raw, body) {
+  const a = agentFromReq(req, raw);
+  if (!a) return [401, { error: "bad_signature" }];
+  a.lastSeen = Date.now();
+  for (const r of body?.results || []) {
+    if (!r?.id) continue;
+    a.results[r.id] = { result: r.result, at: Date.now() };
+    a.queue = (a.queue || []).filter((c) => c.id !== r.id);
+  }
+  /* results are collected by the CRM within seconds; keep an hour's worth */
+  for (const [k, v] of Object.entries(a.results)) if (Date.now() - v.at > 36e5) delete a.results[k];
+  saveAgent(a);
+  return [200, { ok: true }];
+}
+
+const agentForSite = (site) => {
+  const want = hostOf("https://" + String(site || "").replace(/^https?:\/\//, ""));
+  try {
+    for (const f of readdirSync(AGENT_DIR)) {
+      if (!f.endsWith(".json") || f.startsWith("_")) continue;
+      const a = readJson(new URL(f, AGENT_DIR), null);
+      if (a && (a.site === want || a.home === want)) return a;
+    }
+  } catch { /* no agents yet */ }
+  return null;
+};
+
+/* queue one command and wait for the site to answer it */
+async function agentExec(site, op, args = {}, waitMs = 75000) {
+  const a = agentForSite(site);
+  if (!a) return { error: "unpaired", detail: "This site is not paired with the SERP Squad plugin yet." };
+  const id = "c" + Date.now().toString(36) + randomBytes(4).toString("hex");
+  const fresh = loadAgent(a.siteId) || a;
+  fresh.queue = [...(fresh.queue || []), { id, op, args, at: Date.now() }];
+  saveAgent(fresh);
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1200));
+    const cur = loadAgent(a.siteId);
+    const got = cur?.results?.[id];
+    if (got) { delete cur.results[id]; saveAgent(cur); return got.result; }
+  }
+  const cur = loadAgent(a.siteId);
+  const quiet = cur ? Math.round((Date.now() - (cur.lastSeen || 0)) / 1000) : null;
+  return { error: "timeout", detail: quiet != null && quiet > 300
+    ? `The site has not checked in for ${Math.round(quiet / 60)} minutes. WordPress cron only runs when the site gets traffic — open the site once, or ask the host to enable a real cron.`
+    : "The site is connected but has not answered yet — try again in a moment." };
+}
+
+function handleAgentStatus(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const a = agentForSite(body?.site);
+  if (!a) return [200, { paired: false }];
+  return [200, { paired: true, siteId: a.siteId, home: a.home, agent: a.agent || null,
+    pairedAt: a.pairedAt, lastSeen: a.lastSeen, queued: (a.queue || []).length,
+    quietSec: Math.round((Date.now() - (a.lastSeen || 0)) / 1000) }];
+}
+
+async function handleAgentExec(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  if (!body?.site || !body?.op) return [400, { error: "bad_request", detail: "site and op required" }];
+  const out = await agentExec(body.site, String(body.op), body.args || {});
+  return [200, { live: true, result: out }];
 }
 
 /* ---- DataForSEO account balance: GET v3/appendix/user_data ---- */
@@ -3577,7 +3776,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6 : 4e6;
@@ -3632,6 +3831,12 @@ http.createServer(async (req, res) => {
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)
         : req.url === "/api/wp/cleanup" ? await handleWpCleanup(body)
         : req.url === "/api/wp/test" ? await handleWpTest(body)
+        : req.url === "/api/wp/agent/key" ? handleAgentKey(req, body)
+        : req.url === "/api/wp/agent/pair" ? handleAgentPair(body)
+        : req.url === "/api/wp/agent/poll" ? handleAgentPoll(req, raw)
+        : req.url === "/api/wp/agent/result" ? handleAgentResult(req, raw, body)
+        : req.url === "/api/wp/agent/status" ? handleAgentStatus(req, body)
+        : req.url === "/api/wp/agent/exec" ? await handleAgentExec(req, body)
         : req.url === "/api/webflow/deploy" ? await handleWebflowDeploy(body)
         : req.url === "/api/webflow/publish" ? await handleWebflowPublish(body)
         : req.url === "/api/pixel/verify" ? handlePixelVerify(body, req)
