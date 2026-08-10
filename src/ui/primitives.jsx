@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -532,7 +533,11 @@ export const AvaDirCtx = React.createContext(null);
    from App during render — before any child renders — and read as a fallback. */
 let AVA_DIR = null;
 export const setAvaDirectory = (fn) => { AVA_DIR = fn; };
-export function Ava({ name, size = 22, onRemove, img = null }) {
+/* NOTE: an avatar is an identity badge, not a control. It deliberately has no
+   click behaviour — removing someone lives in AssignPicker, behind an explicit
+   ✕. Clicking the face used to unassign, which meant looking at a row and
+   accidentally clearing it. */
+export function Ava({ name, size = 22, img = null }) {
   const mask = React.useContext(AvaMaskCtx);
   const dir = React.useContext(AvaDirCtx) || AVA_DIR;
   if (mask && mask.match(name)) {
@@ -550,22 +555,108 @@ export function Ava({ name, size = 22, onRemove, img = null }) {
      still decides first and no photo can leak through it. */
   const pic = img || dir?.(name) || null;
   return (
-    <span title={name + (onRemove ? " — click to remove" : "")} onClick={onRemove}
-      className={`ll-display inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold text-white ${onRemove ? "cursor-pointer hover:opacity-70" : ""}`}
+    <span title={name}
+      className="ll-display inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold text-white"
       style={{ width: size, height: size, fontSize: size * 0.42, background: bg }}>
       {pic ? <img src={pic} alt={name} className="h-full w-full object-cover" /> : name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
     </span>
   );
 }
-export function AssignPicker({ people, current, onAdd }) {
-  const avail = people.filter((p) => !current.includes(p.name));
-  if (!avail.length) return null;
+/* Assign / unassign in one menu.
+
+   Unassigning used to be a click on the person's avatar, which put a
+   destructive action on the thing you touch to see WHO is assigned — so
+   glancing at a row, or missing a nearby control, quietly removed someone.
+   Removing is now an explicit ✕ to the right of the name, inside this menu,
+   where it cannot be hit by accident.
+
+   The menu also stays available once everyone is assigned; it used to
+   disappear at that point, which would now be the only way to unassign. */
+export function AssignPicker({ people, current, onAdd, onRemove }) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState(null);
+  const box = useRef(null);
+  const panel = useRef(null);
+  /* The menu is rendered into <body>, not next to the button. It opens inside
+     the record window and the checklist list, both of which scroll and clip
+     their contents — anchored normally, the menu would be cut off for every
+     row near the bottom. A portal escapes that; the position is measured from
+     the button and flipped upward when there is no room below. */
+  const place = () => {
+    const r = box.current?.getBoundingClientRect();
+    if (!r) return;
+    const H = 260, W = 208;
+    const below = window.innerHeight - r.bottom;
+    setAt({
+      left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)),
+      top: below < H && r.top > below ? null : r.bottom + 4,
+      bottom: below < H && r.top > below ? window.innerHeight - r.top + 4 : null,
+      width: W,
+    });
+  };
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const away = (e) => {
+      if (box.current?.contains(e.target) || panel.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    const move = () => setOpen(false);      // scrolled away from the anchor
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    window.addEventListener("resize", move);
+    document.addEventListener("scroll", move, true);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+      window.removeEventListener("resize", move);
+      document.removeEventListener("scroll", move, true);
+    };
+  }, [open]);
+
+  const assigned = (current || []);
+  const avail = people.filter((p) => !assigned.includes(p.name));
+  if (!avail.length && !(assigned.length && onRemove)) return null;
+
   return (
-    <select value="" onChange={(e) => e.target.value && onAdd(e.target.value)}
-      className="cursor-pointer rounded-md border border-dashed border-gray-300 bg-transparent px-1.5 py-0.5 text-[11px] text-gray-400 hover:border-gray-400">
-      <option value="">+ Assign</option>
-      {avail.map((p) => <option key={p.name} value={p.name}>{p.name}{p.type === "client" ? " (client)" : ""}</option>)}
-    </select>
+    <span ref={box} className="relative inline-flex">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="cursor-pointer rounded-md border border-dashed border-gray-300 bg-transparent px-1.5 py-0.5 text-[11px] text-gray-400 hover:border-gray-400 hover:text-gray-600">
+        + Assign
+      </button>
+      {open && at && createPortal(
+        <div ref={panel} className="fixed z-[70] max-h-[260px] overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
+          style={{ left: at.left, width: at.width, ...(at.top != null ? { top: at.top } : { bottom: at.bottom }) }}>
+          {onRemove && assigned.length > 0 && (
+            <>
+              <div className="px-2.5 pb-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wider text-gray-400">Assigned</div>
+              {assigned.map((n) => (
+                <div key={n} className="flex items-center gap-2 px-2.5 py-1 hover:bg-gray-50">
+                  <Ava name={n} size={18} />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-gray-700">{n}</span>
+                  {/* the only way to unassign — deliberate, and never where a glance lands */}
+                  <button type="button" title={`Unassign ${n}`} onClick={() => onRemove(n)}
+                    className="rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500"><X size={12} /></button>
+                </div>
+              ))}
+            </>
+          )}
+          {avail.length > 0 && (
+            <>
+              {onRemove && assigned.length > 0 && <div className="my-1 border-t border-gray-100" />}
+              <div className="px-2.5 pb-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wider text-gray-400">Add</div>
+              {avail.map((p) => (
+                <button key={p.name} type="button" onClick={() => { onAdd(p.name); setOpen(false); }}
+                  className="flex w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-gray-50">
+                  <Ava name={p.name} size={18} />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-gray-700">{p.name}{p.type === "client" ? " (client)" : ""}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>, document.body)}
+    </span>
   );
 }
 

@@ -152,11 +152,11 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                 <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Assignees</div>
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {record.assignees.map((a) => (
-                    <Ava key={a} name={maskName(a)} size={22}
-                      onRemove={perms.manage ? () => patch({ assignees: record.assignees.filter((x) => x !== a) }, `removed assignee ${a}`) : undefined} />
+                    <Ava key={a} name={maskName(a)} size={22} />
                   ))}
                   {perms.manage && <AssignPicker people={people} current={record.assignees}
-                    onAdd={(n) => patch({ assignees: [...record.assignees, n] }, `added assignee ${n}`)} />}
+                    onAdd={(n) => patch({ assignees: [...record.assignees, n] }, `added assignee ${n}`)}
+                    onRemove={(n) => patch({ assignees: record.assignees.filter((x) => x !== n) }, `removed assignee ${n}`)} />}
                 </div>
               </div>
               <div>
@@ -250,12 +250,12 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                             </span>
                             <div className="flex -space-x-1.5">
                               {t.assignees.map((a) => (
-                                <Ava key={a} name={maskName(a)} size={19}
-                                  onRemove={perms.manage ? () => mutTask(cl.id, t.id, (x) => ({ ...x, assignees: x.assignees.filter((n) => n !== a) }), `removed ${a} from "${t.title}"`) : undefined} />
+                                <Ava key={a} name={maskName(a)} size={19} />
                               ))}
                             </div>
                             {perms.manage && <AssignPicker people={people} current={t.assignees}
-                              onAdd={(n) => mutTask(cl.id, t.id, (x) => ({ ...x, assignees: [...x.assignees, n] }), `assigned ${n} to "${t.title}"`)} />}
+                              onAdd={(n) => mutTask(cl.id, t.id, (x) => ({ ...x, assignees: [...x.assignees, n] }), `assigned ${n} to "${t.title}"`)}
+                              onRemove={(n) => mutTask(cl.id, t.id, (x) => ({ ...x, assignees: x.assignees.filter((y) => y !== n) }), `removed ${n} from "${t.title}"`)} />}
                           </div>
                         </div>
                       );
