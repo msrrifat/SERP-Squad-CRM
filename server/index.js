@@ -1660,7 +1660,32 @@ async function handleAdsPublish(body) {
    Auth: Application Password ("user:xxxx xxxx …") → HTTP Basic. Production-real:
    every call hits the site's /wp-json/wp/v2 API. Missing site/credential → 503;
    WordPress rejections → 502 with WP's own message. Never fabricates success. */
-const wpBase = (site) => "https://" + String(site || "").replace(/^https?:\/\//, "").replace(/\/$/, "") + "/wp-json/wp/v2";
+const wpHost = (site) => "https://" + String(site || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+const wpBase = (site) => wpHost(site) + "/wp-json/wp/v2";
+
+/* ---- TWO WAYS TO REACH THE SAME REST API -------------------------------
+   Plenty of client sites sit behind a firewall that blocks the literal
+   /wp-json path — Cloudflare's WordPress managed rules and most "security"
+   plugins ship that rule on by default, and it 403s us before WordPress ever
+   sees the request.
+
+   WordPress exposes exactly the same API a second way: /?rest_route=/wp/v2/…
+   It is core, documented (it is what runs when permalinks are off) and needs
+   nothing installed. Critically the string "wp-json" appears nowhere in the
+   URI, so a path rule cannot match it.
+
+   So every call falls back to that form automatically, and whichever works is
+   remembered per site so it is tried first from then on. If BOTH fail the
+   block is on the IP rather than the path, and no rewriting will help — that
+   is the case the browser fallback exists for. */
+const wpRouteUrl = (site, path) => {
+  const [p, qs] = String(path).split("?");
+  return `${wpHost(site)}/?rest_route=${encodeURIComponent("/wp/v2" + p)}${qs ? "&" + qs : ""}`;
+};
+const wpMode = new Map();                       // site -> "json" | "route"
+const wpUrlFor = (site, path, mode) => (mode === "route" ? wpRouteUrl(site, path) : wpBase(site) + path);
+/* an edge/firewall block, as opposed to a genuine WordPress answer */
+const looksBlocked = (status) => status === 403 || status === 406 || status === 418 || status === 503;
 /* client-site firewalls (Cloudflare, security plugins) often 403 obvious bot
    requests while allowing browsers — REST calls go out with browser headers,
    same trick the /api/img proxy uses */
@@ -1677,14 +1702,28 @@ const wpGuard = (body) => {
   return null;
 };
 async function wpFetch(body, path, init = {}) {
-  const r = await fetch(wpBase(body.site) + path, {
+  const opts = {
     signal: AbortSignal.timeout(30000),
     ...init,
     headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential), "content-type": "application/json", ...(init.headers || {}) },
-  });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(d.message || `WordPress ${r.status}`); e.wp = r.status; throw e; }
-  return d;
+  };
+  /* try whichever form is known to work for this site first, then the other */
+  const first = wpMode.get(body.site) || "json";
+  const order = first === "json" ? ["json", "route"] : ["route", "json"];
+  let last = null;
+  for (const mode of order) {
+    const r = await fetch(wpUrlFor(body.site, path, mode), opts);
+    if (r.ok) { wpMode.set(body.site, mode); return r.json().catch(() => ({})); }
+    last = r;
+    /* only a firewall-shaped refusal is worth retrying the other way — a 401
+       or a 404 is WordPress genuinely answering, and re-asking won't change it */
+    if (!looksBlocked(r.status)) break;
+  }
+  const d = await last.json().catch(() => ({}));
+  const e = new Error(d.message || `WordPress ${last.status}`);
+  e.wp = last.status;
+  if (looksBlocked(last.status)) e.blocked = true;      // the browser fallback can take it from here
+  throw e;
 }
 const wpErr = (e) => [502, { error: "provider_error", detail: "WordPress: " + (e?.message || e) }];
 
@@ -2695,19 +2734,34 @@ async function handleWpTest(body) {
   if (!body?.site) return [400, { error: "bad_request", detail: "site required" }];
   const checks = { reachable: false, restApi: false, authenticated: false, user: null, canPublish: false };
   try {
-    const ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+    let ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
     checks.reachable = true;
-    checks.restApi = ping.ok;
+    /* blocked on /wp-json? the same API answers at /?rest_route= and no path
+       rule can match that — if it works, the connector just uses it from now on */
+    if (!ping.ok && looksBlocked(ping.status)) {
+      const alt = await fetch(wpRouteUrl(body.site, "/types"), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+      if (alt.ok) {
+        wpMode.set(body.site, "route");
+        checks.restApi = true;
+        ping = alt;
+      }
+    }
+    checks.restApi = checks.restApi || ping.ok;
     if (!ping.ok) {
       /* identify WHO blocked us — a Cloudflare 1020/challenge page needs an
          IP Access Rule in the Cloudflare dashboard, a host firewall needs the
          hosting panel; "REST disabled" is the rarest cause, not the default */
       const bodyText = (await ping.text().catch(() => "")).slice(0, 4000);
       const cfRay = ping.headers.get("cf-ray");
+      /* both URL forms were refused, so this is not a path rule — the edge is
+         refusing this SERVER. Nothing we rewrite here can change that, and the
+         honest options are: run the sync from the browser instead (same
+         credentials, your own IP, no client changes), or have the block lifted. */
       const who = /error code: 10\d\d|cloudflare/i.test(bodyText) || cfRay
-        ? `Cloudflare is blocking this server's IP (${cfRay ? "ray " + cfRay : "edge block"}) — in the site's Cloudflare dashboard add Security → WAF → Tools → IP Access Rules → ALLOW for the CRM server IP.`
-        : `The site's server/host firewall is blocking this server's IP — whitelist the CRM server IP in the hosting panel (bot protection / firewall).`;
-      return [200, { checks, detail: `Site reached but /wp-json returned HTTP ${ping.status}. ${who}` }];
+        ? `Cloudflare is refusing this server's IP (${cfRay ? "ray " + cfRay : "edge block"}).`
+        : `The site's server/host firewall is refusing this server's IP.`;
+      return [200, { checks, blocked: true,
+        detail: `Site reached, but BOTH /wp-json and /?rest_route= returned HTTP ${ping.status}. ${who} Because the alternate route was refused too, this is not a path rule — the edge is refusing this server's IP specifically, so nothing the CRM sends can get through. Allow the CRM server IP in Cloudflare (Security → WAF → Tools → IP Access Rules) or in the hosting panel's firewall.` }];
     }
   } catch (e) {
     return [200, { checks, detail: `Could not reach https://${body.site}/wp-json — check the domain, DNS and that the site is online. (${e?.message || e})` }];
