@@ -22,7 +22,7 @@ import { API_GUIDES } from "../../data/apiGuides.js";
 
 export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
   /* every field here stays a local draft until Save is clicked */
-  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "whiteLabel", "login", "dfs"]);
+  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "logo", "whiteLabel", "login", "dfs"]);
   const c = draft;
   const wl = draft.whiteLabel;
   const setWl = (patch) => set({ whiteLabel: { ...draft.whiteLabel, ...patch } });
@@ -55,6 +55,16 @@ export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
             <Labeled label="Company name"><input value={c.companyName} onChange={(e) => set({ companyName: e.target.value })} className={inputCls} /></Labeled>
             <Labeled label="Company website"><input value={c.companyWebsite} onChange={(e) => set({ companyWebsite: e.target.value })} className={inputCls} /></Labeled>
             <Labeled label="Address"><input value={c.address} onChange={(e) => set({ address: e.target.value })} className={inputCls} /></Labeled>
+          </div>
+          {/* the client's OWN logo, independent of white-labelling — used
+              wherever the client is presented, including the Bill to block on
+              invoices. It used to exist only inside the white-label panel, so
+              an ordinary client had no logo anywhere. */}
+          <div className="mt-3">
+            <Labeled label="Client logo">
+              <LogoUpload value={c.logo || null} onChange={(logo) => set({ logo })} label="Upload client logo" />
+            </Labeled>
+            <p className="mt-1 text-[10.5px] text-gray-400">Shown on invoices and anywhere this client is listed.</p>
           </div>
         </div>
 
@@ -689,6 +699,7 @@ export function AddClientModal({ onClose, onAdd }) {
           onClick={() => onAdd({
             id: "cl" + Date.now(), name: name.trim(), contact, email, phone: "",
             companyName: companyName || name.trim(), companyWebsite, address: "",
+            logo: null,
             whiteLabel: { enabled: false, name: "", website: "", logo: null },
             /* Performance Studio on by default; everything else opt-in */
             login: { enabled: false, email: email || "", password: "", projectIds: [],

@@ -796,15 +796,18 @@ export function InvoiceSection({ company, onChange, clients }) {
   const client = clients.find((c) => c.id === clientId) || null;
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  /* A white-labelled client is billed under THAT brand — its logo and name are
-     already in Client settings, so the invoice picks them up rather than
-     asking anyone to upload the same image again. Otherwise it is the
-     agency's own branding. */
-  const wl = client?.whiteLabel?.enabled ? client.whiteLabel : null;
-  const brandName = wl?.name || inv.legalName || company.name || "";
-  const brandLogo = wl?.logo || inv.logo || company.logo || null;
-  const brandSite = wl?.website || "";
+  /* Two brands appear on an invoice and they are not interchangeable: the
+     issuer at the top is YOUR company, and the client's own mark belongs
+     beside their details in Bill to. An earlier version swapped the header to
+     the client's white-label brand, which put the customer's logo where the
+     sender's should be. */
+  const brandName = inv.legalName || company.name || "";
+  const brandLogo = inv.logo || company.logo || null;
   const accent = inv.accent || company.accent;
+  const clientName = client ? (client.companyName || client.name) : "";
+  /* the client's own logo, falling back to a white-label brand logo when that
+     is the only image on file */
+  const clientLogo = client ? (client.logo || client.whiteLabel?.logo || null) : null;
 
   const today = new Date();
   const dueDays = Number.isFinite(+inv.dueDays) && +inv.dueDays >= 0 ? +inv.dueDays : 14;
@@ -863,7 +866,7 @@ export function InvoiceSection({ company, onChange, clients }) {
         <Card className="no-print ll-fade space-y-4 p-4">
           <div className="text-[12.5px] text-gray-400">
             Saved once and used on every invoice. Anything left empty is simply left off the invoice.
-            {wl && <> This client is white-labelled, so its own brand name and logo are used instead of the fields below.</>}
+            The client's own logo comes from Client settings and appears beside their details in Bill to.
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <Labeled label="Business name on invoices"><input value={inv.legalName || ""} onChange={(e) => setInv({ legalName: e.target.value })} placeholder={company.name || ""} className={inputCls} /></Labeled>
@@ -920,7 +923,7 @@ export function InvoiceSection({ company, onChange, clients }) {
             {(inv.address || "").split("\n").filter(Boolean).map((l, i) => <Line key={i}>{l}</Line>)}
             <Line>{inv.email}</Line>
             <Line>{inv.phone}</Line>
-            <Line>{brandSite || inv.website}</Line>
+            <Line>{inv.website}</Line>
             <Line>{inv.taxId}</Line>
           </div>
           <div className="shrink-0 text-right">
@@ -939,10 +942,13 @@ export function InvoiceSection({ company, onChange, clients }) {
         <div className="mb-6">
           <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Bill to</div>
           {client ? (
-            <div className="leading-relaxed">
-              <div className="ll-display text-[16px] font-semibold">{client.companyName || client.name}</div>
-              <Line>{[client.contact && `Attn: ${client.contact}`, client.email, client.phone].filter(Boolean).join(" · ")}</Line>
-              <Line>{[client.companyWebsite, client.address].filter(Boolean).join(" · ")}</Line>
+            <div className="flex items-start gap-3 leading-relaxed">
+              <BrandMark name={clientName || "—"} logo={clientLogo} accent={accent} size="lg" />
+              <div className="min-w-0">
+                <div className="ll-display text-[16px] font-semibold">{clientName}</div>
+                <Line>{[client.contact && `Attn: ${client.contact}`, client.email, client.phone].filter(Boolean).join(" · ")}</Line>
+                <Line>{[client.companyWebsite, client.address].filter(Boolean).join(" · ")}</Line>
+              </div>
             </div>
           ) : <div className="text-[12.5px] text-gray-400">Add a client to bill.</div>}
           <div className="no-print mt-1 text-[10.5px] text-gray-300">Auto-filled from Client settings — edit it there to change.</div>
