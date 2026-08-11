@@ -118,7 +118,14 @@ export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, op
       const r = await fetch("/api/guestpost/search", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
         body: JSON.stringify({ niche: niche.trim(), location: location.trim(), country: cc[2], gl: country, footprints: fps,
           cse: cseReady ? { key: cse.apiKey, cx: cse.cx } : undefined,
-          dfs: !cseReady && dfsReady ? { login: dfs.login, password: dfs.password } : undefined }) });
+          /* ALWAYS send DataForSEO when it is available, even with a Custom
+             Search key present. The server prefers the free engine and only
+             reaches for DataForSEO if Google refuses — but it can only do that
+             if it has the credentials. Withholding them whenever a CSE key
+             existed meant a dead key ("API key expired") failed the whole
+             search instead of falling back, which is precisely when the
+             fallback was needed. */
+          dfs: dfsReady ? { login: dfs.login, password: dfs.password } : undefined }) });
       const d = await r.json();
       if (!r.ok) setErr(d.detail || d.error || `HTTP ${r.status}`);
       else { setRes({ ...d, results: d.results.map((x) => ({ ...x, authority: null, traffic: null, email: "", socials: [] })) }); setFolderName(`${niche.trim()} — guest posts`); }
@@ -230,6 +237,12 @@ export function GuestPostFinder({ company, onUpdateCompany, accent, dfs, cse, op
             {err}
             {niche.trim() && <button onClick={loadDemo} className="ml-2 rounded-md border border-amber-300 bg-white px-2 py-0.5 text-[10.5px] font-bold text-amber-700">Load labeled demo results instead</button>}
           </div>
+        )}
+        {/* the search succeeded, but not on the engine it was configured to
+            use — worth saying, since the free engine silently stopped being
+            free and every future search now spends DataForSEO credits */}
+        {res?.fellBack && res?.note && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11.5px] text-amber-800">{res.note}</div>
         )}
       </Card>
 

@@ -2349,6 +2349,7 @@ async function handleGuestSearch(body) {
   let engine = cse?.key && cse?.cx ? "cse" : creds ? "dfs" : null;
   if (!engine) return [503, { error: "not_configured", detail: "Connect DataForSEO in Company Settings → API settings (Google closed the Custom Search API to new customers)." }];
   const byDomain = new Map();
+  let cseError = null;
   try {
     for (const fp of footprints) {
       const q = [niche, loc, fp].filter(Boolean).join(" ");
@@ -2359,9 +2360,13 @@ async function handleGuestSearch(body) {
         const d = await r.json();
         if (d.error) {
           /* Google closed the Custom Search JSON API to new customers (sunset
-             Jan 2027) — fall back to DataForSEO instead of failing the search */
+             Jan 2027), and existing keys expire or get revoked — fall back to
+             DataForSEO rather than failing the search. The reason is carried
+             back so the dead key can actually be dealt with, instead of
+             silently paying for DataForSEO on every search from now on. */
+          cseError = d.error.message || d.error.status || "refused the request";
           if (creds) { engine = "dfs"; }
-          else return [502, { error: "provider_error", detail: `Google Custom Search: ${d.error.message || d.error.status} — Google closed this API to new customers; connect DataForSEO instead.` }];
+          else return [502, { error: "provider_error", detail: `Google Custom Search: ${cseError}. Connect DataForSEO in Company Settings → API settings and the search will run through it instead — Google has closed this API to new customers, so a broken key cannot be replaced.` }];
         } else {
           items = (d.items || []).map((it) => ({ url: it.link, title: it.title || "", snippet: it.snippet || "" }));
         }
@@ -2376,7 +2381,9 @@ async function handleGuestSearch(body) {
         if (!byDomain.has(host)) byDomain.set(host, { domain: host, url: it.url, title: it.title.slice(0, 140), snippet: it.snippet.slice(0, 220), footprint: fp });
       }
     }
-    return [200, { live: true, engine, niche, queries: footprints.length, results: [...byDomain.values()] }];
+    return [200, { live: true, engine, niche, queries: footprints.length, results: [...byDomain.values()],
+      /* surfaced in the UI: the search worked, but not the way it was set up to */
+      ...(cseError ? { fellBack: true, note: `Google Custom Search failed (${cseError}) — this search ran on DataForSEO instead. Remove the Custom Search key in Company Settings → API settings to stop retrying it.` } : {}) }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 200) }]; }
 }
 
