@@ -580,6 +580,16 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
       let grids = null;
       let live = false;
       let scanMeta = null;   // { mode, scanned, failed, errors } from the server
+      /* A REAL project never gets a drawn-from-nothing grid. Every failure
+         below used to fall through to genDemoGrid: the 503 threw, but the
+         catch immediately swallowed it because its message did not begin with
+         "Live scan failed", and any other status — a 500, a 413, a timeout —
+         had no branch at all. The result was a fabricated map labelled only by
+         a caption, on an account that is properly connected. */
+      const isReal = project.demoMode === false;
+      if (!center && isReal) {
+        throw new Error("This project has no business coordinates yet — set the location in the Geo-grid setup before scanning.");
+      }
       if (center) {
         /* ALL keywords go in one request — the server queues every
            (keyword × point) task at once ($0.0006/scan, standard queue),
@@ -596,14 +606,24 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             }),
           });
           if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; scanMeta = { mode: d.mode, scanned: d.scanned, failed: d.failed, errors: d.errors }; }
-          else if (res.status === 502) { const e2 = await res.json().catch(() => ({})); throw new Error("Live scan failed: " + (e2.detail || "provider error")); }
-          /* 503 = the scan carried no usable credentials. Quietly drawing a demo
-             grid here is how a "connected" account ends up showing invented
-             rankings — the reason is reported instead. */
-          else if (res.status === 503) { const e2 = await res.json().catch(() => ({})); throw new Error(e2.detail || "DataForSEO isn't connected for this scan."); }
+          else {
+            /* every non-OK status is reported — including the ones that used to
+               have no branch and silently became demo data */
+            const e2 = await res.json().catch(() => ({}));
+            const why = e2.detail || e2.error || `HTTP ${res.status}`;
+            throw new Error(res.status === 503 ? why : `Live scan failed: ${why}`);
+          }
         } catch (e) {
-          if (String(e?.message || "").startsWith("Live scan failed")) throw e;
-          /* server down → demo below */
+          const msg = String(e?.message || e);
+          /* on a real project nothing is invented — the reason is surfaced,
+             whatever it was: provider error, missing credentials, the API
+             server being down, or the request timing out */
+          if (isReal) {
+            throw new Error(/abort|timeout/i.test(msg) && !/Live scan failed/.test(msg)
+              ? "The scan did not finish in time. The tasks may still be running at DataForSEO — wait a minute and open the report again before re-running, so you are not charged twice."
+              : msg);
+          }
+          /* demo project + server down → the labelled demo grid below */
         }
       }
       if (!grids) {
