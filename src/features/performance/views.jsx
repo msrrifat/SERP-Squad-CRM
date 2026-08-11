@@ -729,7 +729,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
           const res = await fetch("/api/rank/start", {
             method: "POST", headers: { "Content-Type": "application/json" },
             signal: AbortSignal.timeout(120000),
-            body: JSON.stringify({ entries: chunk, dfs: creds, depth: 100 }),
+            body: JSON.stringify({ entries: chunk, dfs: creds, depth: 100, projectId: project.id }),
           });
           if (res.ok) {
             const { jobId, total } = await res.json();
@@ -820,7 +820,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             const res = await fetch("/api/rank/start", {
               method: "POST", headers: { "Content-Type": "application/json" },
               signal: AbortSignal.timeout(120000),
-              body: JSON.stringify({ entries: chunk, dfs: creds2, depth: 100 }),
+              body: JSON.stringify({ entries: chunk, dfs: creds2, depth: 100, projectId: project.id }),
             });
             if (res.ok) {
               const { jobId } = await res.json();

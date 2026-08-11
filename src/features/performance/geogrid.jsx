@@ -453,15 +453,15 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
               completion guarantee, so it is opt-in and always finishes any
               stragglers live rather than leaving blank points on the map. */}
           <Labeled label="Scan mode">
-            <select value={r.scanMode || "live"} onChange={(e) => setR({ ...r, scanMode: e.target.value })} className={inputCls}>
-              <option value="live">Accurate — every point fetched live (finishes in about a minute)</option>
-              <option value="queue">Economy — queued SERPs, cheaper per point (can take 5–10 minutes)</option>
+            <select value={r.scanMode || "queue"} onChange={(e) => setR({ ...r, scanMode: e.target.value })} className={inputCls}>
+              <option value="queue">Standard — queued Maps SERPs, DataForSEO's recommended mode (5–10 minutes)</option>
+              <option value="live">Live — every point fetched immediately, about 3× the price (about a minute)</option>
             </select>
           </Labeled>
           <div className="text-[10.5px] text-gray-400">
-            {(r.scanMode || "live") === "live"
-              ? "Each point is a live coordinate-targeted Maps request, run several at a time and retried on failure — the grid comes back complete or tells you exactly which points didn't."
-              : "Points are queued at the cheaper standard rate. Whatever the queue hasn't returned within a few minutes is finished live, so the grid still completes — it just takes longer."}
+            {(r.scanMode || "queue") === "queue"
+              ? "The same coordinate-targeted Maps data at the standard queue rate — roughly a third of the live price. Anything the queue hasn't returned in a few minutes is finished live, so the grid still completes."
+              : "Every point fetched live. Same data, same accuracy, but live Maps costs about 3× the queue — worth it only when you need the grid right now."}
           </div>
 
           {/* live grid preview — the exact points the scan will hit, on the real
@@ -602,7 +602,8 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             body: JSON.stringify({
               keywords: rp.keywords, center, grid: { size: rp.size, spacingKm, shape: rp.shape },
               business: { name: biz.name, placeId: biz.placeId }, language_code: locale(rp)[1], dfs: realDfs(dfs),
-              mode: rp.scanMode === "queue" ? "queue" : "live",
+              projectId: project.id,
+              mode: rp.scanMode === "live" ? "live" : "queue",
             }),
           });
           if (res.ok) { const d = await res.json(); grids = d.grids || { [rp.keywords[0]]: d.points }; live = true; scanMeta = { mode: d.mode, scanned: d.scanned, failed: d.failed, errors: d.errors }; }

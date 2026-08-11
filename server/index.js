@@ -131,13 +131,17 @@ async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 480000, pollMs = 800
   const pending = new Map(); // DataForSEO task id → index into `tasks`
   const headers = { Authorization: authHeader(creds), "Content-Type": "application/json" };
   for (let i = 0; i < tasks.length; i += 100) { // API cap: 100 tasks per POST
-    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: String(i + j) }));
+    /* the tag carries BOTH the batch index (how a result finds its task here)
+       and whatever the caller set (project + keyword/cell, so a late or
+       duplicated delivery updates the right row). Index first, so parseInt
+       still recovers it. */
+    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: `${i + j}${t.tag ? "~" + t.tag : ""}` }));
     const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_post`, {
       method: "POST", headers, body: JSON.stringify(chunk), signal: AbortSignal.timeout(35000),
     });
     if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
     for (const t of (await res.json()).tasks || []) {
-      const idx = +(t.data?.tag ?? -1);
+      const idx = parseInt(String(t.data?.tag ?? ""), 10);
       if (!(idx >= 0 && idx < tasks.length)) continue;
       if (t.status_code === 20100) pending.set(t.id, idx); // 20100 = Task Created
       else out[idx] = { error: `task ${t.status_code}: ${t.status_message}` };
@@ -3086,13 +3090,17 @@ async function dfsPost(creds, pathSeg, tasks) {
   const out = new Array(tasks.length).fill(null);
   const headers = { Authorization: authHeader(creds), "Content-Type": "application/json" };
   for (let i = 0; i < tasks.length; i += 100) {          // API cap: 100 per POST
-    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: String(i + j) }));
+    /* the tag carries BOTH the batch index (how a result finds its task here)
+       and whatever the caller set (project + keyword/cell, so a late or
+       duplicated delivery updates the right row). Index first, so parseInt
+       still recovers it. */
+    const chunk = tasks.slice(i, i + 100).map((t, j) => ({ priority: 1, ...t, tag: `${i + j}${t.tag ? "~" + t.tag : ""}` }));
     const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_post`, {
       method: "POST", headers, body: JSON.stringify(chunk), signal: AbortSignal.timeout(60000),
     });
     if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     for (const t of (await res.json()).tasks || []) {
-      const idx = +(t.data?.tag ?? -1);
+      const idx = parseInt(String(t.data?.tag ?? ""), 10);
       if (!(idx >= 0 && idx < tasks.length)) continue;
       /* 20100 = created. Anything else failed at creation, which DataForSEO
          does not bill for — surfaced so it is not silently retried forever. */
@@ -3337,6 +3345,25 @@ async function handleRankStart(body) {
       device: (e.device || "Desktop").toLowerCase(),
       os: e.device === "Mobile" ? "android" : "windows",
       depth,
+      /* STOP CRAWLING ONCE THE SITE IS FOUND.
+
+         Billing is per SERP page returned, so asking for depth 100 and always
+         paying for ten pages is the expensive way to answer "where do we
+         rank". DataForSEO's cost-control guidance is to stop on match: a site
+         sitting at #3 now costs one page instead of ten, and a site that is
+         genuinely absent still crawls the full depth, so nothing is lost —
+         the worst case is exactly what we paid before.
+
+         match_type "domain" so a ranking URL anywhere on the site counts,
+         which is what the parser already looks for. */
+      ...(engine === "google" && e.domain ? {
+        stop_crawl_on_match: true,
+        match_type: "domain",
+        match_value: String(e.domain).replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
+      } : {}),
+      /* ties the result to the project and keyword, so a late or duplicated
+         delivery updates the right row instead of being matched by position */
+      tag: `${String(body.projectId || "proj").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32)}|${String(e.id).slice(0, 40)}`,
       ...(loc(e) ? { location_code: loc(e).code }
                  : { location_name: [e.city?.city, e.city?.region, e.city?.country].filter(Boolean).join(",") }),
       ...(engine === "google" && SE_DOMAINS[e.city?.country] ? { se_domain: SE_DOMAINS[e.city.country] } : {}),
@@ -3496,9 +3523,14 @@ function gridPoints(center, size, spacingKm, shape = "square") {
 function parseMapsTask(task, business) {
   const items = (task.result?.[0]?.items || []).filter((it) => it.type === "maps_search");
   const target = normName(business.name);
+  /* place_id -> feature_id -> cid -> exact name -> containment. feature_id is
+     the identifier DataForSEO returns most consistently for Maps listings and
+     was missing entirely, so a business whose title differs slightly from the
+     tracked name could be matched by containment — or missed. */
   const hit =
-    (business.cid && items.find((it) => String(it.cid) === String(business.cid))) ||
     (business.placeId && items.find((it) => it.place_id === business.placeId)) ||
+    (business.featureId && items.find((it) => it.feature_id === business.featureId)) ||
+    (business.cid && items.find((it) => String(it.cid) === String(business.cid))) ||
     items.find((it) => normName(it.title) === target) ||
     items.find((it) => normName(it.title).includes(target) || target.includes(normName(it.title)));
   return {
@@ -3527,16 +3559,27 @@ async function handleGeoGrid(body) {
   const zoom = Math.min(21, Math.max(3, +body.zoom || 17));
   /* one task per (keyword, point) */
   const tasks = [];
-  for (const kw of keywords) for (const pt of pts) tasks.push({
+  /* `tag` ties a result back to its grid cell, which is what makes a retry or
+     a late webhook idempotent instead of guesswork (DataForSEO's grid guide
+     recommends exactly this) */
+  const projTag = String(body.projectId || "grid").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+  for (const kw of keywords) pts.forEach((pt, i) => tasks.push({
     keyword: kw, location_coordinate: `${pt.lat},${pt.lng},${zoom}z`, language_code: languageCode, depth: 100,
-  });
+    tag: `${projTag}|${i}`,
+  }));
 
-  /* LIVE by default. The standard queue is cheaper per SERP, but it gives no
-     completion guarantee, and a geo-grid is only worth anything if EVERY
-     point returns — a grid where most points failed silently reports "not
-     ranking here" for places the business may well rank. Economy mode stays
-     available for anyone who prefers the price and can wait. */
-  const mode = body.mode === "queue" ? "queue" : "live";
+  /* STANDARD QUEUE by default.
+
+     This used to default to the live endpoint on the reasoning that a grid is
+     only worth anything if every point returns. That reasoning cost real
+     money: live Maps is roughly 3.3x the queue price, on every point of every
+     grid — a 15x15 grid is 225 points, so the default was ~$0.45 a keyword
+     where the queue is ~$0.135. DataForSEO's own guidance is Standard for
+     scheduled and bulk collection, live only when the answer is needed right
+     now, and the completion worry is already handled: the retry pass below
+     closes any holes, and a grid with failed points is reported as such
+     rather than passed off as complete. */
+  const mode = body.mode === "live" ? "live" : "queue";
   const results = mode === "queue"
     ? await dfsQueue(creds, "google/maps", tasks)
     : await dfsLivePool(creds, "google/maps", tasks, { concurrency: Math.min(12, Math.max(4, +body.concurrency || 8)) });
