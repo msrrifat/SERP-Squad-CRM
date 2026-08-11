@@ -3592,7 +3592,11 @@ async function handleGeoGrid(body) {
      everything is a dead provider or bad credentials — dfsLivePool already
      retried each task and bails early on 401/402, so sweeping again would
      only double the wait.) */
-  const missIdx = results.map((r, i) => (!r?.task ? i : -1)).filter((i) => i >= 0);
+  /* 40102 "No Search Results" is an ANSWER, not a failure — Google returned an
+     empty Maps SERP for that coordinate. Re-running it live costs money to be
+     told the same thing again, so those points are left out of the retry. */
+  const noResults = (r) => /\b40102\b|no search results/i.test(String(r?.error || ""));
+  const missIdx = results.map((r, i) => (!r?.task && !noResults(r) ? i : -1)).filter((i) => i >= 0);
   if (missIdx.length && (mode === "queue" || missIdx.length < tasks.length)) {
     const retry = await dfsLivePool(creds, "google/maps", missIdx.map((i) => tasks[i]), { concurrency: 5, attempts: 2 });
     retry.forEach((r, j) => { if (r?.task) results[missIdx[j]] = r; });
@@ -3604,6 +3608,14 @@ async function handleGeoGrid(body) {
     grids[kw] = pts.map((pt, pi) => {
       const r = results[ki * pts.length + pi];
       if (r?.task) return { ...pt, ...parseMapsTask(r.task, business) };
+      /* Google had nothing to show at this coordinate. The business does not
+         rank there because NOTHING does — which is exactly what a visibility
+         grid is measuring, so the point counts as scanned with no ranking.
+         DataForSEO's own guide is explicit: do not confuse a missing target
+         with an API error. Marking these as failures made a working scan look
+         broken and pulled honest zero-visibility cells out of the metrics,
+         flattering the coverage numbers. */
+      if (noResults(r)) return { ...pt, rank: null, results: [], noResults: true };
       const error = r?.error || "scan failed";
       errCounts[error] = (errCounts[error] || 0) + 1;
       return { ...pt, rank: null, error, results: [] };
@@ -3618,7 +3630,10 @@ async function handleGeoGrid(body) {
   return [200, { live: true, mode, grids, points: grids[keywords[0]], size, spacingKm, zoom,
     /* the client shows this verbatim: a partially-failed grid must never look
        like a complete one */
-    scanned: all.length - failed, failed, errors: errCounts, checkedAt: Date.now() }];
+    scanned: all.length - failed, failed, errors: errCounts,
+    /* counted and named, so "no local results here" is never presented as a
+       scan that went wrong */
+    empty: all.filter((p) => p.noResults).length, checkedAt: Date.now() }];
 }
 
 /* ---- Google Places: resolve the business location (Find Place) ---- */

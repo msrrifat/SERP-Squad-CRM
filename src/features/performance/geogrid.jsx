@@ -200,7 +200,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
           const top3 = (p.results || []).slice(0, 3);
           return (
             <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : `Rank: ${p.rank ?? "not in top 100"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not in top 100"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
               <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
                 style={preview
                   ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
@@ -928,6 +928,15 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
       {/* a partially-scanned grid is NOT a ranking result — the metrics below
           would read failed points as "not ranking here", so the shortfall is
           stated with the provider's own reason instead of a grey dot */}
+      {/* an empty Maps SERP is a real answer — no local results exist at that
+          coordinate — so it is reported as information, not as a fault */}
+      {snap && snap.live && snap.empty > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-[11.5px] text-gray-600">
+          <b>{snap.empty} point{snap.empty > 1 ? "s" : ""} returned no local results.</b> Google shows nothing for this
+          keyword at those coordinates, so they count as no visibility — that is real data, not a failed scan, and it is
+          included in the metrics above.
+        </div>
+      )}
       {snap && snap.live && snap.failed > 0 && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[11.5px] text-red-800">
           <b>{snap.failed} of {snap.failed + snap.scanned} points didn't scan.</b> They show as grey <b>!</b> markers and are
