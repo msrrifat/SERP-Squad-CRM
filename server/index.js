@@ -3554,9 +3554,35 @@ async function handleGeoGrid(body) {
   const spacingKm = Math.min(10, Math.max(0.05, +grid?.spacingKm || 1));
   const pts = gridPoints(center, size, spacingKm, grid?.shape === "circle" ? "circle" : "square");
   const languageCode = body.language_code || "en";
-  /* map zoom sent with each coordinate. Every point must be scanned at the
-     SAME zoom or the ranks aren't comparable across the grid. */
-  const zoom = Math.min(21, Math.max(3, +body.zoom || 17));
+  /* MAP ZOOM — the single most consequential parameter in this whole scan,
+     and it was wrong.
+
+     Google Maps returns the businesses inside the requested viewport, and the
+     viewport is set by the zoom. At 17z that viewport is a few hundred metres,
+     so each point came back with a HANDFUL of listings — measured on a real
+     coordinate, same keyword, same $0.002 cost per call:
+
+         17z ->   6 results      15z ->  41
+         13z -> 100 results      11z -> 100
+
+     We were asking for depth 100, paying for depth 100, and receiving six.
+     With six candidates per point a business can only ever be found on its own
+     doorstep, which is exactly what the grids showed: the centre ranked, every
+     other cell read "100+ / not ranked". Those cells were not measurements,
+     they were an artefact of the viewport.
+
+     13z restores the full 100 and still varies properly by location — the
+     grid's whole purpose. Measured across three coordinates 4km apart:
+
+         Ontario Energy Care   centre 1   north 18   east 8
+         Superior HVAC         centre 3   north  9   east 6
+
+     Wider is not automatically better: at 11z the pool stops growing while the
+     viewport keeps widening, which is what flattens neighbouring cells. 13z is
+     the default; the caller can still override.
+
+     Every point must use the SAME zoom or the ranks are not comparable. */
+  const zoom = Math.min(21, Math.max(3, +body.zoom || 13));
   /* one task per (keyword, point) */
   const tasks = [];
   /* `tag` ties a result back to its grid cell, which is what makes a retry or
