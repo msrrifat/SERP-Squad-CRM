@@ -530,8 +530,15 @@ const pendingOAuth = new Map(); // state → { clientId, clientSecret, redirectU
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/analytics.readonly",
   "https://www.googleapis.com/auth/webmasters.readonly",
+  /* Business Profile. Without this the listing picker could never have worked
+     however well the rest was connected — the token simply was not authorised
+     for it. Connections made before this was added do not carry it, which is
+     why the check below asks for a reconnect rather than letting Google
+     return a confusing permission error. */
+  "https://www.googleapis.com/auth/business.manage",
   "openid", "email",
 ];
+const GBP_SCOPE = "https://www.googleapis.com/auth/business.manage";
 function handleOAuthStart(body) {
   const clientId = String(body?.clientId || "").trim();
   const clientSecret = String(body?.clientSecret || "").trim();
@@ -1514,11 +1521,42 @@ function handleDeviceCheck(body) {
 async function handleProfileListings(body) {
   const provider = body?.provider;
   if (provider === "gbp") {
-    const token = body?.accessToken || process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
-    if (!token) return [503, { error: "not_configured", detail: "Google OAuth is not connected. Add the Google Cloud OAuth app in Company Settings → API settings and complete the consent flow — listing selection then reads your accounts' locations from the Business Profile API (mybusinessbusinessinformation.googleapis.com)." }];
+    /* This used to demand body.accessToken — a raw OAuth access token the
+       browser never has and never had. Our OAuth stores a REFRESH token
+       server-side against a connectionId (that is how Search Console and GA4
+       work), so the condition was unsatisfiable and the endpoint answered
+       "Google OAuth is not connected" no matter how well it was connected. */
+    const connectionId = body?.connectionId;
+    const envToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
+    if (!connectionId && !envToken) {
+      return [503, { error: "not_connected", detail: "No Google account is connected to this project yet — connect one in the project's Google data settings, then pick the listing." }];
+    }
+    let token = envToken;
+    if (connectionId) {
+      const stored = loadGTokens()[connectionId];
+      if (!stored) return [503, { error: "not_connected", detail: "That Google connection no longer exists — reconnect the Google account and try again." }];
+      /* a connection authorised before Business Profile was requested cannot
+         read listings; say so plainly instead of surfacing Google's 403 */
+      if (stored.scope && !stored.scope.includes(GBP_SCOPE)) {
+        return [503, { error: "scope_missing", detail: "This Google account was connected before Business Profile access was requested. Reconnect it (Company Settings → API settings → Google) and approve the Business Profile permission, then pick the listing." }];
+      }
+      try { token = (await googleAccess(connectionId)).accessToken; }
+      catch (e) { return gErr(e); }
+    }
     try {
       const accRes = await fetch("https://mybusinessaccountmanagement.googleapis.com/v1/accounts", { headers: { Authorization: "Bearer " + token } });
-      if (!accRes.ok) return [502, { error: "provider_error", detail: `Google account list failed (HTTP ${accRes.status})` }];
+      if (!accRes.ok) {
+        const ed = await accRes.json().catch(() => ({}));
+        const msg = ed.error?.message || `HTTP ${accRes.status}`;
+        /* Enabling the API is not the same as being granted access to it.
+           Until Google approves the request the per-minute quota stays at 0,
+           and every call fails — which is a waiting problem, not a setup
+           problem, and deserves to be described as one. */
+        if (accRes.status === 403 || /quota|permission|not been used|disabled/i.test(msg)) {
+          return [502, { error: "gbp_not_approved", detail: `Google accepted the sign-in but refused the Business Profile API: ${msg}. This is the access request, not your connection — until Google approves it the quota stays at 0 and every call fails. Check Cloud Console → APIs → Business Profile APIs → Quotas.` }];
+        }
+        return [502, { error: "provider_error", detail: `Google account list failed: ${msg}` }];
+      }
       const accounts = (await accRes.json()).accounts || [];
       const listings = [];
       for (const a of accounts.slice(0, 10)) {

@@ -310,7 +310,9 @@ function ConnectProfileModal({ provider, client, project, loc, accent, onConnect
     try {
       const res = await fetch("/api/profile-listings", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({ provider }),
+        /* the project's Google connection — the server mints an access token
+           from it, the same way Search Console and GA4 already do */
+        body: JSON.stringify({ provider, connectionId: project.google?.connectionId || null }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) { setListings({ live: true, items: d.listings || [] }); setStep("pick"); }
