@@ -365,7 +365,7 @@ const SOCIAL_PLATFORMS = [
   { id: "instagram", label: "Instagram Business",  cred: "metaApp" },
   { id: "linkedin",  label: "LinkedIn",            cred: "linkedinApp" },
   { id: "x",         label: "X (Twitter)",         cred: "xApp" },
-  { id: "youtube",   label: "YouTube Channel",     cred: "googleOAuth" },
+  { id: "youtube",   label: "YouTube Channel",     cred: "googleOauth" },   // registry id is googleOauth — the capital-A form matched nothing, so YouTube could never enable
   { id: "tiktok",    label: "TikTok Business",     cred: "tiktokApp" },
   { id: "pinterest", label: "Pinterest Business",  cred: "pinterestApp" },
   { id: "threads",   label: "Threads",             cred: "threadsApp" },

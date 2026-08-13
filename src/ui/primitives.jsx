@@ -488,12 +488,19 @@ export function GuideTip({ title = "How to get this", steps = [], docs = null, a
           <ol className="list-decimal space-y-1 pl-4 text-[11px] leading-relaxed text-gray-600">
             {steps.map((st, i) => <li key={i}>{st}</li>)}
           </ol>
-          {docs && (
-            <a href={/^https?:/.test(docs) ? docs : "https://" + docs} target="_blank" rel="noopener noreferrer"
-              className="mt-2 inline-block text-[11px] font-semibold underline" style={{ color: accent }}>
-              Open official docs →
-            </a>
-          )}
+          {docs && (() => {
+            /* docs strings are human paths — "developers.facebook.com/apps →
+               Create app → Settings". Linking the WHOLE string sent the arrows
+               and step names into the URL, and every one of those links 404ed.
+               Only the leading token is an address. */
+            const url = String(docs).split(/\s/)[0];
+            return (
+              <a href={/^https?:/.test(url) ? url : "https://" + url} target="_blank" rel="noopener noreferrer"
+                className="mt-2 inline-block text-[11px] font-semibold underline" style={{ color: accent }}>
+                Open official docs →
+              </a>
+            );
+          })()}
         </span>
       )}
     </span>
