@@ -92,17 +92,21 @@ export const API_REGISTRY = [
       },
       {
         id: "bingPlaces", name: "Microsoft Bing Places (partner access)",
-        /* Corrected: this was described as an Azure AD app pointing at
-           portal.azure.com. Bing Places is NOT an Azure AD integration —
-           Microsoft states there is no public API, and access is granted only
-           to its location-partner programme against a verified Bing Places
-           account. Registering an app in Azure gets you nothing here, so the
-           card no longer sends anyone there. */
-        desc: "No public API. Microsoft grants Bing Places API access only through its location-partner programme, against a verified Bing Places account — request it from partneronbp@microsoft.com. Until it is granted, the Bing Places tab manages content in the app and you publish through bingplaces.com (single listing or bulk upload).",
-        docs: "bingplaces.com \u2192 verify your listings, then email partneronbp@microsoft.com",
+        /* NOT an Azure AD integration — an earlier card asked for client ID /
+           client secret / tenant ID, which Bing Places never accepts. Per
+           Microsoft's own Trusted Partner API document, a partner is issued a
+           PUID and a client certificate by the Bing Places team after emailing
+           partneronbp@microsoft.com; the PUID + the account email identify
+           every call and the certificate authenticates it
+           (api.bingplaces.com/trustedPartnerApi/v1). These fields exist so the
+           credentials have a home the day Microsoft issues them. */
+        desc: "No public API and no Azure app — Microsoft's Trusted Partner programme issues a PUID and a client certificate after you email partneronbp@microsoft.com from a verified Bing Places account. Until then, manage Bing content in the app and publish through bingplaces.com.",
+        docs: "bingplaces.com \u2192 verify listings \u2192 email partneronbp@microsoft.com",
         fields: [
-          { key: "partnerId", label: "Partner / account identifier", optional: true, placeholder: "issued by Microsoft on approval" },
-          { key: "apiKey", label: "API key or token", secret: true, optional: true, placeholder: "issued by Microsoft on approval" },
+          { key: "email", label: "Bing Places account email", optional: true, placeholder: "the Microsoft account that owns the listings" },
+          { key: "puid", label: "PUID", secret: true, optional: true, placeholder: "issued by the Bing Places team" },
+          { key: "certificate", label: "Client certificate (PEM)", secret: true, optional: true, multiline: true, placeholder: "-----BEGIN CERTIFICATE-----" },
+          { key: "certificateKey", label: "Certificate key (PEM)", secret: true, optional: true, multiline: true, placeholder: "-----BEGIN PRIVATE KEY-----" },
         ],
       },
       {
@@ -462,9 +466,18 @@ export function ApiCard({ api, company, onChange }) {
       <div className="grid gap-2 sm:grid-cols-2">
         {api.fields.map((f) => (
           <Labeled key={f.key} label={f.label + (f.optional ? " (optional)" : "")}>
-            <input value={draft[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)}
-              type={f.secret && !reveal ? "password" : "text"}
-              placeholder={f.placeholder} className={(f.secret ? "ll-mono " : "") + inputCls} />
+            {/* certificates and other PEM blocks span many lines — a one-line
+                input silently truncates what gets pasted into it */}
+            {f.multiline ? (
+              <textarea value={draft[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)}
+                rows={reveal || !f.secret ? 4 : 2} placeholder={f.placeholder}
+                style={f.secret && !reveal ? { WebkitTextSecurity: "disc" } : undefined}
+                className={"ll-mono resize-y " + inputCls} />
+            ) : (
+              <input value={draft[f.key] || ""} onChange={(e) => setField(f.key, e.target.value)}
+                type={f.secret && !reveal ? "password" : "text"}
+                placeholder={f.placeholder} className={(f.secret ? "ll-mono " : "") + inputCls} />
+            )}
           </Labeled>
         ))}
       </div>
