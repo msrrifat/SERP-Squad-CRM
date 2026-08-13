@@ -2807,12 +2807,12 @@ async function handleWpTest(body) {
   if (!body?.site) return [400, { error: "bad_request", detail: "site required" }];
   const checks = { reachable: false, restApi: false, authenticated: false, user: null, canPublish: false };
   try {
-    let ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+    let ping = await fetch(wpBase(body.site).replace("/wp/v2", ""), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) });
     checks.reachable = true;
     /* blocked on /wp-json? the same API answers at /?rest_route= and no path
        rule can match that — if it works, the connector just uses it from now on */
     if (!ping.ok && looksBlocked(ping.status)) {
-      const alt = await fetch(wpRouteUrl(body.site, "/types"), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+      const alt = await fetch(wpRouteUrl(body.site, "/types"), { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) });
       if (alt.ok) {
         wpMode.set(body.site, "route");
         checks.restApi = true;
@@ -2838,7 +2838,7 @@ async function handleWpTest(body) {
          and prove it by pinging the site through it. */
       const agent = agentForSite(body.site);
       if (agent) {
-        const pong = await agentExec(body.site, "ping", {}, 20000);
+        const pong = await agentExec(body.site, "ping", {}, 15000);
         if (!pong?.error) {
           checks.restApi = true; checks.authenticated = true; checks.canPublish = true;
           checks.user = "SERP Squad plugin";
@@ -2857,7 +2857,7 @@ async function handleWpTest(body) {
   if (!body.credential || !String(body.credential).includes(":"))
     return [200, { checks, detail: "REST API reachable ✓ — now add the Application Password as username:xxxx xxxx xxxx xxxx (the USERNAME prefix and the colon are required, not just the password)." }];
   try {
-    const me = await fetch(wpBase(body.site) + "/users/me?context=edit", { headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential) }, signal: AbortSignal.timeout(10000) });
+    const me = await fetch(wpBase(body.site) + "/users/me?context=edit", { headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential) }, signal: AbortSignal.timeout(8000) });
     const rawMe = await me.text();
     let d = {}; try { d = JSON.parse(rawMe); } catch { /* not JSON — see below */ }
     if (!me.ok) {
@@ -2877,7 +2877,7 @@ async function handleWpTest(body) {
            and they need completely different fixes. */
         let anonOk = null;
         try {
-          const anon = await fetch(wpHost(body.site) + "/wp-json/", { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+          const anon = await fetch(wpHost(body.site) + "/wp-json/", { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) });
           anonOk = anon.ok;
         } catch { anonOk = null; }
         const where = anonOk === false

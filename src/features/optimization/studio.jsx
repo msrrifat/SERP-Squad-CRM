@@ -2482,14 +2482,26 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     if (w.platform === "wordpress") {
       /* real check: reachability → REST API → auth → publish capability */
       try {
-        const r = await fetch("/api/wp/test", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000), body: JSON.stringify({ site: project.website, credential: val }) });
+        /* this test makes SEVERAL round trips to the client's site — reach,
+           the alternate REST route, the authenticated call, and on a failure
+           an unauthenticated re-check. Against a slow or fataling site that
+           adds up, and a 25s budget aborted mid-way and reported the CRM's own
+           API as unreachable, which was never true. */
+        const r = await fetch("/api/wp/test", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(70000), body: JSON.stringify({ site: project.website, credential: val }) });
         const d = await r.json();
         setCredNote({ ok: !!d.checks?.authenticated, text: d.detail, checks: d.checks, needsAgent: !!d.needsAgent });
         if (d.checks?.authenticated) {
           set({ credential: { type: plat.credential.type, value: val, masked: val.split(":")[0] + ":••••••••", status: "valid", user: d.checks.user, addedAt: Date.now() } });
           setCredDraft(""); work?.("website", "wpConnected", { detail: d.checks.user }); log?.(`WordPress connected as ${d.checks.user}`, project.website);
         }
-      } catch { setCredNote({ ok: false, text: "API server unreachable (npm run api) — the credential test runs server-side." }); }
+      } catch (e) {
+        /* an abort is the test running long against THEIR site; only a real
+           network failure means our API server is not answering */
+        const timedOut = /abort|timeout/i.test(String(e?.name || "") + String(e?.message || ""));
+        setCredNote({ ok: false, text: timedOut
+          ? `${project.website} did not answer in time. That is the client's site being slow or erroring, not the CRM — open https://${project.website}/wp-json/ in a browser: if it hangs or shows an error there, fix that first, then retest.`
+          : "API server unreachable (npm run api) — the credential test runs server-side." });
+      }
     } else {
       /* non-WP platforms: store for the deploy engine; real validation happens on first use */
       set({ credential: { type: plat.credential.type, value: val, masked: val.slice(0, 4) + "••••••••", status: "saved", addedAt: Date.now() } });
