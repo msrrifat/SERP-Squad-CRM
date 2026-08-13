@@ -354,11 +354,24 @@ function CustomLinks({ fam, br, set, accent }) {
 /* connect-only social rows — the composer lives in Automation campaigns */
 /* Platform -> which API_REGISTRY credential entry holds its developer app.
    Several share one: Facebook and Instagram are both the Meta app. */
-const SOCIAL_CRED_KEY = {
-  facebook: "metaApp", instagram: "metaApp", threads: "threadsApp",
-  linkedin: "linkedinApp", x: "xApp", youtube: "googleOAuth",
-  tiktok: "tiktokApp", pinterest: "pinterestApp",
-};
+/* The connectors the SERVER can actually authorise. The rows are rendered from
+   THIS list, not from whatever happens to be saved on the project — the old
+   code mapped over opt.social.accounts, so a project that had never stored any
+   showed an empty card with no way to connect anything, and the ids it did
+   store ("fb", "ig", "li"…) matched no provider on the server, so Connect
+   would have failed even when rows existed. One list, one set of names. */
+const SOCIAL_PLATFORMS = [
+  { id: "facebook",  label: "Facebook Page",       cred: "metaApp" },
+  { id: "instagram", label: "Instagram Business",  cred: "metaApp" },
+  { id: "linkedin",  label: "LinkedIn",            cred: "linkedinApp" },
+  { id: "x",         label: "X (Twitter)",         cred: "xApp" },
+  { id: "youtube",   label: "YouTube Channel",     cred: "googleOAuth" },
+  { id: "tiktok",    label: "TikTok Business",     cred: "tiktokApp" },
+  { id: "pinterest", label: "Pinterest Business",  cred: "pinterestApp" },
+  { id: "threads",   label: "Threads",             cred: "threadsApp" },
+  { id: "bluesky",   label: "Bluesky",             cred: null },   // app password, no developer app
+];
+const SOCIAL_CRED_KEY = Object.fromEntries(SOCIAL_PLATFORMS.map((p) => [p.id, p.cred]));
 const SOCIAL_REDIRECT = () => `${window.location.origin}/api/oauth/social/callback`;
 
 function SocialConnectors({ accounts, onPatch, accent, log, title, note, project, company, ownerSuffix = "" }) {
@@ -437,18 +450,24 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
       <div className="ll-display text-[14px] font-semibold">{title}</div>
       <div className="text-[11.5px] text-gray-400">{note}</div>
       {err && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">{err}</div>}
-      {accounts.map((a) => {
+      {SOCIAL_PLATFORMS.map((a) => {
         const Icon = SOCIAL_ICONS[a.id] || Globe;
         const on = live[a.id];
         const editing = editId === a.id;
+        /* a platform whose developer app has not been entered cannot be
+           connected — say that here rather than after a failed round trip */
+        const credVals = a.cred ? (company?.apis || {})[a.cred]?.values || {} : {};
+        const needsCred = !!a.cred && !(credVals.clientId || credVals.appId);
         return (
           <div key={a.id} className="rounded-xl border border-gray-100">
             <div className="flex items-center gap-2.5 px-3 py-2.5">
               <Icon size={16} style={{ color: on ? SOCIAL_COLORS[a.id] || "#374151" : "#C7CDD8" }} />
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-semibold text-gray-800">{a.platform}</div>
+                <div className="text-[13px] font-semibold text-gray-800">{a.label}</div>
                 <div className="ll-mono truncate text-[10.5px] text-gray-400">
-                  {on ? `${on.handle || ""} ${on.name ? "· " + on.name : ""}`.trim() : "Not connected"}
+                  {on ? `${on.handle || ""} ${on.name ? "· " + on.name : ""}`.trim()
+                    : needsCred ? "Add its app in Company Settings → API settings → Social connectors"
+                    : a.id === "bluesky" ? "Needs only an app password — no developer app" : "Not connected"}
                 </div>
               </div>
               {on && (
@@ -457,11 +476,12 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
                 </button>
               )}
               {on ? (
-                <button onClick={() => disconnect(a.id, a.platform)}
+                <button onClick={() => disconnect(a.id, a.label)}
                   className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-red-200 hover:text-red-500">Disconnect</button>
               ) : (
-                <button disabled={busyId === a.id} onClick={() => connect(a.id, a.platform)}
-                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-60" style={{ background: accent }}>
+                <button disabled={busyId === a.id || needsCred} onClick={() => connect(a.id, a.label)}
+                  title={needsCred ? `${a.label} needs its developer app added in Company Settings → API settings first` : ""}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
                   {busyId === a.id ? <><RefreshCw size={12} className="animate-spin" /> Authorizing…</> : "Connect"}
                 </button>
               )}

@@ -22,7 +22,7 @@ import { AccountingSection } from "./accounting.jsx";
 
 export const API_REGISTRY = [
   {
-    group: "Social publishing",
+    group: "Social connectors",
     icon: Share2,
     items: [
       {

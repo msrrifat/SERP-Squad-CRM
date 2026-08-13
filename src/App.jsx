@@ -1550,7 +1550,7 @@ export default function App() {
             </div>
           )}
           {project && activeSection === "optimization" && (
-            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} work={logWork} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} /></Lazy>
+            <Lazy><OptimizationView project={project} accent={accent} onUpdate={updateProject} log={logActivity} work={logWork} access={access} aiProviders={aiProviders} aiConfig={aiConfig} dfs={activeDfs} company={company} /></Lazy>
           )}
           {project && activeSection === "adsmgr" && (
             <Lazy><AdsView project={project} accent={accent} onUpdate={updateProject} log={logActivity} company={company} aiConfig={aiConfig} /></Lazy>

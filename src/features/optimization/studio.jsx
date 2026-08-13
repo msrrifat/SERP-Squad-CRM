@@ -34,9 +34,15 @@ import { PostsArchitectTab } from "./postsarchitect.jsx";
 import { ReoptimizePanel } from "./reoptimize.jsx";
 import { INTENT_STYLE, OPP_STYLE, genKeywordSuggestions, genPageQueries, keywordUsage, oppFromRows, pageTextParts, regenSuggestion, relevancy } from "../../lib/seo.js";
 
-export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send };
-export const SOCIAL_COLORS = { fb: "#1877F2", ig: "#E4405F", li: "#0A66C2", x: "#111827", yt: "#FF0000", tt: "#111827", pin: "#E60023", th: "#111827", bs: "#0285FF" };
-export function OptimizationView({ project, accent, onUpdate, log, work = null, access = null, aiProviders = [], aiConfig = null, dfs }) {
+export const SOCIAL_ICONS = { fb: Facebook, ig: Instagram, li: Linkedin, x: Twitter, yt: Youtube, tt: Music2, pin: Pin, th: MessageSquare, bs: Send,
+  /* the connector ids are the SERVER's platform names — the short codes above
+     are the older brand-properties keys and stay for those screens */
+  facebook: Facebook, instagram: Instagram, linkedin: Linkedin, youtube: Youtube,
+  tiktok: Music2, pinterest: Pin, threads: MessageSquare, bluesky: Send };
+export const SOCIAL_COLORS = { fb: "#1877F2", ig: "#E4405F", li: "#0A66C2", x: "#111827", yt: "#FF0000", tt: "#111827", pin: "#E60023", th: "#111827", bs: "#0285FF",
+  facebook: "#1877F2", instagram: "#E4405F", linkedin: "#0A66C2", youtube: "#FF0000",
+  tiktok: "#111827", pinterest: "#E60023", threads: "#111827", bluesky: "#0285FF" };
+export function OptimizationView({ project, accent, onUpdate, log, work = null, access = null, aiProviders = [], aiConfig = null, dfs, company = null }) {
   const opt = project.opt || mkOpt();
   const [tab, setTab] = useState("gbp");
 
@@ -200,7 +206,7 @@ export function OptimizationView({ project, accent, onUpdate, log, work = null, 
           : <BpNotConnected label="Apple Maps" loc={activeLoc} />)}
         {activeTab === "website" && <WebsiteOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiProviders={aiProviders} aiConfig={aiConfig} dfs={dfs} />}
         {activeTab === "listings" && <ListingsScannerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
-        {activeTab === "social" && <BrandingOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} />}
+        {activeTab === "social" && <BrandingOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} company={company} />}
         {activeTab === "indexchk" && <IndexCheckerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
       </div>
     </div>
