@@ -372,6 +372,8 @@ const SOCIAL_PLATFORMS = [
   { id: "bluesky",   label: "Bluesky",             cred: null },   // app password, no developer app
 ];
 const SOCIAL_CRED_KEY = Object.fromEntries(SOCIAL_PLATFORMS.map((p) => [p.id, p.cred]));
+/* credentials entered under the retired card ids, still honoured */
+const LEGACY_CRED = { facebook: "meta", instagram: "meta" };
 const SOCIAL_REDIRECT = () => `${window.location.origin}/api/oauth/social/callback`;
 
 function SocialConnectors({ accounts, onPatch, accent, log, title, note, project, company, ownerSuffix = "" }) {
@@ -401,7 +403,12 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
     if (platform === "bluesky") { setBsky({ handle: "", appPassword: "" }); return; }
     setBusyId(platform);
     try {
-      const cred = (company?.apis || {})[SOCIAL_CRED_KEY[platform]]?.values || {};
+      /* API settings used to carry TWO Meta cards — the older "meta" entry
+         (appId/appSecret) and this group's "metaApp". Only one card remains,
+         but anything already saved under the old id is still read, so a
+         connection set up before the tidy-up keeps working. */
+      const apis = company?.apis || {};
+      const cred = { ...(apis[LEGACY_CRED[platform]]?.values || {}), ...(apis[SOCIAL_CRED_KEY[platform]]?.values || {}) };
       const r = await fetch("/api/social/start", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ platform, ownerId, redirectUri: SOCIAL_REDIRECT(),
@@ -456,7 +463,9 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
         const editing = editId === a.id;
         /* a platform whose developer app has not been entered cannot be
            connected — say that here rather than after a failed round trip */
-        const credVals = a.cred ? (company?.apis || {})[a.cred]?.values || {} : {};
+        const credVals = a.cred
+          ? { ...((company?.apis || {})[LEGACY_CRED[a.id]]?.values || {}), ...((company?.apis || {})[a.cred]?.values || {}) }
+          : {};
         const needsCred = !!a.cred && !(credVals.clientId || credVals.appId);
         return (
           <div key={a.id} className="rounded-xl border border-gray-100">
