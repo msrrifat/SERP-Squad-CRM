@@ -2858,8 +2858,39 @@ async function handleWpTest(body) {
     return [200, { checks, detail: "REST API reachable ✓ — now add the Application Password as username:xxxx xxxx xxxx xxxx (the USERNAME prefix and the colon are required, not just the password)." }];
   try {
     const me = await fetch(wpBase(body.site) + "/users/me?context=edit", { headers: { ...BROWSER_HEADERS, Authorization: wpAuth(body.credential) }, signal: AbortSignal.timeout(10000) });
-    const d = await me.json().catch(() => ({}));
-    if (!me.ok) return [200, { checks, detail: `Authentication failed (HTTP ${me.status}): ${d.message || "check the username and that the Application Password was copied with its spaces"}. Note: some hosts strip the Authorization header — add "SetEnvIf Authorization" rules or enable it in the host panel.` }];
+    const rawMe = await me.text();
+    let d = {}; try { d = JSON.parse(rawMe); } catch { /* not JSON — see below */ }
+    if (!me.ok) {
+      /* A 5xx carrying WordPress's fatal-error page is PHP crashing on the
+         site. It is not a stripped Authorization header, and saying so sends
+         people to edit .htaccess over a problem that is nothing to do with
+         it — so the two are told apart, and the fatal is diagnosed further
+         instead of guessed at. */
+      /* the HTML "critical error" page and the JSON internal_server_error are
+         the SAME condition — WordPress's fatal handler just answers REST
+         requests in JSON. Both mean PHP died. */
+      const isFatal = me.status >= 500
+        && /critical error|Fatal error|wp-content|troubleshooting|internal_server_error|technical difficulties/i.test(rawMe);
+      if (isFatal) {
+        /* does the REST API crash WITHOUT credentials too? That separates "this
+           site is broken" from "something breaks only on authenticated calls",
+           and they need completely different fixes. */
+        let anonOk = null;
+        try {
+          const anon = await fetch(wpHost(body.site) + "/wp-json/", { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
+          anonOk = anon.ok;
+        } catch { anonOk = null; }
+        const where = anonOk === false
+          ? "The REST API also fails WITHOUT credentials, so the whole site is throwing the error — this is not about the Application Password."
+          : anonOk === true
+            ? "The REST API works fine WITHOUT credentials and only crashes on the authenticated call, so something on the site fatals while resolving the logged-in user — most often a security, membership or role-management plugin."
+            : "The REST API could not be reached again to compare.";
+        return [200, { checks, siteFatal: true,
+          detail: `WordPress returned HTTP ${me.status} with its "critical error" page. That is a PHP fatal error on ${body.site}, not a credential or header problem — the Application Password never got the chance to be checked. ${where} To see the actual error: set WP_DEBUG and WP_DEBUG_LOG to true in wp-config.php and read wp-content/debug.log, or open the host's PHP error log. If the site was working before, deactivate whatever changed most recently — including the SERP Squad Connector plugin if it was just installed or updated — and retest.` }];
+      }
+      const said = d.message || (rawMe && !/[<]/.test(rawMe.slice(0, 40)) ? rawMe.slice(0, 160) : "");
+      return [200, { checks, detail: `Authentication failed (HTTP ${me.status}): ${said || "check the username and that the Application Password was copied with its spaces"}.${me.status === 401 || me.status === 403 ? ' Note: some hosts strip the Authorization header — add "SetEnvIf Authorization" rules or enable it in the host panel.' : ""}` }];
+    }
     checks.authenticated = true; checks.user = d.name || d.slug;
     checks.canPublish = (d.capabilities && (d.capabilities.publish_pages || d.capabilities.publish_posts)) || ["administrator", "editor"].some((r) => (d.roles || []).includes(r));
     return [200, { checks, detail: checks.canPublish ? `Connected as ${checks.user} ✓ — full-site deploys, scheduled posts and media sync are ready.` : `Authenticated as ${checks.user}, but this user can't publish pages — use an Administrator or Editor account.` }];
