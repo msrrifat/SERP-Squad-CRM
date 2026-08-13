@@ -1582,7 +1582,7 @@ async function handleProfileListings(body) {
     } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e) }]; }
   }
   if (provider === "bing") {
-    return [503, { error: "not_configured", detail: "Bing Places has no public listings API — access requires an approved Microsoft partner application. Store its credentials in Company Settings → API settings once Microsoft grants access; this endpoint then lists your store locations." }];
+    return [503, { error: "not_configured", detail: "Bing Places has no public listings API. Microsoft grants access only through its location-partner programme, against a verified Bing Places account — request it from partneronbp@microsoft.com. This is not an Azure AD integration, so registering an app in the Azure portal will not help. Until access is granted, manage the content here and publish it at bingplaces.com." }];
   }
   return [400, { error: "bad_request", detail: "provider must be gbp, bing or apple" }];
 }

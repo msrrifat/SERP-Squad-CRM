@@ -83,13 +83,26 @@ export const API_REGISTRY = [
     icon: Building2,
     items: [
       {
-        id: "bingPlaces", name: "Microsoft Bing Places",
-        desc: "Azure AD app powering Bing Places sync and performance pulls \u2014 impressions, clicks, calls and direction requests on Bing Search & Maps.",
-        docs: "portal.azure.com \u2192 App registrations",
+        id: "bingWebmaster", name: "Bing Webmaster Tools API",
+        desc: "FREE and available today: real Bing search performance for any site you have verified — impressions, clicks, average position, top queries and crawl data. One key covers every verified site on the account.",
+        docs: "bing.com/webmasters \u2192 Settings \u2192 API Access \u2192 Generate API key",
         fields: [
-          { key: "clientId", label: "Application (client) ID", placeholder: "00000000-0000-0000-0000-000000000000" },
-          { key: "clientSecret", label: "Client secret", secret: true, placeholder: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" },
-          { key: "tenantId", label: "Directory (tenant) ID", optional: true, placeholder: "common" },
+          { key: "apiKey", label: "API key", secret: true, placeholder: "generated in Bing Webmaster Tools" },
+        ],
+      },
+      {
+        id: "bingPlaces", name: "Microsoft Bing Places (partner access)",
+        /* Corrected: this was described as an Azure AD app pointing at
+           portal.azure.com. Bing Places is NOT an Azure AD integration —
+           Microsoft states there is no public API, and access is granted only
+           to its location-partner programme against a verified Bing Places
+           account. Registering an app in Azure gets you nothing here, so the
+           card no longer sends anyone there. */
+        desc: "No public API. Microsoft grants Bing Places API access only through its location-partner programme, against a verified Bing Places account — request it from partneronbp@microsoft.com. Until it is granted, the Bing Places tab manages content in the app and you publish through bingplaces.com (single listing or bulk upload).",
+        docs: "bingplaces.com \u2192 verify your listings, then email partneronbp@microsoft.com",
+        fields: [
+          { key: "partnerId", label: "Partner / account identifier", optional: true, placeholder: "issued by Microsoft on approval" },
+          { key: "apiKey", label: "API key or token", secret: true, optional: true, placeholder: "issued by Microsoft on approval" },
         ],
       },
       {
