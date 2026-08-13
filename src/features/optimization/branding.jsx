@@ -1,9 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2, Calendar, CheckCircle2, ChevronRight, Globe, ImagePlus, Link2, Lock,
   MapPin, Plus, RefreshCw, Rocket, Search, Send, Share2, Trash2, Upload, X, Zap,
 } from "lucide-react";
-import { Card, CharCount, Labeled, OAuthButton, Seg, Toggle, askDelete, askDisconnect, inputCls } from "../../ui/primitives.jsx";
+import { Card, CharCount, Labeled, Seg, Toggle, askDelete, askDisconnect, inputCls } from "../../ui/primitives.jsx";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
@@ -321,7 +321,7 @@ export function BrandingOptTab({ opt, setOpt, accent, log, project, company }) {
         ))}
       </div>
 
-      {sub === "properties" && <PropertiesTab br={br} set={set} accent={accent} project={project} opt={opt} setOpt={setOpt} log={log} brandName={brandName} />}
+      {sub === "properties" && <PropertiesTab br={br} set={set} accent={accent} project={project} opt={opt} setOpt={setOpt} log={log} brandName={brandName} company={company} />}
       {sub === "media" && <MediaTab br={br} set={set} accent={accent} />}
       {sub === "campaigns" && <CampaignsTab br={br} set={set} accent={accent} log={log} project={project} brandName={brandName} opt={opt} />}
     </div>
@@ -352,37 +352,147 @@ function CustomLinks({ fam, br, set, accent }) {
 }
 
 /* connect-only social rows — the composer lives in Automation campaigns */
-function SocialConnectors({ accounts, onPatch, accent, log, title, note }) {
+/* Platform -> which API_REGISTRY credential entry holds its developer app.
+   Several share one: Facebook and Instagram are both the Meta app. */
+const SOCIAL_CRED_KEY = {
+  facebook: "metaApp", instagram: "metaApp", threads: "threadsApp",
+  linkedin: "linkedinApp", x: "xApp", youtube: "googleOAuth",
+  tiktok: "tiktokApp", pinterest: "pinterestApp",
+};
+const SOCIAL_REDIRECT = () => `${window.location.origin}/api/oauth/social/callback`;
+
+function SocialConnectors({ accounts, onPatch, accent, log, title, note, project, company, ownerSuffix = "" }) {
   const [editId, setEditId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+  const [live, setLive] = useState({});          // what the SERVER says is connected
+  const [bsky, setBsky] = useState(null);        // { handle, appPassword } while entering
+  const ownerId = `${project.id}${ownerSuffix}`;
   const patchAcc = (id, p) => onPatch(accounts.map((x) => (x.id === id ? { ...x, ...p } : x)));
+
+  /* the truth about a connection lives on the server, where the tokens are —
+     never in the workspace, which is why a "connected" flag alone was able to
+     look right while nothing was authorised */
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch("/api/social/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerId }) });
+      if (!r.ok) return;
+      const d = await r.json();
+      setLive(d.accounts || {});
+    } catch { /* API server down — the UI just shows nothing connected */ }
+  }, [ownerId]);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const connect = async (platform, label) => {
+    setErr(null);
+    if (platform === "bluesky") { setBsky({ handle: "", appPassword: "" }); return; }
+    setBusyId(platform);
+    try {
+      const cred = (company?.apis || {})[SOCIAL_CRED_KEY[platform]]?.values || {};
+      const r = await fetch("/api/social/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform, ownerId, redirectUri: SOCIAL_REDIRECT(),
+          clientId: cred.clientId || cred.appId || "", clientSecret: cred.clientSecret || cred.appSecret || "" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.detail || `Could not start the connection (HTTP ${r.status})`); setBusyId(null); return; }
+      const win = window.open(d.authUrl, "ss_social", "width=620,height=760");
+      const onMsg = (e) => {
+        if (e.data?.socialOAuth) {
+          window.removeEventListener("message", onMsg);
+          setBusyId(null);
+          if (e.data.socialOAuth === "ok") { refresh(); log?.(`Connected ${label}`, project.name); }
+          else setErr(`${label} did not complete the authorisation.`);
+        }
+      };
+      window.addEventListener("message", onMsg);
+      /* the popup can be closed by hand — stop waiting and re-check rather
+         than spinning forever */
+      const poll = setInterval(() => {
+        if (win?.closed) { clearInterval(poll); window.removeEventListener("message", onMsg); setBusyId(null); refresh(); }
+      }, 700);
+    } catch { setErr("API server unreachable — the connection is made server-side."); setBusyId(null); }
+  };
+
+  const saveBluesky = async () => {
+    setBusyId("bluesky"); setErr(null);
+    try {
+      const r = await fetch("/api/social/bluesky", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerId, handle: bsky.handle, appPassword: bsky.appPassword }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(d.detail || "Bluesky rejected that sign-in.");
+      else { setBsky(null); refresh(); log?.("Connected Bluesky", project.name); }
+    } catch { setErr("API server unreachable."); }
+    setBusyId(null);
+  };
+
+  const disconnect = async (platform, label) => {
+    if (!await askDisconnect(label)) return;
+    await fetch("/api/social/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerId, platform }) });
+    refresh();
+  };
+
   return (
     <Card className="space-y-2 p-5">
       <div className="ll-display text-[14px] font-semibold">{title}</div>
       <div className="text-[11.5px] text-gray-400">{note}</div>
+      {err && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">{err}</div>}
       {accounts.map((a) => {
         const Icon = SOCIAL_ICONS[a.id] || Globe;
+        const on = live[a.id];
         const editing = editId === a.id;
         return (
           <div key={a.id} className="rounded-xl border border-gray-100">
             <div className="flex items-center gap-2.5 px-3 py-2.5">
-              <Icon size={16} style={{ color: a.connected ? SOCIAL_COLORS[a.id] || "#374151" : "#C7CDD8" }} />
+              <Icon size={16} style={{ color: on ? SOCIAL_COLORS[a.id] || "#374151" : "#C7CDD8" }} />
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold text-gray-800">{a.platform}</div>
-                <div className="ll-mono truncate text-[10.5px] text-gray-400">{a.connected ? `${a.handle} · ${a.name}` : "Not connected"}</div>
+                <div className="ll-mono truncate text-[10.5px] text-gray-400">
+                  {on ? `${on.handle || ""} ${on.name ? "· " + on.name : ""}`.trim() : "Not connected"}
+                </div>
               </div>
-              {a.connected && (
+              {on && (
                 <button onClick={() => setEditId(editing ? null : a.id)} className="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-medium text-gray-500 hover:border-gray-300">
-                  {editing ? "Close" : "Edit info"}
+                  {editing ? "Close" : "Details"}
                 </button>
               )}
-              <OAuthButton label="Connect" accent={accent} connected={a.connected}
-                onDone={() => { patchAcc(a.id, { connected: true, handle: a.handle || "@yourhandle", name: a.name || a.platform }); log?.(`Connected ${a.platform}`, ""); }}
-                onDisconnect={() => patchAcc(a.id, { connected: false })} />
+              {on ? (
+                <button onClick={() => disconnect(a.id, a.platform)}
+                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-red-200 hover:text-red-500">Disconnect</button>
+              ) : (
+                <button disabled={busyId === a.id} onClick={() => connect(a.id, a.platform)}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-60" style={{ background: accent }}>
+                  {busyId === a.id ? <><RefreshCw size={12} className="animate-spin" /> Authorizing…</> : "Connect"}
+                </button>
+              )}
             </div>
-            {editing && a.connected && (
-              <div className="ll-fade grid gap-2 border-t border-gray-50 p-3 sm:grid-cols-2">
-                <Labeled label="Display name"><input value={a.name} onChange={(e) => patchAcc(a.id, { name: e.target.value })} className={inputCls} /></Labeled>
-                <Labeled label="Handle"><input value={a.handle} onChange={(e) => patchAcc(a.id, { handle: e.target.value })} className={"ll-mono " + inputCls} /></Labeled>
+            {/* Bluesky takes an app password rather than OAuth — the AT Protocol
+                has no developer app to register, which is why it is the one that
+                works without waiting for a platform review */}
+            {bsky && a.id === "bluesky" && (
+              <div className="ll-fade space-y-2 border-t border-gray-50 p-3">
+                <div className="text-[11px] leading-relaxed text-gray-500">
+                  Bluesky needs an <b>app password</b>, not your account password — make one at
+                  {" "}<span className="ll-mono">bsky.app → Settings → App Passwords</span>.
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Labeled label="Handle"><input value={bsky.handle} onChange={(e) => setBsky({ ...bsky, handle: e.target.value })} placeholder="you.bsky.social" className={"ll-mono " + inputCls} /></Labeled>
+                  <Labeled label="App password"><input type="password" value={bsky.appPassword} onChange={(e) => setBsky({ ...bsky, appPassword: e.target.value })} placeholder="xxxx-xxxx-xxxx-xxxx" className={"ll-mono " + inputCls} /></Labeled>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={saveBluesky} disabled={busyId === "bluesky" || !bsky.handle || !bsky.appPassword}
+                    className="rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
+                    {busyId === "bluesky" ? "Signing in…" : "Connect Bluesky"}
+                  </button>
+                  <button onClick={() => setBsky(null)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] text-gray-500">Cancel</button>
+                </div>
+              </div>
+            )}
+            {editing && on && (
+              <div className="ll-fade border-t border-gray-50 p-3 text-[11.5px] text-gray-500">
+                <div><b className="text-gray-700">{on.name}</b> {on.handle}</div>
+                <div className="ll-mono mt-1 text-[10.5px] text-gray-400">connected {new Date(on.at).toLocaleString()}</div>
+                {on.scope && <div className="ll-mono mt-0.5 break-all text-[10px] text-gray-400">scope: {on.scope}</div>}
               </div>
             )}
           </div>
@@ -392,7 +502,7 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note }) {
   );
 }
 
-function PropertiesTab({ br, set, accent, project, opt, setOpt, log, brandName }) {
+function PropertiesTab({ br, set, accent, project, opt, setOpt, log, brandName, company }) {
   const [mode, setMode] = useState("connectors"); // "connectors" | "properties"
   /* secondary accounts: same networks, second profile — created lazily */
   const secondaryAccounts = br.secondarySocial || MAIN_SOCIALS.map(([k, name]) => ({ id: k, platform: name + " (2nd)", connected: false, handle: "", name: "" }));
@@ -426,9 +536,11 @@ function PropertiesTab({ br, set, accent, project, opt, setOpt, log, brandName }
           </Card>
           <div className="grid gap-4 lg:grid-cols-2">
             <SocialConnectors accounts={opt.social?.accounts || []} accent={accent} log={log}
-              title="Main social profiles" note="Your brand's primary accounts — OAuth per platform."
+              project={project} company={company} ownerSuffix=""
+              title="Main social profiles" note="Your brand's primary accounts — each is a real OAuth connection."
               onPatch={(next) => setOpt("social", { accounts: next })} />
             <SocialConnectors accounts={secondaryAccounts} accent={accent} log={log}
+              project={project} company={company} ownerSuffix=":2"
               title="Secondary social profiles" note="Second accounts on the same networks — location pages, brand alts."
               onPatch={(next) => set({ secondarySocial: next })} />
           </div>

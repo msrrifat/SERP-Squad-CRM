@@ -22,6 +22,66 @@ import { AccountingSection } from "./accounting.jsx";
 
 export const API_REGISTRY = [
   {
+    group: "Social publishing",
+    icon: Share2,
+    items: [
+      {
+        id: "metaApp", name: "Meta app (Facebook + Instagram)",
+        desc: "One Meta app covers both Facebook Pages and Instagram Business. Publishing permissions (pages_manage_posts, instagram_content_publish) need Meta App Review before they work on accounts other than your own.",
+        docs: "developers.facebook.com/apps → Create app (Business) → Facebook Login → Settings",
+        fields: [
+          { key: "clientId", label: "App ID", placeholder: "1234567890" },
+          { key: "clientSecret", label: "App Secret", secret: true, placeholder: "••••••••" },
+        ],
+      },
+      {
+        id: "threadsApp", name: "Threads app",
+        desc: "Threads uses its own app and scopes (threads_basic, threads_content_publish), separate from the Facebook/Instagram app.",
+        docs: "developers.facebook.com/apps → Threads API",
+        fields: [
+          { key: "clientId", label: "App ID" },
+          { key: "clientSecret", label: "App Secret", secret: true },
+        ],
+      },
+      {
+        id: "linkedinApp", name: "LinkedIn app",
+        desc: "Posting as a person needs w_member_social; posting as a company Page needs the Community Management API, which LinkedIn reviews before granting.",
+        docs: "linkedin.com/developers/apps → Auth",
+        fields: [
+          { key: "clientId", label: "Client ID" },
+          { key: "clientSecret", label: "Client Secret", secret: true },
+        ],
+      },
+      {
+        id: "xApp", name: "X (Twitter) app",
+        desc: "OAuth 2.0 with PKCE. Posting requires a PAID API tier — the free tier cannot publish, so connecting will succeed and publishing will not.",
+        docs: "developer.x.com → Projects & Apps → User authentication settings",
+        fields: [
+          { key: "clientId", label: "OAuth 2.0 Client ID" },
+          { key: "clientSecret", label: "OAuth 2.0 Client Secret", secret: true },
+        ],
+      },
+      {
+        id: "tiktokApp", name: "TikTok app",
+        desc: "Content Posting API. TikTok reviews the app before video.publish is granted, and unaudited apps can only post privately.",
+        docs: "developers.tiktok.com → Manage apps → Login Kit + Content Posting API",
+        fields: [
+          { key: "clientId", label: "Client key" },
+          { key: "clientSecret", label: "Client secret", secret: true },
+        ],
+      },
+      {
+        id: "pinterestApp", name: "Pinterest app",
+        desc: "Trial access allows your own boards; wider access needs Pinterest's app review.",
+        docs: "developers.pinterest.com/apps",
+        fields: [
+          { key: "clientId", label: "App ID" },
+          { key: "clientSecret", label: "App secret", secret: true },
+        ],
+      },
+    ],
+  },
+  {
     group: "SEO data",
     icon: BarChart3,
     items: [

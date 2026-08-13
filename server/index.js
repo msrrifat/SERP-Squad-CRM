@@ -3731,6 +3731,231 @@ async function handleGeoGrid(body) {
     empty: all.filter((p) => p.noResults).length, checkedAt: Date.now() }];
 }
 
+
+/* ======================================================================
+   SOCIAL CONNECTORS — real OAuth, replacing a button that faked it.
+
+   The Connect button used to be a 900ms timer that set connected:true. No
+   authorisation happened, no token existed, and nothing could ever have been
+   published. This is the flow it should have been, built on the same shape as
+   the Google connection that already works: the browser asks for an authorize
+   URL, the platform redirects back here with a code, the code is exchanged
+   server-side, and the tokens never touch the browser.
+
+   Every provider below needs a developer app THE USER creates, because the
+   client_id/secret identify their business to the platform — no integration
+   can create those for them. What differs per provider is only configuration,
+   so adding one is a table entry rather than new code.
+
+   PKCE is per-provider: X and TikTok require it, and providers that do not
+   expect the parameters reject them, so it is not sent globally.
+   ====================================================================== */
+const SOCIAL_DIR = new URL("./data/social/", import.meta.url);
+const socialFile = (owner, platform) =>
+  new URL(`${String(owner).replace(/[^A-Za-z0-9_-]/g, "")}__${String(platform).replace(/[^a-z0-9]/gi, "")}.json`, SOCIAL_DIR);
+
+const SOCIAL_PROVIDERS = {
+  facebook: {
+    label: "Facebook Page", credKey: "metaApp", pkce: false,
+    auth: "https://www.facebook.com/v21.0/dialog/oauth",
+    token: "https://graph.facebook.com/v21.0/oauth/access_token",
+    scope: "pages_show_list,pages_manage_posts,pages_read_engagement,business_management",
+    profile: async (t) => {
+      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=name,username,id&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
+      const p = me.data?.[0];
+      return p ? { name: p.name, handle: p.username ? "@" + p.username : p.id, pageId: p.id } : null;
+    },
+  },
+  instagram: {
+    label: "Instagram Business", credKey: "metaApp", pkce: false,
+    auth: "https://www.facebook.com/v21.0/dialog/oauth",
+    token: "https://graph.facebook.com/v21.0/oauth/access_token",
+    scope: "instagram_basic,instagram_content_publish,pages_show_list,business_management",
+    profile: async (t) => {
+      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account{username,name}&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
+      const ig = me.data?.map((x) => x.instagram_business_account).find(Boolean);
+      return ig ? { name: ig.name || ig.username, handle: "@" + ig.username, igId: ig.id } : null;
+    },
+  },
+  threads: {
+    label: "Threads", credKey: "threadsApp", pkce: false,
+    auth: "https://threads.net/oauth/authorize",
+    token: "https://graph.threads.net/oauth/access_token",
+    scope: "threads_basic,threads_content_publish",
+    profile: async (t) => {
+      const d = await fetch(`https://graph.threads.net/v1.0/me?fields=username,name&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
+      return d.username ? { name: d.name || d.username, handle: "@" + d.username } : null;
+    },
+  },
+  linkedin: {
+    label: "LinkedIn Page", credKey: "linkedinApp", pkce: false,
+    auth: "https://www.linkedin.com/oauth/v2/authorization",
+    token: "https://www.linkedin.com/oauth/v2/accessToken",
+    scope: "openid profile w_member_social",
+    profile: async (t) => {
+      const d = await fetch("https://api.linkedin.com/v2/userinfo", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      return d.name ? { name: d.name, handle: d.email || d.sub } : null;
+    },
+  },
+  x: {
+    label: "X (Twitter)", credKey: "xApp", pkce: true, basicAuthToken: true,
+    auth: "https://twitter.com/i/oauth2/authorize",
+    token: "https://api.twitter.com/2/oauth2/token",
+    scope: "tweet.read tweet.write users.read offline.access",
+    profile: async (t) => {
+      const d = await fetch("https://api.twitter.com/2/users/me", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      return d.data ? { name: d.data.name, handle: "@" + d.data.username } : null;
+    },
+  },
+  youtube: {
+    label: "YouTube Channel", credKey: "googleOAuth", pkce: false,
+    auth: "https://accounts.google.com/o/oauth2/v2/auth",
+    token: "https://oauth2.googleapis.com/token",
+    scope: "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload",
+    extraAuth: { access_type: "offline", prompt: "consent" },
+    profile: async (t) => {
+      const d = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      const c = d.items?.[0];
+      return c ? { name: c.snippet.title, handle: c.snippet.customUrl || c.id, channelId: c.id } : null;
+    },
+  },
+  tiktok: {
+    label: "TikTok Business", credKey: "tiktokApp", pkce: true, clientKeyParam: "client_key",
+    auth: "https://www.tiktok.com/v2/auth/authorize/",
+    token: "https://open.tiktokapis.com/v2/oauth/token/",
+    scope: "user.info.basic,video.publish,video.upload",
+    profile: async (t) => {
+      const d = await fetch("https://open.tiktokapis.com/v2/user/info/?fields=display_name,username", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      const u = d.data?.user;
+      return u ? { name: u.display_name, handle: u.username ? "@" + u.username : "" } : null;
+    },
+  },
+  pinterest: {
+    label: "Pinterest Business", credKey: "pinterestApp", pkce: false, basicAuthToken: true,
+    auth: "https://www.pinterest.com/oauth/",
+    token: "https://api.pinterest.com/v5/oauth/token",
+    scope: "boards:read,pins:read,pins:write",
+    profile: async (t) => {
+      const d = await fetch("https://api.pinterest.com/v5/user_account", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      return d.username ? { name: d.business_name || d.username, handle: "@" + d.username } : null;
+    },
+  },
+};
+
+/* Bluesky is the exception and the useful one: the AT Protocol has no OAuth
+   app to register and no review to wait for. An app password (Settings → App
+   Passwords) is exchanged for a session immediately, so this connector works
+   the day it ships — which also makes it the way to prove the rest of the
+   pipeline end to end. */
+async function handleSocialBluesky(body) {
+  const owner = String(body?.ownerId || "").trim();
+  const handle = String(body?.handle || "").trim().replace(/^@/, "");
+  const appPassword = String(body?.appPassword || "").trim();
+  if (!owner || !handle || !appPassword) return [400, { error: "bad_request", detail: "handle and app password required" }];
+  try {
+    const r = await fetch("https://bsky.social/xrpc/com.atproto.server.createSession", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20000),
+      body: JSON.stringify({ identifier: handle, password: appPassword }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return [502, { error: "provider_error", detail: d.message || `Bluesky rejected the sign-in (HTTP ${r.status}). Use an APP PASSWORD from Settings → App Passwords, not your account password.` }];
+    mkdirSync(SOCIAL_DIR, { recursive: true });
+    writeFileSync(socialFile(owner, "bluesky"), JSON.stringify({
+      platform: "bluesky", owner, did: d.did, handle: "@" + d.handle, name: d.handle,
+      accessJwt: d.accessJwt, refreshJwt: d.refreshJwt, at: Date.now(),
+    }));
+    return [200, { ok: true, platform: "bluesky", name: d.handle, handle: "@" + d.handle }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 160) }]; }
+}
+
+function handleSocialStart(body) {
+  const platform = String(body?.platform || "");
+  const p = SOCIAL_PROVIDERS[platform];
+  if (!p) return [400, { error: "bad_platform", detail: `No connector for "${platform}".` }];
+  const owner = String(body?.ownerId || "").trim();
+  const clientId = String(body?.clientId || "").trim();
+  const clientSecret = String(body?.clientSecret || "").trim();
+  const redirectUri = String(body?.redirectUri || "").trim();
+  if (!owner) return [400, { error: "bad_request", detail: "ownerId required" }];
+  if (!clientId || !clientSecret || !redirectUri) {
+    return [503, { error: "not_configured",
+      detail: `${p.label} needs its own developer app. Add the Client ID, Client Secret and redirect URI for it in Company Settings → API settings, then connect.` }];
+  }
+  const state = randomBytes(16).toString("hex");
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  pendingOAuth.set("sm_" + state, { platform, owner, clientId, clientSecret, redirectUri, verifier, exp: Date.now() + 10 * 60e3 });
+  const q = {
+    [p.clientKeyParam || "client_id"]: clientId,
+    redirect_uri: redirectUri, response_type: "code",
+    scope: p.scope, state: "sm_" + state, ...(p.extraAuth || {}),
+  };
+  if (p.pkce) { q.code_challenge = challenge; q.code_challenge_method = "S256"; }
+  return [200, { authUrl: p.auth + (p.auth.includes("?") ? "&" : "?") + new URLSearchParams(q), state: "sm_" + state }];
+}
+
+async function handleSocialCallback(reqUrl) {
+  const u = new URL(reqUrl, "http://x");
+  const code = u.searchParams.get("code"), state = u.searchParams.get("state"), err = u.searchParams.get("error");
+  const page = (title, msg, ok) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<body style="font:15px/1.5 -apple-system,system-ui,sans-serif;color:#1F2937;max-width:420px;margin:60px auto;padding:0 20px;text-align:center">
+<div style="font-size:34px">${ok ? "✅" : "⚠️"}</div><h2 style="margin:8px 0">${title}</h2><p style="color:#6B7280">${msg}</p>
+<script>try{if(window.opener){window.opener.postMessage({socialOAuth:${ok ? '"ok"' : '"error"'}},"*");setTimeout(function(){window.close();},1400);}}catch(e){}</script></body>`;
+  if (err) return page("Connection cancelled", "The platform returned: " + err + ". You can close this window.", false);
+  const pend = state && pendingOAuth.get(state);
+  if (!pend || Date.now() > pend.exp) return page("Link expired", "That connection link expired — start again from the app.", false);
+  pendingOAuth.delete(state);
+  const p = SOCIAL_PROVIDERS[pend.platform];
+  try {
+    const form = {
+      code, grant_type: "authorization_code", redirect_uri: pend.redirectUri,
+      [p.clientKeyParam || "client_id"]: pend.clientId,
+    };
+    const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    /* X and Pinterest authenticate the TOKEN call with HTTP Basic rather than
+       a secret in the body — sending it the other way is rejected */
+    if (p.basicAuthToken) headers.Authorization = "Basic " + Buffer.from(`${pend.clientId}:${pend.clientSecret}`).toString("base64");
+    else form.client_secret = pend.clientSecret;
+    if (p.pkce) form.code_verifier = pend.verifier;
+
+    const tr = await fetch(p.token, { method: "POST", headers, body: new URLSearchParams(form), signal: AbortSignal.timeout(25000) });
+    const td = await tr.json().catch(() => ({}));
+    if (!tr.ok || (!td.access_token && !td.data?.access_token)) {
+      return page("Could not finish", (td.error_description || td.error?.message || td.error || `token exchange HTTP ${tr.status}`) + "", false);
+    }
+    const accessToken = td.access_token || td.data?.access_token;
+    let prof = null;
+    try { prof = await p.profile(accessToken); } catch { /* profile is a nicety, not the connection */ }
+    mkdirSync(SOCIAL_DIR, { recursive: true });
+    writeFileSync(socialFile(pend.owner, pend.platform), JSON.stringify({
+      platform: pend.platform, owner: pend.owner,
+      accessToken, refreshToken: td.refresh_token || td.data?.refresh_token || null,
+      expiresIn: td.expires_in || null, scope: td.scope || p.scope,
+      name: prof?.name || p.label, handle: prof?.handle || "", extra: prof || null, at: Date.now(),
+    }));
+    return page("Connected", `${p.label} is linked${prof?.handle ? " as " + prof.handle : ""}. You can close this window.`, true);
+  } catch (e) { return page("Could not finish", String(e?.message || e).slice(0, 180), false); }
+}
+
+function handleSocialStatus(body) {
+  const owner = String(body?.ownerId || "").trim();
+  if (!owner) return [400, { error: "bad_request", detail: "ownerId required" }];
+  const out = {};
+  for (const platform of [...Object.keys(SOCIAL_PROVIDERS), "bluesky"]) {
+    const d = readJson(socialFile(owner, platform), null);
+    if (d) out[platform] = { connected: true, name: d.name, handle: d.handle, at: d.at, scope: d.scope || null };
+  }
+  return [200, { ok: true, accounts: out, available: [...Object.keys(SOCIAL_PROVIDERS), "bluesky"] }];
+}
+
+function handleSocialDisconnect(body) {
+  const owner = String(body?.ownerId || "").trim();
+  const platform = String(body?.platform || "");
+  if (!owner || !platform) return [400, { error: "bad_request", detail: "ownerId and platform required" }];
+  try { rmSync(socialFile(owner, platform), { force: true }); } catch { /* already gone */ }
+  return [200, { ok: true }];
+}
+
 /* ---- Google Places: resolve the business location (Find Place) ---- */
 async function handlePlacesLocate(body) {
   const key = body.placesKey;
@@ -3909,6 +4134,11 @@ http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url.startsWith("/api/state/slice?")) { const [c2, p2] = handleStateSlice(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
+    if (req.method === "GET" && req.url.startsWith("/api/oauth/social/callback")) {
+      const html = await handleSocialCallback(req.url);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SEC_HEADERS });
+      return res.end(html);
+    }
     if (req.method === "GET" && req.url.startsWith("/api/oauth/google/callback")) {
       const html = await handleOAuthCallback(req.url);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SEC_HEADERS });
@@ -3936,7 +4166,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6 : 4e6;
@@ -4032,6 +4262,10 @@ http.createServer(async (req, res) => {
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)
+        : req.url === "/api/social/start" ? handleSocialStart(body)
+        : req.url === "/api/social/status" ? handleSocialStatus(body)
+        : req.url === "/api/social/disconnect" ? handleSocialDisconnect(body)
+        : req.url === "/api/social/bluesky" ? await handleSocialBluesky(body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)
         : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)
