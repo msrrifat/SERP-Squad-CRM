@@ -65,6 +65,17 @@ const mergeRecord = (a, b) => {
   };
 };
 
+/* meeting notes: { memberId: [meetings] } — union each member's list by id,
+   newer updatedAt wins per meeting, so notes typed in one tab survive a save
+   landing from another */
+const mergeNotesMap = (a, b) => {
+  const out = { ...(a || {}) };
+  for (const [member, list] of Object.entries(b || {})) {
+    out[member] = out[member] ? unionById(out[member], list) : list;
+  }
+  return out;
+};
+
 const mergeProject = (a, b) => {
   /* scalar/config fields follow the side edited last, so a settings change is
      not undone; the collections below are unions regardless */
@@ -75,6 +86,7 @@ const mergeProject = (a, b) => {
     lists: unionById(a.lists, b.lists),
     tracking: unionById(a.tracking, b.tracking),
     chatMsgs: unionById(a.chatMsgs, b.chatMsgs),
+    meetingNotes: mergeNotesMap(a.meetingNotes, b.meetingNotes),
   };
 };
 
@@ -100,6 +112,7 @@ const mergeCompany = (a, b) => {
     recordTemplates: unionById(a.recordTemplates, b.recordTemplates),
     chatGroups: unionById(a.chatGroups, b.chatGroups),
     activity: unionById(a.activity, b.activity).slice(0, 400),
+    meetingNotes: mergeNotesMap(a.meetingNotes, b.meetingNotes),
   };
 };
 

@@ -18,6 +18,7 @@ import { askConfirm, askDelete, askInput, AssignPicker, Ava, Card, inputCls, NEG
 import { fmtDay, fmtTs2, relTime, todayISO } from "../../lib/format.jsx";
 import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
+import { MeetingNotesTab } from "./meetings.jsx";
 
 export const taskState = (t) => (t.completedAt ? "done" : t.dueDate && t.dueDate < todayISO() ? "overdue" : "open");
 
@@ -53,7 +54,9 @@ function TaskTitle({ value, done, color, canEdit, onCommit }) {
       onClick={canEdit ? () => { setDraft(value); setEditing(true); } : undefined}
       title={canEdit ? "Click to edit" : undefined}
       className={"min-w-0 flex-1 text-[13px] font-medium " + (canEdit ? "cursor-text rounded px-1 -mx-1 hover:bg-gray-100" : "")}
-      style={{ color, textDecoration: done ? "line-through" : "none", opacity: done ? 0.75 : 1 }}>
+      /* a discussed/completed task reads GREEN, not crossed out — the strike
+         made finished work look deleted */
+      style={{ color, opacity: done ? 0.85 : 1 }}>
       {value}
     </div>
   );
@@ -425,7 +428,7 @@ export function ChatView({ project, currentUser, canWrite = true, accent, onUpda
 }
 
 export function ProjectManagementView({ project, people, perms, currentUser, accent, onUpdate, log, maskName = (n) => n, canChat = true, initialOpenId = null, jumpKey = 0,
-  templates = null, onSaveTemplate = null, onDeleteTemplate = null }) {
+  templates = null, onSaveTemplate = null, onDeleteTemplate = null, meetingsUser = null }) {
   const records = project.records || [];
   /* board lists (kanban columns) — every record belongs to one; the same
      columns are mirrored across the All/Open/Overdue/Completed filters */
@@ -505,7 +508,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
     <div className="ll-fade space-y-4">
       {/* PM top bar */}
       <div className="flex gap-1.5">
-        {[["records", "Records", ListTodo], ...(templates ? [["templates", "Record Templates", Copy]] : []), ["wiki", "Wiki", FileTextIcon], ...(canChat ? [["chat", "Chat", MessageSquare]] : [])].map(([key, label, Icon]) => (
+        {[["records", "Work Records", ListTodo], ...(templates ? [["templates", "Record Templates", Copy]] : []), ...(meetingsUser ? [["meetings", "Meeting notes", Calendar]] : []), ["wiki", "Wiki", FileTextIcon], ...(canChat ? [["chat", "Chat", MessageSquare]] : [])].map(([key, label, Icon]) => (
           <button key={key} onClick={() => setPmTab(key)}
             className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
             style={pmTab === key ? { background: accent + "10", borderColor: accent, color: accent } : { background: "var(--chip-bg, #fff)", borderColor: "#E5E7EB", color: "var(--chip-fg, #4B5563)" }}>
@@ -516,6 +519,9 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
           </button>
         ))}
       </div>
+      {pmTab === "meetings" && meetingsUser && (
+        <MeetingNotesTab project={project} user={meetingsUser} accent={accent} onUpdate={onUpdate} />
+      )}
       {pmTab === "wiki" && <WikiView project={project} onUpdate={onUpdate} canEdit={perms.manage} accent={accent} log={log} />}
       {pmTab === "chat" && canChat && <ChatView project={project} currentUser={currentUser} canWrite={perms.comment !== false} accent={accent} onUpdate={onUpdate} maskName={maskName} mentionables={people.map((p2) => p2.name)} />}
       {pmTab === "records" && (<>

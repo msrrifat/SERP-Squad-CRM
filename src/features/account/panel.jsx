@@ -4,6 +4,7 @@ import {
   MessageSquare, Moon, Shield, Sun, Trash2, User, Users,
 } from "lucide-react";
 import { askDelete, Ava, Card, inputCls, shrinkImage, Toggle } from "../../ui/primitives.jsx";
+import { ROLE_AUTO_SECTIONS } from "../../data/seed.js";
 import { relTime, todayISO } from "../../lib/format.jsx";
 import { MessageThread } from "../chat/thread.jsx";
 
@@ -229,6 +230,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
   const [sel, setSel] = useState(others.length ? { type: "dm", name: others[0].name } : (channels[0] ? { type: "proj", projectId: channels[0].project.id } : null));
   const [newGroup, setNewGroup] = useState(null); // { name, members: Set }
   const [manage, setManage] = useState(false);    // group manage popover
+  const [showRoster, setShowRoster] = useState(false);  // channel member list
   const dmMsgs = (other) => (dms || {})[dmKeyOf(me, other)] || [];
   const dmUnread = (other) => dmMsgs(other).filter((m) => m.author !== me && m.ts > (((dmReads || {})[dmKeyOf(me, other)] || {})[me] || 0)).length;
   const projMsgs = (ch) => ch.project.chatMsgs || [];
@@ -251,8 +253,21 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
 
   const preview = (msgs) => { const last = msgs[msgs.length - 1]; return last ? `${last.author === me ? "You" : maskName(last.author).split(" ")[0]}: ${last.text}` : "No messages yet"; };
   const selMember = selDm ? team.find((m) => m.name === selDm) : null;
+  /* CHANNEL MEMBERSHIP IS DERIVED, NEVER STORED. A member is in a project's
+     channel exactly when they are assigned to the project (Company Settings →
+     Team & permissions) with chat access — so assigning someone adds them to
+     the channel by itself, and unassigning removes them. There is no separate
+     list to forget to update. */
+  const channelRoster = (ch) => (team || []).filter((m) => {
+    const assigned = m.isOwner || m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(ch.project.id));
+    if (!assigned) return false;
+    if (m.isOwner || m.role === "Admin") return true;
+    const auto = ROLE_AUTO_SECTIONS[m.role] || [];
+    const manual = (ch.project.teamAccess || {})[m.id] || {};
+    return manual.chat !== undefined ? !!manual.chat : (auto === "all" || auto.includes("chat"));
+  });
   /* who can be @mentioned in the open thread */
-  const channelMembers = (ch) => team.filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(ch.project.id))).map((m) => m.name);
+  const channelMembers = (ch) => channelRoster(ch).map((m) => m.name);
   const createGroup = () => {
     const name = newGroup.name.trim();
     if (!name || newGroup.members.size === 0) return;
@@ -457,12 +472,38 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
         )}
         {selCh && (
           <>
-            <div className="flex items-center gap-2.5 border-b border-gray-200 bg-white px-4 py-2.5">
-              <span className="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-white" style={{ background: selCh.project.accent || accent }}><Hash size={13} /></span>
-              <div>
-                <div className="text-[13px] font-bold text-gray-800">{selCh.project.name}</div>
-                <div className="text-[10px] text-gray-400">{selCh.clientName} · synced with Project Management → Chat</div>
+            <div className="border-b border-gray-200 bg-white">
+              <div className="flex items-center gap-2.5 px-4 py-2.5">
+                <span className="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-white" style={{ background: selCh.project.accent || accent }}><Hash size={13} /></span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-bold text-gray-800">{selCh.project.name}</div>
+                  <div className="truncate text-[10px] text-gray-400">{selCh.clientName} · synced with Project Management → Chat</div>
+                </div>
+                <button onClick={() => setShowRoster((v) => !v)} title="Channel members"
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 px-2 py-1 hover:border-gray-300">
+                  <span className="flex -space-x-1.5">
+                    {channelRoster(selCh).slice(0, 4).map((m) => <Ava key={m.id} name={maskName(m.name)} img={m.avatar} size={18} />)}
+                  </span>
+                  <span className="ll-mono text-[10.5px] font-bold text-gray-500">{channelRoster(selCh).length}</span>
+                </button>
               </div>
+              {showRoster && (
+                <div className="ll-fade border-t border-gray-100 px-4 py-2.5">
+                  <div className="mb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Members — follows project assignment automatically</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {channelRoster(selCh).map((m) => (
+                      <span key={m.id} className="flex items-center gap-1.5 rounded-full border border-gray-100 bg-gray-50 py-0.5 pl-0.5 pr-2">
+                        <Ava name={maskName(m.name)} img={m.avatar} size={18} />
+                        <span className="text-[11px] font-medium text-gray-700">{maskName(m.name)}</span>
+                        <span className="text-[9px] uppercase tracking-wide text-gray-400">{m.isOwner ? "Owner" : m.role}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 text-[10px] text-gray-400">
+                    Assigning a member to this project (Company Settings → Team &amp; permissions) adds them here automatically; unassigning removes them.
+                  </div>
+                </div>
+              )}
             </div>
             <MessageThread msgs={projMsgs(selCh)} me={me} accent={selCh.project.accent || accent} maskName={maskName}
               mentionables={channelMembers(selCh)}

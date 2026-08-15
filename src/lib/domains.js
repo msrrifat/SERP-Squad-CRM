@@ -29,7 +29,7 @@
    demoMode, accent, logo, google, teamAccess, integrations, widgets, and
    whatever gets added later — stays in core, which is small and shared. */
 export const PROJECT_DOMAINS = {
-  pm:           ["records", "lists", "chatMsgs", "chatReads", "wiki"],
+  pm:           ["records", "lists", "chatMsgs", "chatReads", "wiki", "meetingNotes"],
   performance:  ["tracking", "geoGrid"],
   optimization: ["website", "opt", "listings", "gbp", "bing", "apple"],
   ads:          ["ads", "adsAccounts", "campaigns"],

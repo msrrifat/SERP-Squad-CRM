@@ -79,6 +79,7 @@ const TeamView = lazyOf(() => import("./features/account/panel.jsx"), "TeamView"
 const AdsView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsView");
 const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsPerformanceView");
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
+const MeetingsOverview = lazyOf(() => import("./features/pm/meetings.jsx"), "MeetingsOverview");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
 /* DataForSEO rank-tracking views fetch their OWN data — they render without the
    demo/aggregated `data` and never gate on it (live Google now shows inside
@@ -171,6 +172,7 @@ export default function App() {
     if (accountView === "assignments") return "/dashboard";
     if (accountView === "chat") return "/chat";
     if (accountView === "team") return "/team";
+    if (accountView === "meetings") return "/meetings";
     if (accountView === "settings") return "/account";
     if (activeProjectId) return `/project/${activeProjectId}/${section}${section === "performance" ? `/${view}` : ""}`;
     return "/dashboard";
@@ -190,7 +192,7 @@ export default function App() {
       return;
     }
     if (seg[0] === "portal") return; // client session already renders the portal
-    setAccountView({ dashboard: "assignments", chat: "chat", team: "team", account: "settings" }[seg[0]] || "assignments");
+    setAccountView({ dashboard: "assignments", chat: "chat", team: "team", meetings: "meetings", account: "settings" }[seg[0]] || "assignments");
   };
   useEffect(() => {
     const onPop = () => { popNav.current = true; applyPathRef.current(window.location.pathname); };
@@ -1276,6 +1278,7 @@ export default function App() {
               ["assignments", "Assignments", ClipboardList, lateAssigned > 0 ? { n: lateAssigned, bg: "#FEE2E2", fg: "#991B1B" } : null],
               ["chat", "Chat", MessageSquare, chatTotalUnread > 0 ? { n: chatTotalUnread, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
               ...(isAdmin ? [["team", "Team", Users, null]] : []),
+              ["meetings", "Meetings & Notes", Calendar, null],
             ].map(([key, label, Icon, badge]) => {
               const active = accountView === key;
               return (
@@ -1424,7 +1427,7 @@ export default function App() {
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ settings: "Account settings", assignments: "My assignments", chat: "Chat", team: "Team" }[accountView]}
+                {{ settings: "Account settings", assignments: "My assignments", chat: "Chat", team: "Team", meetings: "Meetings & notes" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -1439,6 +1442,15 @@ export default function App() {
               )}
               {accountView === "assignments" && (
                 <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} showClient={isAdmin} />
+              )}
+              {accountView === "meetings" && (
+                <MeetingsOverview clients={visibleClients} company={company} accent={accent}
+                  user={{ id: currentUser?.id || "owner", name: meName }}
+                  onChangeCompany={updateCompany}
+                  onUpdateAnyProject={(clientId, projectId, patch) =>
+                    setClients((cs) => cs.map((c) => (c.id !== clientId ? c : {
+                      ...c, projects: c.projects.map((p) => (p.id === projectId ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
+                    })))} />
               )}
               {accountView === "chat" && (
                 <ChatHome me={meName} team={company.team || []} dms={company.dms || {}} dmReads={company.dmReads || {}}
@@ -1562,7 +1574,10 @@ export default function App() {
               templates={company.recordTemplates || []}
               onSaveTemplate={(tpl) => setCompany((c) => ({ ...c, recordTemplates: [tpl, ...(c.recordTemplates || [])] }))}
               onDeleteTemplate={(tid) => setCompany((c) => ({ ...c, recordTemplates: (c.recordTemplates || []).filter((t) => t.id !== tid) }))}
-              currentUser={currentUser?.name || "You (Owner)"} accent={accent} onUpdate={updateProject} log={logActivity} /></Lazy>
+              currentUser={currentUser?.name || "You (Owner)"} accent={accent} onUpdate={updateProject} log={logActivity}
+              /* identifies WHOSE private meeting notes to show; the client
+                 portal never passes this, so clients never see the tab */
+              meetingsUser={{ id: currentUser?.id || "owner", name: currentUser?.name || "You (Owner)" }} /></Lazy>
           )}
           {project && activeSection === "reports" && slicesLoading && (
             <div className="px-5 py-10 text-center text-[12.5px] text-gray-400">Loading your saved reports…</div>
