@@ -1446,6 +1446,7 @@ export default function App() {
               {accountView === "meetings" && (
                 <MeetingsOverview clients={visibleClients} company={company} accent={accent}
                   user={{ id: currentUser?.id || "owner", name: meName }}
+                  people={(company.team || []).map((m) => ({ name: m.name, type: "team" }))}
                   onChangeCompany={updateCompany}
                   onUpdateAnyProject={(clientId, projectId, patch) =>
                     setClients((cs) => cs.map((c) => (c.id !== clientId ? c : {

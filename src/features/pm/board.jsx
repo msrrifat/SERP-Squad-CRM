@@ -520,7 +520,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
         ))}
       </div>
       {pmTab === "meetings" && meetingsUser && (
-        <MeetingNotesTab project={project} user={meetingsUser} accent={accent} onUpdate={onUpdate} />
+        <MeetingNotesTab project={project} user={meetingsUser} accent={accent} onUpdate={onUpdate} people={people} />
       )}
       {pmTab === "wiki" && <WikiView project={project} onUpdate={onUpdate} canEdit={perms.manage} accent={accent} log={log} />}
       {pmTab === "chat" && canChat && <ChatView project={project} currentUser={currentUser} canWrite={perms.comment !== false} accent={accent} onUpdate={onUpdate} maskName={maskName} mentionables={people.map((p2) => p2.name)} />}
