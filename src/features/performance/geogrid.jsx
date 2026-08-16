@@ -200,7 +200,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
           const top3 = (p.results || []).slice(0, 3);
           return (
             <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not in top 100"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not ranked in the scanned results"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
               <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
                 style={preview
                   ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
@@ -241,7 +241,7 @@ export function AbstractGrid({ points, size, spacingKm, prevPoints }) {
     const prev = prevAt(p);
     const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
     return (
-      <div className="relative" title={`Rank: ${p.rank ?? "not in top 100"}`}>
+      <div className="relative" title={`Rank: ${p.rank ?? "not ranked in the scanned results"}`}>
         <div className={"flex h-10 w-10 items-center justify-center rounded-full text-[12px] font-bold text-white shadow-sm " + (isCenterPt(p, half) ? "ring-2 ring-offset-2 ring-gray-800" : "")} style={{ background: rankColor(p.rank) }}>
           {p.rank ?? "100+"}
         </div>

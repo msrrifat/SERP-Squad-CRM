@@ -3387,11 +3387,20 @@ async function handleRerun(body) {
 }
 
 /* start a rank check: post every task, remember the ids, return at once */
+/* Search operators quintuple a task's price: DataForSEO bills keywords
+   containing allintitle:, site:, inurl: etc. at 5x (docs: "K = 5 if keyword
+   contains search operators"). None of them belongs in a tracked keyword, so
+   they are refused at the door with the reason — not silently billed. */
+const SERP_OPERATOR = /\b(?:allinanchor|allintext|allintitle|allinurl|define|filetype|inanchor|intext|intitle|inurl|link|site)\s*:/i;
+const operatorError = (kw) => `"${kw}" contains a Google search operator — DataForSEO bills these at 5x and they don't measure a real ranking. Track the plain keyword instead.`;
+
 async function handleRankStart(body) {
   const creds = resolveCreds(body);
   if (!creds) return credsMissing(body);
   const entries = Array.isArray(body?.entries) ? body.entries : [];
   if (!entries.length) return [400, { error: "entries[] required" }];
+  const opBad = entries.find((e) => SERP_OPERATOR.test(String(e.keyword || "")));
+  if (opBad) return [400, { error: "search_operator", detail: operatorError(opBad.keyword) }];
   const depth = [10, 20, 30, 50, 100].includes(+body.depth) ? +body.depth : 100;
 
   const resolvedFor = new Map();
@@ -3414,21 +3423,28 @@ async function handleRankStart(body) {
       device: (e.device || "Desktop").toLowerCase(),
       os: e.device === "Mobile" ? "android" : "windows",
       depth,
-      /* STOP CRAWLING ONCE THE SITE IS FOUND.
+      /* STOP CRAWLING ONCE THE SITE IS FOUND — in the shape DataForSEO
+         actually accepts.
 
-         Billing is per SERP page returned, so asking for depth 100 and always
-         paying for ten pages is the expensive way to answer "where do we
-         rank". DataForSEO's cost-control guidance is to stop on match: a site
-         sitting at #3 now costs one page instead of ten, and a site that is
-         genuinely absent still crawls the full depth, so nothing is lost —
-         the worst case is exactly what we paid before.
+         The first version sent stop_crawl_on_match as a BOOLEAN with
+         match_type/match_value as top-level fields. The API spec wants an
+         ARRAY of target objects; the malformed fields were silently ignored,
+         every task crawled the full depth, and the account's own bill proves
+         it: 49 of the last 55 organic tasks charged the full $0.00465 and not
+         one charged the $0.0006 base — including keywords ranking #5.
 
-         match_type "domain" so a ranking URL anywhere on the site counts,
-         which is what the parser already looks for. */
+         find_targets_in is pinned to organic on purpose: without it a match
+         in the LOCAL PACK on page one could stop the crawl before the organic
+         listing is reached, and a site ranking organically at #35 would be
+         reported as unranked. `position` measures organic; only organic may
+         stop the crawl. with_subdomains mirrors the parser, which counts
+         subdomain hits as ranking. */
       ...(engine === "google" && e.domain ? {
-        stop_crawl_on_match: true,
-        match_type: "domain",
-        match_value: String(e.domain).replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
+        stop_crawl_on_match: [{
+          match_type: "with_subdomains",
+          match_value: String(e.domain).replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
+        }],
+        find_targets_in: ["organic"],
       } : {}),
       /* ties the result to the project and keyword, so a late or duplicated
          delivery updates the right row instead of being matched by position */
@@ -3619,6 +3635,8 @@ async function handleGeoGrid(body) {
   const { center, grid, business } = body;
   const keywords = (Array.isArray(body.keywords) && body.keywords.length ? body.keywords : [body.keyword]).filter(Boolean).slice(0, 40);
   if (!keywords.length || !business?.name || !isFinite(center?.lat) || !isFinite(center?.lng)) return [400, { error: "keyword(s), business.name, center.lat/lng required" }];
+  const opBadKw = keywords.find((k) => SERP_OPERATOR.test(String(k)));
+  if (opBadKw) return [400, { error: "search_operator", detail: operatorError(opBadKw) }];
   const size = [3, 5, 7, 9, 11, 13, 15].includes(+grid?.size) ? +grid.size : 5;
   const spacingKm = Math.min(10, Math.max(0.05, +grid?.spacingKm || 1));
   const pts = gridPoints(center, size, spacingKm, grid?.shape === "circle" ? "circle" : "square");
@@ -3652,6 +3670,13 @@ async function handleGeoGrid(body) {
 
      Every point must use the SAME zoom or the ranks are not comparable. */
   const zoom = Math.min(21, Math.max(3, +body.zoom || 13));
+  /* DEPTH — Maps is billed "per each SERP containing up to 100 results"
+     (docs.dataforseo.com/v3/serp/google/maps/task_post), so 50 costs exactly
+     what 100 costs; the unit is the page, not the result. 50 is the default
+     because a map pin's story is told well inside the top 50 — anything
+     deeper renders as "not ranked" either way — but callers can pass 100 back
+     at no extra charge. */
+  const depth = Math.min(100, Math.max(20, +body.depth || 50));
   /* one task per (keyword, point) */
   const tasks = [];
   /* `tag` ties a result back to its grid cell, which is what makes a retry or
@@ -3659,7 +3684,7 @@ async function handleGeoGrid(body) {
      recommends exactly this) */
   const projTag = String(body.projectId || "grid").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
   for (const kw of keywords) pts.forEach((pt, i) => tasks.push({
-    keyword: kw, location_coordinate: `${pt.lat},${pt.lng},${zoom}z`, language_code: languageCode, depth: 100,
+    keyword: kw, location_coordinate: `${pt.lat},${pt.lng},${zoom}z`, language_code: languageCode, depth,
     tag: `${projTag}|${i}`,
   }));
 
