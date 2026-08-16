@@ -656,6 +656,22 @@ async function handleGscQuery(body) {
       .map((r) => ({ query: r.keys[0], ...rowOf(r) }));
     /* bulk page+query mode: every (page, query) pair in one pull — the
        Optimization Studio groups these per page for its keyword suggestions */
+    /* KPI mode: totals for the window and the equal window before it — two
+       cheap calls, no row paging. This is what dashboard blocks need; pulling
+       every query row to show two numbers is what made overview loads slow. */
+    if (body.kpis) {
+      const spanMs = (new Date(endDate) - new Date(startDate)) + 864e5;
+      const pEnd = new Date(new Date(startDate).getTime() - 864e5).toISOString().slice(0, 10);
+      const pStart = new Date(new Date(startDate).getTime() - spanMs).toISOString().slice(0, 10);
+      const [curT, prevT] = await Promise.all([
+        gPost(accessToken, base, { startDate, endDate }),
+        gPost(accessToken, base, { startDate: pStart, endDate: pEnd }),
+      ]);
+      const c = curT.rows?.[0] || {}, pr = prevT.rows?.[0] || {};
+      return [200, { live: true, kpis: true, range: { startDate, endDate }, prevRange: { startDate: pStart, endDate: pEnd },
+        totals: { clicks: c.clicks || 0, impressions: c.impressions || 0, ctr: c.ctr || 0, position: c.position || 0 },
+        prev: { clicks: pr.clicks || 0, impressions: pr.impressions || 0, ctr: pr.ctr || 0, position: pr.position || 0 } }];
+    }
     if (body.byPage) {
       const rows = await pullAll(["page", "query"]);
       return [200, { live: true, range: { startDate, endDate },

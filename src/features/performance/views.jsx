@@ -14,7 +14,7 @@ import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../li
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
-import { GoogleLiveData, useGoogleLive, halfDelta, dayLabel } from "./googlelive.jsx";
+import { GoogleLiveData, useGoogleLive, useGscSocial, GSC_SOCIAL, halfDelta, dayLabel } from "./googlelive.jsx";
 import { startScanJob, clearScanJob, useScanJobs } from "../../lib/scanjobs.js";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 
@@ -38,6 +38,128 @@ function NotConnectedCard({ icon: Icon, label, hint }) {
 /* liveMode: real project (no demo data) — the layout always renders; connected
    GA4/GSC numbers live in the GoogleLiveData section, unconnected sources show
    NotConnectedCard placeholders, rank cards use the real trackers */
+
+/* ---- social profiles in Google Search ---------------------------------
+   One card per connected Search Console social property: impressions on the
+   LEFT, clicks on the RIGHT, each with its change against the equal period
+   before the selected window. Demo projects show deterministic demo numbers,
+   labeled like every other demo metric; real projects show only platforms
+   actually bound in Data sources — an unbound platform renders nothing rather
+   than a fabricated zero. */
+const SOCIAL_META = {
+  youtube: { label: "YouTube", icon: Youtube, tone: "#FF0000" },
+  twitter: { label: "X (Twitter)", icon: Twitter, tone: "#111827" },
+  tiktok: { label: "TikTok", icon: Music2, tone: "#111827" },
+  instagram: { label: "Instagram", icon: Instagram, tone: "#E4405F" },
+};
+function SocialStatCard({ platform, impressions, clicks, imprPct, clickPct, sub, busy, err }) {
+  const m = SOCIAL_META[platform];
+  const I = m.icon;
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ background: m.tone + "1A", color: m.tone }}>
+            <I size={16} />
+          </span>
+          <div className="text-[13px] font-medium text-gray-600">{m.label}</div>
+        </div>
+        <span className="ll-mono rounded bg-gray-100 px-1.5 py-0.5 text-[8.5px] font-bold tracking-wide text-gray-500">GSC</span>
+      </div>
+      {err ? <div className="text-[11px] leading-relaxed text-amber-700">{String(err).slice(0, 90)}</div>
+      : busy ? <div className="ll-mono text-[11px] text-gray-300">Loading…</div>
+      : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Impressions</div>
+            <div className="ll-display mt-0.5 text-[22px] font-semibold leading-none tracking-tight">{fmt(impressions)}</div>
+            <div className="mt-1">{imprPct != null && <Delta pct={imprPct} />}</div>
+          </div>
+          <div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Clicks</div>
+            <div className="ll-display mt-0.5 text-[22px] font-semibold leading-none tracking-tight">{fmt(clicks)}</div>
+            <div className="mt-1">{clickPct != null && <Delta pct={clickPct} />}</div>
+          </div>
+        </div>
+      )}
+      {sub && <div className="mt-2 text-[10px] text-gray-400">{sub}</div>}
+    </Card>
+  );
+}
+/* deterministic demo numbers, keyed like every other demo series */
+const demoSocial = (projectId, platform, cmp) => {
+  const r = mulberry32(hashStr(`${projectId}|gscsocial|${platform}`));
+  const impr = Math.round(800 + r() * 24000);
+  const clicks = Math.round(impr * (0.008 + r() * 0.03));
+  const drift = (mulberry32(hashStr(`${projectId}|${platform}|${cmp}`))() - 0.42) * 0.3;
+  return { impressions: impr, clicks, imprPct: drift * 100, clickPct: (drift + (r() - 0.5) * 0.1) * 100 };
+};
+function SocialSearchCards({ project, liveMode, cmp, days, accent }) {
+  const { slots, configured } = useGscSocial(liveMode ? project : null, days);
+  if (liveMode && !configured.length) return null;
+  const keys = liveMode ? configured : GSC_SOCIAL.map(([k]) => k);
+  return (
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {keys.map((k) => {
+        if (!liveMode) {
+          const d = demoSocial(project.id, k, cmp);
+          return <SocialStatCard key={k} platform={k} {...d} sub="search appearances of this profile" />;
+        }
+        const sl = slots[k] || {};
+        const pct = (cur, prev) => (prev > 0 ? ((cur - prev) / prev) * 100 : cur > 0 ? 100 : 0);
+        return (
+          <SocialStatCard key={k} platform={k}
+            busy={!!sl.busy} err={sl.err}
+            impressions={sl.totals?.impressions || 0} clicks={sl.totals?.clicks || 0}
+            imprPct={sl.totals ? pct(sl.totals.impressions, sl.prev?.impressions || 0) : null}
+            clickPct={sl.totals ? pct(sl.totals.clicks, sl.prev?.clicks || 0) : null}
+            sub={`last ${days} days vs previous ${days} · live`} />
+        );
+      })}
+    </div>
+  );
+}
+/* website performance: the same numbers as rows, with CTR and the property */
+export function SocialSearchSection({ project, accent }) {
+  const days = 28;
+  const { slots, configured } = useGscSocial(project, days);
+  const social = project.google?.gscSocial || {};
+  if (!configured.length) return null;
+  return (
+    <>
+      <SectionHeader icon={Share2} title="Social profiles in Google Search" sub={`Search Console · last ${days} days vs previous ${days}`} accent={accent} />
+      <Card className="overflow-hidden">
+        {configured.map((k) => {
+          const m = SOCIAL_META[k]; const I = m.icon; const sl = slots[k] || {};
+          const pct = (cur, prev) => (prev > 0 ? ((cur - prev) / prev) * 100 : cur > 0 ? 100 : 0);
+          const ctr = sl.totals && sl.totals.impressions > 0 ? (sl.totals.clicks / sl.totals.impressions) * 100 : null;
+          return (
+            <div key={k} className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-gray-50 px-4 py-3 last:border-0">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: m.tone + "1A", color: m.tone }}><I size={15} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-semibold text-gray-800">{m.label}</span>
+                <span className="ll-mono block truncate text-[10px] text-gray-400">{social[k]}</span>
+              </span>
+              {sl.err ? <span className="text-[11px] text-amber-700">{String(sl.err).slice(0, 70)}</span>
+              : sl.busy ? <span className="ll-mono text-[11px] text-gray-300">Loading…</span>
+              : (
+                <>
+                  <span className="w-28 text-right"><span className="block text-[9px] font-semibold uppercase tracking-wider text-gray-400">Impressions</span>
+                    <span className="ll-mono text-[14px] font-bold">{fmt(sl.totals?.impressions || 0)}</span> <Delta pct={(sl.totals && sl.prev) ? ((sl.prev.impressions > 0 ? (sl.totals.impressions - sl.prev.impressions) / sl.prev.impressions : sl.totals.impressions > 0 ? 1 : 0) * 100) : 0} /></span>
+                  <span className="w-24 text-right"><span className="block text-[9px] font-semibold uppercase tracking-wider text-gray-400">Clicks</span>
+                    <span className="ll-mono text-[14px] font-bold">{fmt(sl.totals?.clicks || 0)}</span> <Delta pct={(sl.totals && sl.prev) ? ((sl.prev.clicks > 0 ? (sl.totals.clicks - sl.prev.clicks) / sl.prev.clicks : sl.totals.clicks > 0 ? 1 : 0) * 100) : 0} /></span>
+                  <span className="w-16 text-right"><span className="block text-[9px] font-semibold uppercase tracking-wider text-gray-400">CTR</span>
+                    <span className="ll-mono text-[14px] font-bold">{ctr == null ? "—" : ctr.toFixed(1) + "%"}</span></span>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </Card>
+    </>
+  );
+}
+
 export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView, liveMode = false }) {
   const [metric, setMetric] = useState("gbpViews");
   /* the comparison window lives here now (moved out of the top bar);
@@ -245,6 +367,11 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
             spark={data.months.map((m) => m.ga.conversions)} />
         )}
       </div>
+
+      {/* social profiles in Google Search — after the core 8, one block per
+          platform: impressions left, clicks right, deltas vs the selected
+          comparison window */}
+      <SocialSearchCards project={project} liveMode={liveMode} cmp={cmp} days={liveDays} accent={accent} />
 
       {/* range-aware trend — the card is always present; without any connected
           source it shows an honest empty state instead of a flat zero line */}
@@ -1681,6 +1808,8 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
     <div className="ll-fade space-y-5">
       {/* live GA4 + Search Console (when connected in Data sources) */}
       <GoogleLiveData project={project} accent={accent} />
+      {/* social properties (YouTube / X / TikTok / Instagram) bound in Data sources */}
+      <SocialSearchSection project={project} accent={accent} />
       <DateRangeBar range={range} setRange={setRange} accent={accent} />
       {I.ga && (
         <>

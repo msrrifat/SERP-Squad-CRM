@@ -59,6 +59,42 @@ export function useGoogleLive(project, days = 28) {
    at our grid) mapped into the genSiteData month-grid shape, so the Report
    builder works identically for demo and REAL projects. Unconnected sources
    stay all-zero — nothing is fabricated. */
+/* ---- SOCIAL PROPERTIES IN SEARCH CONSOLE --------------------------------
+   Search Console is not only websites: a YouTube channel appears as a property
+   automatically for the Google account that owns it, and any other profile
+   URL that the account has managed to verify shows up the same way. Each slot
+   below simply binds ONE of the account's GSC properties — whatever is listed
+   by the API can be picked, and each is queried exactly like the website
+   property. Nothing is fabricated: a slot with no property stays empty. */
+export const GSC_SOCIAL = [
+  ["youtube", "YouTube"],
+  ["twitter", "X (Twitter)"],
+  ["tiktok", "TikTok"],
+  ["instagram", "Instagram"],
+];
+
+/* impressions/clicks + previous-period comparison for every configured slot */
+export function useGscSocial(project, days = 28) {
+  const conn = project?.google || {};
+  const social = conn.gscSocial || {};
+  const configured = GSC_SOCIAL.filter(([k]) => social[k]);
+  const [out, setOut] = useState({});
+  useEffect(() => {
+    if (!conn.connectionId || !configured.length) { setOut({}); return; }
+    let alive = true;
+    setOut(Object.fromEntries(configured.map(([k]) => [k, { busy: true }])));
+    configured.forEach(([k]) => {
+      fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionId: conn.connectionId, siteUrl: social[k], days, kpis: true }) })
+        .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+        .then(({ ok, j }) => { if (alive) setOut((o) => ({ ...o, [k]: ok ? j : { err: j.detail || j.error } })); })
+        .catch((e) => { if (alive) setOut((o) => ({ ...o, [k]: { err: String(e?.message || e) } })); });
+    });
+    return () => { alive = false; };
+  }, [conn.connectionId, JSON.stringify(social), days]); // eslint-disable-line
+  return { slots: out, configured: configured.map(([k]) => k) };
+}
+
 export function useLiveSiteData(project, enabled = true) {
   const [out, setOut] = useState(null);
   const conn = project?.google || {};
@@ -187,7 +223,7 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
       {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{err}</div>}
       {conn.connectionId && (
         <div className="grid gap-3 sm:grid-cols-2">
-          <Labeled label="Google Search Console site">
+          <Labeled label="Search Console — Website">
             {sites?.err ? <div className="text-[11px] text-amber-700">{sites.err}</div>
             : <select value={conn.gscSite || ""} onChange={(e) => setConn({ gscSite: e.target.value })} className={inputCls + " bg-white"}>
                 <option value="">{sites ? (sites.length ? "Select a site…" : "No sites on this account") : "Loading…"}</option>
@@ -213,6 +249,32 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
                 {Array.isArray(props) && props.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.account}</option>)}
               </select>}
           </Labeled>
+        </div>
+      )}
+      {conn.connectionId && (
+        <div>
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Search Console — social properties</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {GSC_SOCIAL.map(([key, label]) => (
+              <Labeled key={key} label={label}>
+                <select value={(conn.gscSocial || {})[key] || ""}
+                  onChange={(e) => setConn({ gscSocial: { ...(conn.gscSocial || {}), [key]: e.target.value } })}
+                  className={inputCls + " bg-white"}>
+                  <option value="">Not connected</option>
+                  {Array.isArray(sites) && sites.map((s) => (
+                    <option key={s.url} value={s.url} disabled={s.readable === false}>
+                      {s.url}{s.readable === false ? "  (no read access)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </Labeled>
+            ))}
+          </div>
+          <div className="mt-1 text-[10.5px] leading-relaxed text-gray-400">
+            Each slot binds one Search Console property from this account. A YouTube channel appears here automatically
+            for the Google account that owns it; other profiles appear once verified in Search Console. If a platform
+            isn't in the list, that property doesn't exist on {conn.email || "this account"} yet.
+          </div>
         </div>
       )}
       {compact && conn.connectionId && (conn.gscSite || conn.ga4Property) && (
