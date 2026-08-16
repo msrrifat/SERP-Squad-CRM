@@ -815,12 +815,19 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   }).filter((t) => t.hist);
 
   const toggleSelect = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  /* Pausing a keyword means "stop including it in scans that run over the
-     whole list", so select-all skips paused rows. Ticking one by hand still
-     works — an explicit choice should never be silently ignored. */
-  const runnable = rows.filter((r) => !r.paused);
+  /* Select-all selects ALL listed rows — paused ones included.
+
+     It used to skip paused rows as a scan-cost guard, and that guard checked
+     a different set than the header checkbox displayed: the toggle filled
+     `runnable` while the checkbox compared against `rows`, so the box could
+     never read as checked — and on a list where EVERY keyword is paused
+     (which is exactly how these projects are configured) select-all built an
+     empty set and selected nothing, while unticking "worked" because the
+     same empty set clears. It also made select-all → Resume impossible, the
+     one bulk action an all-paused list needs. Pause still excludes keywords
+     from automatic recurring scans; it does not make a row unselectable. */
   const toggleAll = () => setSelected(
-    runnable.length > 0 && runnable.every((r) => selected.has(r.id)) ? new Set() : new Set(runnable.map((r) => r.id)));
+    rows.length > 0 && rows.every((r) => selected.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id)));
   const pausedCount = tracking.filter((t) => t.paused).length;
   const selectedRows = [...selected].map((id) => tracking.find((t) => t.id === id)).filter(Boolean);
   const allSelectedPaused = selectedRows.length > 0 && selectedRows.every((t) => t.paused);
@@ -1094,7 +1101,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   : tab === "cities"
                   ? "Tracked keywords grouped per city — open a city to see its keywords, or remove a whole city's tracking in one click."
                   : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}
-                      {pausedCount > 0 && <> · <b className="text-gray-500">{pausedCount} paused</b> (left out of whole-list scans)</>}</>}
+                      {pausedCount > 0 && <> · <b className="text-gray-500">{pausedCount} paused</b> (skipped by automatic recurring scans)</>}</>}
               </div>
             </div>
             {tab === "history" && (
@@ -1230,7 +1237,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         )}
                         {!readOnly && onSetPaused && (
                           <button onClick={() => onSetPaused([t.id], !t.paused)}
-                            title={t.paused ? "Resume automatic tracking for this keyword" : "Pause automatic tracking — keeps the keyword and its history, but leaves it out of whole-list scans"}
+                            title={t.paused ? "Resume automatic tracking for this keyword" : "Pause automatic tracking — keeps the keyword and its history; recurring scans skip it, but you can still select and scan it by hand"}
                             className="no-print rounded p-0.5 text-gray-300 opacity-0 hover:text-gray-600 group-hover:opacity-100 focus:opacity-100"
                             style={t.paused ? { opacity: 1, color: "#6B7280" } : {}}>
                             {t.paused ? <Play size={12} /> : <Pause size={12} />}
