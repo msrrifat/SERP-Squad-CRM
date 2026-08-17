@@ -103,7 +103,10 @@ export function OptimizationView({ project, accent, onUpdate, log, work = null, 
   ];
 
   /* per-property gates from the member's section grants (null = unrestricted) */
-  const NEED = { brandvoice: ["ogbp", "webConnection", "webPages", "webPosts"], gbp: ["ogbp"], bing: ["obing"], apple: ["oapple"], website: ["webConnection", "webPages", "webPosts"], listings: ["olistings"], social: ["social"], indexchk: ["oindex"] };
+  /* brandvoice and the website tab keep their LEGACY keys alongside the new
+     dedicated ones — a member granted webPages years ago must not lose the
+     tab the day finer keys exist. Explicit false still revokes. */
+  const NEED = { brandvoice: ["brandvoice", "ogbp", "webConnection", "webPages", "webPosts"], gbp: ["ogbp"], bing: ["obing"], apple: ["oapple"], website: ["webConnection", "webPages", "webPosts", "webMapping", "webBlogs", "webMedia"], listings: ["olistings"], social: ["social"], indexchk: ["oindex"] };
   const shownProps = access ? PROPS.filter((p) => NEED[p.key].some((k) => access[k])) : PROPS;
   const activeTab = shownProps.some((p) => p.key === tab) ? tab : shownProps[0]?.key;
 
@@ -204,7 +207,7 @@ export function OptimizationView({ project, accent, onUpdate, log, work = null, 
         {activeTab === "apple" && (activeLoc?.integrations?.apple
           ? <PlaceOptTab key={activeLoc?.id} kind="apple" opt={effOpt} setOpt={setOptLoc} accent={accent} log={log} project={project} ai={aiConfig} locId={activeLoc?.id} />
           : <BpNotConnected label="Apple Maps" loc={activeLoc} />)}
-        {activeTab === "website" && <WebsiteOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiProviders={aiProviders} aiConfig={aiConfig} dfs={dfs} />}
+        {activeTab === "website" && <WebsiteOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} aiProviders={aiProviders} aiConfig={aiConfig} dfs={dfs} access={access} />}
         {activeTab === "listings" && <ListingsScannerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
         {activeTab === "social" && <BrandingOptTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} company={company} />}
         {activeTab === "indexchk" && <IndexCheckerTab opt={opt} setOpt={setOpt} accent={accent} log={log} project={project} dfs={dfs} />}
@@ -1923,12 +1926,12 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
   );
 }
 
-export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders = [], aiConfig = null, dfs }) {
+export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders = [], aiConfig = null, dfs, access = null }) {
   const w = opt.website;
   const work = useWork();
   const set = (patch) => setOpt("website", patch);
   const [connectStep, setConnectStep] = useState(null); // null | "pick" | platform key
-  const [sub, setSub] = useState("connection");           // connection | pages | posts
+  const [subSel, setSub] = useState("connection");           // connection | pages | posts
   const [openPage, setOpenPage] = useState(null);
   const [openPost, setOpenPost] = useState(null); // "new" | blog id
   const [copied, setCopied] = useState(false);
@@ -2618,6 +2621,19 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
 
   /* ---------- connected (or sitemap mode) ---------- */
   const sitemapOnly = !w.connected && !!w.sitemapMode;   // read-only: no live edits
+  /* per-tab permission keys. The three NEWER tabs (mapping, blogs & FAQs,
+     media) fall back to "any website access" when their own key is UNSET, so
+     members working in them today keep working the day the finer keys ship;
+     an admin setting the key to false explicitly still revokes. */
+  const anyWeb = !access || !!(access.webConnection || access.webPages || access.webPosts);
+  const subAllowed = {
+    connection: !access || !!access.webConnection,
+    pages: !access || !!access.webPages,
+    posts: !access || !!access.webPosts,
+    mapping: !access || (access.webMapping !== undefined ? !!access.webMapping : anyWeb),
+    postsmap: !access || (access.webBlogs !== undefined ? !!access.webBlogs : anyWeb),
+    media: !access || (access.webMedia !== undefined ? !!access.webMedia : anyWeb),
+  };
   const SUBS = [
     { key: "connection", label: "Connector", icon: Link2, note: sitemapOnly ? "sitemap mode \u00b7 not connected" : plat.label + (w.verified ? " \u00b7 verified" : " \u00b7 awaiting pixel") },
     { key: "pages", label: "Pages", icon: Globe, note: `${w.pages.length} tracked${dirtyCount ? ` \u00b7 ${dirtyCount} pending` : ""}` },
@@ -2625,7 +2641,10 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
     { key: "mapping", label: "Website Mapping & Content", icon: Network, note: w.architecture?.tree?.length ? `${w.architecture.tree.length} top pages` : "AI site architecture" },
     { key: "postsmap", label: "Blogs & FAQs", icon: FileTextIcon, note: w.postsPlan?.posts?.length ? `${w.postsPlan.posts.filter((p) => p.status !== "removed").length} posts planned` : "Research-driven blog & FAQ architecture" },
     { key: "media", label: "Media", icon: ImagePlus, note: (w.media || []).length ? `${w.media.length} items synced` : "Sync the WP media library" },
-  ];
+  ].filter((t) => subAllowed[t.key]);
+  /* the selected tab must be one this member can see — a member without
+     Connector access would otherwise land on an invisible tab's content */
+  const sub = SUBS.some((t) => t.key === subSel) ? subSel : (SUBS[0]?.key || "connection");
   return (
     <div className="space-y-4">
       {/* sub-nav — horizontal top bar (matches the GBP tab bar; avoids a second sidebar) */}

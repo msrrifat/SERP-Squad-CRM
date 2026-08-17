@@ -1240,7 +1240,7 @@ export default function App() {
     if (!access) return true;
     if (key === "adsmgr") return !!access.ads;
     if (key === "management") return !!(access.records || access.wiki || access.chat);
-    if (key === "optimization") return ["ogbp", "obing", "oapple", "webConnection", "webPages", "webPosts", "olistings", "social", "oindex"].some((k) => access[k]);
+    if (key === "optimization") return ["ogbp", "obing", "oapple", "brandvoice", "webConnection", "webPages", "webPosts", "webMapping", "webBlogs", "webMedia", "olistings", "social", "oindex"].some((k) => access[k]);
     return true;
   });
   /* never render a section/view the current user has no grant for on this

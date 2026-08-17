@@ -185,7 +185,7 @@ export const ACCESS_TREE = [
   { key: "perf", label: "Performance Studio", items: [["gbp", "Business Profiles"], ["web", "Website Performance & Analytics"], ["ranks", "Website Rank Tracking"], ["geogrid", "GBP Rank Tracking (geo grid)"]] },
   { key: "adsmgr", label: "Ads & Paid Marketing", items: [["ads", "Ads dashboard & campaign management"], ["adsperf", "Ads Performance (Performance Studio view)"]] },
   { key: "pm", label: "Project Management", items: [["records", "Records"], ["wiki", "Wiki"], ["chat", "Project chat"]] },
-  { key: "opt", label: "Optimization Studio", items: [["ogbp", "Google Business Profile"], ["obing", "Bing Places"], ["oapple", "Apple Maps"], ["webConnection", "Website — Connection"], ["webPages", "Website — Pages"], ["webPosts", "Website — Posts"], ["olistings", "Business Listings"], ["social", "Branding & Automation"], ["oindex", "Index Checker"]] },
+  { key: "opt", label: "Optimization Studio", items: [["ogbp", "Google Business Profile"], ["obing", "Bing Places"], ["oapple", "Apple Maps"], ["brandvoice", "Brand Voice"], ["webConnection", "Website — Connection"], ["webPages", "Website — Pages"], ["webPosts", "Website — Posts"], ["webMapping", "Website — Mapping & Content"], ["webBlogs", "Website — Blogs & FAQs"], ["webMedia", "Website — Media"], ["olistings", "Business Listings"], ["social", "Branding & Automation"], ["oindex", "Index Checker"]] },
   { key: "ai", label: "AI Agent", items: [["agent", "Use the AI agent for this client's projects"]] },
 ];
 
