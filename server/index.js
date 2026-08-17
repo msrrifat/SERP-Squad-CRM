@@ -4028,7 +4028,11 @@ async function handleCommunityFaqs(body) {
     out.push({ q: String(q).trim().slice(0, 180), source, url: url || null });
   };
   for (const topic of topics) {
-    /* Reddit: free, real people, real phrasing */
+    /* Reddit: the free JSON search first — but Reddit 403s datacenter IPs
+       (measured from the VPS), so when it refuses and DataForSEO is
+       available, Reddit threads are surfaced through a plain organic query
+       instead, same as Quora. Base rate — no site: operator. */
+    let redditAdded = 0;
     try {
       const r = await fetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(topic)}&limit=25&sort=relevance&t=year`,
         { headers: { "User-Agent": "serpsquad-research/1.0" }, signal: AbortSignal.timeout(12000) });
@@ -4036,10 +4040,17 @@ async function handleCommunityFaqs(body) {
         const d = await r.json();
         (d.data?.children || []).forEach((c) => {
           const t = c.data?.title || "";
-          if (isQuestionish(t)) push(t, "reddit", "https://www.reddit.com" + (c.data?.permalink || ""));
+          if (isQuestionish(t)) { push(t, "reddit", "https://www.reddit.com" + (c.data?.permalink || "")); redditAdded++; }
         });
-      } else errors.push(`Reddit HTTP ${r.status} for "${topic}"`);
-    } catch (e) { errors.push(`Reddit: ${String(e?.message || e).slice(0, 60)}`); }
+      } else if (!creds) errors.push(`Reddit HTTP ${r.status} for "${topic}"`);
+    } catch (e) { if (!creds) errors.push(`Reddit: ${String(e?.message || e).slice(0, 60)}`); }
+    if (!redditAdded && creds) {
+      try {
+        const task = await dfsLive(creds, "google/organic", { keyword: `${topic} reddit`, location_name: "United States", language_code: "en", depth: 20 });
+        (task.result?.[0]?.items || []).filter((it) => it.type === "organic" && /reddit\.com/.test(it.domain || ""))
+          .forEach((it) => push(String(it.title || "").replace(/\s*[:|-]\s*r\/\w+\s*$/i, "").replace(/\s*-\s*Reddit\s*$/i, ""), "reddit", it.url));
+      } catch (e) { errors.push(`Reddit (DataForSEO): ${String(e?.message || e).slice(0, 60)}`); }
+    }
     /* Quora via a plain organic query — needs DataForSEO */
     if (creds) {
       try {
