@@ -3997,6 +3997,137 @@ function handleSocialDisconnect(body) {
   return [200, { ok: true }];
 }
 
+
+/* ======================================================================
+   BLOGS & FAQS RESEARCH — the scrape steps behind the architect.
+
+   Three sources, three endpoints, all returning plain lists the UI shows in
+   boxes BEFORE any generation happens, so the human can see exactly what
+   research the plan will be built from. Nothing here fabricates: a source
+   that cannot be reached reports why, per item, instead of inventing rows.
+   ====================================================================== */
+const isQuestionish = (q) => /^(how|what|why|when|where|who|which|can|do|does|is|are|should|will|vs|best|worth)\b/i.test(q) || /\?$/.test(q) || / vs\.? | cost| price| worth| problems| review/i.test(q);
+const normQ = (s) => String(s).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+/* Reddit's public JSON search + Quora surfaced through a plain Google query
+   (Quora has no public API and blocks crawlers; Google ranks its threads for
+   its own brand term, so "«topic» quora" found via DataForSEO organic is the
+   reliable route — and it is a NORMAL query, not a site: operator, so it is
+   billed at base rate, not the 5x operator rate). */
+async function handleCommunityFaqs(body) {
+  const topics = [...new Set((Array.isArray(body?.topics) ? body.topics : []).map((t) => String(t).trim()).filter(Boolean))].slice(0, 8);
+  if (!topics.length) return [400, { error: "bad_request", detail: "topics[] required — add services or products first." }];
+  const creds = resolveCreds(body);
+  const out = [];
+  const errors = [];
+  const seen = new Set();
+  const push = (q, source, url) => {
+    const k = normQ(q);
+    if (!k || k.length < 12 || seen.has(k)) return;
+    seen.add(k);
+    out.push({ q: String(q).trim().slice(0, 180), source, url: url || null });
+  };
+  for (const topic of topics) {
+    /* Reddit: free, real people, real phrasing */
+    try {
+      const r = await fetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(topic)}&limit=25&sort=relevance&t=year`,
+        { headers: { "User-Agent": "serpsquad-research/1.0" }, signal: AbortSignal.timeout(12000) });
+      if (r.ok) {
+        const d = await r.json();
+        (d.data?.children || []).forEach((c) => {
+          const t = c.data?.title || "";
+          if (isQuestionish(t)) push(t, "reddit", "https://www.reddit.com" + (c.data?.permalink || ""));
+        });
+      } else errors.push(`Reddit HTTP ${r.status} for "${topic}"`);
+    } catch (e) { errors.push(`Reddit: ${String(e?.message || e).slice(0, 60)}`); }
+    /* Quora via a plain organic query — needs DataForSEO */
+    if (creds) {
+      try {
+        const task = await dfsLive(creds, "google/organic", { keyword: `${topic} questions quora`, location_name: "United States", language_code: "en", depth: 20 });
+        (task.result?.[0]?.items || []).filter((it) => it.type === "organic" && /quora\.com/.test(it.domain || ""))
+          .forEach((it) => push(String(it.title || "").replace(/\s*-\s*Quora\s*$/i, ""), "quora", it.url));
+      } catch (e) { errors.push(`Quora (DataForSEO): ${String(e?.message || e).slice(0, 60)}`); }
+    }
+  }
+  if (!creds) errors.push("Quora needs DataForSEO (Company Settings → API settings) — Reddit-only results shown.");
+  return [200, { live: true, faqs: out.slice(0, 150), errors: errors.slice(0, 6), topics }];
+}
+
+/* Competitor blogs & FAQs, from each domain's own sitemap. "Common" marks a
+   topic that appears (near-duplicate title) on 2+ of the competitors — the
+   themes the market agrees are worth writing; "uncommon" are single-domain
+   angles, often the gaps worth stealing. */
+async function handleCompetitorTopics(body) {
+  const domains = [...new Set((Array.isArray(body?.domains) ? body.domains : [])
+    .map((d) => String(d).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")).filter(Boolean))].slice(0, 5);
+  if (!domains.length) return [400, { error: "bad_request", detail: "domains[] required — add competitor websites first." }];
+
+  const fetchXml = async (url) => {
+    const r = await fetch(url, { headers: BROWSER_HEADERS, redirect: "follow", signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.text();
+  };
+  const locsOf = (xml) => [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/g)].map((m) => m[1].trim());
+  const POSTY = /(blog|faq|article|news|guide|resource|learn|tip|question|post|advice|insight)/i;
+
+  const topics = [];
+  const errors = {};
+  const perDomain = {};
+  for (const domain of domains) {
+    try {
+      let urls = [];
+      /* root sitemap first; on an index, follow the children that look like posts */
+      for (const start of [`https://${domain}/sitemap.xml`, `https://${domain}/sitemap_index.xml`, `https://${domain}/wp-sitemap.xml`]) {
+        try {
+          const xml = await fetchXml(start);
+          const locs = locsOf(xml);
+          if (!locs.length) continue;
+          if (/<sitemapindex/i.test(xml)) {
+            const kids = locs.filter((u) => /post|blog|page|faq|news|article/i.test(u)).slice(0, 5);
+            for (const kid of (kids.length ? kids : locs.slice(0, 3))) {
+              try { urls.push(...locsOf(await fetchXml(kid))); } catch { /* one child down */ }
+            }
+          } else urls = locs;
+          if (urls.length) break;
+        } catch { /* try the next well-known path */ }
+      }
+      if (!urls.length) { errors[domain] = "no readable sitemap"; continue; }
+      const posts = urls
+        .map((u) => { try { return new URL(u); } catch { return null; } })
+        .filter(Boolean)
+        .filter((u) => POSTY.test(u.pathname) || (u.pathname.split("/").filter(Boolean).length >= 2 && /-/.test(u.pathname.split("/").filter(Boolean).pop() || "")))
+        .slice(0, 150);
+      perDomain[domain] = posts.length;
+      posts.forEach((u) => {
+        const slug = (u.pathname.split("/").filter(Boolean).pop() || "").replace(/\.(html?|php)$/i, "");
+        const title = slug.replace(/[-_]+/g, " ").trim();
+        if (title.length >= 8 && !/^\d+$/.test(title)) topics.push({ title, slug, url: u.href, domain });
+      });
+    } catch (e) { errors[domain] = String(e?.message || e).slice(0, 80); }
+  }
+  /* commonality: same-ish title on 2+ different domains */
+  const toks = (s) => new Set(normQ(s).split(" ").filter((w) => w.length > 3));
+  for (const t of topics) {
+    t.common = topics.some((o) => o.domain !== t.domain && (() => {
+      const A = toks(t.title), B = toks(o.title);
+      if (A.size < 2 || B.size < 2) return false;
+      let n = 0; A.forEach((w) => B.has(w) && n++);
+      return n / Math.min(A.size, B.size) >= 0.6;
+    })());
+  }
+  return [200, { live: true, topics: topics.slice(0, 400), perDomain, errors }];
+}
+
+/* the connected WordPress site's real post categories — for the plan's
+   category dropdown and the pusher */
+async function handleWpCategories(body) {
+  const g = wpGuard(body); if (g) return g;
+  try {
+    const cats = await wpFetch(body, `/categories?per_page=100&_fields=id,name,count,parent`);
+    return [200, { live: true, categories: (cats || []).map((c) => ({ id: c.id, name: c.name, count: c.count, parent: c.parent || 0 })) }];
+  } catch (e) { return wpErr(e); }
+}
+
 /* ---- Google Places: resolve the business location (Find Place) ---- */
 async function handlePlacesLocate(body) {
   const key = body.placesKey;
@@ -4207,7 +4338,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6 : 4e6;
@@ -4262,6 +4393,9 @@ http.createServer(async (req, res) => {
         : req.url === "/api/wp/deploy" ? await handleWpDeploy(body)
         : req.url === "/api/wp/cleanup" ? await handleWpCleanup(body)
         : req.url === "/api/wp/test" ? await handleWpTest(body)
+        : req.url === "/api/wp/categories" ? await handleWpCategories(body)
+        : req.url === "/api/posts/community" ? await handleCommunityFaqs(body)
+        : req.url === "/api/posts/competitors" ? await handleCompetitorTopics(body)
         : req.url === "/api/wp/agent/key" ? handleAgentKey(req, body)
         : req.url === "/api/wp/agent/pair" ? handleAgentPair(body)
         : req.url === "/api/wp/agent/poll" ? handleAgentPoll(req, raw)

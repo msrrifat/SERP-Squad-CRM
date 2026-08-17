@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   BookOpen, FileText, ImagePlus, ListTree, MessageCircleQuestion,
   Plus, RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
@@ -98,7 +98,9 @@ async function pushArchitectedPost(p, whenISO, { live, credStr, project, setOpt 
       body: JSON.stringify({ site: project.website, credential: credStr, payload: {
         kind: "post", slug: p.slug, title: p.title, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
         content: mdToWpHtml(p.content.markdown.replace(/^#\s.*\n/, "")),
-        categories: [p.category === "answer" ? "Answer" : "Blog"],
+        /* the chosen site category wins; the tool's own Blog/Answer split is
+           only the fallback for sites with no matching categories */
+        categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")],
         ...(scheduled ? { status: "future", date: when.toISOString() } : { status: "publish" }),
       } }) });
     const d = await r.json().catch(() => ({}));
@@ -108,7 +110,7 @@ async function pushArchitectedPost(p, whenISO, { live, credStr, project, setOpt 
   setOpt("website", (cur) => ({
     blogs: [
       { id: "pb" + Date.now(), title: p.title, slug: p.slug, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
-        content: mdToBlocks(p.content.markdown), categories: [p.category === "answer" ? "Answer" : "Blog"],
+        content: mdToBlocks(p.content.markdown), categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")],
         ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: Date.now() }),
         createdAt: Date.now(), demo: !live },
       ...(cur.blogs || []).filter((b) => b.slug !== p.slug),
@@ -184,6 +186,38 @@ export function findDuplicate(item, pages = [], blogs = []) {
 }
 
 /* ---------- AI prompts ---------- */
+/* ---------- EDITABLE AI PROMPTS ----------
+   Every prompt the architect sends is documented and editable in the "AI
+   prompt docs" panel (top-right). Overrides live per project at
+   opt.website.postsPrompts; anything unset falls back to these defaults.
+   Templates use {{variables}} listed in the panel. */
+export const DEFAULT_POSTS_PROMPTS = {
+  system: `You are a senior SEO strategist who builds TOPICAL AUTHORITY maps for business blogs.
+You design post architectures in exactly TWO categories:
+- "blog": generalized guides that build pillar/cluster topical authority per service and product (cost guides, comparisons, processes, mistakes, checklists, seasonal and LOCAL-PROXIMITY angles that weave the service locations into topics where search behavior is local).
+- "answer": one post per REAL question people ask — questions from Search Console, Reddit, Quora, People-Also-Ask and competitor FAQ pages. Titles are the question, verbatim style.
+Rules:
+- Spread coverage across EVERY service, product category and service location provided. No two posts targeting the same query (no cannibalization).
+- Real scraped questions and competitor gaps provided in the research digest take priority over invented topics.
+- Slugs: kebab-case, short, no stop words. Each post names the ONE service page it supports.
+Return STRICT JSON only: {"posts":[{"category":"blog"|"answer","title":string,"slug":string,"primaryKw":string,"service":string,"serviceUrl":string,"note":string}]}`,
+  batch: `Business: {{brand}} ({{website}}). Niche: {{niche}}. Primary market: {{market}}.
+Service locations to localize for: {{locations}}
+Services (use the EXACT serviceUrl given):
+{{services}}
+Products by category (comparison and pros/cons angles are seeded separately — do NOT repeat plain "X vs Y" or "X pros and cons" topics):
+{{products}}
+
+RESEARCH DIGEST (real scraped material — prefer it over invention):
+{{research}}
+
+This is batch {{batch}} of a larger architecture. Generate EXACTLY {{blogCount}} "blog" posts and {{faqCount}} "answer" posts that are NEW — the following titles already exist and must not be duplicated or closely paraphrased:
+{{existing}}
+
+Cover the topical-authority gaps first: subtopics, locations and products with the least coverage so far.`,
+};
+export const fillPrompt = (tpl, vars) => String(tpl || "").replace(/{{(\w+)}}/g, (_, k) => String(vars[k] ?? ""));
+
 const SYS_POSTS_ARCHITECT = `You are a senior SEO strategist who builds TOPICAL AUTHORITY maps for business blogs.
 You design post architectures in exactly TWO categories:
 - "blog": generalized guides that build pillar/cluster topical authority per service (cost guides, comparisons, processes, mistakes, checklists, seasonal and LOCAL-PROXIMITY angles that weave the market's city/region into topics where search behavior is local).
@@ -287,7 +321,77 @@ const LiveChip = ({ live, provider }) => (
 );
 
 /* ================= the tab ================= */
-export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig = null }) {
+
+/* a numbered research step with a Run button and a visible results box — the
+   scraped material is SHOWN before anything is generated from it */
+function ScrapeBox({ n, title, accent, busy, onRun, runLabel, ready, notReady, items = [], errors = [], empty }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">{n} · {title}</span>
+        <button onClick={onRun} disabled={busy || !ready}
+          title={!ready ? notReady : ""}
+          className="rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+          {busy ? <RefreshCw size={12} className="animate-spin" /> : runLabel}
+        </button>
+      </div>
+      {!ready && <div className="text-[10.5px] text-amber-600">{notReady}</div>}
+      {(errors || []).length > 0 && <div className="mb-1 text-[10.5px] text-amber-600">{errors.join(" · ")}</div>}
+      {items.length > 0 ? (
+        <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-lg border border-gray-100 p-2">
+          <div className="ll-mono px-1 pb-1 text-[9.5px] text-gray-400">{items.length} scraped</div>
+          {items.slice(0, 150).map((it, i) => (
+            <div key={i} className="flex items-center gap-2 px-1 text-[11px]">
+              {it.tag && <span className="shrink-0 rounded bg-gray-100 px-1 text-[8.5px] font-bold uppercase text-gray-500">{it.tag}</span>}
+              {it.url
+                ? <a href={it.url} target="_blank" rel="noopener noreferrer" className="truncate text-gray-700 hover:underline">{it.text}</a>
+                : <span className="truncate text-gray-700">{it.text}</span>}
+            </div>
+          ))}
+        </div>
+      ) : ready && <div className="text-[10.5px] text-gray-400">{empty}</div>}
+    </div>
+  );
+}
+
+/* every prompt the architect sends — readable, editable, saved per project */
+function PromptDocsModal({ prompts, onSave, onClose, accent }) {
+  const [draft, setDraft] = useState({ system: prompts.system, batch: prompts.batch });
+  const FIELDS = [
+    ["system", "System prompt — the strategist's standing rules (categories, cannibalization, JSON contract)"],
+    ["batch", "Batch prompt — sent once per generation round, filled with the variables below"],
+  ];
+  return (
+    <Modal title="AI prompt documentation" onClose={onClose} width={760}>
+      <div className="space-y-4">
+        <div className="rounded-lg bg-gray-50 p-3 text-[11px] leading-relaxed text-gray-500">
+          The architect runs in rounds; each round sends the <b>system prompt</b> plus the <b>batch prompt</b> with these
+          variables filled in: <span className="ll-mono">{"{{brand}} {{website}} {{niche}} {{market}} {{locations}} {{services}} {{products}} {{research}} {{batch}} {{blogCount}} {{faqCount}} {{existing}}"}</span>.
+          Product comparisons and pros &amp; cons are seeded deterministically before any AI call, and real scraped questions become
+          FAQ posts verbatim — the prompts only fill what remains.
+        </div>
+        {FIELDS.map(([k, label]) => (
+          <div key={k}>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">{label}</span>
+              <button onClick={() => setDraft((d) => ({ ...d, [k]: DEFAULT_POSTS_PROMPTS[k] }))}
+                className="text-[10.5px] font-medium text-gray-400 hover:text-gray-600">Reset to default</button>
+            </div>
+            <textarea rows={k === "system" ? 10 : 12} value={draft[k]} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
+              className={"ll-mono " + inputCls + " resize-y text-[11px] leading-relaxed"} />
+          </div>
+        ))}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-gray-200 px-3.5 py-2 text-[12px] font-medium text-gray-500">Cancel</button>
+          <button onClick={() => { onSave(draft); onClose(); }}
+            className="rounded-lg px-4 py-2 text-[12px] font-semibold text-white" style={{ background: accent }}>Save prompts</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig = null, dfs = null }) {
   const work = useWork();
   const w = opt.website || {};
   const plan = w.postsPlan || null;
@@ -301,6 +405,11 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   const livePages = w.pages || [];
   const liveBlogs = w.blogs || [];
   const google = project.google || {};
+  /* research inputs & scraped material — persisted with the project (declared
+     BEFORE anything derives from it: a dependency on a const declared further
+     down is evaluated during render and throws in its dead zone) */
+  const research = w.postsResearch || {};
+  const setR = (patch) => setOpt("website", (cur) => ({ postsResearch: { ...(cur?.postsResearch || {}), ...patch } }));
 
   /* services: live service pages first (the real site), then the architecture map */
   const services = useMemo(() => {
@@ -311,7 +420,9 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     const seen = new Set();
     return out.filter((s) => { const k = s.url; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
   }, [livePages, w.architecture]);
-  const [svcDraft, setSvcDraft] = useState("");
+  /* services persist with the project and accept commas or new lines */
+  const svcDraft = research.services || "";
+  const setSvcDraft = (v) => setR({ services: v });
   const svcList = svcDraft.trim()
     ? svcDraft.split(/[,\n]/).map((x) => x.trim()).filter(Boolean).map((name) => ({ name, url: services.find((s) => s.name.toLowerCase() === name.toLowerCase())?.url || "/services/" + slugify(name) }))
     : services;
@@ -321,6 +432,53 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   const [gscNote, setGscNote] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [publishing, setPublishing] = useState(false);
+  const [progress, setProgress] = useState(null);          // batched-architect status line
+  const [scraping, setScraping] = useState(null);          // "gsc" | "community" | "competitors"
+  const [promptDocs, setPromptDocs] = useState(false);     // AI prompt documentation panel
+
+  const prompts = { ...DEFAULT_POSTS_PROMPTS, ...(w.postsPrompts || {}) };
+  const splitList = (t) => String(t || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+  const locations = splitList(research.locations);
+  const prodCats = research.products || [];               // [{ id, category, items }]
+  const allProducts = prodCats.flatMap((c) => splitList(c.items).map((name) => ({ name, category: c.category })));
+  const counts = { blogs: Math.min(60, Math.max(1, +research.counts?.blogs || 12)), faqs: Math.min(80, Math.max(1, +research.counts?.faqs || 18)) };
+
+  /* ---- the three scrape steps: each fills a visible box, never silently ---- */
+  const scrapeTopics = () => [...svcList.map((x) => x.name), ...allProducts.map((x) => x.name)].slice(0, 8);
+  const scrapeGsc = async () => {
+    setScraping("gsc"); setGenErr(null);
+    const qs = await fetchGscQuestions(google, svcList.length ? svcList : [{ name: project.name }]);
+    if (qs === null) setGenErr("Search Console isn't connected for this project — connect it in Project settings → Data sources.");
+    else setR({ gscQs: qs });
+    setScraping(null);
+  };
+  const scrapeCommunity = async () => {
+    setScraping("community"); setGenErr(null);
+    try {
+      const r = await fetch("/api/posts/community", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ topics: scrapeTopics(), dfs: dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad") ? { login: dfs.login, password: dfs.password } : undefined }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+      setR({ community: d.faqs, communityErrors: d.errors || [] });
+    } catch (e) { setGenErr("Community scrape failed: " + String(e?.message || e)); }
+    setScraping(null);
+  };
+  const scrapeCompetitors = async () => {
+    setScraping("competitors"); setGenErr(null);
+    try {
+      const domains = splitList(research.competitors).slice(0, 5);
+      if (!domains.length) throw new Error("add up to 5 competitor domains first");
+      const r = await fetch("/api/posts/competitors", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ domains }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+      setR({ compTopics: d.topics, compErrors: d.errors || {}, compPerDomain: d.perDomain || {} });
+    } catch (e) { setGenErr("Competitor scrape failed: " + String(e?.message || e)); }
+    setScraping(null);
+  };
+
+  /* ---- WordPress categories, for the per-post dropdown + the pusher ---- */
+  const [wpCats, setWpCats] = useState(null);
 
   const patchPost = (id, patch) => setOpt("website", (cur) => ({
     postsPlan: { ...(cur?.postsPlan || {}), posts: (cur?.postsPlan?.posts || []).map((p) => p.id === id ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p) },
@@ -329,6 +487,16 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   /* per-row instant publish / schedule (same engine as the bulk modal) */
   const credStr = typeof w.credential === "string" ? w.credential : (w.credential?.value || "");
   const canLive = w.platform === "wordpress" && /:/.test(credStr);
+  useEffect(() => {
+    if (!canLive) { setWpCats(null); return; }
+    let alive = true;
+    fetch("/api/wp/categories", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({ site: project.website, credential: credStr }) })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => { if (alive) setWpCats(ok ? j.categories : null); })
+      .catch(() => { if (alive) setWpCats(null); });
+    return () => { alive = false; };
+  }, [canLive, project.website, credStr]);
   const [rowBusy, setRowBusy] = useState(null);   // post id being pushed
   const [rowErr, setRowErr] = useState(null);     // { id, msg }
   const [schedFor, setSchedFor] = useState(null); // { id, date } — open date picker
@@ -352,38 +520,139 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     note: String(p.note || ""),
   })).filter((p) => p.title);
 
-  const architect = async () => {
-    if (!svcList.length) { setGenErr("No services found — generate the Website Mapping first, or type services below."); return; }
-    setBusy(true); setGenErr(null); setGscNote(null);
-    const gscQs = await fetchGscQuestions(google, svcList);
-    if (gscQs?.length) setGscNote(`${gscQs.length} real Search Console queries fed into the architecture.`);
-    let list = null, live = false;
-    try {
-      const text = await aiGenerate(aiConfig, {
-        system: SYS_POSTS_ARCHITECT, json: true, maxTokens: 6000,
-        prompt: `Business: ${brand} (${project.website}). Niche: ${w.architecture?.niche || project.name}. Market: ${market}.\nServices (each MUST get blog + answer coverage; use the EXACT serviceUrl given):\n${svcList.map((s) => `- ${s.name} → ${s.url}`).join("\n")}\n${gscQs?.length ? `\nREAL Search Console queries from this site's last 180 days (turn genuine questions into "answer" posts):\n${gscQs.join("\n")}` : ""}\nExisting posts (do NOT duplicate their topics):\n${liveBlogs.slice(0, 30).map((b) => "- " + b.title).join("\n") || "(none)"}\n\nDesign 2-3 "blog" + 3-4 "answer" posts per service. Local proximity: this business serves ${market} — weave the location into topics where locals search locally.`,
-      });
-      const parsed = parseJsonLoose(text);
-      list = normalizePosts(parsed.posts);
-      if (!list.length) throw new Error("empty architecture");
-      live = true;
-    } catch (e) {
-      if (e.code === 502) { setGenErr("AI provider error: " + e.message); setBusy(false); return; }
-      await new Promise((r) => setTimeout(r, 900));
-      list = draftArchitecture(svcList, market, w.architecture?.niche || "");
+  /* ---------- BATCHED ARCHITECT — many small AI calls, no ceiling ----------
+     One giant call was the token-limit failure: every service, question and
+     instruction stuffed into a single 6000-token request, which overflowed as
+     soon as the inputs grew. The architecture is now built in ROUNDS of ~12
+     posts per category, each round seeing only a digest of the research and a
+     compressed list of what already exists, until the requested counts are
+     met. More keywords now means more rounds, never an error. */
+  const digestResearch = () => {
+    const parts = [];
+    if (research.gscQs?.length) parts.push("REAL Search Console queries (turn genuine questions into answers):\n" + research.gscQs.slice(0, 20).map((q) => "- " + q).join("\n"));
+    if (research.community?.length) parts.push("Questions scraped from Reddit/Quora:\n" + research.community.slice(0, 20).map((f) => `- ${f.q} (${f.source})`).join("\n"));
+    if (research.compTopics?.length) {
+      const common = research.compTopics.filter((t) => t.common).slice(0, 15);
+      const gaps = research.compTopics.filter((t) => !t.common).slice(0, 10);
+      if (common.length) parts.push("Topics MULTIPLE competitors cover (the market's proven themes):\n" + common.map((t) => "- " + t.title).join("\n"));
+      if (gaps.length) parts.push("Topics only ONE competitor covers (gaps to take):\n" + gaps.map((t) => `- ${t.title} (${t.domain})`).join("\n"));
     }
-    /* duplicate cross-check against the LIVE site */
-    /* posts only match existing POSTS — a service page sharing words with a
-       post title is not a duplicate of it */
-    const withDup = list.map((p, i) => ({
+    return parts.join("\n\n") || "(no scraped research — invent from the services, products and locations)";
+  };
+  const svcFor = (text) => {
+    const tk = tokens(text);
+    let best = svcList[0], score = -1;
+    svcList.forEach((sv) => { let n = 0; tokens(sv.name).forEach((x) => tk.has(x) && n++); if (n > score) { score = n; best = sv; } });
+    return best || { name: "", url: "" };
+  };
+  /* the MUST-HAVE product topics, generated deterministically so they exist
+     regardless of what the model does: comparisons among products of the SAME
+     category, and pros & cons for every product */
+  const productSeeds = () => {
+    const seeds = [];
+    for (const cat of prodCats) {
+      const items = splitList(cat.items);
+      const svc = svcFor(cat.category + " " + items.join(" "));
+      for (let i = 0; i < items.length; i++) {
+        for (let j = i + 1; j < items.length && seeds.length < 200; j++) {
+          seeds.push({ category: "blog", title: `${items[i]} vs ${items[j]}: which ${cat.category.toLowerCase()} is right for you?`,
+            slug: slugify(`${items[i]} vs ${items[j]}`), primaryKw: `${items[i]} vs ${items[j]}`,
+            service: svc.name, serviceUrl: svc.url, note: `product comparison · ${cat.category}` });
+        }
+      }
+      if (items.length >= 3) seeds.push({ category: "blog", title: `Best ${cat.category.toLowerCase()} compared: ${items.slice(0, 4).join(", ")}${items.length > 4 ? " and more" : ""}`,
+        slug: slugify(`best ${cat.category}`), primaryKw: `best ${cat.category.toLowerCase()}`, service: svc.name, serviceUrl: svc.url, note: `category roundup · ${cat.category}` });
+      for (const it of items) seeds.push({ category: "blog", title: `${it} review: pros and cons`,
+        slug: slugify(`${it} pros and cons`), primaryKw: `${it} pros and cons`, service: svc.name, serviceUrl: svc.url, note: `pros & cons · ${cat.category}` });
+    }
+    return seeds;
+  };
+  /* real scraped questions become answer posts VERBATIM first — a question a
+     human actually asked beats anything invented */
+  const questionSeeds = (cap) => {
+    const pool = [...(research.gscQs || []).map((q) => ({ q, note: "Search Console query" })),
+                  ...(research.community || []).map((f) => ({ q: f.q, note: `asked on ${f.source}` }))];
+    const seen = new Set(); const out = [];
+    for (const { q, note } of pool) {
+      const k = q.toLowerCase().trim(); if (seen.has(k)) continue; seen.add(k);
+      const svc = svcFor(q);
+      out.push({ category: "answer", title: q.length > 8 ? q[0].toUpperCase() + q.slice(1) : q, slug: slugify(q),
+        primaryKw: q.toLowerCase().slice(0, 80), service: svc.name, serviceUrl: svc.url, note });
+      if (out.length >= cap) break;
+    }
+    return out;
+  };
+
+  const architect = async () => {
+    if (!svcList.length && !allProducts.length) { setGenErr("Add services (or products) first — the architecture needs something to cover."); return; }
+    setBusy(true); setGenErr(null); setGscNote(null);
+    const existingTitles = [...liveBlogs.map((b) => b.title)];
+    const isNew = (title, list) => !list.some((t) => jaccard(t, title) >= 0.6);
+    let planned = [];
+    const exactSeen = new Set(existingTitles.map((t) => t.toLowerCase().trim()));
+    /* seeds are PATTERNED on purpose — "Carrier vs Trane" and "Carrier vs
+       Lennox" share most of their words, and the similarity gate that guards
+       against AI paraphrases would wrongly collapse them (it did: 3 of 7
+       seeds survived it). Seeds dedupe on exact title only; the jaccard gate
+       applies to AI output, where near-duplicates really are duplicates. */
+    const add = (p, seed = false) => {
+      if (!p.title) return;
+      const k = p.title.toLowerCase().trim();
+      if (exactSeen.has(k)) return;
+      if (!seed && !isNew(p.title, [...existingTitles, ...planned.map((x) => x.title)])) return;
+      exactSeen.add(k); planned.push(p);
+    };
+
+    productSeeds().forEach((p) => planned.filter((x) => x.category === "blog").length < counts.blogs && add(p, true));
+    questionSeeds(Math.ceil(counts.faqs / 2)).forEach((p) => add(p, true));
+
+    const nBlogs = () => planned.filter((p) => p.category === "blog").length;
+    const nFaqs = () => planned.filter((p) => p.category === "answer").length;
+    let live = false, round = 0;
+    try {
+      while ((nBlogs() < counts.blogs || nFaqs() < counts.faqs) && round < 10) {
+        round++;
+        const needB = Math.min(12, counts.blogs - nBlogs());
+        const needF = Math.min(12, counts.faqs - nFaqs());
+        setProgress(`Batch ${round} — ${nBlogs()}/${counts.blogs} blogs · ${nFaqs()}/${counts.faqs} FAQs`);
+        const existing = [...existingTitles, ...planned.map((p) => p.title)];
+        const shown = existing.slice(0, 90);
+        const text = await aiGenerate(aiConfig, {
+          system: prompts.system, json: true, maxTokens: 4000,
+          prompt: fillPrompt(prompts.batch, {
+            brand, website: project.website, niche: w.architecture?.niche || project.name, market,
+            locations: locations.join(", ") || market,
+            services: svcList.map((sv) => `- ${sv.name} → ${sv.url}`).join("\n") || "(none — cover the products)",
+            products: prodCats.map((c) => `- ${c.category}: ${c.items}`).join("\n") || "(none)",
+            research: digestResearch(), batch: round,
+            blogCount: Math.max(0, needB), faqCount: Math.max(0, needF),
+            existing: shown.map((t) => "- " + t).join("\n") + (existing.length > shown.length ? `\n…and ${existing.length - shown.length} more` : ""),
+          }),
+        });
+        const fresh = normalizePosts(parseJsonLoose(text).posts);
+        const before = planned.length;
+        fresh.forEach((p) => {
+          if (p.category === "blog" && nBlogs() >= counts.blogs) return;
+          if (p.category === "answer" && nFaqs() >= counts.faqs) return;
+          add(p);
+        });
+        live = true;
+        if (planned.length === before) break;      // a dry round — stop rather than spin
+      }
+    } catch (e) {
+      if (e.code === 503 && !planned.length) { setGenErr("Connect an AI provider (Company Settings → API settings) — the seeds need AI to grow into a full plan."); setBusy(false); setProgress(null); return; }
+      if (!planned.length) { setGenErr("AI provider error: " + (e?.message || e)); setBusy(false); setProgress(null); return; }
+      setGenErr(`AI stopped after ${planned.length} topics (${e?.message || e}) — the plan below is what was completed.`);
+    }
+    const withDup = planned.map((p, i) => ({
       id: "pa" + Date.now().toString(36) + i, ...p, status: "planned", content: null,
       dup: findDuplicate(p, [], liveBlogs),
     }));
     setOpt("website", (cur) => ({ postsPlan: { generatedAt: Date.now(), live, provider: aiConfig?.provider, posts: withDup } }));
     const dups = withDup.filter((p) => p.dup).length;
-    work?.("website", "postsArchitected", { detail: `${withDup.length} posts${dups ? `, ${dups} possible duplicates` : ""}` });
-    log?.(`Architected ${withDup.length} blog/answer posts${live ? " (AI)" : " (draft)"}${dups ? ` — ${dups} duplicate warnings` : ""}`, project.name);
-    setBusy(false);
+    work?.("website", "postsArchitected", { detail: `${withDup.length} posts in ${round} AI batch${round === 1 ? "" : "es"}${dups ? `, ${dups} possible duplicates` : ""}` });
+    log?.(`Architected ${withDup.length} blogs & FAQs${live ? ` (AI · ${round} batches)` : " (seeds only)"}${dups ? ` — ${dups} duplicate warnings` : ""}`, project.name);
+    setBusy(false); setProgress(null);
   };
 
   /* ---- extend the plan: more guides / more questions, one category at a
@@ -442,32 +711,114 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
 
   return (
     <div className="space-y-4">
-      <Card className="space-y-3 p-5">
-        <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><ListTree size={15} style={{ color: accent }} /> Posts Architect
-          {plan && <LiveChip live={plan.live} provider={plan.provider} />}
+      <Card className="space-y-4 p-5">
+        <div className="ll-display flex items-center justify-between gap-2 text-[15px] font-semibold">
+          <span className="flex items-center gap-2"><ListTree size={15} style={{ color: accent }} /> Blogs &amp; FAQs
+            {plan && <LiveChip live={plan.live} provider={plan.provider} />}</span>
+          {/* every prompt this tool sends, readable and editable */}
+          <button onClick={() => setPromptDocs(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-600 hover:border-gray-300">
+            <BookOpen size={13} /> AI prompt docs
+          </button>
         </div>
         <div className="text-[11.5px] leading-relaxed text-gray-400">
-          Architects the blog for <b>topical authority</b> and <b>local proximity</b> in two live categories:
-          <b> Blog</b> (generalized guides per service) and <b>Answer</b> (the questions people actually ask about each service on
-          Reddit, Quora, People-Also-Ask and AnswerThePublic{google.connectionId && google.gscSite ? <> — plus <b>real Search Console queries</b> from this site</> : ""}).
-          Content generation links to the live service pages with varied anchor text and pulls captioned images from the media library.
+          Research first, architecture second: feed in services, products, locations and scraped real-world questions, then the
+          architect builds the requested number of <b>blogs</b> and <b>FAQs</b> in batches — topical authority across every
+          service, product category and location, with product comparisons and pros &amp; cons guaranteed by construction.
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10.5px] font-bold uppercase tracking-wide text-gray-400">Services covered:</span>
-          {svcList.map((s) => <span key={s.url} className="ll-mono rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600" title={s.url}>{s.name}</span>)}
-          {svcList.length === 0 && <span className="text-[11px] text-amber-600">none found — type them below or run Website Mapping first</span>}
-        </div>
-        <Labeled label="Override services (optional, comma-separated — otherwise pulled from live pages + site map)">
-          <input value={svcDraft} onChange={(e) => setSvcDraft(e.target.value)} placeholder="drain cleaning, water heater repair" className={inputCls} />
+
+        {/* 1 · services */}
+        <Labeled label="1 · Services — one per line or comma-separated (auto-detected from the site when left empty)">
+          <textarea rows={2} value={svcDraft} onChange={(e) => setSvcDraft(e.target.value)}
+            placeholder={"furnace repair\nair conditioner installation, duct cleaning"} className={inputCls + " resize-y"} />
         </Labeled>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10.5px] font-bold uppercase tracking-wide text-gray-400">Covering:</span>
+          {svcList.map((s) => <span key={s.url} className="ll-mono rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600" title={s.url}>{s.name}</span>)}
+          {svcList.length === 0 && <span className="text-[11px] text-amber-600">none yet — type services above or run Website Mapping</span>}
+        </div>
+
+        {/* 2 · products, grouped in categories */}
+        <div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">2 · Products the business works with, grouped by category</div>
+          <div className="mb-1.5 text-[10.5px] text-gray-400">Products in the SAME category get comparison posts against each other, and every product gets a pros &amp; cons post — guaranteed, before the AI adds anything.</div>
+          <div className="space-y-2">
+            {prodCats.map((c) => (
+              <div key={c.id} className="flex items-start gap-2">
+                <input value={c.category} onChange={(e) => setR({ products: prodCats.map((x) => x.id === c.id ? { ...x, category: e.target.value } : x) })}
+                  placeholder="Heating products" className={inputCls + " w-44"} />
+                <textarea rows={1} value={c.items} onChange={(e) => setR({ products: prodCats.map((x) => x.id === c.id ? { ...x, items: e.target.value } : x) })}
+                  placeholder="Carrier, Trane, Lennox" className={inputCls + " flex-1 resize-y"} />
+                <button onClick={() => setR({ products: prodCats.filter((x) => x.id !== c.id) })}
+                  className="mt-1.5 rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><X size={13} /></button>
+              </div>
+            ))}
+            <button onClick={() => setR({ products: [...prodCats, { id: "pc" + Date.now().toString(36), category: "", items: "" }] })}
+              className="rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[11.5px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
+              + Add product category
+            </button>
+          </div>
+        </div>
+
+        {/* 3 · GSC questions */}
+        <ScrapeBox n="3" title="Questions from Google Search Console" accent={accent}
+          busy={scraping === "gsc"} onRun={scrapeGsc} runLabel="Scrape GSC queries"
+          ready={!!(google.connectionId && google.gscSite)} notReady="Connect Search Console in Project settings → Data sources first."
+          items={(research.gscQs || []).map((q) => ({ text: q }))}
+          empty="Real question-style queries this site already appears for — scraped from the last 180 days." />
+
+        {/* 4 · locations */}
+        <Labeled label="4 · Service locations — the content localizes to these (one per line or commas)">
+          <textarea rows={2} value={research.locations || ""} onChange={(e) => setR({ locations: e.target.value })}
+            placeholder={"Mississauga\nBrampton, Oakville"} className={inputCls + " resize-y"} />
+        </Labeled>
+
+        {/* 5 · Reddit / Quora */}
+        <ScrapeBox n="5" title="FAQs from Reddit & Quora" accent={accent}
+          busy={scraping === "community"} onRun={scrapeCommunity} runLabel="Scrape Reddit & Quora"
+          ready={svcList.length > 0 || allProducts.length > 0} notReady="Add services or products first — they drive the search."
+          items={(research.community || []).map((f) => ({ text: f.q, tag: f.source, url: f.url }))}
+          errors={research.communityErrors}
+          empty="Real questions people asked about these services, products and brands." />
+
+        {/* 6 · competitors */}
+        <div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">6 · Competitor blogs &amp; FAQs</div>
+          <div className="flex gap-2">
+            <textarea rows={1} value={research.competitors || ""} onChange={(e) => setR({ competitors: e.target.value })}
+              placeholder="competitor1.com, competitor2.com (up to 5)" className={inputCls + " flex-1 resize-y"} />
+            <button onClick={scrapeCompetitors} disabled={scraping === "competitors"}
+              className="shrink-0 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
+              {scraping === "competitors" ? <RefreshCw size={12} className="animate-spin" /> : "Scrape competitors"}
+            </button>
+          </div>
+          {research.compTopics && (
+            <div className="mt-2 max-h-44 space-y-0.5 overflow-y-auto rounded-lg border border-gray-100 p-2">
+              <div className="ll-mono px-1 pb-1 text-[9.5px] text-gray-400">
+                {research.compTopics.length} topics · {research.compTopics.filter((t) => t.common).length} common (2+ competitors) ·
+                {" "}{Object.entries(research.compPerDomain || {}).map(([d, n]) => `${d}: ${n}`).join(" · ")}
+                {Object.entries(research.compErrors || {}).map(([d, e]) => <span key={d} className="text-amber-600"> · {d}: {e}</span>)}
+              </div>
+              {research.compTopics.slice(0, 120).map((t, i) => (
+                <div key={i} className="flex items-center gap-2 px-1 text-[11px]">
+                  <span className={"shrink-0 rounded px-1 text-[8.5px] font-bold uppercase " + (t.common ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>{t.common ? "common" : "gap"}</span>
+                  <span className="truncate text-gray-700">{t.title}</span>
+                  <span className="ll-mono shrink-0 text-[9px] text-gray-300">{t.domain}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 7 · counts, 8 · architect */}
+        <div className="flex flex-wrap items-end gap-3 border-t border-gray-100 pt-3">
+          <Labeled label="7 · Blogs to generate"><input value={research.counts?.blogs ?? 12} onChange={(e) => setR({ counts: { ...(research.counts || {}), blogs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls + " w-24"} /></Labeled>
+          <Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? 18} onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls + " w-24"} /></Labeled>
           <button onClick={architect} disabled={busy}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-            {busy ? <><RefreshCw size={13} className="animate-spin" /> Architecting posts…</> : <><Sparkles size={13} /> {posts.length ? "Re-architect posts" : "Architect blog & answer posts"}</>}
+            {busy ? <><RefreshCw size={13} className="animate-spin" /> {progress || "Architecting…"}</> : <><Sparkles size={13} /> 8 · Architect Blogs &amp; FAQs</>}
           </button>
-          <span className="text-[10.5px] text-gray-400">
-            {google.connectionId && google.gscSite ? "✓ Search Console connected — real queries feed the plan" : "Connect Google (Website Performance tab) to feed real GSC queries into the plan"}
-          </span>
+          <span className="text-[10.5px] text-gray-400">Runs in batches until the counts are met — more inputs means more batches, never a token error.</span>
         </div>
         {gscNote && <div className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">{gscNote}</div>}
         {genErr && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{genErr}</div>}
@@ -493,7 +844,8 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                           <CatChip cat={p.category} />
                           <button onClick={() => setOpenId(p.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                             <span className="truncate text-[12.5px] font-medium text-gray-800">{p.title}</span>
-                            <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">→ {p.serviceUrl}</span>
+                            {/* slug only — the site prepends the category in its permalinks */}
+                            <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">/{p.slug}</span>
                             {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">possible duplicate</span>}
                             {/* status: published / scheduled · date / written */}
                             {p.status === "published"
@@ -502,6 +854,16 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                               ? <span className="ll-mono shrink-0 rounded-full bg-blue-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-blue-700">scheduled · {new Date(p.scheduledAt).toISOString().slice(0, 10)}</span>
                               : p.content && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">written</span>}
                           </button>
+                          {/* the site's REAL category for this post — scraped from the
+                              connected WordPress; disabled (with the default) until a site
+                              is connected. The pusher publishes into exactly this category. */}
+                          <select value={p.wpCategory || ""} disabled={!wpCats}
+                            title={wpCats ? "WordPress category the pusher will publish into" : "Connect WordPress in the Connector tab to load the site's categories"}
+                            onChange={(e) => patchPost(p.id, { wpCategory: e.target.value || null })}
+                            className="ll-mono w-28 shrink-0 rounded-lg border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] text-gray-600 disabled:opacity-40">
+                            <option value="">{p.category === "answer" ? "Answer" : "Blog"} (default)</option>
+                            {(wpCats || []).map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                          </select>
                           {/* right-side actions once the content is written */}
                           {p.content && p.status !== "published" && (
                             schedFor?.id === p.id ? (
@@ -600,6 +962,10 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         </div>
       )}
 
+      {promptDocs && (
+        <PromptDocsModal prompts={prompts} accent={accent} onClose={() => setPromptDocs(false)}
+          onSave={(next) => { setOpt("website", () => ({ postsPrompts: next })); log?.("Updated Blogs & FAQs AI prompts", project.name); }} />
+      )}
       {openPost && (
         <PostWriter post={openPost} opt={opt} setOpt={setOpt} accent={accent} project={project} ai={aiConfig}
           brand={brand} brandVoice={brandVoice} brandProps={brandProps} market={market} media={media}
