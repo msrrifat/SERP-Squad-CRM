@@ -3,7 +3,7 @@ import {
   BookOpen, FileText, ImagePlus, ListTree, MessageCircleQuestion,
   Plus, RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
 } from "lucide-react";
-import { Card, Labeled, Modal, Toggle, askDelete, inputCls, CharCount } from "../../ui/primitives.jsx";
+import { Card, Labeled, Modal, Toggle, askDelete, askInput, inputCls, CharCount } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { parseAiJson } from "../../lib/jsonrepair.js";
 import { useWork } from "../../lib/worklog.jsx";
@@ -101,6 +101,7 @@ async function pushArchitectedPost(p, whenISO, { live, credStr, project, setOpt 
         /* the chosen site category wins; the tool's own Blog/Answer split is
            only the fallback for sites with no matching categories */
         categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")],
+        tags: p.tags || [],
         ...(scheduled ? { status: "future", date: when.toISOString() } : { status: "publish" }),
       } }) });
     const d = await r.json().catch(() => ({}));
@@ -110,7 +111,7 @@ async function pushArchitectedPost(p, whenISO, { live, credStr, project, setOpt 
   setOpt("website", (cur) => ({
     blogs: [
       { id: "pb" + Date.now(), title: p.title, slug: p.slug, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc,
-        content: mdToBlocks(p.content.markdown), categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")],
+        content: mdToBlocks(p.content.markdown), categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")], tags: p.tags || [],
         ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: Date.now() }),
         createdAt: Date.now(), demo: !live },
       ...(cur.blogs || []).filter((b) => b.slug !== p.slug),
@@ -186,6 +187,38 @@ export function findDuplicate(item, pages = [], blogs = []) {
 }
 
 /* ---------- AI prompts ---------- */
+/* ---------- TAGS — one controlled vocabulary, deterministic ----------
+   Tags exist so the template's related-posts sidebar can match on them, and
+   matching only works when two posts about the same thing carry the SAME tag
+   string. So tags are never invented per post: the vocabulary is built once
+   from the research (services, product categories, products, locations) and
+   every post picks its 2-5 best matches from that list. The supporting
+   service is always tagged, so service-cluster posts always inter-relate. */
+const splitTagList = (t) => String(t || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+export function buildTagVocab({ services = [], prodCats = [], locations = [] }) {
+  const vocab = [];
+  const push = (name, weight) => {
+    name = cap(String(name || "").trim());
+    if (name && name.length > 1 && !vocab.some((t) => t.name.toLowerCase() === name.toLowerCase()))
+      vocab.push({ name, weight, words: tokens(name) });
+  };
+  services.forEach((sv) => push(sv.name, 3));
+  prodCats.forEach((c) => { push(c.category, 2); splitTagList(c.items).forEach((it) => push(it, 2)); });
+  locations.forEach((l) => push(l, 1));
+  return vocab;
+}
+export function tagsForPost(post, vocab) {
+  const tk = tokens(`${post.title} ${post.primaryKw || ""} ${post.note || ""}`);
+  const svc = String(post.service || "").trim();
+  const scored = vocab
+    .map((t) => { let n = 0; t.words.forEach((w) => tk.has(w) && n++); return { t, score: n * t.weight }; })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+  const out = scored.slice(0, 5).map((x) => x.t.name);
+  if (svc && !out.some((n) => n.toLowerCase() === svc.toLowerCase())) out.unshift(cap(svc));
+  return [...new Set(out)].slice(0, 5);
+}
+
 /* ---------- EDITABLE AI PROMPTS ----------
    Every prompt the architect sends is documented and editable in the "AI
    prompt docs" panel (top-right). Overrides live per project at
@@ -453,6 +486,9 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
      questions and competitor themes there actually are — instead of a fixed
      default. A typed number is a CONTRACT: the plan delivers exactly that. */
   const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  /* the controlled tag vocabulary — rebuilt whenever the research changes */
+  const tagVocab = useMemo(() => buildTagVocab({ services: svcList, prodCats, locations }),
+    [JSON.stringify(svcList), JSON.stringify(prodCats), JSON.stringify(locations)]); // eslint-disable-line
   const blogsTarget = String(research.counts?.blogs ?? "").trim() === "" ? null : clampN(+research.counts.blogs || 1, 1, 100);
   const faqsTarget = String(research.counts?.faqs ?? "").trim() === "" ? null : clampN(+research.counts.faqs || 1, 1, 120);
 
@@ -516,6 +552,8 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   const publishRow = async (p, whenISO) => {
     setRowBusy(p.id); setRowErr(null);
     try {
+      /* plans generated before tags existed get theirs at push time */
+      if (!p.tags?.length) { p = { ...p, tags: tagsForPost(p, tagVocab) }; patchPost(p.id, { tags: p.tags }); }
       const res = await pushArchitectedPost(p, whenISO, { live: canLive, credStr, project, setOpt });
       patchPost(p.id, res.scheduled ? { status: "scheduled", scheduledAt: res.when } : { status: "published", publishedAt: Date.now() });
       work?.("website", "postsPublished", { detail: `${p.title}${res.scheduled ? " (scheduled)" : ""}` });
@@ -675,6 +713,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     }
     const withDup = planned.map((p, i) => ({
       id: "pa" + Date.now().toString(36) + i, ...p, status: "planned", content: null,
+      tags: tagsForPost(p, tagVocab),
       dup: findDuplicate(p, [], liveBlogs),
     }));
     setOpt("website", (cur) => ({ postsPlan: { generatedAt: Date.now(), live, provider: aiConfig?.provider, posts: withDup } }));
@@ -725,6 +764,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
       if (!fresh.length) throw new Error("no new topics survived the duplicate check — try again or add research");
       const withDup = fresh.map((p, i) => ({
         id: "pa" + Date.now().toString(36) + "m" + i, ...p, status: "planned", content: null,
+        tags: tagsForPost(p, tagVocab),
         dup: findDuplicate(p, [], liveBlogs),
       }));
       setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), ...withDup] } }));
@@ -751,6 +791,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
       id: "pa" + stamp + "x" + i, category: cat, title: title.slice(0, 140), slug: slugify(title),
       primaryKw: title.toLowerCase().replace(/[?!.]/g, "").slice(0, 80), service: svc.name, serviceUrl: svc.url,
       note: "added manually", status: "planned", content: null,
+      tags: tagsForPost({ title, primaryKw: title, service: svc.name }, tagVocab),
       dup: findDuplicate({ title, slug: slugify(title) }, [], liveBlogs),
     }));
     setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), ...newPosts] } }));
@@ -906,6 +947,10 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                             <span className="truncate text-[12.5px] font-medium text-gray-800">{p.title}</span>
                             {/* slug only — the site prepends the category in its permalinks */}
                             <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">/{p.slug}</span>
+                            {(p.tags || []).slice(0, 3).map((t) => (
+                              <span key={t} className="hidden shrink-0 rounded bg-gray-100 px-1 py-px text-[8.5px] font-medium text-gray-500 lg:inline">#{t}</span>
+                            ))}
+                            {(p.tags || []).length > 3 && <span className="hidden text-[8.5px] text-gray-300 lg:inline">+{p.tags.length - 3}</span>}
                             {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">possible duplicate</span>}
                             {/* status: published / scheduled · date / written */}
                             {p.status === "published"
@@ -917,6 +962,14 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                           {/* the site's REAL category for this post — scraped from the
                               connected WordPress; disabled (with the default) until a site
                               is connected. The pusher publishes into exactly this category. */}
+                          <button title={"Edit tags — pushed to WordPress with the post and used by related-post widgets\nNow: " + ((p.tags || []).join(", ") || "none")}
+                            onClick={async () => {
+                              const v = await askInput({ title: "Post tags", message: "Comma-separated — kept consistent with services/products so related posts match:", value: (p.tags || []).join(", "), confirmLabel: "Save tags" });
+                              if (v != null) patchPost(p.id, { tags: splitTagList(v).slice(0, 8) });
+                            }}
+                            className="ll-mono shrink-0 rounded-lg border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-gray-300">
+                            #{(p.tags || []).length}
+                          </button>
                           <select value={p.wpCategory || ""} disabled={!wpCats}
                             title={wpCats ? "WordPress category the pusher will publish into" : "Connect WordPress in the Connector tab to load the site's categories"}
                             onChange={(e) => patchPost(p.id, { wpCategory: e.target.value || null })}

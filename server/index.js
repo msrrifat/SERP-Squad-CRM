@@ -1938,10 +1938,27 @@ async function handleWpDeploy(body) {
         } catch { /* category failure never blocks the post itself */ }
       }
     }
+    /* post TAGS by name — find-or-create like categories, so the tag
+       taxonomy stays one controlled vocabulary across every post. Tags are
+       what related-post widgets match on: two posts about the same service
+       share the exact same tag or the widget finds nothing. */
+    let tagIds = [];
+    if (kind === "posts" && Array.isArray(p2.tags) && p2.tags.length) {
+      for (const name of p2.tags.slice(0, 8)) {
+        try {
+          const found = await wpFetch(body, `/tags?search=${encodeURIComponent(name)}&_fields=id,name`);
+          const exact = (found || []).find((t) => t.name.toLowerCase() === String(name).toLowerCase());
+          if (exact) { tagIds.push(exact.id); continue; }
+          const made = await wpFetch(body, `/tags`, { method: "POST", body: JSON.stringify({ name }) });
+          if (made?.id) tagIds.push(made.id);
+        } catch { /* a tag failure never blocks the post itself */ }
+      }
+    }
     const payload = {
       title: p2.title, slug: p2.slug,
       ...(p2.content && !contentSkipped ? { content: p2.content } : {}),
       ...(categoryIds.length ? { categories: categoryIds } : {}),
+      ...(tagIds.length ? { tags: tagIds } : {}),
       status: p2.status || "publish",
       ...(p2.date ? { date: p2.date } : {}),
       ...(kind === "pages" && parentId ? { parent: parentId } : {}),
