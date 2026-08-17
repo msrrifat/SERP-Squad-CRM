@@ -1926,6 +1926,76 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
   );
 }
 
+
+/* Paste URLs — one per line — and they become tracked pages/posts with their
+   REAL titles scraped server-side. This is the manual route for sites whose
+   bot protection blocks the crawler: the visitor-shaped fetch usually gets
+   through, and when even that is challenged the entry is still created with
+   a slug-derived title and says which ones were blocked, instead of failing
+   the whole paste. */
+function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const host = String(site || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const normalize = (line) => {
+    let abs = line;
+    if (!/^https?:\/\//i.test(abs)) abs = abs.startsWith("/") ? `https://${host}${abs}` : `https://${abs}`;
+    try {
+      const u = new URL(abs);
+      const path = (u.pathname.replace(/\/+$/, "") || "/");
+      return { abs: u.href, path };
+    } catch { return null; }
+  };
+  const run = async () => {
+    setBusy(true); setNote(null);
+    const seen = new Set(existingPaths.map((x) => String(x).toLowerCase()));
+    const targets = [];
+    for (const l of lines) {
+      const n = normalize(l);
+      if (!n || seen.has(n.path.toLowerCase())) continue;
+      seen.add(n.path.toLowerCase()); targets.push(n);
+    }
+    if (!targets.length) { setNote({ warn: true, text: "Nothing new to add — every line is empty, invalid, or already tracked." }); setBusy(false); return; }
+    let metas = {};
+    let blocked = 0;
+    try {
+      const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ urls: targets.map((t) => t.abs) }) });
+      const d = await r.json().catch(() => ({}));
+      (d.results || []).forEach((res) => { metas[res.url] = res; if (res.error === "blocked") blocked++; });
+    } catch { /* scrape unreachable — slug titles below still work */ }
+    const fromSlug = (path) => cap((path.split("/").filter(Boolean).pop() || "home").replace(/[-_]+/g, " "));
+    const items = targets.map((t) => {
+      const m = metas[t.abs] || {};
+      return { path: t.path, abs: t.abs, title: (m.metaTitle || m.h1 || "").trim() || fromSlug(t.path),
+        metaTitle: m.metaTitle || "", metaDesc: m.metaDesc || "", scrapedOk: !m.error && !!(m.metaTitle || m.h1) };
+    });
+    onAdd(items);
+    const okN = items.filter((x) => x.scrapedOk).length;
+    setNote({ warn: okN < items.length, text: `Added ${items.length} ${kind}${items.length > 1 ? "s" : ""} — ${okN} with scraped titles${blocked ? `, ${blocked} blocked by the site's firewall (slug titles used; edit them any time)` : okN < items.length ? ", the rest use slug-derived titles" : ""}.` });
+    setText("");
+    setBusy(false);
+  };
+  return (
+    <div className="mt-3 rounded-xl border border-dashed border-gray-300 p-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Add {kind}s by URL — one per line</div>
+      <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder={kind === "page" ? `https://${host || "site.com"}/services/\n/services/drain-cleaning\n/about` : `https://${host || "site.com"}/blog/first-post\n/blog/second-post`}
+        className={inputCls + " resize-y ll-mono text-[11.5px]"} />
+      <div className="mt-1.5 flex items-center gap-2">
+        <button onClick={run} disabled={busy || !lines.length}
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
+          {busy ? <><RefreshCw size={12} className="animate-spin" /> Scraping titles…</> : <>Fetch titles &amp; add{lines.length ? ` ${lines.length}` : ""}</>}
+        </button>
+        <span className="text-[10.5px] text-gray-400">Titles are scraped from each page; blocked pages still get added with slug titles. Pages nest under their URL path automatically.</span>
+      </div>
+      {note && <div className={"mt-1.5 rounded-lg px-2.5 py-1.5 text-[11px] " + (note.warn ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-700")}>{note.text}</div>}
+    </div>
+  );
+}
+
 export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders = [], aiConfig = null, dfs, access = null }) {
   const w = opt.website;
   const work = useWork();
@@ -2950,9 +3020,23 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             slugsEnabled={slugsEnabled} siteHost={String(project.website || "").replace(/^https?:\/\//, "").replace(/\/+$/, "")}
             onPatch={(p) => patchPage(openPage, p)} onClose={() => setOpenPage(null)} />
         )}
+        <PasteUrlsAdd kind="page" site={project.website} accent={accent}
+          existingPaths={w.pages.map((p) => p.url)}
+          onAdd={(items) => set((cur) => {
+            const stamp = Date.now();
+            const added = items.map((it, i) => ({
+              id: "pg" + stamp + i, url: it.path, origUrl: it.abs, name: it.title,
+              metaTitle: it.metaTitle, metaDesc: it.metaDesc, manual: true,
+              content: [{ id: "cb" + stamp + i, kind: "heading", level: 1, text: it.title }],
+            }));
+            /* hierarchical order: parents first, children grouped beneath —
+               the table's depth renderer does the indentation */
+            const all = [...(cur.pages || []), ...added].sort((x, y) => String(x.url).localeCompare(String(y.url)));
+            return { pages: all };
+          })} />
         <button onClick={() => set({ pages: [...w.pages, { id: "pg" + Date.now(), url: "/new-page", name: "New page", metaTitle: "", metaDesc: "", dirty: true, content: [{ id: "cb" + Date.now(), kind: "heading", level: 1, text: "New page heading" }, { id: "ct" + Date.now(), kind: "text", text: "Click to edit this text.", links: [] }] }] })}
           className="mt-2 flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
-          <Plus size={12} /> Add page manually
+          <Plus size={12} /> Add a blank page instead
         </button>
       </Card>
 
@@ -2982,6 +3066,19 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             )}
           </span>
         </div>
+        <PasteUrlsAdd kind="post" site={project.website} accent={accent}
+          existingPaths={w.blogs.map((b2) => b2.url || "/blog/" + b2.slug)}
+          onAdd={(items) => set((cur) => {
+            const stamp = Date.now();
+            return { blogs: [
+              ...items.map((it, i) => ({
+                id: "pb" + stamp + i, slug: (it.path.split("/").filter(Boolean).pop() || "post"), url: it.path, origUrl: it.abs,
+                title: it.title, metaTitle: it.metaTitle, metaDesc: it.metaDesc, body: it.metaDesc || "",
+                status: "published", publishedAt: null, createdAt: stamp, manual: true, content: [],
+              })),
+              ...(cur.blogs || []),
+            ] };
+          })} />
         {/* plat is null in sitemap mode — never dereference it there */}
         {sitemapOnly ? (
           <div className="mt-3 rounded-lg bg-amber-50 p-3 text-[11.5px] leading-relaxed text-amber-700">
