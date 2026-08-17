@@ -1934,9 +1934,19 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
    a slug-derived title and says which ones were blocked, instead of failing
    the whole paste. */
 function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd, dfs = null }) {
+  /* local on purpose: this file had no `cap` — the slug-title fallback threw
+     "cap is not defined", but only for URLs whose page yielded no title, which
+     is why 80 pages worked and a posts batch died. */
+  const capWords = (t) => String(t).replace(/\b\w/g, (c) => c.toUpperCase());
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  /* "default" = our own scraper only, free — right when the CRM IP is
+     whitelisted or the site is open. "dataforseo" additionally re-fetches
+     whatever the firewall blocks through DataForSEO's crawlers, paid per
+     rescued page. The free mode never spends a cent. */
+  const [scraper, setScraper] = useState("default");
+  const dfsReady = !!(dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad"));
   const host = String(site || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const normalize = (line) => {
@@ -1966,17 +1976,24 @@ function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd, dfs = null }) 
       if (!targets.length) { setNote({ warn: true, text: "Nothing new to add — every line is empty, invalid, or already tracked." }); return; }
       let metas = {};
       let blocked = 0, rescued = 0;
-      try {
-        const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
-          body: JSON.stringify({ urls: targets.map((t) => t.abs),
-            /* blocked URLs are re-fetched through DataForSEO's own crawlers —
-               a firewall that bans OUR server has no reason to ban theirs */
-            dfs: dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad") ? { login: dfs.login, password: dfs.password } : undefined }) });
-        const d = await r.json().catch(() => ({}));
-        rescued = d.rescued || 0;
-        (d.results || []).forEach((res) => { metas[res.url] = res; if (res.error === "blocked") blocked++; });
-      } catch { /* scrape unreachable — slug titles below still work */ }
-      const fromSlug = (path) => cap((path.split("/").filter(Boolean).pop() || "home").replace(/[-_]+/g, " "));
+      /* CHUNKED: the server scrapes at most 120 URLs per call, so a 323-post
+         paste in one request would silently leave 203 with slug titles.
+         Batches of 100 scrape everything, with progress in the note line. */
+      for (let off = 0; off < targets.length; off += 100) {
+        const slice = targets.slice(off, off + 100);
+        if (targets.length > 100) setNote({ warn: false, text: `Scraping ${Math.min(off + slice.length, targets.length)} of ${targets.length}…` });
+        try {
+          const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
+            body: JSON.stringify({ urls: slice.map((t) => t.abs),
+              /* credentials travel ONLY in DataForSEO mode — the default
+                 scraper must be incapable of spending money */
+              dfs: scraper === "dataforseo" && dfsReady ? { login: dfs.login, password: dfs.password } : undefined }) });
+          const d = await r.json().catch(() => ({}));
+          rescued += d.rescued || 0;
+          (d.results || []).forEach((res) => { metas[res.url] = res; if (res.error === "blocked") blocked++; });
+        } catch { /* one chunk unreachable — its slug titles still work */ }
+      }
+      const fromSlug = (path) => capWords((path.split("/").filter(Boolean).pop() || "home").replace(/[-_]+/g, " "));
       const items = targets.map((t) => {
         const m = metas[t.abs] || {};
         return { path: t.path, abs: t.abs, title: (m.metaTitle || m.h1 || "").trim() || fromSlug(t.path),
@@ -1987,7 +2004,7 @@ function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd, dfs = null }) 
       setNote({ warn: okN < items.length,
         text: `Added ${items.length} ${kind}${items.length > 1 ? "s" : ""} — ${okN} with scraped titles`
           + (rescued ? `, ${rescued} fetched through DataForSEO because the site blocks this server` : "")
-          + (blocked ? `, ${blocked} blocked even via DataForSEO (slug titles used; edit any time)` : okN < items.length ? ", the rest use slug-derived titles" : "") + "." });
+          + (blocked ? (scraper === "dataforseo" ? `, ${blocked} blocked even via DataForSEO (slug titles used; edit any time)` : `, ${blocked} blocked by the site's firewall — switch the scraper to DataForSEO to fetch those (paid per page)`) : okN < items.length ? ", the rest use slug-derived titles" : "") + "." });
       setText("");
     } catch (e) {
       setNote({ warn: true, text: "Adding failed: " + String(e?.message || e).slice(0, 140) });
@@ -1999,7 +2016,13 @@ function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd, dfs = null }) 
       <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
         placeholder={kind === "page" ? `https://${host || "site.com"}/services/\n/services/drain-cleaning\n/about` : `https://${host || "site.com"}/blog/first-post\n/blog/second-post`}
         className={inputCls + " resize-y ll-mono text-[11.5px]"} />
-      <div className="mt-1.5 flex items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <select value={scraper} onChange={(e) => setScraper(e.target.value)}
+          title={dfsReady ? "How blocked pages are handled" : "DataForSEO mode needs credentials in Company Settings → API settings"}
+          className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-[11px] font-medium text-gray-600">
+          <option value="default">Default scraper — free</option>
+          <option value="dataforseo" disabled={!dfsReady}>DataForSEO fallback — rescues blocked pages (paid)</option>
+        </select>
         <button onClick={run} disabled={busy || !lines.length}
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
           {busy ? <><RefreshCw size={12} className="animate-spin" /> Scraping titles…</> : <>Fetch titles &amp; add{lines.length ? ` ${lines.length}` : ""}</>}
