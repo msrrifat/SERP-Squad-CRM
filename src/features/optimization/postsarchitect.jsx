@@ -292,6 +292,15 @@ export function insertImages(md, images, brand) {
 }
 
 /* ---------- GSC question mining ---------- */
+/* QUESTIONS ONLY. The old filter had an escape hatch — any query sharing a
+   word with a service name passed, so "furnace repair toronto" counted as a
+   question and the box filled with plain keywords. A query now qualifies only
+   by question language: it STARTS with an interrogative/auxiliary, or
+   CONTAINS a strong question word as a whole word, or ends with "?". Nothing
+   passes because of what it is about — only because of how it is asked. */
+const GSC_Q_START = /^(how|what|why|when|where|who|whose|whom|which|can|could|should|would|will|shall|do|does|did|is|are|was|were|has|have|had|am|may|might|must)\b/i;
+const GSC_Q_CONTAIN = /\b(how|what|why|when|where|which|who|should|can|vs|versus)\b/i;
+export const isGscQuestion = (q) => GSC_Q_START.test(String(q).trim()) || GSC_Q_CONTAIN.test(q) || String(q).trim().endsWith("?");
 async function fetchGscQuestions(google, services) {
   if (!google?.connectionId || !google?.gscSite) return null;
   try {
@@ -299,11 +308,9 @@ async function fetchGscQuestions(google, services) {
       body: JSON.stringify({ connectionId: google.connectionId, siteUrl: google.gscSite, days: 180 }) });
     if (!r.ok) return null;
     const d = await r.json();
-    const svWords = tokens(services.map((s) => s.name).join(" "));
-    const isQ = (q) => /^(how|what|why|when|where|who|which|can|do|does|is|are|should|will|vs)\b/.test(q) || / near me$| cost| price| worth/.test(q);
     return (d.queries || d.rows || []).map((row) => row.query || row.keys?.[0]).filter(Boolean)
-      .filter((q) => isQ(q.toLowerCase()) || [...tokens(q)].some((w) => svWords.has(w)))
-      .slice(0, 50);
+      .filter(isGscQuestion)
+      .slice(0, 80);
   } catch { return null; }
 }
 
@@ -771,7 +778,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
           busy={scraping === "gsc"} onRun={scrapeGsc} runLabel="Scrape GSC queries"
           ready={!!(google.connectionId && google.gscSite)} notReady="Connect Search Console in Project settings → Data sources first."
           items={(research.gscQs || []).map((q) => ({ text: q }))}
-          empty="Real question-style queries this site already appears for — scraped from the last 180 days." />
+          empty="Only question-style queries pass the filter (how / what / why / when / where / which / who / can / should / is / are / do / vs …) — plain keywords are left out." />
 
         {/* 4 · locations */}
         <Labeled label="4 · Service locations — the content localizes to these (one per line or commas)">
