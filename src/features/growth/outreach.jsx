@@ -185,7 +185,7 @@ function AddAccountModal({ accent, onClose, onAdd }) {
         ) : (
           <div className="space-y-2.5">
             <div className="text-[12px] font-bold text-gray-700">IMAP <span className="font-normal text-gray-400">(optional — powers the Inbox & reply detection)</span></div>
-            <div className="grid grid-cols-[1fr,110px] gap-2">
+            <div className="grid grid-cols-[1fr_110px] gap-2">
               <Labeled label="IMAP Host"><input value={d.imapHost} onChange={set("imapHost")} placeholder="imap.yourhost.com" className={"ll-mono " + inputCls} /></Labeled>
               <Labeled label="IMAP Port"><input value={d.imapPort} onChange={set("imapPort")} placeholder="Generally 993" className={"ll-mono " + inputCls} /></Labeled>
             </div>
@@ -194,7 +194,7 @@ function AddAccountModal({ accent, onClose, onAdd }) {
               <Labeled label="IMAP Password"><input type="password" value={d.imapPass} onChange={set("imapPass")} placeholder="Generally the email password" className={"ll-mono " + inputCls} /></Labeled>
             </div>
             <div className="text-[12px] font-bold text-gray-700">SMTP</div>
-            <div className="grid grid-cols-[1fr,110px] gap-2">
+            <div className="grid grid-cols-[1fr_110px] gap-2">
               <Labeled label="SMTP Host *"><input value={d.smtpHost} onChange={set("smtpHost")} placeholder="smtp.yourhost.com" className={"ll-mono " + inputCls} /></Labeled>
               <Labeled label="SMTP Port *"><input value={d.smtpPort} onChange={set("smtpPort")} placeholder="465" className={"ll-mono " + inputCls} /></Labeled>
             </div>

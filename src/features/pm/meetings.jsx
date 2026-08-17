@@ -150,7 +150,7 @@ export function MeetingNotesPane({ notes, onChange, accent, people = [], emptyHi
   const removeSel = () => { onChange((notes || []).filter((m) => m.id !== sel.id)); setSelId(null); };
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[270px,1fr]" style={{ minHeight: 420 }}>
+    <div className="grid gap-4 lg:grid-cols-[270px_1fr]" style={{ minHeight: 420 }}>
       <div className="space-y-2">
         <button onClick={create}
           className="flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-[12.5px] font-semibold text-white"

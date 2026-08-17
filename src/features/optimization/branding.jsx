@@ -1158,7 +1158,7 @@ function CampaignWizard({ c, patch, onBack, accent, log, project, brandName, br,
 
       {/* step 1 */}
       <StepBox n={1} title="Topic guides & publishing cadence" done={c.step > 0} active={c.step === 0}>
-        <div className="grid gap-3 sm:grid-cols-[1fr,180px]">
+        <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
           <Labeled label="Topic guide — what the content should push">
             <textarea value={c.topicGuide} rows={2} onChange={(e) => patch({ topicGuide: e.target.value })}
               placeholder="e.g. lead with pricing transparency, feature before/after cases, target 'near me' intent" className={inputCls + " resize-none"} />

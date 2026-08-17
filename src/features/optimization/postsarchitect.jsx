@@ -743,14 +743,20 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">2 · Products the business works with, grouped by category</div>
           <div className="mb-1.5 text-[10.5px] text-gray-400">Products in the SAME category get comparison posts against each other, and every product gets a pros &amp; cons post — guaranteed, before the AI adds anything.</div>
           <div className="space-y-2">
+            {/* a GRID with sized columns, not flex + width utilities: inputCls
+                carries w-full, and a w-44 added beside it is a class conflict
+                Tailwind resolves by stylesheet order — the category field won
+                the whole row and crushed the products box. Grid columns size
+                the fields regardless of what the inputs themselves claim, and
+                the row stacks on narrow windows. */}
             {prodCats.map((c) => (
-              <div key={c.id} className="flex items-start gap-2">
+              <div key={c.id} className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(140px,200px)_1fr_28px]">
                 <input value={c.category} onChange={(e) => setR({ products: prodCats.map((x) => x.id === c.id ? { ...x, category: e.target.value } : x) })}
-                  placeholder="Heating products" className={inputCls + " w-44"} />
-                <textarea rows={1} value={c.items} onChange={(e) => setR({ products: prodCats.map((x) => x.id === c.id ? { ...x, items: e.target.value } : x) })}
-                  placeholder="Carrier, Trane, Lennox" className={inputCls + " flex-1 resize-y"} />
-                <button onClick={() => setR({ products: prodCats.filter((x) => x.id !== c.id) })}
-                  className="mt-1.5 rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><X size={13} /></button>
+                  placeholder="Category — e.g. Heating" className={inputCls} />
+                <textarea rows={2} value={c.items} onChange={(e) => setR({ products: prodCats.map((x) => x.id === c.id ? { ...x, items: e.target.value } : x) })}
+                  placeholder={"Paste products — commas or new lines:\nCarrier, Trane\nLennox"} className={inputCls + " resize-y"} />
+                <button onClick={() => setR({ products: prodCats.filter((x) => x.id !== c.id) })} title="Remove this category"
+                  className="mt-1.5 justify-self-center rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><X size={13} /></button>
               </div>
             ))}
             <button onClick={() => setR({ products: [...prodCats, { id: "pc" + Date.now().toString(36), category: "", items: "" }] })}
@@ -812,8 +818,8 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
 
         {/* 7 · counts, 8 · architect */}
         <div className="flex flex-wrap items-end gap-3 border-t border-gray-100 pt-3">
-          <Labeled label="7 · Blogs to generate"><input value={research.counts?.blogs ?? 12} onChange={(e) => setR({ counts: { ...(research.counts || {}), blogs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls + " w-24"} /></Labeled>
-          <Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? 18} onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls + " w-24"} /></Labeled>
+          <div className="w-28"><Labeled label="7 · Blogs to generate"><input value={research.counts?.blogs ?? 12} onChange={(e) => setR({ counts: { ...(research.counts || {}), blogs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
+          <div className="w-28"><Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? 18} onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
           <button onClick={architect} disabled={busy}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {busy ? <><RefreshCw size={13} className="animate-spin" /> {progress || "Architecting…"}</> : <><Sparkles size={13} /> 8 · Architect Blogs &amp; FAQs</>}
@@ -825,7 +831,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
       </Card>
 
       {posts.length > 0 && (
-        <div className={"grid gap-4 " + (dupPosts.length ? "lg:grid-cols-[1fr,300px]" : "")}>
+        <div className={"grid gap-4 " + (dupPosts.length ? "lg:grid-cols-[1fr_300px]" : "")}>
           <div className="space-y-4">
             {["blog", "answer"].map((cat) => {
               const list = activePosts.filter((p) => p.category === cat);

@@ -90,7 +90,7 @@ function LeadFinder({ accent, placesKey, growth, commit }) {
           Searches Google Maps live through your <b>Google Places API key</b> (up to 60 businesses per search, contact details for the top {detailsCap}) —
           zero DataForSEO cost. Services/products/posts counts aren't public API data; run the <b>Business Profile Audit</b> on shortlisted leads for the deep dive.
         </div>
-        <div className="grid items-end gap-3 sm:grid-cols-[1fr,1fr,auto,auto]">
+        <div className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto_auto]">
           <Labeled label="City"><input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Austin, TX" className={inputCls} /></Labeled>
           <Labeled label="Business category (search Google's list)">
             <div className="relative">

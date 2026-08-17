@@ -262,7 +262,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
             </button>
           ))}
         </div>
-        <div className="grid items-stretch gap-2 lg:grid-cols-[1.2fr,1fr,170px,auto]">
+        <div className="grid items-stretch gap-2 lg:grid-cols-[1.2fr_1fr_170px_auto]">
           <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5">
             <Search size={13} className="shrink-0 text-gray-400" />
             <input value={seed} onChange={(e) => setSeed(e.target.value)} onKeyDown={(e) => e.key === "Enter" && seed.trim() && run()}
@@ -288,7 +288,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
       </Card>
 
       {res && (
-        <div className="grid items-start gap-4 xl:grid-cols-[1fr,400px]">
+        <div className="grid items-start gap-4 xl:grid-cols-[1fr_400px]">
           {/* ---- keyword table ---- */}
           <Card className="p-0">
             <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2.5">
