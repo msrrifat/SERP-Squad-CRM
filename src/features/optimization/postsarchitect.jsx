@@ -876,7 +876,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
           <div className="w-28"><Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? ""} placeholder="Auto" onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
           <button onClick={architect} disabled={busy}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
-            {busy ? <><RefreshCw size={13} className="animate-spin" /> {progress || "Architecting…"}</> : <><Sparkles size={13} /> 8 · Architect Blogs &amp; FAQs</>}
+            {busy ? <><RefreshCw size={13} className="animate-spin" /> {progress || "Architecting…"}</> : <><Sparkles size={13} /> Architect Blogs &amp; FAQs</>}
           </button>
           <span className="text-[10.5px] text-gray-400">A typed number is delivered exactly. Left on Auto, the plan sizes itself from the research above — services, products, locations, scraped questions and competitor themes.</span>
         </div>
