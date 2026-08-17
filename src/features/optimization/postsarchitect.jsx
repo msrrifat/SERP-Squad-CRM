@@ -448,7 +448,13 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   const locations = splitList(research.locations);
   const prodCats = research.products || [];               // [{ id, category, items }]
   const allProducts = prodCats.flatMap((c) => splitList(c.items).map((name) => ({ name, category: c.category })));
-  const counts = { blogs: Math.min(60, Math.max(1, +research.counts?.blogs || 12)), faqs: Math.min(80, Math.max(1, +research.counts?.faqs || 18)) };
+  /* EMPTY count fields mean AUTO: a suitable size computed from the research
+     itself — how many services, product categories, locations, scraped
+     questions and competitor themes there actually are — instead of a fixed
+     default. A typed number is a CONTRACT: the plan delivers exactly that. */
+  const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const blogsTarget = String(research.counts?.blogs ?? "").trim() === "" ? null : clampN(+research.counts.blogs || 1, 1, 100);
+  const faqsTarget = String(research.counts?.faqs ?? "").trim() === "" ? null : clampN(+research.counts.faqs || 1, 1, 120);
 
   /* ---- the three scrape steps: each fills a visible box, never silently ---- */
   const scrapeTopics = () => [...svcList.map((x) => x.name), ...allProducts.map((x) => x.name)].slice(0, 8);
@@ -597,31 +603,38 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     const isNew = (title, list) => !list.some((t) => jaccard(t, title) >= 0.6);
     let planned = [];
     const exactSeen = new Set(existingTitles.map((t) => t.toLowerCase().trim()));
-    /* seeds are PATTERNED on purpose — "Carrier vs Trane" and "Carrier vs
-       Lennox" share most of their words, and the similarity gate that guards
-       against AI paraphrases would wrongly collapse them (it did: 3 of 7
-       seeds survived it). Seeds dedupe on exact title only; the jaccard gate
-       applies to AI output, where near-duplicates really are duplicates. */
     const add = (p, seed = false) => {
-      if (!p.title) return;
+      if (!p.title) return false;
       const k = p.title.toLowerCase().trim();
-      if (exactSeen.has(k)) return;
-      if (!seed && !isNew(p.title, [...existingTitles, ...planned.map((x) => x.title)])) return;
-      exactSeen.add(k); planned.push(p);
+      if (exactSeen.has(k)) return false;
+      if (!seed && !isNew(p.title, [...existingTitles, ...planned.map((x) => x.title)])) return false;
+      exactSeen.add(k); planned.push(p); return true;
     };
-
-    productSeeds().forEach((p) => planned.filter((x) => x.category === "blog").length < counts.blogs && add(p, true));
-    questionSeeds(Math.ceil(counts.faqs / 2)).forEach((p) => add(p, true));
-
     const nBlogs = () => planned.filter((p) => p.category === "blog").length;
     const nFaqs = () => planned.filter((p) => p.category === "answer").length;
-    let live = false, round = 0;
+
+    const seeds = productSeeds();
+    const qPool = (research.gscQs || []).length + (research.community || []).length;
+    const commonThemes = (research.compTopics || []).filter((t) => t.common).length;
+    const gapThemes = (research.compTopics || []).filter((t) => !t.common).length;
+    /* AUTO sizing: the plan grows with the research it is built from */
+    const targetBlogs = blogsTarget ?? clampN(seeds.length + svcList.length * 2 + prodCats.length + locations.length + Math.round(commonThemes / 2) + Math.round(gapThemes / 4), 10, 45);
+    const targetFaqs = faqsTarget ?? clampN(Math.round(qPool * 0.7) + svcList.length * 3, 12, 70);
+
+    seeds.forEach((p) => nBlogs() < targetBlogs && add(p, true));
+    questionSeeds(Math.min(targetFaqs, Math.ceil(targetFaqs * 0.6))).forEach((p) => nFaqs() < targetFaqs && add(p, true));
+
+    let live = false, round = 0, dry = 0, lastRejected = [];
     try {
-      while ((nBlogs() < counts.blogs || nFaqs() < counts.faqs) && round < 10) {
+      /* STRICT loop: runs until BOTH targets are met. A round whose output is
+         entirely duplicates does not end the run — the next round is told
+         which titles were rejected and ordered onto different angles; only
+         two consecutive dry rounds give up. */
+      while ((nBlogs() < targetBlogs || nFaqs() < targetFaqs) && round < 16 && dry < 2) {
         round++;
-        const needB = Math.min(12, counts.blogs - nBlogs());
-        const needF = Math.min(12, counts.faqs - nFaqs());
-        setProgress(`Batch ${round} — ${nBlogs()}/${counts.blogs} blogs · ${nFaqs()}/${counts.faqs} FAQs`);
+        const needB = Math.min(12, targetBlogs - nBlogs());
+        const needF = Math.min(12, targetFaqs - nFaqs());
+        setProgress(`Batch ${round} — ${nBlogs()}/${targetBlogs} blogs · ${nFaqs()}/${targetFaqs} FAQs`);
         const existing = [...existingTitles, ...planned.map((p) => p.title)];
         const shown = existing.slice(0, 90);
         const text = await aiGenerate(aiConfig, {
@@ -633,23 +646,32 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
             products: prodCats.map((c) => `- ${c.category}: ${c.items}`).join("\n") || "(none)",
             research: digestResearch(), batch: round,
             blogCount: Math.max(0, needB), faqCount: Math.max(0, needF),
-            existing: shown.map((t) => "- " + t).join("\n") + (existing.length > shown.length ? `\n…and ${existing.length - shown.length} more` : ""),
+            existing: shown.map((t) => "- " + t).join("\n") + (existing.length > shown.length ? `\n…and ${existing.length - shown.length} more` : "")
+              + (lastRejected.length ? `\n\nREJECTED last round as too similar to existing topics — do NOT resubmit these angles, find genuinely different subtopics, audiences, seasons, locations or formats:\n${lastRejected.slice(0, 12).map((t) => "- " + t).join("\n")}` : ""),
           }),
         });
         const fresh = normalizePosts(parseJsonLoose(text).posts);
-        const before = planned.length;
+        let added = 0; lastRejected = [];
         fresh.forEach((p) => {
-          if (p.category === "blog" && nBlogs() >= counts.blogs) return;
-          if (p.category === "answer" && nFaqs() >= counts.faqs) return;
-          add(p);
+          if (p.category === "blog" && nBlogs() >= targetBlogs) return;
+          if (p.category === "answer" && nFaqs() >= targetFaqs) return;
+          if (add(p)) added++; else lastRejected.push(p.title);
         });
         live = true;
-        if (planned.length === before) break;      // a dry round — stop rather than spin
+        dry = added === 0 ? dry + 1 : 0;
       }
     } catch (e) {
       if (e.code === 503 && !planned.length) { setGenErr("Connect an AI provider (Company Settings → API settings) — the seeds need AI to grow into a full plan."); setBusy(false); setProgress(null); return; }
       if (!planned.length) { setGenErr("AI provider error: " + (e?.message || e)); setBusy(false); setProgress(null); return; }
       setGenErr(`AI stopped after ${planned.length} topics (${e?.message || e}) — the plan below is what was completed.`);
+    }
+    /* a typed number is exact: trim any overshoot, and say so if the model
+       could not reach it rather than pretending the count was met */
+    const finalBlogs = planned.filter((p) => p.category === "blog").slice(0, targetBlogs);
+    const finalFaqs = planned.filter((p) => p.category === "answer").slice(0, targetFaqs);
+    planned = [...finalBlogs, ...finalFaqs];
+    if (live && (finalBlogs.length < targetBlogs || finalFaqs.length < targetFaqs)) {
+      setGenErr(`Delivered ${finalBlogs.length}/${targetBlogs} blogs and ${finalFaqs.length}/${targetFaqs} FAQs — after ${round} batches the model kept returning near-duplicates. Add research (products, competitors, locations) or run again to top up.`);
     }
     const withDup = planned.map((p, i) => ({
       id: "pa" + Date.now().toString(36) + i, ...p, status: "planned", content: null,
@@ -658,7 +680,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
     setOpt("website", (cur) => ({ postsPlan: { generatedAt: Date.now(), live, provider: aiConfig?.provider, posts: withDup } }));
     const dups = withDup.filter((p) => p.dup).length;
     work?.("website", "postsArchitected", { detail: `${withDup.length} posts in ${round} AI batch${round === 1 ? "" : "es"}${dups ? `, ${dups} possible duplicates` : ""}` });
-    log?.(`Architected ${withDup.length} blogs & FAQs${live ? ` (AI · ${round} batches)` : " (seeds only)"}${dups ? ` — ${dups} duplicate warnings` : ""}`, project.name);
+    log?.(`Architected ${finalBlogs.length} blogs + ${finalFaqs.length} FAQs${live ? ` (AI · ${round} batches)` : " (seeds only)"}${dups ? ` — ${dups} duplicate warnings` : ""}`, project.name);
     setBusy(false); setProgress(null);
   };
 
@@ -666,26 +688,49 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
      time — the AI sees every existing title so nothing repeats ---- */
   const [moreBusy, setMoreBusy] = useState(null); // "blog" | "answer"
   const architectMore = async (cat) => {
-    if (!svcList.length || busy || moreBusy) return;
+    if ((!svcList.length && !allProducts.length) || busy || moreBusy) return;
     setMoreBusy(cat); setGenErr(null);
-    const existing = [...posts.filter((p) => p.status !== "removed").map((p) => p.title), ...liveBlogs.map((b) => b.title)];
+    const TARGET = 20;                    // "generate more" means at least twenty
+    const baseTitles = [...posts.filter((p) => p.status !== "removed").map((p) => p.title), ...liveBlogs.map((b) => b.title)];
+    const fresh = [];
+    const isNew = (title) => ![...baseTitles, ...fresh.map((f) => f.title)].some((t) => jaccard(t, title) >= 0.6);
+    let round = 0, dry = 0, lastRejected = [];
     try {
-      const text = await aiGenerate(aiConfig, {
-        system: SYS_POSTS_ARCHITECT, json: true, maxTokens: 5000,
-        prompt: `Business: ${brand} (${project.website}). Niche: ${w.architecture?.niche || project.name}. Market: ${market}.\nServices (use the EXACT serviceUrl given):\n${svcList.map((s) => `- ${s.name} → ${s.url}`).join("\n")}\n\nEXTEND the existing topical map with ${cat === "blog" ? '5-8 MORE "blog" guide posts (fresh pillar/cluster angles: comparisons, mistakes, checklists, seasonal, local-proximity topics)' : '6-10 MORE "answer" question posts (real questions from Reddit, Quora, People-Also-Ask, AnswerThePublic and autocomplete that are NOT covered yet)'}.\nCategory must be "${cat}" for every post.\n\nAlready planned or published (do NOT duplicate or closely overlap ANY of these):\n${existing.map((t) => "- " + t).join("\n") || "(none)"}`,
-      });
-      const parsed = parseJsonLoose(text);
-      const fresh = normalizePosts(parsed.posts).map((p) => ({ ...p, category: cat }))
-        /* belt & braces: drop anything the model still overlapped */
-        .filter((p) => !existing.some((t) => jaccard(t, p.title) >= 0.6));
-      if (!fresh.length) throw new Error("no new topics came back — try again");
+      while (fresh.length < TARGET && round < 6 && dry < 2) {
+        round++;
+        const need = Math.min(12, TARGET - fresh.length);
+        const existing = [...baseTitles, ...fresh.map((f) => f.title)];
+        const shown = existing.slice(0, 90);
+        const text = await aiGenerate(aiConfig, {
+          system: prompts.system, json: true, maxTokens: 4000,
+          prompt: fillPrompt(prompts.batch, {
+            brand, website: project.website, niche: w.architecture?.niche || project.name, market,
+            locations: locations.join(", ") || market,
+            services: svcList.map((sv) => `- ${sv.name} → ${sv.url}`).join("\n") || "(none — cover the products)",
+            products: prodCats.map((c) => `- ${c.category}: ${c.items}`).join("\n") || "(none)",
+            research: digestResearch(), batch: round,
+            blogCount: cat === "blog" ? need : 0, faqCount: cat === "answer" ? need : 0,
+            existing: shown.map((t) => "- " + t).join("\n") + (existing.length > shown.length ? `\n…and ${existing.length - shown.length} more` : "")
+              + (lastRejected.length ? `\n\nREJECTED last round as too similar — find genuinely different subtopics, audiences, seasons, locations or formats:\n${lastRejected.slice(0, 12).map((t) => "- " + t).join("\n")}` : ""),
+          }),
+        });
+        const got = normalizePosts(parseJsonLoose(text).posts).map((p) => ({ ...p, category: cat }));
+        let added = 0; lastRejected = [];
+        got.forEach((p) => {
+          if (fresh.length >= TARGET) return;
+          if (p.title && isNew(p.title)) { fresh.push(p); added++; } else lastRejected.push(p.title);
+        });
+        dry = added === 0 ? dry + 1 : 0;
+      }
+      if (!fresh.length) throw new Error("no new topics survived the duplicate check — try again or add research");
       const withDup = fresh.map((p, i) => ({
         id: "pa" + Date.now().toString(36) + "m" + i, ...p, status: "planned", content: null,
         dup: findDuplicate(p, [], liveBlogs),
       }));
       setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), ...withDup] } }));
+      if (withDup.length < TARGET) setGenErr(`Added ${withDup.length} of ${TARGET} — after ${round} batches the model kept near-duplicating. Add research or click again to continue.`);
       work?.("website", "postsArchitected", { detail: `+${withDup.length} more ${cat} posts` });
-      log?.(`Generated ${withDup.length} more ${cat === "blog" ? "blog topics" : "questions"}`, project.name);
+      log?.(`Generated ${withDup.length} more ${cat === "blog" ? "blog topics" : "questions"} (${round} batches)`, project.name);
     } catch (e) {
       setGenErr(e.code === 503 ? "Connect an AI provider (API settings) to generate more topics." : "Generate more failed: " + (e?.message || e));
     }
@@ -697,18 +742,20 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   const [manualDraft, setManualDraft] = useState({});
   const addManual = (cat) => {
     const d = manualDraft[cat] || {};
-    const title = String(d.title || "").trim();
-    if (!title) return;
+    /* every non-empty LINE is its own topic — paste ten lines, get ten posts */
+    const titles = String(d.title || "").split("\n").map((t) => t.trim()).filter(Boolean);
+    if (!titles.length) return;
     const svc = svcList.find((s) => s.url === d.svc) || svcList[0] || { name: "", url: "" };
-    const p = {
-      id: "pa" + Date.now().toString(36) + "x", category: cat, title: title.slice(0, 140), slug: slugify(title),
+    const stamp = Date.now().toString(36);
+    const newPosts = titles.map((title, i) => ({
+      id: "pa" + stamp + "x" + i, category: cat, title: title.slice(0, 140), slug: slugify(title),
       primaryKw: title.toLowerCase().replace(/[?!.]/g, "").slice(0, 80), service: svc.name, serviceUrl: svc.url,
       note: "added manually", status: "planned", content: null,
       dup: findDuplicate({ title, slug: slugify(title) }, [], liveBlogs),
-    };
-    setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), p] } }));
+    }));
+    setOpt("website", (cur) => ({ postsPlan: { ...(cur?.postsPlan || {}), posts: [...(cur?.postsPlan?.posts || []), ...newPosts] } }));
     setManualDraft((cur) => ({ ...cur, [cat]: { ...d, title: "" } }));
-    log?.(`Added manual ${cat} topic "${title}"`, project.name);
+    log?.(`Added ${newPosts.length} manual ${cat} topic${newPosts.length > 1 ? "s" : ""}`, project.name);
   };
 
   const openPost = posts.find((p) => p.id === openId);
@@ -825,13 +872,13 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
 
         {/* 7 · counts, 8 · architect */}
         <div className="flex flex-wrap items-end gap-3 border-t border-gray-100 pt-3">
-          <div className="w-28"><Labeled label="7 · Blogs to generate"><input value={research.counts?.blogs ?? 12} onChange={(e) => setR({ counts: { ...(research.counts || {}), blogs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
-          <div className="w-28"><Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? 18} onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
+          <div className="w-28"><Labeled label="7 · Blogs to generate"><input value={research.counts?.blogs ?? ""} placeholder="Auto" onChange={(e) => setR({ counts: { ...(research.counts || {}), blogs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
+          <div className="w-28"><Labeled label="FAQs to generate"><input value={research.counts?.faqs ?? ""} placeholder="Auto" onChange={(e) => setR({ counts: { ...(research.counts || {}), faqs: e.target.value.replace(/\D/g, "") } })} className={"ll-mono " + inputCls} /></Labeled></div>
           <button onClick={architect} disabled={busy}
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {busy ? <><RefreshCw size={13} className="animate-spin" /> {progress || "Architecting…"}</> : <><Sparkles size={13} /> 8 · Architect Blogs &amp; FAQs</>}
           </button>
-          <span className="text-[10.5px] text-gray-400">Runs in batches until the counts are met — more inputs means more batches, never a token error.</span>
+          <span className="text-[10.5px] text-gray-400">A typed number is delivered exactly. Left on Auto, the plan sizes itself from the research above — services, products, locations, scraped questions and competitor themes.</span>
         </div>
         {gscNote && <div className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">{gscNote}</div>}
         {genErr && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-700">{genErr}</div>}
@@ -912,11 +959,14 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                   </div>
                   {/* add your own topic + extend with fresh AI topics */}
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <input value={manualDraft[cat]?.title || ""}
+                    {/* multi-line on purpose: paste ten lines, get ten topics.
+                        Enter makes a new line; the Add button (or Cmd/Ctrl+Enter)
+                        commits every line as its own post. */}
+                    <textarea rows={1} value={manualDraft[cat]?.title || ""}
                       onChange={(e) => setManualDraft((cur) => ({ ...cur, [cat]: { ...(cur[cat] || {}), title: e.target.value } }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") addManual(cat); }}
-                      placeholder={cat === "blog" ? "Add your own blog topic…" : "Add your own question…"}
-                      className={"min-w-[200px] flex-1 " + inputCls} />
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addManual(cat); } }}
+                      placeholder={cat === "blog" ? "Add blog topics — one per line, paste many at once…" : "Add questions — one per line, paste many at once…"}
+                      className={"min-w-[200px] flex-1 resize-y " + inputCls} />
                     <select value={manualDraft[cat]?.svc || svcList[0]?.url || ""}
                       onChange={(e) => setManualDraft((cur) => ({ ...cur, [cat]: { ...(cur[cat] || {}), svc: e.target.value } }))}
                       title="Service page this post supports" className="ll-mono max-w-[160px] rounded-lg border border-gray-200 px-2 py-2 text-[10.5px] text-gray-600">
@@ -924,13 +974,13 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                     </select>
                     <button onClick={() => addManual(cat)} disabled={!(manualDraft[cat]?.title || "").trim()}
                       className="rounded-lg px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40" style={{ background: accent }}>
-                      <Plus size={11} className="mr-0.5 inline" /> Add
+                      <Plus size={11} className="mr-0.5 inline" /> Add{(() => { const n = String(manualDraft[cat]?.title || "").split("\n").filter((t) => t.trim()).length; return n > 1 ? ` ${n} topics` : ""; })()}
                     </button>
                     <button onClick={() => architectMore(cat)} disabled={busy || !!moreBusy}
                       className="flex items-center gap-1.5 rounded-lg border border-dashed px-3 py-2 text-[11px] font-bold disabled:opacity-40"
                       style={{ borderColor: accent + "66", color: accent }}>
                       {moreBusy === cat ? <><RefreshCw size={11} className="animate-spin" /> Generating more…</>
-                        : <><Sparkles size={11} /> {cat === "blog" ? "Generate more blogs" : "Generate more questions"}</>}
+                        : <><Sparkles size={11} /> {cat === "blog" ? "Generate 20 more blogs" : "Generate 20 more questions"}</>}
                     </button>
                   </div>
                 </Card>
