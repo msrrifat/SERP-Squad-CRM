@@ -2209,9 +2209,39 @@ async function handleCrawlMeta(body) {
       return { url: u, ...metaFromHtml(text) };
     } catch (e) { return { url: u, error: String(e?.message || e).slice(0, 60) }; }
   }, 8);
+  /* RESCUE PASS for blocked URLs: fetch them through DataForSEO's OnPage
+     instant-pages endpoint instead. Their crawlers run from their own IPs,
+     which a client site's firewall has no reason to block — so an IP ban on
+     OUR server stops mattering for title scraping. Costs a fraction of a
+     cent per page and only runs for URLs the direct fetch could not read. */
+  const creds = resolveCreds(body);
+  let rescued = 0;
+  const failedRows = results.filter((r) => r.error);
+  if (failedRows.length && creds) {
+    await pool(failedRows, async (r) => {
+      try {
+        const res = await fetch(`${DFS_BASE}/on_page/instant_pages`, {
+          method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(40000),
+          body: JSON.stringify([{ url: r.url }]),
+        });
+        const d = await res.json().catch(() => ({}));
+        const item = d.tasks?.[0]?.result?.[0]?.items?.[0];
+        const title = item?.meta?.title || item?.meta?.htags?.h1?.[0] || "";
+        if (title) {
+          delete r.error;
+          r.metaTitle = String(title).trim();
+          r.metaDesc = String(item?.meta?.description || "").trim().slice(0, 320);
+          r.h1 = String(item?.meta?.htags?.h1?.[0] || "").trim();
+          r.via = "dataforseo";
+          rescued++;
+        }
+      } catch { /* rescue is best-effort — the slug title remains the fallback */ }
+    }, 4);
+  }
   const ok = results.filter((r) => !r.error).length;
-  if (!ok && challenged) return [502, { error: "provider_error", detail: "The site's bot firewall blocked every request — whitelist your CRM server's IP, or retry later." }];
-  return [200, { live: true, scanned: results.length, ok, results }];
+  if (!ok && challenged && !creds) return [502, { error: "provider_error", detail: "The site's bot firewall blocked every request, and DataForSEO isn't connected to fetch through their crawlers instead — connect it in Company Settings → API settings, or whitelist the CRM server IP on the site." }];
+  return [200, { live: true, scanned: results.length, ok, rescued, results }];
 }
 async function handleCrawlPage(body) {
   let url = String(body?.url || "").trim();

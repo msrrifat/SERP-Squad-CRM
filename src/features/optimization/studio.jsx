@@ -1933,7 +1933,7 @@ export function PostEditor({ initial, siteHost, slugsEditable, accent, onSave, o
    through, and when even that is challenged the entry is still created with
    a slug-derived title and says which ones were blocked, instead of failing
    the whole paste. */
-function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd }) {
+function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd, dfs = null }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
@@ -1949,34 +1949,49 @@ function PasteUrlsAdd({ kind, site, existingPaths, accent, onAdd }) {
     } catch { return null; }
   };
   const run = async () => {
+    /* the WHOLE body is fenced: whatever throws — the scrape, the parent's
+       state update, anything — the finally clears the spinner and says what
+       happened. The first version cleared busy only on the happy path, so an
+       exception after the fetch left "Scraping titles…" spinning forever and
+       looked exactly like an hour-long scrape. */
     setBusy(true); setNote(null);
-    const seen = new Set(existingPaths.map((x) => String(x).toLowerCase()));
-    const targets = [];
-    for (const l of lines) {
-      const n = normalize(l);
-      if (!n || seen.has(n.path.toLowerCase())) continue;
-      seen.add(n.path.toLowerCase()); targets.push(n);
-    }
-    if (!targets.length) { setNote({ warn: true, text: "Nothing new to add — every line is empty, invalid, or already tracked." }); setBusy(false); return; }
-    let metas = {};
-    let blocked = 0;
     try {
-      const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(120000),
-        body: JSON.stringify({ urls: targets.map((t) => t.abs) }) });
-      const d = await r.json().catch(() => ({}));
-      (d.results || []).forEach((res) => { metas[res.url] = res; if (res.error === "blocked") blocked++; });
-    } catch { /* scrape unreachable — slug titles below still work */ }
-    const fromSlug = (path) => cap((path.split("/").filter(Boolean).pop() || "home").replace(/[-_]+/g, " "));
-    const items = targets.map((t) => {
-      const m = metas[t.abs] || {};
-      return { path: t.path, abs: t.abs, title: (m.metaTitle || m.h1 || "").trim() || fromSlug(t.path),
-        metaTitle: m.metaTitle || "", metaDesc: m.metaDesc || "", scrapedOk: !m.error && !!(m.metaTitle || m.h1) };
-    });
-    onAdd(items);
-    const okN = items.filter((x) => x.scrapedOk).length;
-    setNote({ warn: okN < items.length, text: `Added ${items.length} ${kind}${items.length > 1 ? "s" : ""} — ${okN} with scraped titles${blocked ? `, ${blocked} blocked by the site's firewall (slug titles used; edit them any time)` : okN < items.length ? ", the rest use slug-derived titles" : ""}.` });
-    setText("");
-    setBusy(false);
+      const seen = new Set(existingPaths.map((x) => String(x).toLowerCase()));
+      const targets = [];
+      for (const l of lines) {
+        const n = normalize(l);
+        if (!n || seen.has(n.path.toLowerCase())) continue;
+        seen.add(n.path.toLowerCase()); targets.push(n);
+      }
+      if (!targets.length) { setNote({ warn: true, text: "Nothing new to add — every line is empty, invalid, or already tracked." }); return; }
+      let metas = {};
+      let blocked = 0, rescued = 0;
+      try {
+        const r = await fetch("/api/crawl/meta", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(180000),
+          body: JSON.stringify({ urls: targets.map((t) => t.abs),
+            /* blocked URLs are re-fetched through DataForSEO's own crawlers —
+               a firewall that bans OUR server has no reason to ban theirs */
+            dfs: dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad") ? { login: dfs.login, password: dfs.password } : undefined }) });
+        const d = await r.json().catch(() => ({}));
+        rescued = d.rescued || 0;
+        (d.results || []).forEach((res) => { metas[res.url] = res; if (res.error === "blocked") blocked++; });
+      } catch { /* scrape unreachable — slug titles below still work */ }
+      const fromSlug = (path) => cap((path.split("/").filter(Boolean).pop() || "home").replace(/[-_]+/g, " "));
+      const items = targets.map((t) => {
+        const m = metas[t.abs] || {};
+        return { path: t.path, abs: t.abs, title: (m.metaTitle || m.h1 || "").trim() || fromSlug(t.path),
+          metaTitle: m.metaTitle || "", metaDesc: m.metaDesc || "", scrapedOk: !m.error && !!(m.metaTitle || m.h1) };
+      });
+      onAdd(items);
+      const okN = items.filter((x) => x.scrapedOk).length;
+      setNote({ warn: okN < items.length,
+        text: `Added ${items.length} ${kind}${items.length > 1 ? "s" : ""} — ${okN} with scraped titles`
+          + (rescued ? `, ${rescued} fetched through DataForSEO because the site blocks this server` : "")
+          + (blocked ? `, ${blocked} blocked even via DataForSEO (slug titles used; edit any time)` : okN < items.length ? ", the rest use slug-derived titles" : "") + "." });
+      setText("");
+    } catch (e) {
+      setNote({ warn: true, text: "Adding failed: " + String(e?.message || e).slice(0, 140) });
+    } finally { setBusy(false); }
   };
   return (
     <div className="mt-3 rounded-xl border border-dashed border-gray-300 p-3">
@@ -3020,7 +3035,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             slugsEnabled={slugsEnabled} siteHost={String(project.website || "").replace(/^https?:\/\//, "").replace(/\/+$/, "")}
             onPatch={(p) => patchPage(openPage, p)} onClose={() => setOpenPage(null)} />
         )}
-        <PasteUrlsAdd kind="page" site={project.website} accent={accent}
+        <PasteUrlsAdd kind="page" site={project.website} accent={accent} dfs={dfs}
           existingPaths={w.pages.map((p) => p.url)}
           onAdd={(items) => set((cur) => {
             const stamp = Date.now();
@@ -3066,7 +3081,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
             )}
           </span>
         </div>
-        <PasteUrlsAdd kind="post" site={project.website} accent={accent}
+        <PasteUrlsAdd kind="post" site={project.website} accent={accent} dfs={dfs}
           existingPaths={w.blogs.map((b2) => b2.url || "/blog/" + b2.slug)}
           onAdd={(items) => set((cur) => {
             const stamp = Date.now();
