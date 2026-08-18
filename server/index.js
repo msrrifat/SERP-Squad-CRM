@@ -2948,8 +2948,16 @@ async function handleWpTest(body) {
           : anonOk === true
             ? "The REST API works fine WITHOUT credentials and only crashes on the authenticated call, so something on the site fatals while resolving the logged-in user — most often a security, membership or role-management plugin."
             : "The REST API could not be reached again to compare.";
+        /* When the server prints errors (display_errors on), the exact fatal —
+           file and line — is sitting in the body it just sent us. Quote it
+           rather than sending the user off to hunt for a log file. */
+        const plain = rawMe.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        const said = (plain.match(/((?:PHP )?(?:Fatal error|Parse error)[: ].*?on line \d+)/i)
+          || plain.match(/(Allowed memory size of \d+ bytes exhausted[^.]*)/i)
+          || plain.match(/(Uncaught (?:Error|TypeError|ValueError|ArgumentCountError|Exception)\b[^"]{0,240})/i)
+          || [])[1];
         return [200, { checks, siteFatal: true,
-          detail: `WordPress returned HTTP ${me.status} with its "critical error" page. That is a PHP fatal error on ${body.site}, not a credential or header problem — the Application Password never got the chance to be checked. ${where} To see the actual error: set WP_DEBUG and WP_DEBUG_LOG to true in wp-config.php and read wp-content/debug.log, or open the host's PHP error log. If the site was working before, deactivate whatever changed most recently — including the SERP Squad Connector plugin if it was just installed or updated — and retest.` }];
+          detail: `WordPress returned HTTP ${me.status} with its "critical error" page. That is a PHP fatal error on ${body.site}, not a credential or header problem — the Application Password never got the chance to be checked. ${where}${said ? ` The site reported: "${said.slice(0, 320).trim()}".` : ""} To see the actual error: set WP_DEBUG and WP_DEBUG_LOG to true in wp-config.php and read wp-content/debug.log, or open the host's PHP error log. If the site was working before, deactivate whatever changed most recently — including the SERP Squad Connector plugin if it was just installed or updated — and retest.` }];
       }
       const said = d.message || (rawMe && !/[<]/.test(rawMe.slice(0, 40)) ? rawMe.slice(0, 160) : "");
       return [200, { checks, detail: `Authentication failed (HTTP ${me.status}): ${said || "check the username and that the Application Password was copied with its spaces"}.${me.status === 401 || me.status === 403 ? ' Note: some hosts strip the Authorization header — add "SetEnvIf Authorization" rules or enable it in the host panel.' : ""}` }];
