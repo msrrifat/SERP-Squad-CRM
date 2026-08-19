@@ -215,6 +215,20 @@ export function composePage(node, ctx) {
     bgImage: lead ? heroPick : null, form: lead, phone: gbp?.phone || "",
     text: (rc && rc.intro) || node.seo?.content?.intro || `Looking for ${primary}${city ? ` in ${city}` : ""}? ${brand} delivers ${primary} with transparent pricing, a written scope and results you can verify. ${brandVoice.tagline || ""}`.trim() });
 
+  /* per-section CONTENT BLOCKS chosen in the structure panel — matched to the
+     written sections by heading similarity (the writer keeps the outline's
+     headings, but may rephrase; index alone would drift on added sections) */
+  const structSecs = node.seo?.structure?.sections || [];
+  const secToks = (s) => new Set(String(s || "").toLowerCase().split(/\W+/).filter((x) => x.length > 2));
+  const secSim = (a, b) => { const A = secToks(a), B = secToks(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach((x) => B.has(x) && n++); return n / (A.size + B.size - n); };
+  const blockFor = (h2, i) => {
+    let best = null, bestS = 0.34;
+    structSecs.forEach((s) => { const sc = secSim(s.h2, h2); if (sc > bestS) { best = s; bestS = sc; } });
+    const s = best || structSecs[i];
+    return s && s.block && s.block !== "content" ? s : null;
+  };
+  let mapPlaced = false, reviewsPlaced = false;
+
   let hasRcFaq = false;
   if (hasResearched) {
     rc.sections.forEach((sec, i) => {
@@ -224,13 +238,29 @@ export function composePage(node, ctx) {
         if (pairs.length) { hasRcFaq = true; push("faq", { h2: sec.h2, items: pairs.slice(0, 8) }); return; }
       }
       const pick = chosenImage(picks, "s" + i);
+      const blockSec = blockFor(sec.h2, i);
+      const block = blockSec?.block || null;
       push("content", { h2: sec.h2, kind, blocks: sec.blocks,
         /* a picked image renders for real beside the text; "no image" is
            honored exactly; undecided sections keep the old behaviour of
-           labeled slots on every third section */
+           labeled slots on every third section — a section whose chosen block
+           is "image" always shows its image (or a labeled slot to fill) */
         image: pick ? { ...pick, side: i % 2 ? "left" : "right" } : null,
-        imageSlot: pick || imageSkipped(picks, "s" + i) || sec.blocks.some((b) => b.k === "img") || i % 3 !== 1
+        imageSlot: pick || imageSkipped(picks, "s" + i) || sec.blocks.some((b) => b.k === "img") || (block !== "image" && i % 3 !== 1)
           ? null : { alt: `${cap(primary)}${city ? ` in ${city}` : ""} — ${sec.h2}`, side: i % 2 ? "left" : "right" } });
+      /* ship the chosen widget right after the section's copy */
+      if (block === "cta") push("cta", { h2: `Get your free ${primary} quote`, phone: gbp?.phone || "", hasForm: !!lead,
+        text: `Tell us what you need — a written quote with transparent pricing, ${city ? `anywhere in ${city}` : "fast"}.` });
+      if (block === "video") push("video", { url: blockSec.videoUrl || "", title: sec.h2 });
+      if (block === "estimator") push("estimator", {
+        h2: `Instant ${primary} price estimate`, services: services.length ? services : [primary],
+        base: 90 + Math.floor(mulberry32(hashStr("price" + primary + city))() * 160),
+        note: "Ballpark only — final pricing is always confirmed in a written quote.", hasForm: !!lead, phone: gbp?.phone || "" });
+      if (block === "map" && gbp?.bizName) { mapPlaced = true; push("napMap", {
+        h2: `Find ${brand}${city ? ` in ${city}` : ""}`,
+        nap: { name: gbp.bizName, address: gbp.address, phone: gbp.phone, website: website ? "https://" + website : gbp.website, email: ctx.email || "", hours: gbp.hours || {} },
+        mapQuery: encodeURIComponent(`${gbp.bizName} ${gbp.address || city}`) }); }
+      if (block === "reviews" && reviews.length) { reviewsPlaced = true; push("reviews", { h2: `What ${city || "our"} customers say about ${brand}`, items: reviews.slice(0, 3), source: ctx.reviewSource || null }); }
     });
   }
 
@@ -278,12 +308,12 @@ export function composePage(node, ctx) {
     push("citiesServed", { h2: `Cities we serve`, items: locations.map((n) => ({ name: n.title.split(" in ").pop(), url: n.url })) });
   }
 
-  /* rule 5 — reviews */
-  if (reviews.length) push("reviews", { h2: `What ${city || "our"} customers say about ${brand}`,
+  /* rule 5 — reviews (skipped when a section block already placed the strip) */
+  if (reviews.length && !reviewsPlaced) push("reviews", { h2: `What ${city || "our"} customers say about ${brand}`,
     items: reviews.slice(0, 3), source: ctx.reviewSource || null });
 
-  /* rule 10 — NAP + map block */
-  if (gbp?.bizName) push("napMap", {
+  /* rule 10 — NAP + map block (skipped when a section block already placed one) */
+  if (gbp?.bizName && !mapPlaced) push("napMap", {
     h2: `Quality-first ${primary} just one click away`,
     nap: { name: gbp.bizName, address: gbp.address, phone: gbp.phone, website: website ? "https://" + website : gbp.website, email: ctx.email || "", hours: gbp.hours || {} },
     mapQuery: encodeURIComponent(`${gbp.bizName} ${gbp.address || city}`),
@@ -411,6 +441,31 @@ const sectionHtml = (s, base) => {
     case "napMap": return wrap(`<h2>${esc(s.h2)}</h2><div class="napgrid"><div class="card napinfo"><p><strong>${esc(s.nap.name)}</strong></p><p>${esc(s.nap.address || "")}</p><p>☎ <a href="tel:${esc((s.nap.phone || "").replace(/[^+\d]/g, ""))}">${esc(s.nap.phone || "")}</a></p>${s.nap.email ? `<p>✉ <a href="mailto:${esc(s.nap.email)}">${esc(s.nap.email)}</a></p>` : ""}<p><a href="${esc(s.nap.website || "#")}">${esc((s.nap.website || "").replace(/https?:\/\//, ""))}</a></p>${Object.keys(s.nap.hours || {}).length ? `<h3>Business hours</h3><ul class="hours">${Object.entries(s.nap.hours).map(([d, h]) => `<li><span>${esc(d)}</span> ${esc(h)}</li>`).join("")}</ul>` : ""}</div><div class="napmap"><iframe src="https://www.google.com/maps?q=${s.mapQuery}&output=embed" title="Map — ${esc(s.nap.name)}" loading="lazy" width="100%" height="300" style="border:0" referrerpolicy="no-referrer-when-downgrade"></iframe></div></div>`);
     case "faq": return wrap(`<h2>${esc(s.h2)}</h2><div class="faq">${s.items.map((f) => `<details><summary>${mdInline(f.q)}</summary><p>${mdInline(f.a)}</p></details>`).join("")}</div>`);
     case "cta": return `<section class="ss-sec sec-cta"><div class="wrap"><h2>${esc(s.h2)}</h2><p>${esc(s.text)}</p>${ctaBtns("Get my written quote", !!s.hasForm)}</div></section>`;
+    case "video": {
+      const u = String(s.url || "");
+      const yt = u.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([\w-]{6,})/);
+      const vim = u.match(/vimeo\.com\/(\d+)/);
+      const src = yt ? `https://www.youtube-nocookie.com/embed/${yt[1]}` : vim ? `https://player.vimeo.com/video/${vim[1]}` : null;
+      const inner = src
+        ? `<div class="vwrap"><iframe src="${esc(src)}" title="${esc(s.title || "Video")}" loading="lazy" allowfullscreen frameborder="0" allow="accelerometer; encrypted-media; picture-in-picture"></iframe></div>`
+        : /^https?:\/\//.test(u)
+          ? `<div class="vwrap"><video src="${esc(u)}" controls preload="metadata"></video></div>`
+          : `<div class="imgslot"><span class="ph">▶</span><span>Video slot — add a video URL to this section's block in the structure panel</span></div>`;
+      return wrap(inner);
+    }
+    case "estimator": {
+      /* interactive ballpark calculator — plain JS, no dependencies, derives a
+         range from the same deterministic base the pricing table uses */
+      const id = "est" + Math.abs([...String(s.h2)].reduce((n, c) => (n * 31 + c.charCodeAt(0)) | 0, 7)).toString(36);
+      const opts = (s.services || []).slice(0, 10).map((sv, i2) => `<option value="${(1 + i2 * 0.18).toFixed(2)}">${esc(cap(sv))}</option>`).join("");
+      return wrap(`<h2>${esc(s.h2)}</h2><div class="est card" id="${id}">
+<div class="est-row"><label>Service<select data-est="svc">${opts}</select></label>
+<label>Scope<select data-est="scope"><option value="1">Standard</option><option value="1.8">Complex / large</option><option value="2.4">Urgent / same-day</option></select></label></div>
+<p class="est-out">Estimated range: <strong data-est="out">—</strong></p>
+<p class="note">${esc(s.note || "Ballpark only — final pricing is always confirmed in writing.")}</p>
+${ctaBtns("Get my exact written quote", !!s.hasForm)}</div>
+<script>(function(){var w=document.getElementById("${id}");if(!w)return;var b=${Math.max(60, +s.base || 120)};function u(){var s2=w.querySelector('[data-est="svc"]'),c=w.querySelector('[data-est="scope"]'),o=w.querySelector('[data-est="out"]');if(!s2||!c||!o)return;var lo=Math.round(b*parseFloat(s2.value||1)*parseFloat(c.value||1)),hi=Math.round(lo*1.45);o.textContent="$"+lo.toLocaleString()+" – $"+hi.toLocaleString()}w.addEventListener("change",u);u()})();<\/script>`);
+    }
     default: return "";
   }
 };
@@ -509,6 +564,14 @@ function designCss(ctx, { hard = false } = {}) {
 .ss-sec .imgslot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:220px;border:2px dashed ${hexRgba(acc,0.33)};border-radius:16px;background:${accT};color:${mut};font-size:13px;text-align:center;padding:18px}
 .ss-sec .imgslot .ph{font-size:30px;opacity:.7}
 .ss-sec .imgslot.hero{min-height:280px;background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:rgba(255,255,255,.85)}
+.ss-sec .vwrap{position:relative;width:100%;aspect-ratio:16/9;border-radius:16px;overflow:hidden;background:#000}
+.ss-sec .vwrap iframe,.ss-sec .vwrap video{position:absolute;inset:0;width:100%${i};height:100%${i};border:0}
+.ss-sec .est{max-width:560px;padding:22px${i}}
+.ss-sec .est .est-row{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px}
+.ss-sec .est label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:700;color:${mut};flex:1;min-width:180px}
+.ss-sec .est select{padding:10px 12px;border:1px solid ${line};border-radius:10px;font-size:14.5px;background:${surface}}
+.ss-sec .est .est-out{font-size:16px;margin:6px 0}
+.ss-sec .est .est-out strong{color:${acc};font-size:22px}
 .ss-sec ul.checks{list-style:none;padding:0;display:grid;gap:10px 22px;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
 .ss-sec ul.checks li{position:relative;padding-left:30px;list-style:none${i}}
 .ss-sec ul.checks li:before{content:"✓";position:absolute;left:0;top:1px;width:21px;height:21px;border-radius:50%;background:${sec};color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}

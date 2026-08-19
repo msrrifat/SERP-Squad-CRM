@@ -271,6 +271,8 @@ Description: <meta description ≤160 chars>
 Rules:
 - One H1 (the post title). Logical ## sections; answer posts open with a direct 2-3 sentence answer to the question (featured-snippet ready) before elaborating.
 - INTERNAL LINKING (critical): the LINK PLAN lists every URL to include EXACTLY ONCE as [anchor](url), each with an assigned ANCHOR TYPE you must follow precisely. Never reuse any listed previously-used anchor. Weave links into sentences naturally.
+- LINK PLACEMENT: NO internal links inside the first ~100 words — the first link lands just after the opening. Spread the rest evenly through the whole body: at most two links per section, never stacked in one paragraph, none invented beyond the plan.
+- CITY ANCHORS: when a plan entry is marked CITY PAGE, its anchor MUST contain that exact city name — this keeps every city page's local keyword relevance steady.
 - Cite business facts from the brand block exactly; never invent details, prices you weren't given, or reviews.
 - FAQ section at the end for answer posts (2-3 related questions).
 - Meet the word target. Follow the brand voice block exactly.`;
@@ -1106,43 +1108,105 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [autoImages, setAutoImages] = useState(media.length > 0);
+  const [brandLinks, setBrandLinks] = useState(true);
   const w = opt.website || {};
 
-  /* link targets from the LIVE site: the money page first, then variety */
+  const wordTarget = post.category === "answer" ? 900 : 1400;
+
+  /* ---- link targets: the WHOLE site, not a handful of nav pages ----
+     The tool's Pages & Posts inventory (livePages/liveBlogs — synced from the
+     connected site) plus every written post in this plan are all candidates.
+     Each is scored by topical relevance to THIS post, and the link count
+     scales with the word target (~1 link per 110 words, 6-14) instead of
+     stopping at three or four service pages. City pages are detected and
+     marked so their anchors carry the exact city name — that keeps each city
+     page's keyword relevance (and rankings) steady instead of bleeding all
+     location authority into one generic anchor. */
+  const cityOf = (p) => {
+    const m = String(p.url || "").match(/^\/(?:locations?|service-areas?|areas?|cities)\/([a-z0-9-]+)/i);
+    if (m) {
+      const segs = m[1].split("-").filter((x) => !/^\d+$/.test(x));
+      if (segs.length > 1 && segs[segs.length - 1].length === 2) segs.pop(); // trailing state code ("-ca", "-tx")
+      return segs.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(" ");
+    }
+    const t = String(p.name || p.title || "").match(/\bin ([A-Z][A-Za-z .-]+?)(?:\s*[|–—-]\s*.*)?$/);
+    return t ? t[1].trim() : "";
+  };
   const buildTargets = () => {
     const targets = [];
-    const push = (url, title, kw) => { if (url && !targets.some((t) => t.url === url)) targets.push({ url, title, kw: kw || title }); };
+    const push = (url, title, kw, extra = {}) => { if (url && !targets.some((t) => t.url === url)) targets.push({ url, title, kw: kw || title, ...extra }); };
+    const postTerms = tokens2(`${post.title} ${post.primaryKw} ${post.service || ""}`);
+    const rel = (s) => { const T = tokens2(s); let n = 0; T.forEach((x) => postTerms.has(x) && n++); return n; };
+    /* 1 — the supported money page always leads */
     push(post.serviceUrl, post.service || "service page", post.service ? `${post.service.toLowerCase()} ${market.split(",")[0]}`.trim() : "");
-    /* a sibling service (topical breadth) */
-    const sib = livePages.find((p) => /^\/services\//.test(p.url || "") && p.url !== post.serviceUrl);
-    if (sib) push(sib.url, sib.name || sib.url, (sib.name || "").toLowerCase());
-    /* related posts from the plan: blog↔answer cross-link on the same service
-       first (the cluster's strongest signal), then a same-category sibling */
+    /* 2 — every known page & post, scored by relevance to this post */
+    const cands = [];
+    livePages.forEach((p) => {
+      if (!p.url || p.url === "/" || p.url === post.serviceUrl || /contact/.test(p.url)) return;
+      const city = cityOf(p);
+      cands.push({ url: p.url, title: p.name || p.title || p.url, kw: String(p.name || p.title || "").toLowerCase(), city,
+        score: rel(`${p.name || p.title || ""} ${p.url.replace(/[/-]/g, " ")}`)
+          + (/^\/services?\//.test(p.url) ? 2 : 0)
+          + (city && postTerms.has(city.toLowerCase().split(" ")[0]) ? 3 : 0) });
+    });
+    liveBlogs.forEach((b) => {
+      const u = b.url || (b.slug ? "/blog/" + b.slug : "");
+      if (u) cands.push({ url: u, title: b.title || b.name || u, kw: "", city: "", score: rel(b.title || b.name || "") });
+    });
     const postUrl = (x) => "/" + (x.category === "answer" ? "answers" : "blog") + "/" + x.slug;
-    const rels = allPosts.filter((x) => x.id !== post.id && (x.content || x.status === "published"));
-    const crossCat = rels.find((x) => x.service === post.service && x.category !== post.category);
-    if (crossCat) push(postUrl(crossCat), crossCat.title, crossCat.primaryKw);
-    const sameCat = rels.find((x) => x.service === post.service && x.category === post.category);
-    if (sameCat) push(postUrl(sameCat), sameCat.title, sameCat.primaryKw);
-    if (!crossCat && !sameCat) { const lb = liveBlogs.find((b) => jaccard2(b.title, post.title) > 0.15); if (lb) push("/blog/" + (lb.slug || ""), lb.title, ""); }
+    allPosts.filter((x) => x.id !== post.id && (x.content || x.status === "published")).forEach((x) => {
+      cands.push({ url: postUrl(x), title: x.title, kw: x.primaryKw || "", city: "",
+        score: rel(`${x.title} ${x.primaryKw || ""}`) + (x.service === post.service ? 2 : 0) + (x.service === post.service && x.category !== post.category ? 1 : 0) });
+    });
+    const capN = Math.max(6, Math.min(14, Math.round(wordTarget / 110)));
+    cands.sort((a, b) => b.score - a.score)
+      .forEach((c2) => { if (targets.length < capN - 2 && (c2.score > 0 || targets.length < 6)) push(c2.url, c2.title, c2.kw, c2.city ? { city: c2.city } : {}); });
+    /* 3 — conversion + brand close the plan */
     const contact = livePages.find((p) => /contact/.test(p.url || ""));
     if (contact) push(contact.url, "contact page", `contact ${brand.toLowerCase()}`);
     const home = livePages.find((p) => p.url === "/");
     if (home) push("/", brand, brand.toLowerCase());
-    return targets.slice(0, 6);
+    return targets.slice(0, capN);
   };
-  function jaccard2(a, b) { const A = tokens2(a), B = tokens2(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach((x) => B.has(x) && n++); return n / (A.size + B.size - n); }
+
+  /* ---- end-of-body brand & profile links: GBP profile, main socials and
+     brand properties from Branding & Automation — appended deterministically
+     so they publish with every post regardless of the AI's mood ---- */
+  const outroLinks = () => {
+    const props = opt.branding?.props || {};
+    const socialNames = { fb: "Facebook", ig: "Instagram", li: "LinkedIn", x: "X (Twitter)", yt: "YouTube", tt: "TikTok", pin: "Pinterest" };
+    const L = [];
+    const gbpUrl = props.gbpShare || props.gbpCid;
+    if (gbpUrl) L.push(`[${brand} on Google Maps](${gbpUrl})`);
+    if (props.gbpReview) L.push(`[our Google reviews](${props.gbpReview})`);
+    if (props.bing) L.push(`[Bing Places](${props.bing})`);
+    if (props.apple) L.push(`[Apple Maps](${props.apple})`);
+    Object.entries(props.socials || {}).forEach(([k, u]) => { if (u) L.push(`[${socialNames[k] || k}](${u})`); });
+    (opt.social?.accounts || []).filter((a) => a.connected && a.url).forEach((a) => {
+      if (!L.some((x) => x.includes(`](${a.url})`))) L.push(`[${a.name || a.label || "our profile"}](${a.url})`);
+    });
+    Object.entries(props.web2 || {}).forEach(([k, u]) => { if (u) L.push(`[${brand} on ${k.charAt(0).toUpperCase() + k.slice(1)}](${u})`); });
+    return L;
+  };
+  const appendOutro = (md) => {
+    if (!brandLinks) return md;
+    const L = outroLinks();
+    if (!L.length || /## Find .* Online/i.test(md)) return md;
+    return md.trimEnd() + `\n\n## Find ${brand} Online\n\nFollow ${brand} for updates, recent projects and local tips: ${L.slice(0, 12).join(" · ")}.\n`;
+  };
   function tokens2(s) { return new Set(String(s || "").toLowerCase().split(/\W+/).filter((x) => x.length > 2)); }
 
   const generate = async () => {
     setBusy(true); setErr(null);
-    const targets = assignAnchorTypes(buildTargets(), w.linkMemory || {}, brand);
+    /* city pages never get naked/generic anchors — the city name IS the anchor's job */
+    const targets = assignAnchorTypes(buildTargets(), w.linkMemory || {}, brand)
+      .map((t) => (t.city && (t.anchorType === "naked" || t.anchorType === "generic") ? { ...t, anchorType: "partial" } : t));
     const linkPlanText = targets.map((t) =>
-      `- ${t.url} — "${t.title}" — anchor type: ${TYPE_HINT[t.anchorType](t, brand)}${t.usedAnchors.length ? ` — previously used anchors you must NOT repeat: ${t.usedAnchors.map((a) => `"${a}"`).join(", ")}` : ""}`).join("\n");
+      `- ${t.url} — "${t.title}" — anchor type: ${TYPE_HINT[t.anchorType](t, brand)}${t.city ? ` — CITY PAGE: the anchor MUST contain the city name "${t.city}" (each city page keeps its own keyword relevance)` : ""}${t.usedAnchors.length ? ` — previously used anchors you must NOT repeat: ${t.usedAnchors.map((a) => `"${a}"`).join(", ")}` : ""}`).join("\n");
     try {
       const text = await aiGenerate(ai, {
         system: SYS_POST_WRITER, maxTokens: 6000,
-        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, brand, brandProps)}\n\nPOST: "${post.title}" (category: ${post.category === "answer" ? "Answer — a real question people ask" : "Blog — a guide"}).\nPrimary keyword: "${post.primaryKw}". Supports service page: ${post.serviceUrl}. Market: ${market}.\nWord target: ${post.category === "answer" ? 900 : 1400}+ words.\n\nLINK PLAN (every URL exactly once, anchor types are assignments, not suggestions):\n${linkPlanText || "(no internal targets yet)"}\n\nWrite the complete post now in the required ---META---/---CONTENT--- format.`,
+        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, brand, brandProps)}\n\nPOST: "${post.title}" (category: ${post.category === "answer" ? "Answer — a real question people ask" : "Blog — a guide"}).\nPrimary keyword: "${post.primaryKw}". Supports service page: ${post.serviceUrl}. Market: ${market}.\nWord target: ${wordTarget}+ words.\n\nLINK PLAN (every URL exactly once, anchor types are assignments, not suggestions):\n${linkPlanText || "(no internal targets yet)"}\n\nWrite the complete post now in the required ---META---/---CONTENT--- format.`,
       });
       const metaM = text.match(/---META---([\s\S]*?)---CONTENT---/);
       const contentM = text.match(/---CONTENT---([\s\S]*)$/);
@@ -1152,6 +1216,7 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
         const secs = [...md.matchAll(/^##\s+(.*)$/gm)].map((m) => m[1]);
         md = insertImages(md, matchMedia(media, post, secs, 2), brand);
       }
+      md = appendOutro(md);
       const metaTitle = (metaM?.[1].match(/Title:\s*(.+)/) || [])[1]?.trim() || post.title.slice(0, 60);
       const metaDesc = (metaM?.[1].match(/Description:\s*(.+)/) || [])[1]?.trim() || "";
       recordAnchors(setOpt, md, targets, brand);
@@ -1167,6 +1232,7 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
       md += `## What It Means for You\n\n- Clear, honest guidance\n- Transparent pricing\n- Local expertise in ${market.split(",")[0]}\n\n`;
       md += `## Next Steps\n\n${targets2.filter((t, i) => i > 0).map((t) => anchorFor(t, brand)).join(" · ")}\n\n`;
       if (autoImages) md = insertImages(md, matchMedia(media, post, [], 2), brand);
+      md = appendOutro(md);
       recordAnchors(setOpt, md, targets2, brand);
       onPatch({ status: "written", content: { generatedAt: Date.now(), live: false, markdown: md, metaTitle: post.title.slice(0, 60), metaDesc: `${cap(post.primaryKw)} explained by ${brand}.`, wordCount: md.split(/\s+/).length } });
       work?.("website", "postWritten", { detail: post.title });
@@ -1207,6 +1273,8 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
             <div className="flex flex-wrap items-center gap-4">
               <Toggle on={autoImages} onChange={setAutoImages} label={`Auto-insert images from Media (${media.length} synced)`}
                 desc="Matches library images by title + alt text to this post's topic; every image gets a caption underneath." />
+              <Toggle on={brandLinks} onChange={setBrandLinks} label="Brand & profile links at the end"
+                desc="Closes every post with links to your Google Business Profile, main social profiles and brand properties (from Branding & Automation) — entity signals on autopilot." />
             </div>
             <button onClick={generate} disabled={busy}
               className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>

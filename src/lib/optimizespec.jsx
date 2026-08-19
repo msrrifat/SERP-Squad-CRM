@@ -22,6 +22,9 @@ export const defaultOptimizeSpec = (city = "") => ({
   research: { entities: true, semantic: true, verbs: true, synonyms: true, faqs: true },
   local: { city, forced: false },
   tasks: { meta: true, internalLinks: true, relatedServices: true, ctas: true, trust: true, aeo: false },
+  /* readability & format variety — the anti-boredom contract: WHERE bullets,
+     numbering, described subheadings and bare power-word punch lists go */
+  readability: { bullets: true, numbered: true, subheads: true, powerLists: true, variety: true },
   structureMode: "flexible", // exact | flexible | extend | new
   lengths: { hero: 200, h2: 500, h3: 280 },
 });
@@ -62,6 +65,18 @@ export function optimizeRulesBlock(spec, { hasExisting = false } = {}) {
   if (t.ctas) lines.push("CTAS — place a short conversion nudge (1-2 sentences with a contact/booking link) after the intro and before the final section; the closing section is a clear call to action.");
   if (t.trust) lines.push("TRUST SIGNALS — weave in the brand's real proof points from the brand block (guarantees, credentials, review presence). Never invent numbers, awards or reviews.");
   if (t.aeo) lines.push("AI-SEARCH READY (AEO) — open every major section with a direct 1-2 sentence answer to the section's implicit question before elaborating, so answer engines can quote it.");
+
+  /* readability & format variety — WHERE each format is mandatory, so the
+     reader can scan without ever hitting a wall of prose */
+  /* default-ON: specs saved before this group existed still get the rules */
+  const rd = { bullets: true, numbered: true, subheads: true, powerLists: true, variety: true, ...(s.readability || {}) };
+  const rdRules = [];
+  if (rd.bullets) rdRules.push("BULLET LISTS are mandatory wherever the material is enumerable: benefits, features, what's-included, symptoms/signs, requirements and comparison points — 3-7 items, one line each, never buried in paragraph prose");
+  if (rd.numbered) rdRules.push("NUMBERED LISTS are mandatory for anything sequential: processes, how-it-works, timelines, step-by-step instructions and checklists done in order");
+  if (rd.subheads) rdRules.push("SUBHEADINGS WITH DESCRIPTIONS: any section covering two or more distinct sub-topics MUST split into ### subheadings, each opening with a 1-2 sentence plain-language description before detail");
+  if (rd.powerLists) rdRules.push("POWER-WORD PUNCH LIST: at least one section carries a bare list of 3-6 short, punchy feature/benefit lines (2-5 words each, **bolded**, NO description under them — e.g. **Same-week installation**, **Lifetime workmanship warranty**) so the page has one purely scannable impact block");
+  if (rd.variety) rdRules.push("FORMAT VARIETY: no two consecutive sections may use the same dominant format (paragraphs / bullets / numbers / punch list / Q&A) and no section may be one unbroken wall of text — a reader scanning only headings and lists must still get the page's full story");
+  if (rdRules.length) lines.push("READABILITY & FORMAT VARIETY — the page must never read as boring uniform prose. Specifically: " + rdRules.join("; ") + ".");
 
   /* structure handling */
   const mode = s.structureMode || "flexible";
@@ -136,6 +151,19 @@ export function OptimizeControls({ spec, onChange, accent }) {
           <Check on={t.ctas} onChange={setTask("ctas")} label="CTA nudges between sections" />
           <Check on={t.trust} onChange={setTask("trust")} label="Weave real trust signals" hint="from Brand Voice facts — never invented" />
           <Check on={t.aeo} onChange={setTask("aeo")} label="AI-search ready (AEO)" hint="direct answers open every section" />
+        </div>
+      </div>
+      {/* readability & format variety */}
+      <div className="rounded-xl border border-gray-100 p-3">
+        <div className="mb-1.5 text-[11.5px] font-bold text-gray-700">Readability & format variety <span className="font-normal text-gray-400">— never a boring wall of text</span></div>
+        <div className="grid gap-x-3 sm:grid-cols-2">
+          {(() => { const rd = s.readability || {}; const setRd = (k) => (v) => onChange({ ...s, readability: { ...rd, [k]: v } }); return (<>
+            <Check on={rd.bullets !== false} onChange={setRd("bullets")} label="Bullet lists for benefits & features" hint="anything enumerable becomes a scannable list" />
+            <Check on={rd.numbered !== false} onChange={setRd("numbered")} label="Numbered steps for processes" hint="how-it-works, timelines, instructions" />
+            <Check on={rd.subheads !== false} onChange={setRd("subheads")} label="Subheadings with descriptions" hint="multi-topic sections split into H3s, each with a 1-2 line intro" />
+            <Check on={rd.powerLists !== false} onChange={setRd("powerLists")} label="Power-word punch list" hint="bold 2-5 word feature/benefit lines, no descriptions — pure scan impact" />
+            <Check on={rd.variety !== false} onChange={setRd("variety")} label="Force format variety" hint="no two consecutive sections in the same format" />
+          </>); })()}
         </div>
       </div>
       {/* structure mode */}

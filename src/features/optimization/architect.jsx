@@ -84,13 +84,47 @@ Description: <meta description, ≤160 chars, primary keyword + concrete benefit
 - Meet or exceed the word target. Follow the brand voice block exactly.
 - The OPTIMIZATION RULES block in the prompt is a HARD CONTRACT: satisfy every rule in it (research depth, local mode, required sections, structure handling and the per-section character targets). Output that ignores any rule is a failed output.`;
 
+/* per-section CONTENT BLOCK — what renders with/after the section's copy on
+   the published page. Chosen in the structure panel; the writer shapes the
+   copy around it and the deploy serializer ships the actual widget. */
+export const SECTION_BLOCKS = [
+  ["content", "Content only"],
+  ["image", "Content + image"],
+  ["cta", "CTA + enquiry form"],
+  ["video", "Video embed"],
+  ["map", "Map & business info"],
+  ["estimator", "Price estimator tool"],
+  ["reviews", "Reviews strip"],
+];
+const BLOCK_WRITER_HINT = {
+  image: "this section MUST carry an image — keep the copy tight and split-friendly (it renders beside the photo)",
+  cta: "a CTA band with an enquiry form renders right after this section — end the section's copy leading naturally into requesting a quote",
+  video: "a video embed renders right after this section — write copy that sets up what the video shows",
+  map: "a map + business info card renders right after this section — write copy that references visiting, finding or contacting us locally",
+  estimator: "an interactive price estimator tool renders right after this section — write a short lead-in about getting an instant ballpark estimate",
+  reviews: "a customer-review strip renders right after this section — reference real customer feedback in the copy",
+};
+/* structure regeneration/adjustment returns fresh sections — carry each
+   section's chosen block (and video URL) over by matching headings, so a
+   re-run never silently drops the page's block design */
+export function carryBlocks(oldSections = [], newSections = []) {
+  const toks = (s) => new Set(String(s || "").toLowerCase().split(/\W+/).filter((x) => x.length > 2));
+  const sim = (a, b) => { const A = toks(a), B = toks(b); if (!A.size || !B.size) return 0; let n = 0; A.forEach((x) => B.has(x) && n++); return n / (A.size + B.size - n); };
+  return newSections.map((s) => {
+    const old = oldSections.find((o) => (o.block && o.block !== "content") && sim(o.h2, s.h2) >= 0.34);
+    return old ? { ...s, block: old.block, ...(old.videoUrl ? { videoUrl: old.videoUrl } : {}) } : s;
+  });
+}
+
 /* validate + normalize an AI structure payload */
 function normalizeStructure(raw, fromCompetitors) {
   if (!raw || !Array.isArray(raw.sections) || !raw.sections.length) throw new Error("missing sections");
   const kinds = new Set(["table-stakes", "differentiator", "secondary", "eeat"]);
+  const blocks = new Set(SECTION_BLOCKS.map(([k]) => k));
   return {
     generatedAt: Date.now(), fromCompetitors,
-    sections: raw.sections.map((s) => ({ h2: String(s.h2 || "").slice(0, 120), note: String(s.note || ""), kind: kinds.has(s.kind) ? s.kind : "table-stakes" })).filter((s) => s.h2),
+    sections: raw.sections.map((s) => ({ h2: String(s.h2 || "").slice(0, 120), note: String(s.note || ""), kind: kinds.has(s.kind) ? s.kind : "table-stakes",
+      ...(blocks.has(s.block) && s.block !== "content" ? { block: s.block } : {}), ...(s.videoUrl ? { videoUrl: String(s.videoUrl).slice(0, 300) } : {}) })).filter((s) => s.h2),
     sharedEntities: (raw.sharedEntities || []).map(String).slice(0, 24),
     differentiators: (raw.differentiators || []).map(String).slice(0, 12),
     faqs: (raw.faqs || []).map(String).slice(0, 10),
@@ -505,6 +539,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
       });
       const st = normalizeStructure(parsedStruct, (seo.competitors || []).length);
       st.live = true; st.provider = ai.provider;
+      st.sections = carryBlocks(seo.structure?.sections, st.sections);
       setSeo({ structure: st, audit: null, content: null });
     },
     () => setSeo({ structure: { ...genContentStructure(node, seo.competitors || [], niche, siteLinks), live: false }, audit: null, content: null }));
@@ -528,6 +563,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
       });
       const st = normalizeStructure(parsedAdjust, seo.structure?.fromCompetitors || 0);
       st.live = true; st.provider = ai.provider; st.adjustedAt = Date.now();
+      st.sections = carryBlocks(seo.structure?.sections, st.sections);
       setSeo({ structure: st, audit: null });
     },
     () => setSeo({ structure: { ...adjustStructure(seo.structure, seo.audit, node), live: seo.structure?.live || false }, audit: null }));
@@ -535,9 +571,14 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
   const generate = () => runStage("content",
     async () => {
       const plan = linkPlanRows(buildLinkPlan(node.url, siteLinks, node.type));
+      /* sections with a chosen content block: the writer shapes copy around
+         the widget the deploy serializer will place there */
+      const blockLines = seo.structure.sections
+        .filter((s) => s.block && s.block !== "content" && BLOCK_WRITER_HINT[s.block])
+        .map((s) => `- "${s.h2}": ${BLOCK_WRITER_HINT[s.block]}`).join("\n");
       const text = await aiGenerate(ai, {
         system: SYS_WRITER, maxTokens: 8000,
-        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\n${optimizeRulesBlock(spec)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
+        prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\n${optimizeRulesBlock(spec)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}${blockLines ? `\n\nSECTION CONTENT BLOCKS (a widget renders with these sections on the published page — shape each section's copy accordingly):\n${blockLines}` : ""}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
       });
       /* parse the structured output; tolerate providers that skip markers */
       const metaM = text.match(/---META---([\s\S]*?)---CONTENT---/);
@@ -669,16 +710,28 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
                   · from {seo.structure.fromCompetitors} competitors · target {seo.structure.wordTarget} words
                 </div>
                 <div className="space-y-1">
-                  {seo.structure.sections.map((s, i) => (
+                  {seo.structure.sections.map((s, i) => {
+                    const patchSec = (patch) => setSeo((cur) => ({ structure: { ...cur.structure, sections: cur.structure.sections.map((x, j) => (j === i ? { ...x, ...patch } : x)) } }));
+                    return (
                     <div key={i} className="flex items-start gap-2 text-[12px]">
                       <span className="ll-mono mt-0.5 w-6 shrink-0 text-right text-gray-300">H2</span>
                       <span className="min-w-0 flex-1"><b className="text-gray-800">{s.h2}</b>
                         <span className="ml-1.5 rounded px-1 py-px text-[8.5px] font-bold uppercase"
                           style={{ background: s.kind === "differentiator" ? "#FEF3C7" : s.kind === "eeat" ? "#F3E8FF" : "#EEF2FF", color: s.kind === "differentiator" ? "#92400E" : s.kind === "eeat" ? "#6B21A8" : "#3730A3" }}>{s.kind}</span>
                         <div className="text-[10.5px] text-gray-400">{s.note}</div>
+                        {s.block === "video" && (
+                          <input value={s.videoUrl || ""} onChange={(e) => patchSec({ videoUrl: e.target.value })}
+                            placeholder="Video URL (YouTube / Vimeo / MP4)" className={"ll-mono mt-1 w-full max-w-sm " + inputCls} />
+                        )}
                       </span>
+                      {/* the section's published CONTENT BLOCK — what ships with this copy */}
+                      <select value={s.block || "content"} onChange={(e) => patchSec({ block: e.target.value })}
+                        title="Content block published with this section — CTA form, image, video, map, estimator…"
+                        className="shrink-0 rounded-lg border border-gray-200 bg-white px-1.5 py-1 text-[10.5px] font-medium text-gray-600">
+                        {SECTION_BLOCKS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                      </select>
                     </div>
-                  ))}
+                  ); })}
                 </div>
                 {(seo.structure.sharedEntities || []).length > 0 && (
                   <div className="flex flex-wrap items-center gap-1 border-t border-gray-50 pt-2 text-[10px]">
