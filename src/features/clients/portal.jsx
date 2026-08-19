@@ -103,7 +103,12 @@ function MessagesPane({ client, brand, accent, maskName, onSend, onReact, onRead
   );
 }
 import { AgentLauncher, AgentPanel } from "../agent/AgentPanel.jsx";
-import { genSiteData, hydrate } from "../../data/gen.js";
+import { emptySiteData, genSiteData, hydrate } from "../../data/gen.js";
+
+/* heavy Performance views are code-split exactly like the team dashboard */
+const GeoGridViewLazy = React.lazy(() => import("../performance/geogrid.jsx").then((m) => ({ default: m.GeoGridView })));
+const GoogleLiveDataLazy = React.lazy(() => import("../performance/googlelive.jsx").then((m) => ({ default: m.GoogleLiveData })));
+const viewLoader = <div className="p-10 text-center text-[12.5px] text-gray-400">Loading…</div>;
 
 export function LoginScreen({ company, dark, onAuthed }) {
   const [email, setEmail] = useState("");
@@ -230,6 +235,15 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
     () => (project && project.demoMode !== false ? genSiteData(project, trackedKeywords, client.companyName) : null),
     [project?.id, project?.name, trackedKeywords.join("|"), client.companyName, monthKey, locSig(project)] // name seeds the generator; monthKey handles rollover; locSig re-derives on location-group edits
   );
+  /* REAL projects (demoMode === false) render like the team dashboard: the
+     Overview keeps its designed layout with all-zero series + live Google data
+     inside, and the web view shows the live GSC/GA4 dashboards once the team
+     has connected Google — never a "come back later" card over real work */
+  const liveData = useMemo(
+    () => (project && project.demoMode === false ? emptySiteData(project) : null),
+    [project?.id, project?.demoMode, monthKey, locSig(project)] // eslint-disable-line
+  );
+  const googleConnected = !!(project?.google?.connectionId && (project.google.gscSite || project.google.ga4Property));
   const accent = project?.accent || "#1F2A44";
 
   const wl = client.whiteLabel;
@@ -245,16 +259,18 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
      visibleNav: Overview needs at least one granted data view (CLIENT_DEFAULT_ON
      flags default to true when unset — `!== false` — matching the settings UI) */
   const gbpShown = !!(project?.integrations.gbp || project?.integrations.bing || project?.integrations.apple) && lg.canViewGbp !== false;
-  const webShown = !!(project?.integrations.ga || project?.integrations.gsc) && lg.canViewWeb !== false;
+  const webShown = (!!(project?.integrations.ga || project?.integrations.gsc) || googleConnected) && lg.canViewWeb !== false;
   const ranksShown = lg.canViewRanks !== false;
+  /* read-only map reports — the scans themselves stay agency-side */
+  const geogridShown = lg.canViewGeogrid !== false;
   const nav = NAV.filter((n) => {
     if (n.key === "settings") return false;
     if (n.key === "ranks") return ranksShown;
-    if (n.key === "geogrid") return false; // agency-side tool (scans cost SERP credits)
+    if (n.key === "geogrid") return geogridShown;
     if (n.key === "adsperf") return !!lg.canViewAds && (project?.ads?.campaigns || []).some((c) => c.status !== "draft");
     if (n.key === "gbp") return gbpShown;
     if (n.key === "web") return webShown;
-    if (n.key === "overview") return gbpShown || webShown || ranksShown;
+    if (n.key === "overview") return gbpShown || webShown || ranksShown || geogridShown;
     return true;
   });
   const visibleSections = [
@@ -461,18 +477,34 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
               No sections are enabled for your account yet — please contact your SEO team.
             </Card>
           )}
-          {project && activeSection === "performance" && !data && (
-            <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
-              Your dashboards are being connected — data appears here as soon as your SEO team finishes
-              linking the analytics sources. Nothing is shown until it's real.
-            </Card>
-          )}
-          {project && activeSection === "performance" && data && (
+          {project && activeSection === "performance" && (
             <>
-              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView />}
+              {/* the Overview always renders its designed layout — demo numbers on
+                  demo projects, all-zero series + live Google data on real ones */}
+              {activeView === "overview" && (data
+                ? <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView />
+                : <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView liveMode />)}
+              {/* rank trackers pull their OWN real data — they render with or without `data` */}
               {activeView === "ranks" && ranksShown && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly />}
-              {activeView === "gbp" && gbpShown && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
-              {activeView === "web" && webShown && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
+              {activeView === "geogrid" && geogridShown && (
+                <React.Suspense fallback={viewLoader}>
+                  <GeoGridViewLazy project={project} accent={accent} onUpdate={() => {}} dfs={{}} readOnly />
+                </React.Suspense>
+              )}
+              {activeView === "gbp" && gbpShown && (data
+                ? <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />
+                : <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
+                    Your Business Profile dashboards are being connected — data appears here as soon as your
+                    SEO team finishes linking the profile sources. Nothing is shown until it's real.
+                  </Card>)}
+              {activeView === "web" && webShown && (data
+                ? <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />
+                : googleConnected
+                  ? <React.Suspense fallback={viewLoader}><GoogleLiveDataLazy project={project} accent={accent} /></React.Suspense>
+                  : <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
+                      Your website analytics are being connected — data appears here as soon as your SEO team
+                      finishes linking Google Search Console and Analytics. Nothing is shown until it's real.
+                    </Card>)}
               {activeView === "adsperf" && !!lg.canViewAds && <AdsPerformanceView project={project} accent={accent} />}
             </>
           )}

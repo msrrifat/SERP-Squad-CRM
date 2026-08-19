@@ -197,6 +197,7 @@ export const CLIENT_ACCESS_TREE = [
     ["canViewGbp", "Business Profiles"],
     ["canViewWeb", "Website Performance & Analytics"],
     ["canViewRanks", "Website Rank Tracking"],
+    ["canViewGeogrid", "GBP Rank Tracking (geo grid)", "Read-only map reports — scans run agency-side only"],
   ] },
   { key: "ads", label: "Ads & Paid Marketing", items: [
     ["canViewAds", "Ads performance", "Read-only campaign results — no budgets or management"],
@@ -215,7 +216,7 @@ export const CLIENT_ACCESS_TREE = [
 ];
 /* new clients automatically see the PERFORMANCE STUDIO of their projects only —
    ads, project management, reports and the agent are explicit opt-in toggles */
-export const CLIENT_DEFAULT_ON = ["canViewGbp", "canViewWeb", "canViewRanks"];
+export const CLIENT_DEFAULT_ON = ["canViewGbp", "canViewWeb", "canViewRanks", "canViewGeogrid"];
 
 export function ClientSettingsModal({ client, company, onChange, onUpdateProject, onUpdateAllProjects, dfsConnected, accent, onDelete, onClose }) {
   const projects = client.projects || [];
@@ -705,7 +706,7 @@ export function AddClientModal({ onClose, onAdd }) {
             whiteLabel: { enabled: false, name: "", website: "", logo: null },
             /* Performance Studio on by default; everything else opt-in */
             login: { enabled: false, email: email || "", password: "", projectIds: [],
-              canViewGbp: true, canViewWeb: true, canViewRanks: true,
+              canViewGbp: true, canViewWeb: true, canViewRanks: true, canViewGeogrid: true,
               canViewAds: false, canManageTasks: false, canComment: false, canChat: false, canDownload: false, canUseAgent: false },
             projects: [],
           })}

@@ -552,7 +552,10 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
 }
 
 /* ================= main view ================= */
-export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [] }) {
+/* readOnly: the client-portal mode — stored reports and snapshots render in
+   full, but everything that runs, edits, shares or deletes is absent, and the
+   scheduled auto-run must NEVER fire from a client's browser (scans are paid). */
+export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [], readOnly = false }) {
   const geo = project.geoGrid || {};
   const gbpLoc = project.opt?.gbp || {};
   const bizBase = geo.business || { name: gbpLoc.bizName || project.name, address: gbpLoc.address || "" };
@@ -648,7 +651,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
   /* scheduled runs: execute at most one due report per mount (PROD: server cron) */
   const schedRan = useRef(false);
   useEffect(() => {
-    if (schedRan.current) return;
+    if (schedRan.current || readOnly) return;
     schedRan.current = true;
     const due = reports.find((rp) => rp.schedule.freq !== "one" && rp.lastRun && Date.now() - rp.lastRun > FREQ_MS[rp.schedule.freq]);
     if (due) runSnapshot(due);
@@ -657,7 +660,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 
   const open = reports.find((rp) => rp.id === openReportId);
   if (open) return (
-    <ReportView report={open} biz={biz} accent={accent} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
+    <ReportView report={open} biz={biz} accent={accent} readOnly={readOnly} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
       onBack={() => setOpenReportId(null)} onRun={() => runSnapshot(open)} onEdit={() => setSetup(open)}
       onDeleteSnapshot={(sid) => patchReport(open.id, (cur) => ({ snapshots: cur.snapshots.filter((x) => x.id !== sid) }))}
       setupModal={setup && (
@@ -679,9 +682,11 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             {isFinite(biz.lat) ? <span className="ll-mono ml-1 text-emerald-600">{biz.name} · {(+biz.lat).toFixed(4)}, {(+biz.lng).toFixed(4)}</span> : " Set the business location in a report's Map tab."}
           </div>
         </div>
-        <button onClick={() => setSetup("new")} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
-          <Plus size={13} /> New report
-        </button>
+        {!readOnly && (
+          <button onClick={() => setSetup("new")} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
+            <Plus size={13} /> New report
+          </button>
+        )}
       </Card>
 
       {reports.map((rp) => {
@@ -705,18 +710,20 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
                 {last && <span>last run {fmtTs2(last.at)}{avg != null ? ` · Avg rank ${avg.toFixed(1)}` : ""}</span>}
               </div>
             </button>
-            <button onClick={() => runSnapshot(rp)} disabled={anyRunning}
+            {!readOnly && <button onClick={() => runSnapshot(rp)} disabled={anyRunning}
               className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
               {running ? <><RefreshCw size={10} className="animate-spin" /> {rpScan.kw ? `"${rpScan.kw}" (${rpScan.kwIndex + 1}/${rpScan.total})` : "Running…"}</> : <><Search size={10} /> Run now <span className="ll-mono ml-1 text-[8.5px] opacity-80">≈{fmtDfsCost(dfsCost(activePointCount(rp) * rp.keywords.length, "mapsQueue"))}</span></>}
-            </button>
-            <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>
-            <button onClick={async () => { if (await askDelete(`the report "${rp.name}" and all its snapshots`)) patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) })); }} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
+            </button>}
+            {!readOnly && <button onClick={() => setSetup(rp)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:border-gray-300">Edit</button>}
+            {!readOnly && <button onClick={async () => { if (await askDelete(`the report "${rp.name}" and all its snapshots`)) patchGeo((cur) => ({ reports: cur.reports.filter((x) => x.id !== rp.id) })); }} className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>}
           </Card>
         );
       })}
       {reports.length === 0 && (
         <Card className="p-10 text-center text-[12.5px] text-gray-400">
-          No reports yet — create one: pick the business on the Map tab, add keywords, set a schedule. Each run scans every keyword across the whole grid.
+          {readOnly
+            ? "No map-grid reports yet — they appear here as soon as your SEO team runs the first scan."
+            : "No reports yet — create one: pick the business on the Map tab, add keywords, set a schedule. Each run scans every keyword across the whole grid."}
         </Card>
       )}
       {(() => { const failed = reports.map((rp) => jobFor(rp.id)).find((j) => j?.status === "error"); return failed
@@ -740,7 +747,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 }
 
 /* ================= report results ================= */
-function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSnapshot, scanState, err, setupModal }) {
+function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSnapshot, scanState, err, setupModal, readOnly = false }) {
   const [kw, setKw] = useState(rp.keywords[0]);
   const [snapId, setSnapId] = useState(null);
   const [snapOpen, setSnapOpen] = useState(false);
@@ -823,17 +830,19 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
         <span className="text-gray-300">/</span>
         <span className="ll-display font-semibold text-gray-800">{rp.name}</span>
         <span className="ml-auto flex gap-2">
-          <button onClick={onRun} disabled={!!scanState}
+          {!readOnly && <button onClick={onRun} disabled={!!scanState}
             className="flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
             {scanState ? <><RefreshCw size={10} className="animate-spin" /> "{scanState.kw}" ({scanState.kwIndex + 1}/{scanState.total})</> : <><Search size={10} /> Run snapshot now</>}
             {!scanState && <DfsCostChip requests={activePointCount(rp) * rp.keywords.length} kind="mapsQueue" className="ml-1 border-white/40 bg-white/20 text-white" />}
-          </button>
+          </button>}
           <span className="relative">
             <button onClick={() => setActionsOpen(!actionsOpen)} className="rounded-lg border border-gray-200 bg-white px-3.5 py-1.5 text-[11.5px] font-semibold text-gray-700 shadow-sm hover:border-gray-300">Actions</button>
             {actionsOpen && (
               <div className="absolute right-0 z-40 mt-1 w-64 rounded-xl border border-gray-200 bg-white py-1.5 shadow-xl" onClick={() => setActionsOpen(false)}>
                 <div className="px-3.5 py-1.5 text-[11px] font-bold text-gray-800">Report</div>
-                {[
+                {(readOnly ? [
+                  ["⇄  Compare", () => setOverlay("compare")],
+                ] : [
                   ["✎  Edit", onEdit],
                   ["⤴  Share", async () => {
                     setShare({ busy: true });
@@ -850,7 +859,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
                   ["🗝  Manage keywords", onEdit],
                   ["⇄  Compare", () => setOverlay("compare")],
                   ["↻  Re-run", onRun],
-                ].map(([l, fn]) => (
+                ]).map(([l, fn]) => (
                   <button key={l} onClick={fn} className="block w-full px-3.5 py-2 text-left text-[12.5px] text-gray-700 hover:bg-gray-50">{l}</button>
                 ))}
                 <div className="mt-1 border-t border-gray-100 px-3.5 py-1.5 text-[11px] font-bold text-gray-800">Current snapshot</div>
@@ -863,8 +872,8 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
                   a.download = `${rp.name} — snapshot ${new Date(snap.at).toISOString().slice(0, 10)}.csv`;
                   a.click();
                 }} className="block w-full px-3.5 py-2 text-left text-[12.5px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">⇓  Export current snapshot (CSV)</button>
-                <button disabled={!snap} onClick={async () => { if (await askDelete("this snapshot")) { onDeleteSnapshot(snap.id); setSnapId(null); } }}
-                  className="block w-full px-3.5 py-2 text-left text-[12.5px] text-red-500 hover:bg-red-50 disabled:opacity-40">🗑  Delete current snapshot</button>
+                {!readOnly && <button disabled={!snap} onClick={async () => { if (await askDelete("this snapshot")) { onDeleteSnapshot(snap.id); setSnapId(null); } }}
+                  className="block w-full px-3.5 py-2 text-left text-[12.5px] text-red-500 hover:bg-red-50 disabled:opacity-40">🗑  Delete current snapshot</button>}
               </div>
             )}
           </span>
