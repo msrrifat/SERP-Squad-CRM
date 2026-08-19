@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { Ava, AvaMaskCtx, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, ProjectMark, inputCls } from "../../ui/primitives.jsx";
+import { Ava, AvaMaskCtx, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, ProjectMark, SaveBar, Toggle, inputCls, useDraft } from "../../ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "../../lib/months.jsx";
 import { GbpView, NAV, OverviewView, RankTrackingView, WebsitePerformanceView } from "../performance/views.jsx";
 import { ProjectManagementView } from "../pm/board.jsx";
@@ -50,7 +50,6 @@ function ClientApiSettings({ client, brand, accent, onUpdateClient }) {
     setTesting(false);
   };
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
       <Card className="p-5">
         <div className="ll-display text-[15px] font-semibold">Your DataForSEO API</div>
         <p className="mt-1 text-[12px] leading-relaxed text-gray-500">
@@ -79,6 +78,71 @@ function ClientApiSettings({ client, brand, accent, onUpdateClient }) {
         {note && <div className={"mt-2 rounded-lg border px-3 py-2 text-[11.5px] leading-relaxed " + (note.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>{note.text}</div>}
         <p className="mt-2 text-[10px] text-gray-400">Until valid credentials are saved, dashboards that depend on live scans show "not configured" — nothing is ever fabricated or billed elsewhere.</p>
       </Card>
+  );
+}
+
+/* The client's own Company settings — the portal counterpart of the agency's
+   client settings. Everything here writes the SAME fields the agency edits
+   (companyName, logo, whiteLabel, dfs.useOwn), so both sides always show one
+   truth: a client flipping "own DataForSEO account" here lights up "Client
+   supplies their own DataForSEO API" in the agency's Client settings, and the
+   agency credentials disconnect for this client's projects at that moment. */
+function ClientCompanySettings({ client, brand, accent, onUpdateClient }) {
+  const { draft, set, dirty, reset } = useDraft(client, ["companyName", "companyWebsite", "email", "phone", "address", "logo", "whiteLabel"]);
+  const wlOn = !!client.whiteLabel?.enabled;
+  const dwl = draft.whiteLabel || {};
+  const setWl = (patch) => set({ whiteLabel: { ...(draft.whiteLabel || {}), ...patch } });
+  const useOwn = !!client.dfs?.useOwn;
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <Card className="p-5">
+        <div className="mb-2 flex items-center gap-2"><Building2 size={15} className="text-gray-400" /><span className="ll-display text-[15px] font-semibold">Company settings</span></div>
+        <p className="mb-3 text-[11.5px] text-gray-400">Keep your business details current — your SEO team sees the same information.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Labeled label="Company name"><input value={draft.companyName || ""} onChange={(e) => set({ companyName: e.target.value })} className={inputCls} /></Labeled>
+          <Labeled label="Company website"><input value={draft.companyWebsite || ""} onChange={(e) => set({ companyWebsite: e.target.value })} className={inputCls} /></Labeled>
+          <Labeled label="Email"><input value={draft.email || ""} onChange={(e) => set({ email: e.target.value })} className={inputCls} /></Labeled>
+          <Labeled label="Phone"><input value={draft.phone || ""} onChange={(e) => set({ phone: e.target.value })} className={inputCls} /></Labeled>
+        </div>
+        <div className="mt-3">
+          <Labeled label="Business address"><input value={draft.address || ""} onChange={(e) => set({ address: e.target.value })} className={inputCls} /></Labeled>
+        </div>
+        <div className="mt-3">
+          <Labeled label="Company logo">
+            <LogoUpload value={draft.logo || null} onChange={(logo) => set({ logo })} label="Upload company logo" />
+          </Labeled>
+          <p className="mt-1 text-[10.5px] text-gray-400">Used wherever your company is presented — including invoices.</p>
+        </div>
+        {wlOn && (
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <div className="ll-display mb-1 text-[13.5px] font-semibold">Dashboard branding</div>
+            <p className="mb-3 text-[11.5px] text-gray-400">This branding appears across your dashboard and on downloaded reports.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Labeled label="Brand name"><input value={dwl.name || ""} onChange={(e) => setWl({ name: e.target.value })} placeholder={client.companyName || client.name} className={inputCls} /></Labeled>
+              <Labeled label="Brand website"><input value={dwl.website || ""} onChange={(e) => setWl({ website: e.target.value })} placeholder={client.companyWebsite} className={inputCls} /></Labeled>
+            </div>
+            <div className="mt-3">
+              <Labeled label="Brand logo">
+                <LogoUpload value={dwl.logo || null} onChange={(logo) => setWl({ logo })} label="Upload brand logo" />
+              </Labeled>
+            </div>
+          </div>
+        )}
+        <SaveBar dirty={dirty} onSave={() => onUpdateClient(draft)} onReset={reset} accent={accent} saveLabel="Save company settings" />
+      </Card>
+
+      <Card className="p-5">
+        <div className="ll-display text-[15px] font-semibold">DataForSEO API</div>
+        <div className="mt-2 rounded-xl border border-gray-100 p-3">
+          <Toggle on={useOwn}
+            onChange={(v) => onUpdateClient((c) => ({ dfs: { login: "", password: "", ...(c.dfs || {}), useOwn: v } }))}
+            label="Use our own DataForSEO account"
+            desc={useOwn
+              ? "Rank tracking, map-grid scans and index checks for your projects run — and bill — on your own DataForSEO account. Turn this off to run on your SEO team's account again."
+              : 'Your projects currently run on your SEO team\'s DataForSEO account. Turn this on to use your own account instead — your SEO team\'s API disconnects for your projects the moment you do, and scans show "not configured" until your credentials below are verified.'} />
+        </div>
+      </Card>
+      {useOwn && <ClientApiSettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />}
     </div>
   );
 }
@@ -213,7 +277,7 @@ export function LoginScreen({ company, dark, onAuthed }) {
   );
 }
 
-export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient }) {
+export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null }) {
   const allowed = client.projects.filter((p) => client.login.projectIds.includes(p.id));
   const [pid, setPid] = useState(allowed[0]?.id);
   /* SAME SHELL AS THE TEAM DASHBOARD: a section ("performance" | "management")
@@ -311,11 +375,11 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   }), [allowed, client, project?.id]);
 
   /* personal screens — the client's equivalent of the team sidebar's
-     "Personal Dashboard" block (Messages replaces team Chat; Settings appears
-     only for white-label clients running their own API account) */
+     "Personal Dashboard" block (Messages replaces team Chat; Company settings
+     is where the client edits their own details, branding and API account) */
   const personal = [
     ["messages", "Messages", MessageSquare, msgUnread > 0 ? { n: msgUnread, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
-    ...(client.dfs?.useOwn ? [["apisettings", "Settings", Settings, null]] : []),
+    ["company", "Company settings", Settings, null],
   ];
   const selectProject = (id) => { setPid(id); setSection("performance"); setView("overview"); setAccountView(null); };
 
@@ -382,14 +446,16 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ messages: "Messages", apisettings: "Settings" }[accountView]}
+                {{ messages: "Messages", company: "Company settings" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
                 <button onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300 md:hidden">
                   <LogOut size={14} /> Log out
                 </button>
-                <Ava name={client.contact} size={32} />
+                <button onClick={() => setAccountView("company")} title="Company settings" className="rounded-full ring-2 ring-transparent hover:ring-gray-300">
+                  <Ava name={client.contact} size={32} />
+                </button>
               </div>
             </div>
             <div className="mx-auto max-w-6xl p-5">
@@ -400,8 +466,8 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
                     onRead={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))} />
                 </AvaMaskCtx.Provider>
               )}
-              {accountView === "apisettings" && client.dfs?.useOwn && (
-                <ClientApiSettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
+              {accountView === "company" && (
+                <ClientCompanySettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
               )}
             </div>
           </>
@@ -435,7 +501,9 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
               <button onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300 md:hidden">
                 <LogOut size={14} /> Log out
               </button>
-              <Ava name={client.contact} size={34} />
+              <button onClick={() => setAccountView("company")} title="Company settings" className="rounded-full ring-2 ring-transparent hover:ring-gray-300">
+                <Ava name={client.contact} size={34} />
+              </button>
             </div>
           </div>
           <div className="no-print mt-3 flex flex-wrap gap-1.5">
@@ -525,6 +593,11 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
         )}
       </main>
 
+      {saveWarn && (
+        <div className="no-print fixed bottom-4 left-1/2 z-50 max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12px] font-semibold text-red-700 shadow-lg">
+          {saveWarn}
+        </div>
+      )}
       {lg.canUseAgent && allowed.length > 0 && (
         <>
           {!agentOpen && <AgentLauncher accent={accent} onClick={() => setAgentOpen(true)} />}

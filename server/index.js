@@ -1053,6 +1053,144 @@ function handleStateSave(req, body) {
   try { const rev = saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev, revs: loadRevs() }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
+
+/* ---- CLIENT-PORTAL WRITES ----------------------------------------------
+   Client sessions may not write app state wholesale (above) — which used to
+   mean they could not write it AT ALL, so everything a client did in the
+   portal (messages sent, settings, task ticks) lived only in their browser
+   and died on reload. This endpoint is the scoped alternative: it merges
+   ONLY what a client legitimately owns, server-side, against the freshly
+   loaded workspace — the client's payload can never touch another client,
+   another author's messages, or any field outside the whitelist below.
+   The whole read-merge-write runs synchronously in one handler turn, so it
+   cannot interleave with a team save. */
+function handleClientStateSave(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
+  if (sess.kind !== "client") return [403, { error: "forbidden", detail: "Client sessions only — team accounts use /api/state." }];
+  const state = loadState();
+  if (!state || !Array.isArray(state.clients)) return [409, { error: "no_state", detail: "No stored workspace to update." }];
+  const idx = state.clients.findIndex((c) => c && c.id === sess.id);
+  if (idx < 0) return [404, { error: "not_found", detail: "Client record not found." }];
+  const cur = state.clients[idx];
+  const contact = cur.contact || "";
+  const lg = cur.login || {};
+  const str = (v, cap) => (typeof v === "string" ? v.slice(0, cap) : "");
+
+  const next = { ...cur };
+  const p = body?.client;
+  if (p && typeof p === "object") {
+    for (const k of ["companyName", "companyWebsite", "email", "phone", "address"]) {
+      if (typeof p[k] === "string") next[k] = p[k].slice(0, 300);
+    }
+    if (typeof p.logo === "string" && p.logo.length < 2_000_000) next.logo = p.logo;
+    else if (p.logo === null) next.logo = null;
+    /* white-label branding is editable only while the AGENCY has white label
+       on — and `enabled` itself always stays whatever the agency set */
+    if (p.whiteLabel && typeof p.whiteLabel === "object" && cur.whiteLabel?.enabled) {
+      const wl = { ...cur.whiteLabel };
+      if (typeof p.whiteLabel.name === "string") wl.name = p.whiteLabel.name.slice(0, 120);
+      if (typeof p.whiteLabel.website === "string") wl.website = p.whiteLabel.website.slice(0, 300);
+      if (typeof p.whiteLabel.logo === "string" && p.whiteLabel.logo.length < 2_000_000) wl.logo = p.whiteLabel.logo;
+      else if (p.whiteLabel.logo === null) wl.logo = null;
+      next.whiteLabel = wl;
+    }
+    /* the client's own DataForSEO account — flipping useOwn here is the same
+       flag the agency's Client settings shows, so both sides stay in sync */
+    if (p.dfs && typeof p.dfs === "object") {
+      const d = { login: "", password: "", ...(cur.dfs || {}) };
+      if ("useOwn" in p.dfs) d.useOwn = !!p.dfs.useOwn;
+      if (typeof p.dfs.login === "string") d.login = p.dfs.login.slice(0, 200);
+      if (typeof p.dfs.password === "string") d.password = p.dfs.password.slice(0, 200);
+      next.dfs = d;
+    }
+  }
+
+  /* messages are append-only unions: a client can add THEIR OWN messages and
+     toggle THEIR OWN reaction membership — nothing in their payload can edit
+     or remove what the team wrote */
+  const cleanMsg = (m) => ({ id: str(m.id, 60), ts: +m.ts || Date.now(), author: contact, text: str(m.text, 4000), ...(m.replyTo ? { replyTo: str(m.replyTo, 60) } : {}) });
+  const mergeMsgs = (stored, incoming) => {
+    const base = Array.isArray(stored) ? stored : [];
+    if (!Array.isArray(incoming)) return base;
+    const have = new Set(base.map((m) => m?.id));
+    const added = incoming.filter((m) => m && m.id && m.text && m.author === contact && !have.has(m.id)).map(cleanMsg);
+    const inById = new Map(incoming.filter((m) => m && m.id).map((m) => [m.id, m]));
+    const out = base.map((m) => {
+      const im = inById.get(m?.id);
+      if (!im) return m;
+      const emojis = new Set([...Object.keys(m.reactions || {}), ...Object.keys(im.reactions || {})]);
+      let reactions = { ...(m.reactions || {}) }, changed = false;
+      for (const e of emojis) {
+        const want = ((im.reactions || {})[e] || []).includes(contact);
+        const curList = reactions[e] || [];
+        if (want === curList.includes(contact)) continue;
+        const list2 = want ? [...curList, contact] : curList.filter((x) => x !== contact);
+        if (list2.length) reactions[e] = list2; else delete reactions[e];
+        changed = true;
+      }
+      return changed ? { ...m, reactions } : m;
+    });
+    return [...out, ...added].slice(-500);
+  };
+  const mergeReads = (stored, incoming) => {
+    const out = { ...(stored || {}) };
+    const ts = +((incoming || {})[contact]) || 0;
+    if (ts > (+out[contact] || 0)) out[contact] = ts;
+    return out;
+  };
+  if (body?.ownerChat && typeof body.ownerChat === "object") {
+    const ch = cur.ownerChat || { msgs: [], reads: {} };
+    next.ownerChat = { ...ch, msgs: mergeMsgs(ch.msgs, body.ownerChat.msgs), reads: mergeReads(ch.reads, body.ownerChat.reads) };
+  }
+
+  /* per-project: chat (if granted), record comments (if granted), and
+     completion ticks on tasks ASSIGNED TO this client (if granted) —
+     everything else in a record is read-only to a client session */
+  const allowedPids = new Set(Array.isArray(lg.projectIds) ? lg.projectIds : []);
+  if (body?.projects && typeof body.projects === "object") {
+    next.projects = (cur.projects || []).map((pr) => {
+      const inP = body.projects[pr.id];
+      if (!inP || typeof inP !== "object" || !allowedPids.has(pr.id)) return pr;
+      let out = pr;
+      if (lg.canChat && (inP.chatMsgs || inP.chatReads)) {
+        out = { ...out, chatMsgs: mergeMsgs(out.chatMsgs, inP.chatMsgs), chatReads: mergeReads(out.chatReads, inP.chatReads) };
+      }
+      if ((lg.canComment || lg.canManageTasks) && Array.isArray(inP.records)) {
+        const inRecs = new Map(inP.records.filter((r) => r && r.id).map((r) => [r.id, r]));
+        out = { ...out, records: (out.records || []).map((r) => {
+          const ir = inRecs.get(r.id);
+          if (!ir) return r;
+          let rec = r;
+          if (lg.canComment) {
+            const merged = mergeMsgs(rec.comments, ir.comments);
+            if (merged !== rec.comments) rec = { ...rec, comments: merged };
+          }
+          if (lg.canManageTasks) {
+            const inCls = new Map((ir.checklists || []).filter((c) => c && c.id).map((c) => [c.id, c]));
+            rec = { ...rec, checklists: (rec.checklists || []).map((cl) => {
+              const icl = inCls.get(cl.id);
+              if (!icl) return cl;
+              const inTs = new Map((icl.tasks || []).filter((t) => t && t.id).map((t) => [t.id, t]));
+              return { ...cl, tasks: (cl.tasks || []).map((t) => {
+                const it = inTs.get(t.id);
+                if (!it || !(t.assignees || []).includes(contact)) return t;
+                const val = it.completedAt ? (+it.completedAt || Date.now()) : null;
+                return val === (t.completedAt ?? null) ? t : { ...t, completedAt: val };
+              }) };
+            }) };
+          }
+          return rec === r ? r : { ...rec, updatedAt: Date.now() };
+        }) };
+      }
+      return out;
+    });
+  }
+
+  state.clients = state.clients.map((c, i) => (i === idx ? next : c));
+  try { const rev = saveState(state); return [200, { ok: true, rev }]; }
+  catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+}
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
 function handleStateBackups(req) {
   const sess = sessionFromReq(req);
@@ -4404,10 +4542,12 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
-      const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6 : 4e6;
+      const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
+        : req.url === "/api/state/client" ? 8e6   // logos travel base64; chats + record ticks ride along
+        : 4e6;
       const chunks = [];
       let received = 0;
       for await (const chunk of req) {
@@ -4500,6 +4640,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
+        : req.url === "/api/state/client" ? handleClientStateSave(req, body)
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)

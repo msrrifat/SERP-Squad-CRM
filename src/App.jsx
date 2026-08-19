@@ -568,6 +568,54 @@ export default function App() {
     return () => clearTimeout(saveTimer.current);
   }, [company, clients, hydrated, teamSession, stateSync, staleState]);
 
+  /* ---- CLIENT-PORTAL PERSISTENCE ---------------------------------------
+     The autosave above is team-only, which used to mean a signed-in CLIENT
+     persisted nothing: messages they sent, settings they changed and tasks
+     they ticked lived only in their tab and died on reload. Client sessions
+     save through /api/state/client instead — a scoped endpoint that merges
+     only what a client legitimately owns (their business details, branding,
+     own-API credentials, their messages/reactions/reads, their comments and
+     completion ticks on tasks assigned to them) into the stored workspace. */
+  const clientSaveTimer = useRef(null);
+  const [clientSaveWarn, setClientSaveWarn] = useState(null);
+  useEffect(() => {
+    if (!hydrated || !session || teamSession) return;
+    if (stateSync !== "loaded" && stateSync !== "empty") return;
+    const token = localStorage.getItem("ss_token");
+    if (!token) return;
+    if (!clientsRef.current.some((x) => x.id === session.clientId)) return;
+    clearTimeout(clientSaveTimer.current);
+    clientSaveTimer.current = setTimeout(async () => {
+      try {
+        const live = clientsRef.current.find((x) => x.id === session.clientId);
+        if (!live) return;
+        const ids = new Set(live.login?.projectIds || []);
+        const r = await fetch("/api/state/client", {
+          method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
+          body: JSON.stringify({
+            client: {
+              companyName: live.companyName, companyWebsite: live.companyWebsite, email: live.email,
+              phone: live.phone, address: live.address, logo: live.logo ?? null,
+              whiteLabel: live.whiteLabel, dfs: live.dfs || {},
+            },
+            ownerChat: live.ownerChat || null,
+            projects: Object.fromEntries((live.projects || []).filter((p) => ids.has(p.id)).map((p) => [p.id, {
+              chatMsgs: p.chatMsgs || [], chatReads: p.chatReads || {},
+              /* records travel as a completion/comment skeleton — the server
+                 only reads comments and per-task completedAt from it */
+              records: (p.records || []).map((rr) => ({
+                id: rr.id, comments: rr.comments || [],
+                checklists: (rr.checklists || []).map((cl) => ({ id: cl.id, tasks: (cl.tasks || []).map((t) => ({ id: t.id, completedAt: t.completedAt ?? null })) })),
+              })),
+            }])),
+          }),
+        });
+        setClientSaveWarn(r.ok ? null : "Your changes couldn't be saved to the server — they may be lost if you reload. Please try again in a moment.");
+      } catch { setClientSaveWarn("Your changes couldn't be saved — the server is unreachable. They may be lost if you reload."); }
+    }, 1200);
+    return () => clearTimeout(clientSaveTimer.current);
+  }, [clients, hydrated, session, teamSession, stateSync]);
+
   /* closing or reloading while a change is still on its way to the server is
      exactly how a freshly-made template or report disappeared — the browser
      now asks first */
@@ -1129,7 +1177,7 @@ export default function App() {
   /* client portal session takes over the whole screen */
   if (session) {
     const sc = clients.find((c) => c.id === session.clientId);
-    if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark}
+    if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark} saveWarn={clientSaveWarn}
       onUpdateClient={(patch) => setClients((cs) => cs.map((c) => (c.id !== sc.id ? c : { ...c, ...(typeof patch === "function" ? patch(c) : patch) })))}
       onUpdateProject={(pid, patch) => setClients((cs) => cs.map((c) => c.id !== sc.id ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)) }))}
       onLogout={signOut} /></Lazy>;

@@ -90,23 +90,29 @@ export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
                 this client, their visitors will see <b>{wl.name || client.companyName || client.name}</b> branding —
                 SERP Squad is hidden everywhere: header, footer and report cover.
               </div>
-              {/* white-label clients can run on THEIR OWN DataForSEO account */}
-              <div className="rounded-xl border border-gray-100 p-3">
-                <Toggle on={!!c.dfs?.useOwn}
-                  onChange={(v) => set({ dfs: { login: "", password: "", ...(c.dfs || {}), useOwn: v } })}
-                  label="Client supplies their own DataForSEO API"
-                  desc="Disables the agency's DataForSEO credentials for every project of this client. The client adds their own API login in their portal → Settings — until then, scans and rank checks honestly show as not configured (never billed to your account)." />
-                {c.dfs?.useOwn && (
-                  <div className="mt-2 flex items-center gap-2 text-[11px]">
-                    <span className="rounded-full px-2 py-0.5 font-bold uppercase tracking-wide"
-                      style={c.dfs.login && c.dfs.password ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
-                      {c.dfs.login && c.dfs.password ? `● Client API connected (${c.dfs.login})` : "○ Waiting for the client's credentials"}
-                    </span>
-                  </div>
-                )}
-              </div>
             </div>
           )}
+        </div>
+
+        {/* ANY client can run on their own DataForSEO account — the client can
+            also flip this themselves in their portal → Company settings, so the
+            toggle lives outside the white-label panel where it always shows the
+            current state (it used to be reachable only with white label on). */}
+        <div className="border-t border-gray-100 pt-4">
+          <div className="rounded-xl border border-gray-100 p-3">
+            <Toggle on={!!c.dfs?.useOwn}
+              onChange={(v) => set({ dfs: { login: "", password: "", ...(c.dfs || {}), useOwn: v } })}
+              label="Client supplies their own DataForSEO API"
+              desc="Disables the agency's DataForSEO credentials for every project of this client. The client adds their own API login in their portal → Company settings — until then, scans and rank checks honestly show as not configured (never billed to your account)." />
+            {c.dfs?.useOwn && (
+              <div className="mt-2 flex items-center gap-2 text-[11px]">
+                <span className="rounded-full px-2 py-0.5 font-bold uppercase tracking-wide"
+                  style={c.dfs.login && c.dfs.password ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>
+                  {c.dfs.login && c.dfs.password ? `● Client API connected (${c.dfs.login})` : "○ Waiting for the client's credentials"}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="border-t border-gray-100 pt-4">
