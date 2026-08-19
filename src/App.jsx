@@ -1284,8 +1284,8 @@ export default function App() {
               return (
                 <button key={key}
                   onClick={() => setAccountView((v) => (v === key ? null : key))}
-                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium"
-                  style={active ? { background: accent + (sbDark ? "40" : "12"), color: sbDark ? "#fff" : (sbText || accent) } : { color: sbCustom ? sbVars.soft : "#4B5563" }}>
+                  className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (active || sbCustom ? "" : " text-gray-600")}
+                  style={active ? { background: accent + (sbDark ? "40" : "12"), color: sbDark ? "#fff" : (sbText || accent) } : (sbCustom ? { color: sbVars.soft } : {})}>
                   <Icon size={14} className={active ? "" : "text-gray-400"} /> {label}
                   {badge && <span className="ll-mono ml-auto rounded-full px-1.5 py-0.5 text-[9.5px] font-bold" style={{ background: badge.bg, color: badge.fg }}>{badge.n}</span>}
                 </button>
@@ -1294,8 +1294,8 @@ export default function App() {
             {isAdmin && (
               <button onClick={() => { setScreen("tools"); logActivity("Opened the Tools dashboard"); }}
                 title="Research & Audit tools + Growth & Prospects"
-                className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium"
-                style={{ color: sbCustom ? sbVars.soft : "#4B5563" }}>
+                className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (sbCustom ? "" : " text-gray-600")}
+                style={sbCustom ? { color: sbVars.soft } : {}}>
                 <Wrench size={14} className="text-gray-400" /> Tools
               </button>
             )}
@@ -1311,8 +1311,8 @@ export default function App() {
                 style={p.id === project?.id ? { background: p.accent + (sbDark ? "40" : "12") } : {}}>
                 <button onClick={() => selectProject(c.id, p.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left">
                   <ProjectMark project={p} />
-                  <span className="block min-w-0 truncate text-[12.5px] font-medium"
-                    style={{ color: p.id === project?.id ? (sbDark ? "#fff" : (sbText || p.accent)) : (sbCustom ? sbVars.soft : "#374151") }}>{p.name}</span>
+                  <span className={"block min-w-0 truncate text-[12.5px] font-medium" + (p.id === project?.id || sbCustom ? "" : " text-gray-700")}
+                    style={p.id === project?.id ? { color: sbDark ? "#fff" : (sbText || p.accent) } : (sbCustom ? { color: sbVars.soft } : {})}>{p.name}</span>
                 </button>
               </div>
             )))}
@@ -1345,8 +1345,8 @@ export default function App() {
                           style={p.id === project?.id ? { background: p.accent + (sbDark ? "40" : "12") } : {}}>
                           <button onClick={() => selectProject(c.id, p.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left">
                             <ProjectMark project={p} />
-                            <span className="block min-w-0 truncate text-[12.5px] font-medium"
-                              style={{ color: p.id === project?.id ? (sbDark ? "#fff" : (sbText || p.accent)) : (sbCustom ? sbVars.soft : "#374151") }}>{p.name}</span>
+                            <span className={"block min-w-0 truncate text-[12.5px] font-medium" + (p.id === project?.id || sbCustom ? "" : " text-gray-700")}
+                              style={p.id === project?.id ? { color: sbDark ? "#fff" : (sbText || p.accent) } : (sbCustom ? { color: sbVars.soft } : {})}>{p.name}</span>
                           </button>
                           {canClients && (
                             <button onClick={() => setModal({ type: "projectSettings", clientId: c.id, projectId: p.id })} title="Project settings"

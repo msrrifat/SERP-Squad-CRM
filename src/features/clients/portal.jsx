@@ -14,7 +14,7 @@ import {
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
 } from "lucide-react";
-import { AvaMaskCtx, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, inputCls } from "../../ui/primitives.jsx";
+import { Ava, AvaMaskCtx, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, ProjectMark, inputCls } from "../../ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "../../lib/months.jsx";
 import { GbpView, NAV, OverviewView, RankTrackingView, WebsitePerformanceView } from "../performance/views.jsx";
 import { ProjectManagementView } from "../pm/board.jsx";
@@ -211,7 +211,13 @@ export function LoginScreen({ company, dark, onAuthed }) {
 export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient }) {
   const allowed = client.projects.filter((p) => client.login.projectIds.includes(p.id));
   const [pid, setPid] = useState(allowed[0]?.id);
+  /* SAME SHELL AS THE TEAM DASHBOARD: a section ("performance" | "management")
+     with Performance views underneath it, plus personal screens (Messages,
+     Settings) that take over the main area — the exact model App.jsx uses for
+     team members, so a client sees the product, not a separate portal. */
+  const [section, setSection] = useState("performance");
   const [view, setView] = useState("overview");
+  const [accountView, setAccountView] = useState(null); // null | "messages" | "apisettings"
   const [cmp, setCmp] = useState(3);
   const [range, setRange] = useState(DEFAULT_RANGE);
   const project = allowed.find((p) => p.id === pid) || allowed[0];
@@ -235,17 +241,28 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   const canChat = !!lg.canChat;      // PM options are opt-in for clients now
   const canPm = !!lg.canManageTasks || !!lg.canComment || canChat;
   const unreadChat = (project?.chatMsgs || []).filter((m) => m.author !== client.contact && m.ts > ((project?.chatReads || {})[client.contact] || 0)).length;
-  const nav = [...NAV.filter((n) => {
+  /* the same per-view gates as before, expressed like the team dashboard's
+     visibleNav: Overview needs at least one granted data view (CLIENT_DEFAULT_ON
+     flags default to true when unset — `!== false` — matching the settings UI) */
+  const gbpShown = !!(project?.integrations.gbp || project?.integrations.bing || project?.integrations.apple) && lg.canViewGbp !== false;
+  const webShown = !!(project?.integrations.ga || project?.integrations.gsc) && lg.canViewWeb !== false;
+  const ranksShown = lg.canViewRanks !== false;
+  const nav = NAV.filter((n) => {
     if (n.key === "settings") return false;
-    if (n.key === "ranks") return lg.canViewRanks;
+    if (n.key === "ranks") return ranksShown;
     if (n.key === "geogrid") return false; // agency-side tool (scans cost SERP credits)
     if (n.key === "adsperf") return !!lg.canViewAds && (project?.ads?.campaigns || []).some((c) => c.status !== "draft");
-    if (n.key === "gbp") return (project?.integrations.gbp || project?.integrations.bing || project?.integrations.apple) && lg.canViewGbp !== false;
-    if (n.key === "web") return (project?.integrations.ga || project?.integrations.gsc) && lg.canViewWeb !== false;
+    if (n.key === "gbp") return gbpShown;
+    if (n.key === "web") return webShown;
+    if (n.key === "overview") return gbpShown || webShown || ranksShown;
     return true;
-  }), ...(canPm ? [{ key: "pm", label: "Project Management", icon: ListTodo }] : []),
-  { key: "messages", label: "Messages", icon: MessageSquare },
-  ...(client.dfs?.useOwn ? [{ key: "apisettings", label: "Settings", icon: Settings }] : [])];
+  });
+  const visibleSections = [
+    ...(nav.length > 0 ? [["performance", "Performance Studio", BarChart3]] : []),
+    ...(canPm ? [["management", "Project Management", ListTodo]] : []),
+  ];
+  const activeSection = visibleSections.some(([k]) => k === section) ? section : (visibleSections[0]?.[0] || "none");
+  const activeView = nav.some((n) => n.key === view) ? view : (nav[0]?.key || "overview");
   /* private owner ↔ client line (the owner answers from the dashboard chat) */
   const ownerChat = client.ownerChat || { msgs: [], reads: {} };
   const msgUnread = (ownerChat.msgs || []).filter((m) => m.author !== client.contact && m.ts > ((ownerChat.reads || {})[client.contact] || 0)).length;
@@ -277,103 +294,211 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
     userName: client.contact, canPlan: false, canReports: false, assignableNames: [],
   }), [allowed, client, project?.id]);
 
+  /* personal screens — the client's equivalent of the team sidebar's
+     "Personal Dashboard" block (Messages replaces team Chat; Settings appears
+     only for white-label clients running their own API account) */
+  const personal = [
+    ["messages", "Messages", MessageSquare, msgUnread > 0 ? { n: msgUnread, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
+    ...(client.dfs?.useOwn ? [["apisettings", "Settings", Settings, null]] : []),
+  ];
+  const selectProject = (id) => { setPid(id); setSection("performance"); setView("overview"); setAccountView(null); };
+
   return (
-    <div className={`ll-root ${dark ? "ll-dark" : ""} min-h-screen bg-[#F5F6F8]`} style={{ "--accent": accent }}>
+    <div className={`ll-root ${dark ? "ll-dark" : ""} flex min-h-screen items-stretch bg-[#F5F6F8]`} style={{ "--accent": accent }}>
       <style>{FONT_CSS}</style>
-      <div className="sticky top-0 z-20 border-b border-gray-200 bg-white/90 px-5 py-3.5 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent} size="lg" />
-            <div>
-              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{brand.name}</div>
-              <div className="ll-display text-[17px] font-semibold leading-tight">{project?.name}</div>
+
+      {/* Sidebar — the same shell team members see: brand on top, personal
+          screens, a flat project list, and the signed-in identity at the foot */}
+      <aside className="ll-sb no-print sticky top-0 z-30 hidden h-screen w-64 shrink-0 flex-col self-start border-r border-gray-200 bg-white md:flex">
+        <div className="flex items-center gap-2 px-4 py-5">
+          <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent} />
+          <span className="ll-display truncate text-[16px] font-bold tracking-tight">{brand.name}</span>
+        </div>
+        <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</div>
+        <div className="space-y-0.5 px-2.5 pb-3">
+          {personal.map(([key, label, Icon, badge]) => {
+            const active = accountView === key;
+            return (
+              <button key={key} onClick={() => setAccountView((v) => (v === key ? null : key))}
+                className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (active ? "" : " text-gray-600")}
+                style={active ? { background: accent + "12", color: accent } : {}}>
+                <Icon size={14} className={active ? "" : "text-gray-400"} /> {label}
+                {badge && <span className="ll-mono ml-auto rounded-full px-1.5 py-0.5 text-[9.5px] font-bold" style={{ background: badge.bg, color: badge.fg }}>{badge.n}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mx-4 mb-2 border-t border-gray-100" />
+        <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Projects</div>
+        <div className="flex-1 overflow-y-auto px-2.5">
+          {allowed.map((p) => (
+            <div key={p.id} className="group mb-0.5 flex items-center gap-0.5 rounded-lg hover:bg-gray-50"
+              style={p.id === project?.id && !accountView ? { background: p.accent + "12" } : {}}>
+              <button onClick={() => selectProject(p.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left">
+                <ProjectMark project={p} />
+                <span className={"block min-w-0 truncate text-[12.5px] font-medium" + (p.id === project?.id && !accountView ? "" : " text-gray-700")}
+                  style={p.id === project?.id && !accountView ? { color: p.accent } : {}}>{p.name}</span>
+              </button>
+            </div>
+          ))}
+          {allowed.length === 0 && (
+            <div className="px-2 py-1.5 text-[11.5px] text-gray-300">No projects have been shared with your account yet.</div>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-gray-100 p-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Ava name={client.contact} size={28} />
+            <div className="min-w-0">
+              <div className="truncate text-[12px] font-semibold text-gray-700">{client.contact}</div>
+              <div className="text-[10.5px] text-gray-400">Client · {allowed.length} project(s)</div>
             </div>
           </div>
-          <div className="no-print flex flex-wrap items-center gap-2">
-            {allowed.length > 1 && (
-              <select value={pid} onChange={(e) => { setPid(e.target.value); setView("overview"); }}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium">
-                {allowed.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            )}
-            {client.login.canDownload && (
-              <button onClick={() => window.print()} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
-                <Printer size={14} /> Report
+          <button onClick={onLogout} title="Log out"
+            className="shrink-0 rounded-lg border border-gray-200 p-1.5 text-gray-400 hover:border-gray-300 hover:text-gray-600">
+            <LogOut size={13} />
+          </button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main className="print-full min-w-0 flex-1">
+        {accountView ? (
+          <>
+            <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
+              <div className="ll-display text-[14px] font-semibold text-gray-700">
+                {{ messages: "Messages", apisettings: "Settings" }[accountView]}
+              </div>
+              <div className="flex items-center gap-2">
+                <DarkToggle dark={dark} setDark={setDark} />
+                <button onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300 md:hidden">
+                  <LogOut size={14} /> Log out
+                </button>
+                <Ava name={client.contact} size={32} />
+              </div>
+            </div>
+            <div className="mx-auto max-w-6xl p-5">
+              {accountView === "messages" && (
+                <AvaMaskCtx.Provider value={avaMask}>
+                  <MessagesPane client={client} brand={brand} accent={accent} maskName={maskName}
+                    onSend={sendOwnerMsg} onReact={reactOwnerMsg}
+                    onRead={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))} />
+                </AvaMaskCtx.Provider>
+              )}
+              {accountView === "apisettings" && client.dfs?.useOwn && (
+                <ClientApiSettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
+              )}
+            </div>
+          </>
+        ) : (
+        <>
+        <div className="sticky top-0 z-20 border-b border-gray-200 bg-white/90 px-5 py-3.5 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              {project && <ProjectMark project={project} size="md" />}
+              <div>
+                <div className="ll-display text-[17px] font-semibold leading-tight">{project?.name}</div>
+                <div className="flex items-center gap-2 text-[11.5px] text-gray-400">
+                  <Globe size={11} /> {project?.website}
+                </div>
+              </div>
+            </div>
+            <div className="no-print flex flex-wrap items-center gap-2">
+              {/* the sidebar is hidden on small screens — keep switching possible there */}
+              {allowed.length > 1 && (
+                <select value={project?.id || ""} onChange={(e) => selectProject(e.target.value)}
+                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium md:hidden">
+                  {allowed.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
+              {lg.canDownload && (
+                <button onClick={() => window.print()} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+                  <Printer size={14} /> Report
+                </button>
+              )}
+              <DarkToggle dark={dark} setDark={setDark} />
+              <button onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300 md:hidden">
+                <LogOut size={14} /> Log out
               </button>
-            )}
-            <DarkToggle dark={dark} setDark={setDark} />
-            <button onClick={onLogout} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
-              <LogOut size={14} /> Log out
-            </button>
+              <Ava name={client.contact} size={34} />
+            </div>
+          </div>
+          <div className="no-print mt-3 flex flex-wrap gap-1.5">
+            {visibleSections.map(([key, label, Icon]) => (
+              <button key={key} onClick={() => { setSection(key); setAccountView(null); }}
+                className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[13px] font-semibold"
+                style={activeSection === key ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#E5E7EB", color: "var(--chip-fg, #4B5563)", background: "var(--chip-bg, #fff)" }}>
+                <Icon size={14} /> {label}
+                {key === "management" && unreadChat > 0 && (
+                  <span className="ll-mono flex items-center gap-1 rounded-full px-1.5 text-[10px] font-bold" title={`${unreadChat} unread chat message${unreadChat === 1 ? "" : "s"}`}
+                    style={activeSection === key ? { background: "rgba(255,255,255,.25)", color: "#fff" } : { background: "#DBEAFE", color: "#1D4ED8" }}>
+                    <MessageSquare size={9} /> {unreadChat}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          {activeSection === "performance" && (
+          <div className="no-print mt-2 flex flex-wrap gap-1">
+            {nav.map((n) => (
+              <button key={n.key} onClick={() => setView(n.key)}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium"
+                style={activeView === n.key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #6B7280)" }}>
+                <n.icon size={14} /> {n.label}
+              </button>
+            ))}
+          </div>
+          )}
+        </div>
+
+        <div className="mx-auto max-w-6xl p-5">
+          {!project && (
+            <Card className="p-10 text-center text-[13px] text-gray-400">
+              No projects have been shared with your account yet — please contact your SEO team.
+            </Card>
+          )}
+          {project && visibleSections.length === 0 && (
+            <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
+              No sections are enabled for your account yet — please contact your SEO team.
+            </Card>
+          )}
+          {project && activeSection === "performance" && !data && (
+            <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
+              Your dashboards are being connected — data appears here as soon as your SEO team finishes
+              linking the analytics sources. Nothing is shown until it's real.
+            </Card>
+          )}
+          {project && activeSection === "performance" && data && (
+            <>
+              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView />}
+              {activeView === "ranks" && ranksShown && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly />}
+              {activeView === "gbp" && gbpShown && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
+              {activeView === "web" && webShown && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
+              {activeView === "adsperf" && !!lg.canViewAds && <AdsPerformanceView project={project} accent={accent} />}
+            </>
+          )}
+          {project && activeSection === "management" && canPm && (
+            <AvaMaskCtx.Provider value={avaMask}>
+            <ProjectManagementView project={project} people={pmPeople} maskName={maskName}
+              perms={{ admin: false, create: false, manage: false, complete: !!lg.canManageTasks, comment: !!lg.canComment }}
+              currentUser={client.contact} accent={accent} canChat={canChat}
+              onUpdate={(patch) => onUpdateProject(project.id, patch)} log={null} />
+            </AvaMaskCtx.Provider>
+          )}
+          <div className="mt-8 flex items-center justify-between border-t border-gray-200 pt-4 text-[11px] text-gray-400">
+            <span>{brand.name} · report for {project?.name}</span>
+            <span>{brand.website || ""}</span>
           </div>
         </div>
-        <div className="no-print mt-3 flex flex-wrap gap-1">
-          {nav.map((n) => (
-            <button key={n.key} onClick={() => setView(n.key)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium"
-              style={view === n.key ? { background: accent + "14", color: accent } : { color: "var(--chip-fg, #6B7280)" }}>
-              <n.icon size={14} /> {n.label}
-              {n.key === "pm" && unreadChat > 0 && (
-                <span className="ll-mono rounded-full px-1.5 text-[10px] font-bold text-white" style={{ background: accent }}>{unreadChat}</span>
-              )}
-              {n.key === "messages" && msgUnread > 0 && (
-                <span className="ll-mono rounded-full px-1.5 text-[10px] font-bold text-white" style={{ background: accent }}>{msgUnread}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
+        </>
+        )}
+      </main>
 
-      <div className="mx-auto max-w-6xl p-5">
-        {!project && (
-          <Card className="p-10 text-center text-[13px] text-gray-400">
-            No projects have been shared with your account yet — please contact your SEO team.
-          </Card>
-        )}
-        {project && !data && (
-          <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
-            Your dashboards are being connected — data appears here as soon as your SEO team finishes
-            linking the analytics sources. Nothing is shown until it's real.
-          </Card>
-        )}
-        {project && data && (
-          <>
-            {view === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView />}
-            {view === "ranks" && lg.canViewRanks && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly />}
-            {view === "gbp" && (project.integrations.gbp || project.integrations.bing || project.integrations.apple) && lg.canViewGbp !== false && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
-            {view === "web" && lg.canViewWeb !== false && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
-            {view === "adsperf" && !!lg.canViewAds && <AdsPerformanceView project={project} accent={accent} />}
-            {view === "apisettings" && client.dfs?.useOwn && (
-              <ClientApiSettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
-            )}
-            {view === "messages" && (
-              <AvaMaskCtx.Provider value={avaMask}>
-                <MessagesPane client={client} brand={brand} accent={accent} maskName={maskName}
-                  onSend={sendOwnerMsg} onReact={reactOwnerMsg}
-                  onRead={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))} />
-              </AvaMaskCtx.Provider>
-            )}
-            {view === "pm" && canPm && (
-              <AvaMaskCtx.Provider value={avaMask}>
-              <ProjectManagementView project={project} people={pmPeople} maskName={maskName}
-                perms={{ admin: false, create: false, manage: false, complete: !!lg.canManageTasks, comment: !!lg.canComment }}
-                currentUser={client.contact} accent={accent} canChat={canChat}
-                onUpdate={(patch) => onUpdateProject(project.id, patch)} log={null} />
-              </AvaMaskCtx.Provider>
-            )}
-          </>
-        )}
-        <div className="mt-8 flex items-center justify-between border-t border-gray-200 pt-4 text-[11px] text-gray-400">
-          <span>{brand.name} · report for {project?.name}</span>
-          <span>{brand.website || ""}</span>
-        </div>
-        {lg.canUseAgent && allowed.length > 0 && (
-          <>
-            {!agentOpen && <AgentLauncher accent={accent} onClick={() => setAgentOpen(true)} />}
-            {agentOpen && <AgentPanel ctx={agentCtx} accent={accent} aiProvider={null} onAction={() => {}} onClose={() => setAgentOpen(false)} />}
-          </>
-        )}
-      </div>
+      {lg.canUseAgent && allowed.length > 0 && (
+        <>
+          {!agentOpen && <AgentLauncher accent={accent} onClick={() => setAgentOpen(true)} />}
+          {agentOpen && <AgentPanel ctx={agentCtx} accent={accent} aiProvider={null} onAction={() => {}} onClose={() => setAgentOpen(false)} />}
+        </>
+      )}
     </div>
   );
 }
