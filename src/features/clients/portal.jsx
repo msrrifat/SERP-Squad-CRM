@@ -277,7 +277,7 @@ export function LoginScreen({ company, dark, onAuthed }) {
   );
 }
 
-export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null }) {
+export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null, appOutdated = false }) {
   const allowed = client.projects.filter((p) => client.login.projectIds.includes(p.id));
   const [pid, setPid] = useState(allowed[0]?.id);
   /* SAME SHELL AS THE TEAM DASHBOARD: a section ("performance" | "management")
@@ -596,6 +596,19 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
       {saveWarn && (
         <div className="no-print fixed bottom-4 left-1/2 z-50 max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[12px] font-semibold text-red-700 shadow-lg">
           {saveWarn}
+        </div>
+      )}
+      {/* a portal tab left open across a deploy keeps running the OLD app —
+          including whatever that deploy fixed or added (this is exactly how
+          "the new dashboard isn't showing" happens). Team tabs already get
+          this banner; a client's tab deserves the same way out. */}
+      {appOutdated && (
+        <div className="no-print fixed bottom-16 left-1/2 z-50 w-[min(92vw,24rem)] -translate-x-1/2 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-lg">
+          <div className="text-[12.5px] font-semibold text-gray-800">Your dashboard has been updated</div>
+          <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">Reload to see the latest features and data views.</div>
+          <button onClick={() => window.location.reload()} className="mt-2 rounded-lg px-3.5 py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
+            Reload now
+          </button>
         </div>
       )}
       {lg.canUseAgent && allowed.length > 0 && (

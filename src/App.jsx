@@ -1177,7 +1177,7 @@ export default function App() {
   /* client portal session takes over the whole screen */
   if (session) {
     const sc = clients.find((c) => c.id === session.clientId);
-    if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark} saveWarn={clientSaveWarn}
+    if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark} saveWarn={clientSaveWarn} appOutdated={appOutdated}
       onUpdateClient={(patch) => setClients((cs) => cs.map((c) => (c.id !== sc.id ? c : { ...c, ...(typeof patch === "function" ? patch(c) : patch) })))}
       onUpdateProject={(pid, patch) => setClients((cs) => cs.map((c) => c.id !== sc.id ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)) }))}
       onLogout={signOut} /></Lazy>;
