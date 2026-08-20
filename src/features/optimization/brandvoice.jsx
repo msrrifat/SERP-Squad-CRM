@@ -112,10 +112,12 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
              remounts on every keystroke and the input loses focus) */
           const linkRow = (key, label, value, onUrl, noteKey, ph) => (
             <Labeled key={key} label={label}>
-              <div className="flex gap-1.5">
-                <input value={value} onChange={onUrl} placeholder={ph} className={"ll-mono min-w-0 flex-[3] " + inputCls} />
+              {/* wraps on narrow screens: the description drops under the URL
+                  instead of squeezing both into unusable slivers */}
+              <div className="flex flex-wrap gap-1.5">
+                <input value={value} onChange={onUrl} placeholder={ph} className={"ll-mono min-w-[180px] flex-[3] " + inputCls} />
                 <input value={notes[noteKey] || ""} onChange={setNote(noteKey)} placeholder="Link description"
-                  title="What this link is — writers use it for context and natural anchor text" className={"min-w-0 flex-[2] " + inputCls} />
+                  title="What this link is — writers use it for context and natural anchor text" className={"min-w-[140px] flex-[2] " + inputCls} />
               </div>
             </Labeled>
           );
@@ -129,22 +131,27 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
               <div className="border-t border-gray-100 pt-3">
                 <div className="text-[11.5px] font-bold text-gray-700">Custom links</div>
                 <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Any other official brand link — directories, awards, press, partner profiles. The description tells the writers what the link is.</div>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {custom.map((row) => (
-                    <div key={row.id} className="flex items-center gap-1.5">
+                    /* stacks to one field per line on phones, one row on sm+ —
+                       fixed widths in a no-wrap flex overflowed the card and
+                       pushed the Add button out of sight on narrow screens */
+                    <div key={row.id} className="grid grid-cols-1 items-center gap-1.5 rounded-lg border border-gray-100 p-2 sm:grid-cols-[9rem_minmax(0,3fr)_minmax(0,2fr)_auto] sm:border-0 sm:p-0">
                       <input value={row.name || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, name: e.target.value } : x)))}
-                        placeholder="Name" className={"w-36 shrink-0 " + inputCls} />
+                        placeholder="Name" className={inputCls} />
                       <input value={row.url || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, url: e.target.value } : x)))}
-                        placeholder="https://…" className={"ll-mono min-w-0 flex-[3] " + inputCls} />
+                        placeholder="https://…" className={"ll-mono " + inputCls} />
                       <input value={row.note || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, note: e.target.value } : x)))}
-                        placeholder="Link description" className={"min-w-0 flex-[2] " + inputCls} />
+                        placeholder="Link description" className={inputCls} />
                       <button onClick={() => askDelete(`the custom link "${row.name || row.url || "row"}"`).then((ok) => { if (ok) setCustom(custom.filter((x) => x.id !== row.id)); })}
-                        className="shrink-0 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+                        title="Remove this link" className="justify-self-end rounded-lg border border-gray-200 p-1.5 text-gray-400 hover:border-red-200 hover:text-red-500 sm:justify-self-auto sm:border-0 sm:p-1">
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   ))}
                   <button onClick={() => setCustom([...custom, { id: "cl" + Date.now(), name: "", url: "", note: "" }])}
-                    className="flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-[10.5px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
-                    <Plus size={11} /> Add custom link
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-gray-300 px-3 py-2 text-[12px] font-semibold text-gray-500 hover:border-gray-400 hover:text-gray-700 sm:w-auto">
+                    <Plus size={13} /> Add custom link
                   </button>
                 </div>
               </div>
