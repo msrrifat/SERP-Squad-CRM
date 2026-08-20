@@ -42,14 +42,20 @@ export function brandVoiceBlock(bv, brand, props = null) {
     biz.serviceAreas && `Service areas: ${biz.serviceAreas}`,
   ].filter(Boolean);
   /* official brand properties (shared with Branding & Automation) — link
-     targets for branded citations, never to be invented */
+     targets for branded citations, never to be invented. Each link may carry
+     a saved description ("what this link is"), which gives the writer real
+     context for natural anchor text instead of guessing from the URL. */
+  const notes = props?.notes || {};
+  const withNote = (line, key) => (line && notes[key] ? `${line} — ${notes[key]}` : line);
   const propLines = props ? [
-    props.website && `Website: ${props.website}`,
-    props.gbpShare && `Google Business Profile: ${props.gbpShare}`,
-    props.gbpReview && `Google reviews: ${props.gbpReview}`,
-    props.bing && `Bing Places: ${props.bing}`,
-    props.apple && `Apple Maps: ${props.apple}`,
-    ...Object.entries(props.socials || {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`),
+    withNote(props.website && `Website: ${props.website}`, "website"),
+    withNote(props.gbpShare && `Google Business Profile: ${props.gbpShare}`, "gbpShare"),
+    withNote(props.gbpReview && `Google reviews: ${props.gbpReview}`, "gbpReview"),
+    withNote(props.bing && `Bing Places: ${props.bing}`, "bing"),
+    withNote(props.apple && `Apple Maps: ${props.apple}`, "apple"),
+    ...Object.entries(props.socials || {}).filter(([, v]) => v).map(([k, v]) => withNote(`${k}: ${v}`, "social:" + k)),
+    /* custom links (Brand Voice + Branding & Automation vault, all families) */
+    ...Object.values(props.custom || {}).flat().filter((c) => c && c.url).map((c) => `${c.name || "Link"}: ${c.url}${c.note ? ` — ${c.note}` : ""}`),
   ].filter(Boolean) : [];
   return [
     `Brand: ${bv.brandName || brand}. ${bv.tagline ? "Positioning: " + bv.tagline + "." : ""}`,

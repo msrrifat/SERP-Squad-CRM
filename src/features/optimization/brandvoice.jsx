@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Building2, FileText, Link2, Mic, Palette, Trash2, Upload, Wand2, X } from "lucide-react";
+import { Building2, FileText, Link2, Mic, Palette, Plus, Trash2, Upload, Wand2, X } from "lucide-react";
 import { Card, Labeled, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { fmtTs2 } from "../../lib/format.jsx";
 import { useWork } from "../../lib/worklog.jsx";
@@ -97,23 +97,58 @@ export function BrandVoiceTab({ opt, setOpt, accent, project }) {
         </div>
         {(() => {
           const props = opt.branding?.properties || {};
+          const notes = props.notes || {};
           const setProp = (k) => (e) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), [k]: e.target.value } }));
           const setSocial = (k) => (e) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), socials: { ...((cur?.properties || {}).socials || {}), [k]: e.target.value } } }));
+          const setNote = (k) => (e) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), notes: { ...((cur?.properties || {}).notes || {}), [k]: e.target.value } } }));
+          /* custom links live in the SAME properties.custom vault the Branding &
+             Automation tab manages (family "other"), so they join the link wheel
+             and campaign targets automatically */
+          const custom = (props.custom || {}).other || [];
+          const setCustom = (next) => setOpt("branding", (cur) => ({ properties: { ...(cur?.properties || {}), custom: { ...((cur?.properties || {}).custom || {}), other: next } } }));
           const MAIN = [["website", "Official website"], ["gbpShare", "Google Business Profile — share link"], ["gbpReview", "Google review link"], ["bing", "Bing Places"], ["apple", "Apple Maps"]];
           const SOC = [["facebook", "Facebook"], ["instagram", "Instagram"], ["linkedin", "LinkedIn"], ["youtube", "YouTube"], ["x", "X / Twitter"], ["tiktok", "TikTok"]];
+          /* plain render helper (NOT a component — an inline component type
+             remounts on every keystroke and the input loses focus) */
+          const linkRow = (key, label, value, onUrl, noteKey, ph) => (
+            <Labeled key={key} label={label}>
+              <div className="flex gap-1.5">
+                <input value={value} onChange={onUrl} placeholder={ph} className={"ll-mono min-w-0 flex-[3] " + inputCls} />
+                <input value={notes[noteKey] || ""} onChange={setNote(noteKey)} placeholder="Link description"
+                  title="What this link is — writers use it for context and natural anchor text" className={"min-w-0 flex-[2] " + inputCls} />
+              </div>
+            </Labeled>
+          );
           return (
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              {MAIN.map(([k, label]) => (
-                <Labeled key={k} label={label}>
-                  <input value={props[k] || ""} onChange={setProp(k)} placeholder={k === "website" ? "https://" + project.website : "https://…"} className={"ll-mono " + inputCls} />
-                </Labeled>
-              ))}
-              {SOC.map(([k, label]) => (
-                <Labeled key={k} label={label}>
-                  <input value={(props.socials || {})[k] || ""} onChange={setSocial(k)} placeholder="https://…" className={"ll-mono " + inputCls} />
-                </Labeled>
-              ))}
-            </div>
+            <>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                {MAIN.map(([k, label]) => linkRow(k, label, props[k] || "", setProp(k), k, k === "website" ? "https://" + project.website : "https://…"))}
+                {SOC.map(([k, label]) => linkRow("s:" + k, label, (props.socials || {})[k] || "", setSocial(k), "social:" + k, "https://…"))}
+              </div>
+              {/* ---- custom links: anything beyond the fixed rows above ---- */}
+              <div className="border-t border-gray-100 pt-3">
+                <div className="text-[11.5px] font-bold text-gray-700">Custom links</div>
+                <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Any other official brand link — directories, awards, press, partner profiles. The description tells the writers what the link is.</div>
+                <div className="space-y-1.5">
+                  {custom.map((row) => (
+                    <div key={row.id} className="flex items-center gap-1.5">
+                      <input value={row.name || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, name: e.target.value } : x)))}
+                        placeholder="Name" className={"w-36 shrink-0 " + inputCls} />
+                      <input value={row.url || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, url: e.target.value } : x)))}
+                        placeholder="https://…" className={"ll-mono min-w-0 flex-[3] " + inputCls} />
+                      <input value={row.note || ""} onChange={(e) => setCustom(custom.map((x) => (x.id === row.id ? { ...x, note: e.target.value } : x)))}
+                        placeholder="Link description" className={"min-w-0 flex-[2] " + inputCls} />
+                      <button onClick={() => askDelete(`the custom link "${row.name || row.url || "row"}"`).then((ok) => { if (ok) setCustom(custom.filter((x) => x.id !== row.id)); })}
+                        className="shrink-0 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+                    </div>
+                  ))}
+                  <button onClick={() => setCustom([...custom, { id: "cl" + Date.now(), name: "", url: "", note: "" }])}
+                    className="flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-[10.5px] font-medium text-gray-400 hover:border-gray-400 hover:text-gray-600">
+                    <Plus size={11} /> Add custom link
+                  </button>
+                </div>
+              </div>
+            </>
           );
         })()}
       </Card>
