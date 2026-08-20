@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
-  ChevronDown, ChevronRight, FileText, Image as ImageIcon, Layers, Network, Plus, RefreshCw, Search,
-  Sparkles, Target, Trash2, TriangleAlert, UploadCloud, Wand2, X,
+  ChevronDown, ChevronRight, FileText, Image as ImageIcon, Layers, Network, Plus, Redo2, RefreshCw, Search,
+  Sparkles, Target, Trash2, TriangleAlert, Undo2, UploadCloud, Wand2, X,
 } from "lucide-react";
 import { Card, Labeled, Modal, askDelete, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
@@ -235,6 +235,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
           </span>
           <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: meta.color }} />
           <span className="truncate text-[12.5px] font-medium text-gray-800" title={node.title}>{node.title}</span>
+          {node.adoptedExisting && <span className="ml-1 shrink-0 rounded bg-emerald-50 px-1 py-px text-[7.5px] font-bold uppercase tracking-wide text-emerald-700" title="Adopted from the live site — keeps its real URL">existing page</span>}
         </button>
         {/* URL */}
         <span className="ll-mono min-w-0 truncate px-2 text-[10.5px] text-gray-400" title={node.url}>{node.url}</span>
@@ -835,6 +836,21 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   const setTree = (fnOrTree) => setOpt("website", (cur) => ({
     architecture: { ...(cur?.architecture || {}), tree: typeof fnOrTree === "function" ? fnOrTree(cur?.architecture?.tree || []) : fnOrTree },
   }));
+  /* ---- undo / redo over the architecture tree --------------------------
+     Every structural change snapshots the tree it replaced; per-node field
+     edits (typing in the page editor) coalesce into one snapshot per burst
+     so undo steps stay meaningful. Snapshots are taken OUTSIDE the state
+     updaters — StrictMode double-invokes those, and a history that pushes
+     from inside them records every step twice. */
+  const hist = React.useRef({ past: [], future: [], lastTag: null, lastAt: 0 });
+  const [, histBump] = useState(0);
+  const snapshot = (t, tag) => {
+    const h = hist.current, now = Date.now();
+    if (tag && h.lastTag === tag && now - h.lastAt < 2500) { h.lastAt = now; return; }
+    h.past.push(t);
+    if (h.past.length > 60) h.past.shift();
+    h.future = []; h.lastTag = tag || null; h.lastAt = now;
+  };
   const [niche, setNiche] = useState(arch?.niche || "");
   const [services, setServices] = useState(arch?.services || "");
   const [locations, setLocations] = useState(arch?.locations || "");
@@ -867,6 +883,9 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     }
     /* enforce the URL hierarchy: children always slug under their parent */
     tree = normalizeTreeUrls(tree);
+    /* a regenerate replaces the whole map — the map it replaced is undoable */
+    const prevTree = arch?.tree || [];
+    if (prevTree.length) { snapshot(prevTree); histBump((x) => x + 1); }
     setOpt("website", (cur) => ({ architecture: { ...(cur?.architecture || {}), tree, niche, services, locations, live, generatedAt: Date.now() } }));
     work?.("website", "archGenerated", { detail: `${countPages(tree)} pages` });
     log?.(`Generated website architecture (${countPages(tree)} pages${live ? ", AI" : ", draft"})`, project.name);
@@ -874,6 +893,23 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   };
 
   const tree = arch?.tree || [];
+  /* structural edits go through here so the state they replace is undoable;
+     the URL-hierarchy self-heal below deliberately bypasses it */
+  const setTreeTracked = (updater, tag) => { snapshot(tree, tag); setTree(updater); histBump((x) => x + 1); };
+  const undoTree = () => {
+    const h = hist.current;
+    if (!h.past.length) return;
+    const prev = h.past.pop();
+    h.future.push(tree); h.lastTag = null;
+    setTree(prev); histBump((x) => x + 1);
+  };
+  const redoTree = () => {
+    const h = hist.current;
+    if (!h.future.length) return;
+    const next = h.future.pop();
+    h.past.push(tree); h.lastTag = null;
+    setTree(next); histBump((x) => x + 1);
+  };
   /* self-heal older maps: enforce the parent/child URL hierarchy on load so
      pre-existing trees (children generated on foreign paths) fix themselves */
   React.useEffect(() => {
@@ -887,17 +923,17 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     const u = (parentUrl === "/" ? "" : parentUrl) + "/" + (c.url.split("/").filter(Boolean).pop() || "page");
     return { ...c, url: u, children: rebaseChildren(c.children, u) };
   });
-  const patchNode = (id, patch) => setTree((t) => updateNode(t, id, (p) => {
+  const patchNode = (id, patch) => setTreeTracked((t) => updateNode(t, id, (p) => {
     const np = typeof patch === "function" ? patch(p) : patch;
     if (np.url !== undefined && np.url !== p.url) return { ...np, children: rebaseChildren(np.children ?? p.children, np.url) };
     return np;
-  }));
+  }), "patch:" + id);
   const openNode = (() => { let found = null; walk(tree, (p) => { if (p.id === openId) found = p; }); return found; })();
 
-  const addChild = (parent) => setTree((t) => updateNode(t, parent.id, (p) => ({
+  const addChild = (parent) => setTreeTracked((t) => updateNode(t, parent.id, (p) => ({
     children: [...(p.children || []), { id: "n" + Date.now(), title: "New subpage", url: (p.url === "/" ? "" : p.url) + "/new-page", type: "service", children: [], seo: blankSeo() }],
   })));
-  const addTop = () => setTree((t) => [...t, { id: "n" + Date.now(), title: "New page", url: "/new-page", type: "service", children: [], seo: blankSeo() }]);
+  const addTop = () => setTreeTracked((t) => [...t, { id: "n" + Date.now(), title: "New page", url: "/new-page", type: "service", children: [], seo: blankSeo() }]);
 
   /* ---------- drag & drop: reorder, re-parent, and pull in live pages ------
      Drop on a row's middle = nest under it (URL becomes parent-url/slug,
@@ -931,7 +967,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       const zone = targetId == null ? "root" : (dragOverRef.current?.id === targetId ? dragOverRef.current.zone : "inside");
       dnd.setOver(null);
       if (!p) return;
-      setTree((t) => {
+      setTreeTracked((t) => {
         let dragged = null;
         if (p.kind === "node") {
           walk(t, (n) => { if (n.id === p.id) dragged = n; });
@@ -989,7 +1025,13 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
         <Card className="p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="ll-display text-[13.5px] font-semibold">Site architecture <span className="text-[11px] font-normal text-gray-400">{countPages(tree)} pages · click a page to research & write · drag rows to reorder, drop on a page to nest under it (URLs re-parent automatically)</span></div>
-            <button onClick={addTop} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600"><Plus size={11} /> Add page</button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button onClick={undoTree} disabled={!hist.current.past.length} title="Undo the last change to the map"
+                className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:text-gray-700 disabled:opacity-30"><Undo2 size={13} /></button>
+              <button onClick={redoTree} disabled={!hist.current.future.length} title="Redo"
+                className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:text-gray-700 disabled:opacity-30"><Redo2 size={13} /></button>
+              <button onClick={addTop} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600"><Plus size={11} /> Add page</button>
+            </div>
           </div>
           <div className="flex gap-4">
             <div className="min-w-0 flex-1 overflow-x-auto">
@@ -1005,7 +1047,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
               <div style={{ minWidth: 720 }}>
               {tree.map((p) => (
                 <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
-                  onRemove={(n) => { if (openId === n.id) setOpenId(null); setTree((t) => removeNode(t, n.id)); }}
+                  onRemove={(n) => { if (openId === n.id) setOpenId(null); setTreeTracked((t) => removeNode(t, n.id)); }}
                   onPublish={(n) => setDeploying({ only: n })} dnd={dnd} grid={gridT} />
               ))}
               </div>
@@ -1023,24 +1065,25 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
             {(w.pages || []).length > 0 && (
               <div className="hidden w-64 shrink-0 border-l border-gray-100 pl-3 lg:block">
                 <div className="text-[11.5px] font-bold text-gray-700">Live pages on the site</div>
-                <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it keeps its real URL unless you nest it under a parent.</div>
+                <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it moves out of this list, gets an "existing page" tag, and keeps its real URL unless you nest it under a parent. Removing it from the map brings it back here.</div>
                 <div className="max-h-[440px] space-y-1 overflow-y-auto pr-1">
-                  {(w.pages || []).map((p) => {
-                    const inMap = treeUrls.has(p.url);
-                    return (
-                      <div key={p.id} draggable={!inMap}
-                        onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
-                        className={"rounded-lg border px-2 py-1.5 " + (inMap ? "border-gray-100 opacity-40" : "cursor-grab border-gray-150 hover:border-gray-300")}
-                        style={{ borderColor: "#E5E7EB" }}>
-                        <div className="flex items-center gap-1.5">
-                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
-                          {inMap && <span className="shrink-0 rounded bg-emerald-50 px-1 py-px text-[7.5px] font-bold uppercase text-emerald-700">in map</span>}
-                          {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
-                        </div>
-                        <div className="ll-mono truncate text-[9.5px] text-gray-400">{p.url}</div>
+                  {(w.pages || []).filter((p) => !treeUrls.has(p.url)).map((p) => (
+                    <div key={p.id} draggable
+                      onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
+                      className="cursor-grab rounded-lg border px-2 py-1.5 hover:border-gray-300"
+                      style={{ borderColor: "#E5E7EB" }}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
+                        {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
                       </div>
-                    );
-                  })}
+                      <div className="ll-mono truncate text-[9.5px] text-gray-400">{p.url}</div>
+                    </div>
+                  ))}
+                  {(w.pages || []).every((p) => treeUrls.has(p.url)) && (
+                    <div className="rounded-lg border border-dashed border-gray-200 px-2 py-3 text-center text-[10px] leading-relaxed text-gray-400">
+                      Every live page is in the map — each carries the <b>existing page</b> tag in the architecture.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1071,7 +1114,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
                     <span className="ll-mono truncate text-[10px] text-amber-700" title={dup.title}>existing {dup.kind}: {dup.url}</span>
                     {same ? <span className="rounded bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">will update in place</span> : (
                       <span className="flex shrink-0 gap-1">
-                        <button onClick={() => setTree((t) => removeNode(t, node.id))} className="rounded border border-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-600 hover:text-red-600">Remove</button>
+                        <button onClick={() => setTreeTracked((t) => removeNode(t, node.id))} className="rounded border border-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-600 hover:text-red-600">Remove</button>
                         <button onClick={() => patchNode(node.id, { url: dup.url, adoptedExisting: true })} className="rounded px-2 py-0.5 text-[10px] font-semibold text-white" style={{ background: accent }}>Use existing URL</button>
                         <button onClick={() => patchNode(node.id, { dupResolved: true })} className="rounded px-2 py-0.5 text-[10px] font-semibold text-gray-400 hover:text-gray-600">Keep both</button>
                       </span>
