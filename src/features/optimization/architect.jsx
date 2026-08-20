@@ -204,19 +204,28 @@ const LiveChip = ({ live, provider }) => (
 
 /* ---- spreadsheet-style architecture rows: Page | URL | Type | Keywords |
    Content | Actions in aligned, resizable columns — a long URL can never
-   swallow the page name again. Rows still drag to reorder/nest. ---- */
-function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish, dnd, grid }) {
+   swallow the page name again. Rows still drag to reorder/nest; RIGHT-CLICK
+   toggles a row into the multi-selection, and dragging any selected row
+   moves the whole selection together. ---- */
+function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish, dnd, grid, sel = null, onToggleSel = null }) {
   const [open, setOpen] = useState(true);
   const meta = PAGE_TYPE_META[node.type] || { label: node.type, color: "#64748B" };
   const hasKids = (node.children || []).length > 0;
   const done = node.seo?.content ? "content" : node.seo?.structure ? "structure" : node.seo?.primaryKw ? "keywords" : null;
   const over = dnd?.over?.id === node.id ? dnd.over.zone : null;
+  const isSel = !!sel?.has(node.id);
   const seo = node.seo || {};
   const kws = [seo.primaryKw, ...String(seo.secondaryKws || "").split(",")].map((s) => s?.trim()).filter(Boolean);
   return (
     <div>
       <div draggable={!!dnd}
-        onDragStart={(e) => { dnd?.start({ kind: "node", id: node.id }); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", node.id); } catch { /* older browsers */ } }}
+        onDragStart={(e) => {
+          /* dragging a selected row carries the WHOLE selection */
+          if (isSel && sel.size > 1) dnd?.start({ kind: "multi", ids: [...sel] });
+          else dnd?.start({ kind: "node", id: node.id });
+          e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", node.id); } catch { /* older browsers */ }
+        }}
+        onContextMenu={(e) => { if (onToggleSel) { e.preventDefault(); onToggleSel(node.id); } }}
         onDragOver={(e) => {
           if (!dnd?.dragging()) return;
           e.preventDefault(); e.dataTransfer.dropEffect = "move";
@@ -228,8 +237,8 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dnd?.drop(node.id); }}
         className="group grid items-center border-b border-gray-50 hover:bg-gray-50"
         style={{ gridTemplateColumns: grid, cursor: dnd ? "grab" : undefined,
-          boxShadow: over === "inside" ? `inset 0 0 0 2px ${accent}` : undefined,
-          background: over === "inside" ? accent + "0D" : undefined,
+          boxShadow: over === "inside" ? `inset 0 0 0 2px ${accent}` : isSel ? `inset 3px 0 0 ${accent}` : undefined,
+          background: over === "inside" ? accent + "0D" : isSel ? accent + "14" : undefined,
           borderTop: over === "before" ? `2px solid ${accent}` : "2px solid transparent",
           borderBottom: over === "after" ? `2px solid ${accent}` : undefined }}>
         {/* Page */}
@@ -240,6 +249,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
           <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: meta.color }} />
           <span className="truncate text-[12.5px] font-medium text-gray-800" title={node.title}>{node.title}</span>
           {node.adoptedExisting && <span className="ml-1 shrink-0 rounded bg-emerald-50 px-1 py-px text-[7.5px] font-bold uppercase tracking-wide text-emerald-700" title="Adopted from the live site — keeps its real URL">existing page</span>}
+          {isSel && <span className="ml-1 shrink-0 rounded-full px-1.5 py-px text-[7.5px] font-bold uppercase tracking-wide text-white" style={{ background: accent }} title="In the selection — drag any selected row to move them all; right-click to deselect">selected</span>}
         </button>
         {/* URL */}
         <span className="ll-mono min-w-0 truncate px-2 text-[10.5px] text-gray-400" title={node.url}>{node.url}</span>
@@ -272,7 +282,7 @@ function PageRow({ node, depth, accent, onOpen, onAddChild, onRemove, onPublish,
         </span>
       </div>
       {open && (node.children || []).map((c) => (
-        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} dnd={dnd} grid={grid} />
+        <PageRow key={c.id} node={c} depth={depth + 1} accent={accent} onOpen={onOpen} onAddChild={onAddChild} onRemove={onRemove} onPublish={onPublish} dnd={dnd} grid={grid} sel={sel} onToggleSel={onToggleSel} />
       ))}
     </div>
   );
@@ -879,6 +889,13 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   /* the "Live pages on the site" column tucks away — remembered per device */
   const [liveSbHidden, setLiveSbHidden] = useState(() => localStorage.getItem("ss_arch_livesb") === "1");
   const toggleLiveSb = (v) => { setLiveSbHidden(v); try { localStorage.setItem("ss_arch_livesb", v ? "1" : "0"); } catch { /* private mode */ } };
+  /* multi-selection of STRUCTURE rows (right-click toggles) — dragging any
+     selected row moves the whole selection in one drop */
+  const [selIds, setSelIds] = useState(() => new Set());
+  const toggleSel = (id) => setSelIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  /* multi-selection of LIVE pages (checkboxes) — adopted into the map in bulk */
+  const [pickLive, setPickLive] = useState(() => new Set());
+  const togglePickLive = (url) => setPickLive((s) => { const n = new Set(s); n.has(url) ? n.delete(url) : n.add(url); return n; });
   const brandVoice = opt.brandVoice || {};
 
   /* geo target for SERP scans: the project's tracked market, else US */
@@ -1011,8 +1028,33 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       const zone = targetId == null ? "root" : (dragOverRef.current?.id === targetId ? dragOverRef.current.zone : "inside");
       dnd.setOver(null);
       if (!p) return;
+      if (p.kind === "multi") setSelIds(new Set());  // the move consumes the selection
       setTreeTracked((t) => {
         let dragged = null;
+        /* a whole right-click selection moves in one drop */
+        if (p.kind === "multi") {
+          const ids = new Set(p.ids);
+          /* only the TOP-MOST selected nodes move — a selected child inside a
+             selected parent travels with the parent, never separately */
+          const picked = [];
+          const walkTop = (nodes, under) => (nodes || []).forEach((n) => {
+            const isSel = ids.has(n.id);
+            if (isSel && !under) picked.push(n);
+            walkTop(n.children, under || isSel);
+          });
+          walkTop(t, false);
+          if (!picked.length) return t;
+          if (targetId && (ids.has(targetId) || picked.some((n) => containsId(n, targetId)))) return t; // never drop the selection into itself
+          let without = t;
+          picked.forEach((n) => { without = removeNode(without, n.id); });
+          if (zone === "root") return [...without, ...picked.map((n) => rebase(n, ""))];
+          /* "after" inserts one-by-one right after the target, so reverse
+             keeps the selection's own order intact */
+          const seq = zone === "after" ? [...picked].reverse() : picked;
+          let out = without;
+          seq.forEach((n) => { out = insertAt(out, "", n, targetId, zone); });
+          return out;
+        }
         if (p.kind === "node") {
           walk(t, (n) => { if (n.id === p.id) dragged = n; });
           if (!dragged || dragged.id === targetId || (targetId && containsId(dragged, targetId))) return t; // never drop into own subtree
@@ -1028,6 +1070,19 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
         return zone === "root" ? [...t, dragged] : insertAt(t, "", dragged, targetId, zone);
       });
     },
+  };
+  /* bulk-adopt the checkbox-selected live pages as top-level map entries */
+  const addPickedLive = () => {
+    const urls = [...pickLive].filter((u) => !treeUrls.has(u));
+    if (!urls.length) { setPickLive(new Set()); return; }
+    const pages = (w.pages || []);
+    setTreeTracked((t) => [...t, ...urls.map((u, i) => {
+      const pg = pages.find((x) => x.url === u) || {};
+      return { id: "n" + Date.now().toString(36) + i + Math.floor(Math.random() * 1e4).toString(36),
+        title: pg.name || u, url: u, type: /blog|article|news/.test(u) ? "article" : "service",
+        adoptedExisting: true, children: [], seo: blankSeo() };
+    })]);
+    setPickLive(new Set());
   };
   const treeUrls = (() => { const s = new Set(); walk(tree, (n) => s.add(n.url)); return s; })();
 
@@ -1068,8 +1123,14 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       {tree.length > 0 && (
         <Card className="p-4">
           <div className="mb-2 flex items-center justify-between">
-            <div className="ll-display text-[13.5px] font-semibold">Site architecture <span className="text-[11px] font-normal text-gray-400">{countPages(tree)} pages · click a page to research & write · drag rows to reorder, drop on a page to nest under it (URLs re-parent automatically)</span></div>
+            <div className="ll-display text-[13.5px] font-semibold">Site architecture <span className="text-[11px] font-normal text-gray-400">{countPages(tree)} pages · click a page to research & write · drag rows to reorder, drop on a page to nest under it · right-click rows to select several, then drag any of them to move the whole selection</span></div>
             <div className="flex shrink-0 items-center gap-1">
+              {selIds.size > 0 && (
+                <button onClick={() => setSelIds(new Set())} title="Clear the right-click selection"
+                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[10.5px] font-bold text-white" style={{ background: accent }}>
+                  {selIds.size} selected <X size={10} />
+                </button>
+              )}
               <button onClick={undoTree} disabled={!hist.current.past.length} title="Undo the last change to the map"
                 className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:text-gray-700 disabled:opacity-30"><Undo2 size={13} /></button>
               <button onClick={redoTree} disabled={!hist.current.future.length} title="Redo"
@@ -1097,8 +1158,8 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
               <div style={{ minWidth: 720 }}>
               {tree.map((p) => (
                 <PageRow key={p.id} node={p} depth={0} accent={accent} onOpen={(n) => setOpenId(n.id)} onAddChild={addChild}
-                  onRemove={(n) => { if (openId === n.id) setOpenId(null); setTreeTracked((t) => removeNode(t, n.id)); }}
-                  onPublish={(n) => setDeploying({ only: n })} dnd={dnd} grid={gridT} />
+                  onRemove={(n) => { if (openId === n.id) setOpenId(null); setSelIds((s) => { const x = new Set(s); x.delete(n.id); return x; }); setTreeTracked((t) => removeNode(t, n.id)); }}
+                  onPublish={(n) => setDeploying({ only: n })} dnd={dnd} grid={gridT} sel={selIds} onToggleSel={toggleSel} />
               ))}
               </div>
               {/* root drop zone: drop here = top-level page */}
@@ -1124,14 +1185,22 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
                     <button onClick={() => toggleLiveSb(true)} title="Hide this list"
                       className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><PanelRightClose size={13} /></button>
                   </div>
-                  <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it moves out of this list, gets an "existing page" tag, and keeps its real URL unless you nest it under a parent. Removing it from the map brings it back here.</div>
+                  <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag a page into the architecture — or tick several and add them all at once. Adopted pages leave this list, get an "existing page" tag, and keep their real URL unless nested under a parent. Removing one from the map brings it back here.</div>
+                  {pickLive.size > 0 && (
+                    <button onClick={addPickedLive}
+                      className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-white" style={{ background: accent }}>
+                      <Plus size={11} /> Add {pickLive.size} selected page{pickLive.size === 1 ? "" : "s"} to the map
+                    </button>
+                  )}
                   <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
                     {(w.pages || []).filter((p) => !treeUrls.has(p.url)).map((p) => (
                       <div key={p.id} draggable
                         onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
                         className="cursor-grab rounded-lg border px-2 py-1.5 hover:border-gray-300"
-                        style={{ borderColor: "#E5E7EB" }}>
+                        style={pickLive.has(p.url) ? { borderColor: accent, background: accent + "0A" } : { borderColor: "#E5E7EB" }}>
                         <div className="flex items-center gap-1.5">
+                          <input type="checkbox" checked={pickLive.has(p.url)} onChange={() => togglePickLive(p.url)}
+                            onMouseDown={(e) => e.stopPropagation()} className="shrink-0 accent-current" style={{ accentColor: accent }} />
                           <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
                           {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
                         </div>
