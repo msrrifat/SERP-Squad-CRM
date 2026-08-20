@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import {
-  ChevronDown, ChevronRight, Download, FileText, Image as ImageIcon, Layers, Network, Plus, Redo2, RefreshCw, Search,
+  ChevronDown, ChevronRight, Download, FileText, Image as ImageIcon, Layers, Network, PanelRightClose, PanelRightOpen, Plus, Redo2, RefreshCw, Search,
   Sparkles, Target, Trash2, TriangleAlert, Undo2, UploadCloud, Wand2, X,
 } from "lucide-react";
 import { downloadContentDocx } from "../../lib/docx.js";
@@ -165,7 +165,10 @@ const slugSeg = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")
 export function normalizeTreeUrls(nodes, parentUrl = null) {
   return (nodes || []).map((n) => {
     let url = n.url;
-    if (parentUrl !== null) {
+    /* adopted live pages are the exception everywhere: their URL is the page's
+       REAL address on the site — re-slugging it under a parent would break the
+       "existing page" promise (and un-hide it from the live-pages list) */
+    if (parentUrl !== null && !n.adoptedExisting) {
       const seg = (n.url || "").split("/").filter(Boolean).pop() || slugSeg(n.title) || "page";
       url = (parentUrl === "/" ? "" : parentUrl) + "/" + seg;
     }
@@ -864,6 +867,9 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
   const [genErr, setGenErr] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [deploying, setDeploying] = useState(false);
+  /* the "Live pages on the site" column tucks away — remembered per device */
+  const [liveSbHidden, setLiveSbHidden] = useState(() => localStorage.getItem("ss_arch_livesb") === "1");
+  const toggleLiveSb = (v) => { setLiveSbHidden(v); try { localStorage.setItem("ss_arch_livesb", v ? "1" : "0"); } catch { /* private mode */ } };
   const brandVoice = opt.brandVoice || {};
 
   /* geo target for SERP scans: the project's tracked market, else US */
@@ -889,6 +895,10 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     }
     /* enforce the URL hierarchy: children always slug under their parent */
     tree = normalizeTreeUrls(tree);
+    /* pages the site ALREADY has adopt automatically: a generated page whose
+       URL or slug matches a live page IS that page — it takes the live URL
+       and the "existing page" tag instead of waiting for a manual resolve */
+    tree = adoptExisting(tree);
     /* a regenerate replaces the whole map — the map it replaced is undoable */
     const prevTree = arch?.tree || [];
     if (prevTree.length) { snapshot(prevTree); histBump((x) => x + 1); }
@@ -929,6 +939,25 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     const u = (parentUrl === "/" ? "" : parentUrl) + "/" + (c.url.split("/").filter(Boolean).pop() || "page");
     return { ...c, url: u, children: rebaseChildren(c.children, u) };
   });
+  /* match generated pages against the live site (demo placeholders excluded):
+     exact URL first, exact slug second — fuzzy title matches stay a manual
+     decision in the duplicate panel below */
+  const adoptExisting = (nodes) => {
+    const livePages = (w.pages || []).filter((p) => !p.demo && p.url);
+    if (!livePages.length) return nodes;
+    const byUrl = new Map(livePages.map((p) => [p.url, p]));
+    const bySlug = new Map();
+    livePages.forEach((p) => { const s = p.url.split("/").filter(Boolean).pop(); if (s && !bySlug.has(s)) bySlug.set(s, p); });
+    const mapNode = (n) => {
+      const slug = n.url.split("/").filter(Boolean).pop() || "";
+      const hit = byUrl.get(n.url) || bySlug.get(slug);
+      const out = hit && !n.adoptedExisting
+        ? { ...n, url: hit.url, adoptedExisting: true, children: rebaseChildren(n.children, hit.url) }
+        : n;
+      return { ...out, children: (out.children || []).map(mapNode) };
+    };
+    return nodes.map(mapNode);
+  };
   const patchNode = (id, patch) => setTreeTracked((t) => updateNode(t, id, (p) => {
     const np = typeof patch === "function" ? patch(p) : patch;
     if (np.url !== undefined && np.url !== p.url) return { ...np, children: rebaseChildren(np.children ?? p.children, np.url) };
@@ -1037,6 +1066,12 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
               <button onClick={redoTree} disabled={!hist.current.future.length} title="Redo"
                 className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:text-gray-700 disabled:opacity-30"><Redo2 size={13} /></button>
               <button onClick={addTop} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600"><Plus size={11} /> Add page</button>
+              {(w.pages || []).length > 0 && liveSbHidden && (
+                <button onClick={() => toggleLiveSb(false)} title="Show the site's live pages for drag & drop"
+                  className="hidden items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-600 lg:flex">
+                  <PanelRightOpen size={12} /> Live pages
+                </button>
+              )}
             </div>
           </div>
           <div className="flex gap-4">
@@ -1068,28 +1103,38 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
             </div>
             {/* ---- the LIVE site's pages: drag any into the map to combine
                  existing + researched pages into the final architecture ---- */}
-            {(w.pages || []).length > 0 && (
-              <div className="hidden w-64 shrink-0 border-l border-gray-100 pl-3 lg:block">
-                <div className="text-[11.5px] font-bold text-gray-700">Live pages on the site</div>
-                <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it moves out of this list, gets an "existing page" tag, and keeps its real URL unless you nest it under a parent. Removing it from the map brings it back here.</div>
-                <div className="max-h-[440px] space-y-1 overflow-y-auto pr-1">
-                  {(w.pages || []).filter((p) => !treeUrls.has(p.url)).map((p) => (
-                    <div key={p.id} draggable
-                      onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
-                      className="cursor-grab rounded-lg border px-2 py-1.5 hover:border-gray-300"
-                      style={{ borderColor: "#E5E7EB" }}>
-                      <div className="flex items-center gap-1.5">
-                        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
-                        {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
+            {(w.pages || []).length > 0 && !liveSbHidden && (
+              /* zero intrinsic height: the column is absolutely positioned inside
+                 a width-only shell, so it always matches the architecture list's
+                 height exactly — dragging near the bottom rows lines up, and a
+                 long page list scrolls inside instead of stretching the card */
+              <div className="relative hidden w-64 shrink-0 lg:block">
+                <div className="absolute inset-0 flex flex-col border-l border-gray-100 pl-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11.5px] font-bold text-gray-700">Live pages on the site</div>
+                    <button onClick={() => toggleLiveSb(true)} title="Hide this list"
+                      className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><PanelRightClose size={13} /></button>
+                  </div>
+                  <div className="mb-2 mt-0.5 text-[10px] leading-relaxed text-gray-400">Drag an existing page into the architecture to keep it in the final map — it moves out of this list, gets an "existing page" tag, and keeps its real URL unless you nest it under a parent. Removing it from the map brings it back here.</div>
+                  <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+                    {(w.pages || []).filter((p) => !treeUrls.has(p.url)).map((p) => (
+                      <div key={p.id} draggable
+                        onDragStart={(e) => { dnd.start({ kind: "live", url: p.url, name: p.name }); e.dataTransfer.effectAllowed = "copy"; try { e.dataTransfer.setData("text/plain", p.url); } catch { /* older browsers */ } }}
+                        className="cursor-grab rounded-lg border px-2 py-1.5 hover:border-gray-300"
+                        style={{ borderColor: "#E5E7EB" }}>
+                        <div className="flex items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-700">{p.name || p.url}</span>
+                          {p.demo && <span className="shrink-0 rounded bg-amber-50 px-1 py-px text-[7.5px] font-bold uppercase text-amber-700">demo</span>}
+                        </div>
+                        <div className="ll-mono truncate text-[9.5px] text-gray-400">{p.url}</div>
                       </div>
-                      <div className="ll-mono truncate text-[9.5px] text-gray-400">{p.url}</div>
-                    </div>
-                  ))}
-                  {(w.pages || []).every((p) => treeUrls.has(p.url)) && (
-                    <div className="rounded-lg border border-dashed border-gray-200 px-2 py-3 text-center text-[10px] leading-relaxed text-gray-400">
-                      Every live page is in the map — each carries the <b>existing page</b> tag in the architecture.
-                    </div>
-                  )}
+                    ))}
+                    {(w.pages || []).every((p) => treeUrls.has(p.url)) && (
+                      <div className="rounded-lg border border-dashed border-gray-200 px-2 py-3 text-center text-[10px] leading-relaxed text-gray-400">
+                        Every live page is in the map — each carries the <b>existing page</b> tag in the architecture.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
