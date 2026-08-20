@@ -7,7 +7,7 @@
    high → low) — the bank feeds Website Mapping & Content, Pages and
    Posts in the Optimization Studio for structure + content writing.
    Live via DataForSEO Labs (cost-chipped) or labeled demo. ---- */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, CheckCircle2, ChevronDown, Download, FolderPlus, Globe, MapPin,
   RefreshCw, Search, TrendingUp, X,
@@ -74,19 +74,52 @@ const KdRing = ({ kd, size = 84 }) => {
   );
 };
 
-/* location combobox: national entries + every city + free text */
-function LocationPick({ value, onChange }) {
+/* location combobox — searches DataForSEO's REAL locations database (every
+   city, region and state its Google data covers, ~100k+ worldwide) when the
+   credentials are connected; the app's built-in city list + free text remain
+   the offline fallback. Free lookups; the list is cached server-side. */
+function LocationPick({ value, onChange, dfsCreds = null }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [remote, setRemote] = useState(null);   // null = unavailable/idle, [] = searched & none
+  const [looking, setLooking] = useState(false);
+  useEffect(() => {
+    if (!dfsCreds || q.trim().length < 2) { setRemote(null); setLooking(false); return; }
+    let dead = false;
+    const t = setTimeout(async () => {
+      setLooking(true);
+      try {
+        /* first search after a server restart downloads + caches the full
+           locations list, which can take a minute — hence the long timeout */
+        const r = await fetch("/api/kw/locations", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(150000),
+          body: JSON.stringify({ q: q.trim(), dfs: dfsCreds }) });
+        const d = await r.json().catch(() => ({}));
+        if (!dead) setRemote(r.ok ? (d.rows || []) : null);
+      } catch { if (!dead) setRemote(null); }
+      if (!dead) setLooking(false);
+    }, 350);
+    return () => { dead = true; clearTimeout(t); };
+  }, [q, dfsCreds]);
   const matches = useMemo(() => {
     const s = q.trim().toLowerCase();
     const nat = COUNTRIES.map((c) => ({ national: true, label: `${c} — national`, locationName: c }));
+    /* live results from DataForSEO's own list are authoritative — a picked
+       name is guaranteed to resolve, for ANY city or state */
+    if (s && Array.isArray(remote) && remote.length) {
+      return [
+        ...nat.filter((n) => n.label.toLowerCase().includes(s)),
+        ...remote.map((r) => ({
+          label: r.name.split(",").join(", ") + (r.type && r.type !== "City" ? ` · ${String(r.type).toLowerCase()}` : ""),
+          locationName: r.name, national: !r.name.includes(","),
+        })),
+      ].slice(0, 25);
+    }
     const cities = ALL_CITIES.map((c) => ({ label: `${c.city}, ${regionShort(c.region)}, ${c.country}`, locationName: `${c.city},${c.region},${c.country}` }));
     if (!s) return [...nat, ...cities.slice(0, 8)];
     const hit = [...nat.filter((n) => n.label.toLowerCase().includes(s)), ...cities.filter((c) => c.label.toLowerCase().includes(s))].slice(0, 12);
-    if (!hit.length) hit.push({ label: `Use "${q.trim()}" as location`, locationName: q.trim(), custom: true });
+    if (!hit.length && !looking) hit.push({ label: `Use "${q.trim()}" as location`, locationName: q.trim(), custom: true });
     return hit;
-  }, [q]);
+  }, [q, remote, looking]);
   return (
     <div className="relative min-w-0">
       <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5">
@@ -98,6 +131,9 @@ function LocationPick({ value, onChange }) {
       </div>
       {open && (
         <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+          {looking && (
+            <div className="px-3 py-1.5 text-[11px] text-gray-400">Searching DataForSEO's locations… <span className="text-[10px]">(the first search after a restart caches the full list — up to a minute)</span></div>
+          )}
           {matches.map((m, i) => (
             <button key={i} onMouseDown={() => { onChange(m); setOpen(false); }}
               className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[12px] text-gray-700 hover:bg-gray-50">
@@ -114,6 +150,8 @@ function LocationPick({ value, onChange }) {
 export function KeywordFinderView({ company, clients = [], onAddToProject, accent, onUpdateCompany = null, savedView = false, onExitSaved = null }) {
   const dfs = company.dfs;
   const dfsReady = !!(dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad"));
+  /* stable identity, or the combobox's search effect refires every render */
+  const dfsAuth = useMemo(() => (dfsReady ? { login: dfs.login, password: dfs.password } : null), [dfsReady, dfs?.login, dfs?.password]);
   const [mode, setMode] = useState("keyword"); // keyword | domain
   const [seed, setSeed] = useState("");
   const [loc, setLoc] = useState({ national: true, label: "United States — national", locationName: "United States" });
@@ -250,7 +288,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
       <Card className="space-y-3 p-5">
         <div className="ll-display text-[17px] font-bold">Find long-tail keywords with low SEO difficulty</div>
         <div className="text-[11.5px] text-gray-400">
-          Local (any city in the USA, Canada, UK, Australia & Netherlands) or national research.
+          Local or national research — the location box searches DataForSEO's own database, so every city, state and region its Google data covers is selectable (typed locations are also auto-resolved server-side).
           {dfsReady ? <> Live via <b>DataForSEO Labs</b> <DfsCostChip requests={2} kind="organic" />.</> : <> DataForSEO isn't connected — results run as a labeled demo until the credentials are added in API settings.</>}
         </div>
         <div className="flex gap-0 border-b border-gray-200">
@@ -269,7 +307,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
               placeholder={mode === "keyword" ? "Enter the keyword" : "Enter a domain (competitor.com)"}
               className="w-full bg-transparent py-2 text-[13px] outline-none" />
           </div>
-          <LocationPick value={loc} onChange={setLoc} />
+          <LocationPick value={loc} onChange={setLoc} dfsCreds={dfsAuth} />
           <select value={lang} onChange={(e) => setLang(e.target.value)} className={inputCls + " bg-white"}>
             {LANGS.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
           </select>

@@ -2694,9 +2694,40 @@ async function dfsLabs(creds, endpoint, task) {
    metros) — a tracked city like "York,Yorkshire and the Humber,United Kingdom"
    fails with "Invalid Field: 'location_name'". Walk from most to least
    specific instead of erroring the whole search, and report what was used. */
+/* any typed location → DataForSEO's canonical location_name, resolved against
+   the real locations list (cached 30 days, free endpoint). "deerfield beach"
+   → "Deerfield Beach,Florida,United States". Without this, every city outside
+   the app's small built-in list failed the exact-name match and either fell
+   back to national numbers or errored into the demo — the tool must work for
+   every city and state DataForSEO's Google database covers. */
+async function canonicalLocation(creds, locationName) {
+  const parts = String(locationName || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let rows;
+  try { rows = await locationsFor(creds, ""); } catch { return null; }
+  const exact = rows.find((r) => normLoc(r.name) === normLoc(parts.join(",")));
+  if (exact) return exact.name;
+  const cityNorm = normLoc(parts[0]);
+  if (!cityNorm) return null;
+  const cands = rows.filter((r) => { const n = normLoc(r.name); return n === cityNorm || n.startsWith(cityNorm + " "); });
+  if (!cands.length) return null;
+  const rest = parts.slice(1).map(normLoc).filter(Boolean);
+  const scored = cands.map((r) => {
+    const n = normLoc(r.name);
+    return { r, s: (String(r.type || "").toLowerCase() === "city" ? 4 : 0)
+      + (rest.length && rest.every((p) => n.includes(p)) ? 4 : 0)
+      + (n.endsWith("united states") ? 1 : 0) };
+  }).sort((a, b) => b.s - a.s || a.r.name.length - b.r.name.length);
+  return scored[0].r.name;
+}
+
 async function dfsLabsLoc(creds, endpoint, task, locationName) {
   const parts = String(locationName || "United States").split(",").map((s) => s.trim()).filter(Boolean);
   const variants = [...new Set([parts.join(","), parts.slice(-2).join(","), parts[parts.length - 1]])].filter(Boolean);
+  /* the canonical name goes FIRST: a free-typed city rarely matches
+     DataForSEO's exact "City,Region,Country" form on its own */
+  const canon = await canonicalLocation(creds, locationName);
+  if (canon && !variants.some((v) => normLoc(v) === normLoc(canon))) variants.unshift(canon);
   let lastErr = null;
   for (const loc of variants) {
     try { const r = await dfsLabs(creds, endpoint, { ...task, location_name: loc }); return { ...r, usedLocation: loc }; }
@@ -2769,6 +2800,30 @@ async function handleKwResearch(body) {
     rows.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || (b.volume ?? -1) - (a.volume ?? -1));
     return [200, { live: true, mode: "keyword", keyword, locationName: r.usedLocation || location_name, total: rows.length, rows }];
   } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 220) }]; }
+}
+/* live location search for the finder's combobox — every city, region and
+   state in DataForSEO's Google database becomes selectable, not just the
+   app's built-in list. Free lookups; the full list is cached server-side. */
+async function handleKwLocations(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "Location search needs DataForSEO credentials — the lookups themselves are free." }];
+  const q = normLoc(body?.q);
+  if (!q || q.length < 2) return [200, { rows: [] }];
+  try {
+    const rows = await locationsFor(creds, "");
+    const toks = q.split(" ").filter(Boolean);
+    const hits = [];
+    for (const r of rows) {
+      const n = normLoc(r.name);
+      if (!toks.every((t) => n.includes(t))) continue;
+      hits.push(r);
+      if (hits.length >= 400) break;
+    }
+    hits.sort((a, b) =>
+      ((normLoc(a.name).startsWith(q) ? 0 : 1) - (normLoc(b.name).startsWith(q) ? 0 : 1))
+      || a.name.length - b.name.length);
+    return [200, { rows: hits.slice(0, 25).map((r) => ({ name: r.name, type: r.type })) }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 200) }]; }
 }
 async function handleKwDomain(body) {
   const creds = resolveCreds(body);
@@ -4542,7 +4597,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -4635,6 +4690,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/kw/volume" ? await handleKwVolume(body)
         : req.url === "/api/kw/research" ? await handleKwResearch(body)
         : req.url === "/api/kw/domain" ? await handleKwDomain(body)
+        : req.url === "/api/kw/locations" ? await handleKwLocations(body)
         : req.url === "/api/insight/audit" ? await handleInsightAudit(body)
         : req.url === "/api/app/login" ? await handleAppLogin(body)
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
