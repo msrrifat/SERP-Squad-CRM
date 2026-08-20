@@ -13,6 +13,7 @@ import {
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
+  PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { Ava, AvaMaskCtx, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, ProjectMark, SaveBar, Toggle, inputCls, useDraft } from "../../ui/primitives.jsx";
 import { DEFAULT_RANGE, useMonthGrid } from "../../lib/months.jsx";
@@ -278,6 +279,10 @@ export function LoginScreen({ company, dark, onAuthed }) {
 }
 
 export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null, appOutdated = false }) {
+  /* the sidebar tucks away for a full-width view — remembered per device,
+     same key the team dashboard uses */
+  const [sbHidden, setSbHidden] = useState(() => localStorage.getItem("ss_sb_hidden") === "1");
+  const toggleSb = (v) => { setSbHidden(v); try { localStorage.setItem("ss_sb_hidden", v ? "1" : "0"); } catch { /* private mode */ } };
   const allowed = client.projects.filter((p) => client.login.projectIds.includes(p.id));
   const [pid, setPid] = useState(allowed[0]?.id);
   /* SAME SHELL AS THE TEAM DASHBOARD: a section ("performance" | "management")
@@ -389,10 +394,17 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
 
       {/* Sidebar — the same shell team members see: brand on top, personal
           screens, a flat project list, and the signed-in identity at the foot */}
+      {!sbHidden && (
       <aside className="ll-sb no-print sticky top-0 z-30 hidden h-screen w-64 shrink-0 flex-col self-start border-r border-gray-200 bg-white md:flex">
-        <div className="flex items-center gap-2 px-4 py-5">
-          <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent} />
-          <span className="ll-display truncate text-[16px] font-bold tracking-tight">{brand.name}</span>
+        <div className="flex items-center justify-between px-4 py-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent} />
+            <span className="ll-display truncate text-[16px] font-bold tracking-tight">{brand.name}</span>
+          </div>
+          <button onClick={() => toggleSb(true)} title="Hide sidebar"
+            className="shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+            <PanelLeftClose size={16} />
+          </button>
         </div>
         <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</div>
         <div className="space-y-0.5 px-2.5 pb-3">
@@ -439,6 +451,14 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
           </button>
         </div>
       </aside>
+      )}
+      {/* the way back in when the sidebar is tucked away */}
+      {sbHidden && (
+        <button onClick={() => toggleSb(false)} title="Show sidebar"
+          className="no-print fixed bottom-4 left-4 z-40 hidden rounded-full border border-gray-200 bg-white p-2.5 text-gray-500 shadow-lg hover:text-gray-700 md:block">
+          <PanelLeftOpen size={17} />
+        </button>
+      )}
 
       {/* Main */}
       <main className="print-full min-w-0 flex-1">

@@ -13,6 +13,7 @@ import {
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
   Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare, User, ClipboardList, Megaphone, Wrench,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
+  PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { AddClientModal, AddProjectModal, ClientSettingsModal, ProjectSettingsModal } from "./features/clients/modals.jsx";
 import { Ava, BrandMark, DarkToggle, DialogHost, FONT_CSS, GoTopButton, Modal, ProjectMark, setAvaDirectory } from "./ui/primitives.jsx";
@@ -134,6 +135,10 @@ export default function App() {
   const [showReport, setShowReport] = useState(null); // null | "performance" | "work"
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [dark, setDark] = useState(false);
+  /* the left sidebar can be tucked away for a full-width working area —
+     remembered per device, same key the client portal uses */
+  const [sbHidden, setSbHidden] = useState(() => localStorage.getItem("ss_sb_hidden") === "1");
+  const toggleSb = (v) => { setSbHidden(v); try { localStorage.setItem("ss_sb_hidden", v ? "1" : "0"); } catch { /* private mode */ } };
   const [section, setSection] = useState("performance"); // "performance" | "management"
   const [agentOpen, setAgentOpen] = useState(false);
   const [reportAi, setReportAi] = useState(null);   // { summary, run } — written by the agent
@@ -1305,19 +1310,25 @@ export default function App() {
       {sbCss && <style>{sbCss}</style>}
 
       {/* Sidebar */}
-      {!clientView && (
+      {!clientView && !sbHidden && (
         <aside className="ll-sb no-print sticky top-0 z-30 hidden h-screen w-64 shrink-0 flex-col self-start border-r border-gray-200 bg-white md:flex">
           <div className="flex items-center justify-between px-4 py-5">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <BrandMark name={company.name} logo={company.logo} accent={company.accent} />
-              <span className="ll-display text-[16px] font-bold tracking-tight">{company.name}</span>
+              <span className="ll-display truncate text-[16px] font-bold tracking-tight">{company.name}</span>
             </div>
-            {isAdmin && (
-              <button onClick={() => { setScreen("company"); logActivity("Opened company settings"); }} title="Company settings"
+            <div className="flex shrink-0 items-center">
+              {isAdmin && (
+                <button onClick={() => { setScreen("company"); logActivity("Opened company settings"); }} title="Company settings"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                  <Settings size={16} />
+                </button>
+              )}
+              <button onClick={() => toggleSb(true)} title="Hide sidebar"
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-                <Settings size={16} />
+                <PanelLeftClose size={16} />
               </button>
-            )}
+            </div>
           </div>
           {/* personal dashboard: the signed-in person's own screens */}
           <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</div>
@@ -1467,6 +1478,13 @@ export default function App() {
             </div>
           )}
         </aside>
+      )}
+      {/* the way back in when the sidebar is tucked away */}
+      {!clientView && sbHidden && (
+        <button onClick={() => toggleSb(false)} title="Show sidebar"
+          className="no-print fixed bottom-4 left-4 z-40 hidden rounded-full border border-gray-200 bg-white p-2.5 text-gray-500 shadow-lg hover:text-gray-700 md:block">
+          <PanelLeftOpen size={17} />
+        </button>
       )}
 
       {/* Main */}
