@@ -487,7 +487,7 @@ function ImageStep({ node, media, accent, primaryKw, brand, onPatch, onClose }) 
 }
 
 /* ---- per-page content pipeline editor ---- */
-function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, media = [], locationName, siteLinks = [], onPatch, onPublish, onClose }) {
+function PageEditor({ node, project, brandVoice, brandProps = null, niche, accent, dfs, ai, media = [], locationName, siteLinks = [], linkArch = true, liveCount = 0, onLinkArch = null, onPatch, onPublish, onClose }) {
   const work = useWork();
   const seo = node.seo || {};
   const [imgStep, setImgStep] = useState(false);
@@ -698,6 +698,15 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
 
           <Card className="space-y-3 p-4">
             <div className="ll-display flex items-center gap-2 text-[13.5px] font-semibold"><Layers size={14} style={{ color: accent }} /> Content structure pipeline</div>
+            {onLinkArch && (
+              <div className="rounded-xl border border-gray-100 p-3">
+                <Toggle on={linkArch} onChange={onLinkArch}
+                  label="Use site architecture for internal links"
+                  desc={linkArch
+                    ? `Structure & content link to the planned architecture's URLs (${siteLinks.length} pages) — the right choice when this map is what you're deploying.`
+                    : `Structure & content link to the LIVE site's crawled pages & posts (${liveCount} found) — for a page that must link into the site as it exists today.`} />
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               <Btn on={genStructure} disabled={!(seo.competitors || []).length} icon={Sparkles} label="Generate content structure" busyKey="structure" primary />
               {seo.structure && <Btn on={audit} icon={TriangleAlert} label="Content audit & suggestions" busyKey="audit" />}
@@ -1191,12 +1200,24 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
       )}
 
       {openNode && (() => {
-        /* the finalized site plan, flattened — powers structure-aware internal linking */
+        /* the internal-link universe: the finalized site plan (default), or —
+           when the toggle in the editor is off — the LIVE crawled pages &
+           posts, for writing a page that must link into the site as it
+           exists today rather than the structure being planned */
+        const linkArch = w.linkArchPages !== false;
         const siteLinks = [];
-        walk(tree, (p) => siteLinks.push({ title: p.title, url: p.url, type: p.type, primaryKw: p.seo?.primaryKw || "" }));
+        if (linkArch) {
+          walk(tree, (p) => siteLinks.push({ title: p.title, url: p.url, type: p.type, primaryKw: p.seo?.primaryKw || "" }));
+        } else {
+          const liveType = (u) => u === "/" ? "home" : /contact/.test(u) ? "contact" : /about/.test(u) ? "about" : /^\/(blog|answers|news)(\/|$)/.test(u) ? "article" : /^\/(locations?|service-areas?|areas?|cities)\//.test(u) ? "location" : "service";
+          (w.pages || []).filter((p) => !p.demo && p.url).forEach((p) => siteLinks.push({ title: p.name || p.url, url: p.url, type: liveType(p.url), primaryKw: "" }));
+          (w.blogs || []).filter((b) => !b.demo).forEach((b) => { const u = b.url || (b.slug ? "/blog/" + b.slug : ""); if (u) siteLinks.push({ title: b.title || u, url: u, type: "article", primaryKw: "" }); });
+        }
         return (
           <PageEditor node={openNode} project={project} brandVoice={brandVoice} brandProps={opt.branding?.properties || null} niche={arch?.niche || niche || project.name}
             accent={accent} dfs={dfs} ai={aiConfig} media={w.media || []} locationName={locationName} siteLinks={siteLinks}
+            linkArch={linkArch} liveCount={(w.pages || []).filter((p) => !p.demo).length + (w.blogs || []).filter((b) => !b.demo).length}
+            onLinkArch={(v) => setOpt("website", () => ({ linkArchPages: v }))}
             onPatch={(patch) => patchNode(openNode.id, patch)} onPublish={() => setDeploying({ only: openNode })} onClose={() => setOpenId(null)} />
         );
       })()}
@@ -1258,14 +1279,21 @@ function DeployModal({ tree, arch, project, opt, setOpt, accent, brandVoice, log
     : false;
   const [mode, setMode] = useState("demo");
   const live = builder !== "export" && mode === "live" && canLive;
-  const reviewSource = opt.branding?.props?.gbpReview || "";
+  /* brand links come from opt.branding.properties — the store Brand Voice and
+     Branding & Automation actually write. (opt.branding.props was a key
+     nothing ever wrote, so schema sameAs and the review source were always
+     empty no matter what the user entered.) */
+  const reviewSource = opt.branding?.properties?.gbpReview || "";
   const gbp = opt.gbp || {};
   const media = w.media || [];
-  const props = opt.branding?.props || {};
-  const sameAs = [
+  const props = opt.branding?.properties || {};
+  const sameAs = [...new Set([
     ...Object.values(props).filter((v) => typeof v === "string" && /^https?:\/\//.test(v)),
+    ...Object.values(props.socials || {}).filter((v) => typeof v === "string" && /^https?:\/\//.test(v)),
+    ...Object.values(props.web2 || {}).filter((v) => typeof v === "string" && /^https?:\/\//.test(v)),
+    ...Object.values(props.custom || {}).flat().map((c) => c?.url).filter((v) => typeof v === "string" && /^https?:\/\//.test(v)),
     ...((opt.social?.accounts || []).filter((a) => a.connected && a.url).map((a) => a.url)),
-  ];
+  ])];
   /* ---- the hero lead form: where enquiries land ----
      The deployed page never carries the address — it carries a key that this
      app registers against the recipient, so leads can't be redirected by

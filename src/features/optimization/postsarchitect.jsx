@@ -1133,24 +1133,55 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
     const t = String(p.name || p.title || "").match(/\bin ([A-Z][A-Za-z .-]+?)(?:\s*[|–—-]\s*.*)?$/);
     return t ? t[1].trim() : "";
   };
+  /* ---- internal-link source: the LIVE crawled site (default) or the
+     PLANNED site architecture. Writing content for a structure that hasn't
+     deployed yet must link to the architecture's URLs — linking to live
+     pages that are about to be replaced ships dead anchors. The toggle is
+     per project (w.linkArchPosts) and only takes effect when a Website
+     Mapping architecture actually exists. ---- */
+  const archNodes = useMemo(() => {
+    const out = [];
+    const walkA = (nodes) => (nodes || []).forEach((n) => { if (n.url) out.push(n); walkA(n.children); });
+    walkA(opt.website?.architecture?.tree || []);
+    return out;
+  }, [opt.website?.architecture?.tree]);
+  const useArch = !!w.linkArchPosts && archNodes.length > 0;
+  /* pages the scorer sees, in one shape regardless of source */
+  const pagePool = useArch
+    ? archNodes.filter((n) => n.type !== "article").map((n) => ({ url: n.url, name: n.title, type: n.type }))
+    : livePages;
+  const blogPool = useArch
+    ? archNodes.filter((n) => n.type === "article").map((n) => ({ url: n.url, title: n.title }))
+    : liveBlogs;
+  /* in architecture mode the money page resolves to the ARCH url for that
+     service (same url, else same slug), so the anchor never points at a
+     live path the new structure abandons */
+  const moneyUrl = () => {
+    if (!useArch || !post.serviceUrl) return post.serviceUrl;
+    const slug = post.serviceUrl.split("/").filter(Boolean).pop();
+    const hit = archNodes.find((n) => n.url === post.serviceUrl) || archNodes.find((n) => n.url.split("/").filter(Boolean).pop() === slug);
+    return hit ? hit.url : post.serviceUrl;
+  };
+
   const buildTargets = () => {
     const targets = [];
     const push = (url, title, kw, extra = {}) => { if (url && !targets.some((t) => t.url === url)) targets.push({ url, title, kw: kw || title, ...extra }); };
     const postTerms = tokens2(`${post.title} ${post.primaryKw} ${post.service || ""}`);
     const rel = (s) => { const T = tokens2(s); let n = 0; T.forEach((x) => postTerms.has(x) && n++); return n; };
+    const money = moneyUrl();
     /* 1 — the supported money page always leads */
-    push(post.serviceUrl, post.service || "service page", post.service ? `${post.service.toLowerCase()} ${market.split(",")[0]}`.trim() : "");
+    push(money, post.service || "service page", post.service ? `${post.service.toLowerCase()} ${market.split(",")[0]}`.trim() : "");
     /* 2 — every known page & post, scored by relevance to this post */
     const cands = [];
-    livePages.forEach((p) => {
-      if (!p.url || p.url === "/" || p.url === post.serviceUrl || /contact/.test(p.url)) return;
-      const city = cityOf(p);
+    pagePool.forEach((p) => {
+      if (!p.url || p.url === "/" || p.url === money || p.type === "contact" || /contact/.test(p.url)) return;
+      const city = p.type === "location" ? (cityOf(p) || (String(p.name || "").split(" in ").pop() || "").trim()) : cityOf(p);
       cands.push({ url: p.url, title: p.name || p.title || p.url, kw: String(p.name || p.title || "").toLowerCase(), city,
         score: rel(`${p.name || p.title || ""} ${p.url.replace(/[/-]/g, " ")}`)
-          + (/^\/services?\//.test(p.url) ? 2 : 0)
+          + (p.type === "service" || /^\/services?\//.test(p.url) ? 2 : 0)
           + (city && postTerms.has(city.toLowerCase().split(" ")[0]) ? 3 : 0) });
     });
-    liveBlogs.forEach((b) => {
+    blogPool.forEach((b) => {
       const u = b.url || (b.slug ? "/blog/" + b.slug : "");
       if (u) cands.push({ url: u, title: b.title || b.name || u, kw: "", city: "", score: rel(b.title || b.name || "") });
     });
@@ -1163,10 +1194,10 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
     cands.sort((a, b) => b.score - a.score)
       .forEach((c2) => { if (targets.length < capN - 2 && (c2.score > 0 || targets.length < 6)) push(c2.url, c2.title, c2.kw, c2.city ? { city: c2.city } : {}); });
     /* 3 — conversion + brand close the plan */
-    const contact = livePages.find((p) => /contact/.test(p.url || ""));
+    const contact = pagePool.find((p) => p.type === "contact" || /contact/.test(p.url || ""));
     if (contact) push(contact.url, "contact page", `contact ${brand.toLowerCase()}`);
-    const home = livePages.find((p) => p.url === "/");
-    if (home) push("/", brand, brand.toLowerCase());
+    const home = pagePool.find((p) => p.url === "/" || p.type === "home");
+    if (home) push(home.url, brand, brand.toLowerCase());
     return targets.slice(0, capN);
   };
 
@@ -1174,8 +1205,12 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
      brand properties from Branding & Automation — appended deterministically
      so they publish with every post regardless of the AI's mood ---- */
   const outroLinks = () => {
-    const props = opt.branding?.props || {};
-    const socialNames = { fb: "Facebook", ig: "Instagram", li: "LinkedIn", x: "X (Twitter)", yt: "YouTube", tt: "TikTok", pin: "Pinterest" };
+    /* the ONE property store: opt.branding.properties — the same object Brand
+       Voice → Other information and Branding & Automation → Properties edit.
+       (This used to read opt.branding.props, a key nothing ever writes, so
+       every link entered in Brand Voice was silently ignored here.) */
+    const props = opt.branding?.properties || {};
+    const socialNames = { facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn", youtube: "YouTube", x: "X (Twitter)", tiktok: "TikTok", pinterest: "Pinterest", threads: "Threads", bluesky: "Bluesky" };
     const L = [];
     const gbpUrl = props.gbpShare || props.gbpCid;
     if (gbpUrl) L.push(`[${brand} on Google Maps](${gbpUrl})`);
@@ -1183,6 +1218,11 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
     if (props.bing) L.push(`[Bing Places](${props.bing})`);
     if (props.apple) L.push(`[Apple Maps](${props.apple})`);
     Object.entries(props.socials || {}).forEach(([k, u]) => { if (u) L.push(`[${socialNames[k] || k}](${u})`); });
+    /* custom links from the vault (Brand Voice "Custom links" + every
+       Branding & Automation family) — the saved name is the anchor */
+    Object.values(props.custom || {}).flat().forEach((c) => {
+      if (c && c.url && !L.some((x) => x.includes(`](${c.url})`))) L.push(`[${c.name || c.url.replace(/^https?:\/\//, "").split("/")[0]}](${c.url})`);
+    });
     (opt.social?.accounts || []).filter((a) => a.connected && a.url).forEach((a) => {
       if (!L.some((x) => x.includes(`](${a.url})`))) L.push(`[${a.name || a.label || "our profile"}](${a.url})`);
     });
@@ -1275,7 +1315,12 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
               <Toggle on={autoImages} onChange={setAutoImages} label={`Auto-insert images from Media (${media.length} synced)`}
                 desc="Matches library images by title + alt text to this post's topic; every image gets a caption underneath." />
               <Toggle on={brandLinks} onChange={setBrandLinks} label="Brand & profile links at the end"
-                desc="Closes every post with links to your Google Business Profile, main social profiles and brand properties (from Branding & Automation) — entity signals on autopilot." />
+                desc="Closes every post with links to your Google Business Profile, main social profiles and brand properties (from Brand Voice / Branding & Automation) — entity signals on autopilot." />
+              <Toggle on={!!w.linkArchPosts} onChange={(v) => setOpt("website", () => ({ linkArchPosts: v }))}
+                label={`Use site architecture for internal links${archNodes.length ? "" : " (generate an architecture first)"}`}
+                desc={archNodes.length
+                  ? `Internal links point at the planned Website Mapping architecture's URLs (${archNodes.length} pages) instead of the live crawled pages — write for the structure you're about to deploy without shipping dead anchors.`
+                  : "No Website Mapping architecture exists yet for this project — until one is generated, links use the live crawled pages."} />
             </div>
             <button onClick={generate} disabled={busy}
               className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>
