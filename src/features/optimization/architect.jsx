@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import {
-  ChevronDown, ChevronRight, FileText, Image as ImageIcon, Layers, Network, Plus, Redo2, RefreshCw, Search,
+  ChevronDown, ChevronRight, Download, FileText, Image as ImageIcon, Layers, Network, Plus, Redo2, RefreshCw, Search,
   Sparkles, Target, Trash2, TriangleAlert, Undo2, UploadCloud, Wand2, X,
 } from "lucide-react";
+import { downloadContentDocx } from "../../lib/docx.js";
 import { Card, Labeled, Modal, askDelete, inputCls } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { KwBankPicker } from "../tools/kwbank.jsx";
@@ -776,6 +777,11 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
                       {seo.content.internalLinksUsed.length} internal links
                     </span>
                   )}
+                  <button onClick={() => downloadContentDocx({ title: node.title, markdown: seo.content.markdown, metaTitle: seo.content.metaTitle, metaDesc: seo.content.metaDesc, site: project.website, pageUrl: node.url, filename: node.url.split("/").filter(Boolean).pop() || "page" })}
+                    title="Download as a Word document — real Word headings, hyperlinks and lists"
+                    className="ml-auto flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[10.5px] font-semibold text-gray-600 hover:border-gray-300">
+                    <Download size={11} /> Word (.docx)
+                  </button>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Labeled label={<span className="flex items-center justify-between">Meta title <CharCount value={seo.content.metaTitle || ""} max={60} /></span>}>

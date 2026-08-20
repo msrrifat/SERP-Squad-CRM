@@ -1,8 +1,9 @@
 import React, { useMemo, useState, useEffect } from "react";
 import {
-  BookOpen, FileText, ImagePlus, ListTree, MessageCircleQuestion,
+  BookOpen, Download, FileText, ImagePlus, ListTree, MessageCircleQuestion,
   Plus, RefreshCw, Replace, Sparkles, Trash2, UploadCloud, X,
 } from "lucide-react";
+import { downloadContentDocx } from "../../lib/docx.js";
 import { Card, Labeled, Modal, Toggle, askDelete, askInput, inputCls, CharCount } from "../../ui/primitives.jsx";
 import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { parseAiJson } from "../../lib/jsonrepair.js";
@@ -1292,6 +1293,11 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
                 <b className="text-gray-700">Content</b> <LiveChip live={c.live} provider={c.provider} /> · {c.wordCount} words
                 {(c.markdown.match(/\]\(\//g) || []).length > 0 && <span className="rounded-full bg-blue-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-blue-700">{(c.markdown.match(/\]\(\//g) || []).length} internal links</span>}
                 {(c.markdown.match(/^!\[/gm) || []).length > 0 && <span className="rounded-full bg-purple-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-purple-700"><ImagePlus size={9} className="mr-0.5 inline" />{(c.markdown.match(/^!\[/gm) || []).length} captioned images</span>}
+                <button onClick={() => downloadContentDocx({ title: post.title, markdown: c.markdown, metaTitle: c.metaTitle, metaDesc: c.metaDesc, site: project.website, pageUrl: "/" + (post.category === "answer" ? "answers" : "blog") + "/" + post.slug, filename: post.slug })}
+                  title="Download as a Word document — real Word headings, hyperlinks and lists"
+                  className="ml-auto flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-[10.5px] font-semibold text-gray-600 hover:border-gray-300">
+                  <Download size={11} /> Word (.docx)
+                </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <Labeled label={<span className="flex items-center justify-between">Meta title <CharCount value={c.metaTitle || ""} max={60} /></span>}>
