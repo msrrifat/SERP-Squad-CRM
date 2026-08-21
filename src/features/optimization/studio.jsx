@@ -2811,7 +2811,7 @@ export function WebsiteOptTab({ opt, setOpt, accent, log, project, aiProviders =
       )}
 
       {/* selected feature window — with the re-optimize wizard as a right sidebar */}
-      <div className={reoptTarget ? "grid gap-4 lg:grid-cols-[1fr_360px]" : ""}>
+      <div className={reoptTarget ? "grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]" : ""}>
       <div className="min-w-0 space-y-4">
       {sub === "connection" && !sitemapOnly && (<>
       {/* connection, verification & credentials (n8n-style) */}

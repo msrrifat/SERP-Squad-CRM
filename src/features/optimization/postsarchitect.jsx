@@ -929,8 +929,11 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
       </Card>
 
       {posts.length > 0 && (
-        <div className={"grid gap-4 " + (dupPosts.length ? "lg:grid-cols-[1fr_300px]" : "")}>
-          <div className="space-y-4">
+        {/* minmax(0,1fr): a bare 1fr track's minimum is `auto`, so one long
+            single-line topic row inflated the column past the viewport and
+            the whole page scrolled sideways — content must truncate instead */}
+        <div className={"grid gap-4 " + (dupPosts.length ? "lg:grid-cols-[minmax(0,1fr)_300px]" : "")}>
+          <div className="min-w-0 space-y-4">
             {["blog", "answer"].map((cat) => {
               const list = activePosts.filter((p) => p.category === cat);
               if (!list.length) return null;

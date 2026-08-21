@@ -326,7 +326,7 @@ export function KeywordFinderView({ company, clients = [], onAddToProject, accen
       </Card>
 
       {res && (
-        <div className="grid items-start gap-4 xl:grid-cols-[1fr_400px]">
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
           {/* ---- keyword table ---- */}
           <Card className="p-0">
             <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2.5">
