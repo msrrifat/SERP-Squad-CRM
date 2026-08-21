@@ -1600,7 +1600,11 @@ export default function App() {
           )}
         </div>
 
-        <div className="mx-auto max-w-6xl p-5">
+        {/* the Optimization Studio hosts real working tables (posts plan, site
+            architecture) — on big monitors the 6xl cap left half the screen as
+            dead margin while columns sat at their minimum widths; the studio
+            gets the room, every other section keeps its reading width */}
+        <div className={"mx-auto p-5 " + (activeSection === "optimization" ? "max-w-[1560px]" : "max-w-6xl")}>
           {!project && (
             <div className="ll-fade mx-auto mt-10 max-w-lg rounded-2xl border border-gray-200 bg-white p-8 text-center">
               <div className="ll-display text-[18px] font-bold">Welcome to {company.name}</div>
