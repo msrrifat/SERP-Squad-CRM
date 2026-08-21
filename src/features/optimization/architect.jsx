@@ -43,7 +43,7 @@ async function aiJson(ai, opts) {
   catch (e) {
     const retry = await aiGenerate(ai, {
       ...opts,
-      prompt: `${opts.prompt}\n\nIMPORTANT: your previous reply was NOT valid JSON (${String(e.message).slice(0, 120)}). Return the SAME content again as STRICT, complete, valid JSON only — no prose, no markdown fences, every array element comma-separated, every string closed. Keep it concise enough to finish within the token budget.`,
+      prompt: `${opts.prompt}\n\nIMPORTANT: your previous reply was NOT valid JSON (${String(e.message).slice(0, 120)}). Return the SAME content again as STRICT, complete, valid JSON only — no prose, no markdown fences, every array element comma-separated, every string closed. Do NOT shorten or drop anything — there is no output limit.`,
     });
     return parseAiJson(retry); // still bad → caller falls back to the local draft
   }
@@ -57,6 +57,7 @@ Rules you always apply:
 - URLs: kebab-case, lowercase, max 3 path segments, no stop words.
 - Always include: homepage, about, contact, a reviews/trust page.
 - Page types must be exactly one of: home, hub, service, location, article, about, trust, contact.
+- FULL TOPICAL-AUTHORITY COVERAGE (mandatory): one page for EVERY service and EVERY location provided — no sampling, no "top" subset, no shortening the map to save output space. Add the sub-service and blog spokes complete coverage of the niche requires; a map that omits provided services or locations is a failed output.
 Return STRICT JSON only, no commentary: {"pages":[{"title":string,"url":string,"type":string,"primaryKw":string,"children":[same shape]}]}`;
 
 const SYS_STRUCTURE = `You are a technical SEO content strategist. You reverse-engineer what Google rewards for a query by analyzing the pages that already rank.
@@ -185,7 +186,9 @@ const blankSeo = () => ({ primaryKw: "", secondaryKws: "", competitors: [], stru
 /* map an AI architecture payload into node shape */
 function nodesFromAi(pages, depth = 0) {
   if (!Array.isArray(pages) || depth > 3) return [];
-  return pages.slice(0, 20).map((p, i) => ({
+  /* 120/level is a runaway guard, not a design cap — the old 20 silently
+     truncated big service+location maps the model had fully delivered */
+  return pages.slice(0, 120).map((p, i) => ({
     id: "n" + Date.now().toString(36) + depth + i + Math.floor(Math.random() * 1e4).toString(36),
     title: String(p.title || "Untitled").slice(0, 90),
     url: /^\//.test(p.url || "") ? String(p.url).toLowerCase() : "/" + String(p.url || "page").toLowerCase(),
@@ -549,7 +552,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
   const genStructure = () => runStage("structure",
     async () => {
       const parsedStruct = await aiJson(ai, {
-        system: SYS_STRUCTURE, json: true, maxTokens: 6000,
+        system: SYS_STRUCTURE, json: true,
         prompt: `Page: "${node.title}" (${node.url}) — type: ${node.type}.\nNiche: ${niche}. Market: ${locationName}.\nPrimary keyword: "${seo.primaryKw}". Secondary keywords: ${seo.secondaryKws || "(none)"}.\n\n${optimizeRulesBlock(spec)}\n\nTop-ranking competitors for the primary keyword:\n${competitorBlock()}\n\nSITE MAP (use EXACT urls for internalLinks):\n${siteLinks.map((l) => `${l.url} — ${l.title} (${l.type})`).join("\n")}\n\nBuild the content structure that beats this SERP and satisfies every optimization rule above (the structure must contain the sections those rules require).`,
       });
       const st = normalizeStructure(parsedStruct, (seo.competitors || []).length);
@@ -562,7 +565,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
   const audit = () => runStage("audit",
     async () => {
       const a = await aiJson(ai, {
-        system: SYS_AUDIT, json: true, maxTokens: 4000,
+        system: SYS_AUDIT, json: true,
         prompt: `Primary keyword: "${seo.primaryKw}" (page type: ${node.type}, market: ${locationName}).\nContent structure to audit:\n${JSON.stringify(seo.structure, null, 1)}`,
       });
       if (!Array.isArray(a.issues)) throw new Error("schema: issues missing");
@@ -573,7 +576,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
   const adjust = () => runStage("adjust",
     async () => {
       const parsedAdjust = await aiJson(ai, {
-        system: SYS_ADJUST, json: true, maxTokens: 6000,
+        system: SYS_ADJUST, json: true,
         prompt: `Structure:\n${JSON.stringify(seo.structure, null, 1)}\n\nAudit issues to fix:\n${JSON.stringify(seo.audit.issues, null, 1)}`,
       });
       const st = normalizeStructure(parsedAdjust, seo.structure?.fromCompetitors || 0);
@@ -592,7 +595,7 @@ function PageEditor({ node, project, brandVoice, brandProps = null, niche, accen
         .filter((s) => s.block && s.block !== "content" && BLOCK_WRITER_HINT[s.block])
         .map((s) => `- "${s.h2}": ${BLOCK_WRITER_HINT[s.block]}`).join("\n");
       const text = await aiGenerate(ai, {
-        system: SYS_WRITER, maxTokens: 8000,
+        system: SYS_WRITER,
         prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, project.name, brandProps)}\n\n${optimizeRulesBlock(spec)}\n\nPAGE: "${node.title}" — ${project.website}${node.url} (type: ${node.type}). Market: ${locationName}. Niche: ${niche}.\nPrimary keyword: "${seo.primaryKw}". Secondary: ${seo.secondaryKws || "(none)"}.\nWord target: ${seo.structure.wordTarget}+ words.\nRequired entities: ${(seo.structure.sharedEntities || []).join(", ") || "(none)"}.\nDifferentiator angles: ${(seo.structure.differentiators || []).join(", ") || "(none)"}.\n\nLINK PLAN (every URL must appear as an internal link with a descriptive anchor):\n${plan.map((l) => `${l.url} — "${l.title}" (${l.why})`).join("\n") || "(no other pages yet)"}\n\nSECTION OUTLINE (use as ## in this order):\n${seo.structure.sections.map((s) => `## ${s.h2} — ${s.note}`).join("\n")}${blockLines ? `\n\nSECTION CONTENT BLOCKS (a widget renders with these sections on the published page — shape each section's copy accordingly):\n${blockLines}` : ""}\n\nFAQs to answer:\n${(seo.structure.faqs || []).join("\n")}\n\nWrite the complete page now in the required ---META---/---CONTENT---/---SCHEMA--- format.`,
       });
       /* parse the structured output; tolerate providers that skip markers */
@@ -908,7 +911,7 @@ export function WebsiteMappingTab({ opt, setOpt, accent, log, project, dfs, aiCo
     let tree = null, live = false;
     try {
       const parsed = await aiJson(aiConfig, {
-        system: SYS_ARCHITECT, json: true, maxTokens: 7000,
+        system: SYS_ARCHITECT, json: true,
         prompt: `Business: ${project.name} (${project.website}). Niche: ${niche}.\nServices: ${services || "(infer sensible ones from the niche)"}.\nLocations: ${locations || "(none — skip location pages)"}.\nBrand positioning: ${brandVoice.tagline || "(none)"}.\nDesign the complete site architecture.`,
       });
       const nodes = nodesFromAi(parsed.pages);

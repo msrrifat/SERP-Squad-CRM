@@ -679,7 +679,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         const existing = [...existingTitles, ...planned.map((p) => p.title)];
         const shown = existing.slice(0, 90);
         const text = await aiGenerate(aiConfig, {
-          system: prompts.system, json: true, maxTokens: 4000,
+          system: prompts.system, json: true,
           prompt: fillPrompt(prompts.batch, {
             brand, website: project.website, niche: w.architecture?.niche || project.name, market,
             locations: locations.join(", ") || market,
@@ -744,7 +744,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         const existing = [...baseTitles, ...fresh.map((f) => f.title)];
         const shown = existing.slice(0, 90);
         const text = await aiGenerate(aiConfig, {
-          system: prompts.system, json: true, maxTokens: 4000,
+          system: prompts.system, json: true,
           prompt: fillPrompt(prompts.batch, {
             brand, website: project.website, niche: w.architecture?.niche || project.name, market,
             locations: locations.join(", ") || market,
@@ -1246,7 +1246,7 @@ function PostWriter({ post, opt, setOpt, accent, project, ai, brand, brandVoice,
       `- ${t.url} — "${t.title}" — anchor type: ${TYPE_HINT[t.anchorType](t, brand)}${t.city ? ` — CITY PAGE: the anchor MUST contain the city name "${t.city}" (each city page keeps its own keyword relevance)` : ""}${t.usedAnchors.length ? ` — previously used anchors you must NOT repeat: ${t.usedAnchors.map((a) => `"${a}"`).join(", ")}` : ""}`).join("\n");
     try {
       const text = await aiGenerate(ai, {
-        system: SYS_POST_WRITER, maxTokens: 6000,
+        system: SYS_POST_WRITER,
         prompt: `BRAND VOICE & BUSINESS FACTS (must follow):\n${brandVoiceBlock(brandVoice, brand, brandProps)}\n\nPOST: "${post.title}" (category: ${post.category === "answer" ? "Answer — a real question people ask" : "Blog — a guide"}).\nPrimary keyword: "${post.primaryKw}". Supports service page: ${post.serviceUrl}. Market: ${market}.\nWord target: ${wordTarget}+ words.\n\nLINK PLAN (every URL exactly once, anchor types are assignments, not suggestions):\n${linkPlanText || "(no internal targets yet)"}\n\nWrite the complete post now in the required ---META---/---CONTENT--- format.`,
       });
       const metaM = text.match(/---META---([\s\S]*?)---CONTENT---/);
