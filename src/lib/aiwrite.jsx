@@ -5,6 +5,8 @@
 import React, { useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 
+/* maxTokens is legacy — the server runs every call at the provider's own
+   maximum and ignores it (artificial caps starved reasoning models mid-plan) */
 export async function aiGenerate(ai, { system, prompt, json = false, maxTokens }, _retried = false) {
   if (!ai?.key) { const e = new Error("no AI provider configured"); e.code = 503; throw e; }
   const res = await fetch("/api/generate", {

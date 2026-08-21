@@ -4430,40 +4430,51 @@ function handleShareGet(id) {
    provider's own error — generation is never faked here. ---- */
 const AI_DEFAULT_MODELS = { openai: "gpt-4o", deepseek: "deepseek-chat", claude: "claude-sonnet-5", gemini: "gemini-2.5-pro" };
 async function handleGenerate(body) {
-  const { provider, apiKey, model, system, prompt, json, maxTokens } = body || {};
+  const { provider, apiKey, model, system, prompt, json } = body || {};
   if (!provider || !AI_DEFAULT_MODELS[provider]) return [400, { error: "provider must be one of openai|claude|gemini|deepseek" }];
   if (!apiKey) return [503, { error: "not_configured", hint: "Add the provider's API key in Company Settings → API settings" }];
   if (!prompt) return [400, { error: "prompt required" }];
   const mdl = model || AI_DEFAULT_MODELS[provider];
-  const CAPS = { openai: 16000, deepseek: 8192, claude: 16000, gemini: 16000 };
-  const max = Math.min(CAPS[provider] || 8000, Math.max(256, +maxTokens || 4000));
+  /* NO ARTIFICIAL TOKEN LIMITS — research and generation run at each
+     provider's own maximum. The old per-request caps (4k default) starved
+     reasoning models: they spend the budget on internal thinking first and
+     return "empty output (finish reason: max_tokens)" mid-plan. Where the
+     parameter is optional it is omitted (the provider then allows its model
+     maximum); where it is required, the request asks for a huge budget and
+     adapts to the ceiling the provider names. The client-sent maxTokens is
+     deliberately ignored. */
   let text, finish = "";
   try {
     if (provider === "claude") {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: mdl, max_tokens: max, ...(system ? { system } : {}), messages: [{ role: "user", content: prompt }] }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(`Anthropic ${r.status}: ${d.error?.message || JSON.stringify(d).slice(0, 200)}`);
-      text = (d.content || []).map((c) => c.text || "").join("");
-      finish = d.stop_reason || "";
+      /* Anthropic REQUIRES max_tokens. Ask big; if the model's ceiling is
+         lower, the 400 names the real maximum — retry at exactly that. */
+      const call = async (mt) => {
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+          body: JSON.stringify({ model: mdl, max_tokens: mt, ...(system ? { system } : {}), messages: [{ role: "user", content: prompt }] }),
+        });
+        return { r, d: await r.json() };
+      };
+      let out = await call(32000);
+      if (!out.r.ok) {
+        const msg = String(out.d?.error?.message || "");
+        const nums = (msg.match(/\d{4,6}/g) || []).map(Number).filter((n) => n >= 1024);
+        if (/max_tokens/i.test(msg) && nums.length) out = await call(Math.min(...nums));
+        else if (/stream/i.test(msg)) out = await call(16000);
+      }
+      if (!out.r.ok) throw new Error(`Anthropic ${out.r.status}: ${out.d?.error?.message || JSON.stringify(out.d).slice(0, 200)}`);
+      text = (out.d.content || []).map((c) => c.text || "").join("");
+      finish = out.d.stop_reason || "";
     } else if (provider === "gemini") {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ...(system ? { system_instruction: { parts: [{ text: system }] } } : {}),
           contents: [{ parts: [{ text: prompt }] }],
-          /* Gemini 2.5+ "thinking" models spend maxOutputTokens on internal
-             reasoning FIRST — without headroom + a bounded thinking budget
-             they burn the whole allowance and return zero text parts
-             ("provider returned empty output" on hard JSON tasks) */
-          generationConfig: {
-            maxOutputTokens: max + 8192,
-            ...(json ? { responseMimeType: "application/json" } : {}),
-            ...(/gemini-[23]/.test(mdl) ? { thinkingConfig: { thinkingBudget: 4096 } } : {}),
-          },
+          /* no maxOutputTokens: Gemini then allows the model's full output
+             window, so "thinking" can never starve the visible answer */
+          generationConfig: { ...(json ? { responseMimeType: "application/json" } : {}) },
         }),
       });
       const d = await r.json();
@@ -4472,11 +4483,15 @@ async function handleGenerate(body) {
       finish = d.candidates?.[0]?.finishReason || "";
     } else { // openai | deepseek — OpenAI-compatible chat completions
       const base = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
+      /* OpenAI: omit the limit entirely (also sidesteps o-/gpt-5 models that
+         reject max_tokens). DeepSeek defaults LOW when omitted, so it gets
+         its documented model maximum instead. */
+      const tok = provider === "deepseek" ? { max_tokens: /reason/i.test(mdl) ? 64000 : 8192 } : {};
       const r = await fetch(base + "/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: "Bearer " + apiKey, "content-type": "application/json" },
         body: JSON.stringify({
-          model: mdl, max_tokens: max,
+          model: mdl, ...tok,
           ...(json ? { response_format: { type: "json_object" } } : {}),
           messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }],
         }),
