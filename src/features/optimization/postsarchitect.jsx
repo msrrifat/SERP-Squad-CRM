@@ -252,6 +252,11 @@ Cover the topical-authority gaps first: subtopics, locations and products with t
 };
 export const fillPrompt = (tpl, vars) => String(tpl || "").replace(/{{(\w+)}}/g, (_, k) => String(vars[k] ?? ""));
 
+/* the plan table's shared column template — fr units flex with the window,
+   minmax floors keep every column readable, and each row uses the SAME
+   template so all cells stay perfectly aligned */
+const POST_ROW_GRID = "minmax(200px,2.4fr) minmax(120px,1.4fr) minmax(90px,1.1fr) minmax(80px,.8fr) minmax(110px,1fr) minmax(170px,auto)";
+
 const SYS_POSTS_ARCHITECT = `You are a senior SEO strategist who builds TOPICAL AUTHORITY maps for business blogs.
 You design post architectures in exactly TWO categories:
 - "blog": generalized guides that build pillar/cluster topical authority per service (cost guides, comparisons, processes, mistakes, checklists, seasonal and LOCAL-PROXIMITY angles that weave the market's city/region into topics where search behavior is local).
@@ -944,77 +949,97 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                     {cat === "blog" ? "Blog — guides & topical authority" : "Answer — real questions per service"}
                     <span className="text-[11px] font-normal text-gray-400">{list.length} posts · category "{cat === "blog" ? "Blog" : "Answer"}" on WordPress</span>
                   </div>
-                  <div className="space-y-1">
+                  {/* real columns: every row shares one fr-based grid template, so
+                      Title / URL / Tags / Status / Category / Actions stay aligned
+                      and grow or shrink WITH the window; below the minimum width
+                      the table scrolls inside the card — the page never squishes
+                      rows into each other or scrolls sideways again */}
+                  <div className="overflow-x-auto">
+                    <div style={{ minWidth: 760 }}>
+                      <div className="grid items-center gap-2 border-b border-gray-100 px-2 pb-1" style={{ gridTemplateColumns: POST_ROW_GRID }}>
+                        {["Post", "URL", "Tags", "Status", "WP category", ""].map((h, i) => (
+                          <span key={i} className={"text-[9.5px] font-bold uppercase tracking-wide text-gray-400" + (i === 5 ? " text-right" : "")}>{h || "Actions"}</span>
+                        ))}
+                      </div>
+                      <div className="space-y-0.5 pt-1">
                     {list.map((p) => (
                       <div key={p.id}>
-                        <div className="group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50">
-                          <CatChip cat={p.category} />
-                          <button onClick={() => setOpenId(p.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                            <span className="truncate text-[12.5px] font-medium text-gray-800">{p.title}</span>
-                            {/* slug only — the site prepends the category in its permalinks */}
-                            <span className="ll-mono hidden shrink-0 text-[9.5px] text-gray-400 sm:inline">/{p.slug}</span>
-                            {(p.tags || []).slice(0, 3).map((t) => (
-                              <span key={t} className="hidden shrink-0 rounded bg-gray-100 px-1 py-px text-[8.5px] font-medium text-gray-500 lg:inline">#{t}</span>
-                            ))}
-                            {(p.tags || []).length > 3 && <span className="hidden text-[8.5px] text-gray-300 lg:inline">+{p.tags.length - 3}</span>}
-                            {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">possible duplicate</span>}
-                            {/* status: published / scheduled · date / written */}
+                        <div className="group grid items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50" style={{ gridTemplateColumns: POST_ROW_GRID }}>
+                          {/* Post */}
+                          <button onClick={() => setOpenId(p.id)} className="flex min-w-0 items-center gap-2 text-left">
+                            <CatChip cat={p.category} />
+                            <span className="min-w-0 truncate text-[12.5px] font-medium text-gray-800" title={p.title}>{p.title}</span>
+                          </button>
+                          {/* URL — slug only; the site prepends the category in its permalinks */}
+                          <button onClick={() => setOpenId(p.id)} className="ll-mono min-w-0 truncate text-left text-[9.5px] text-gray-400" title={"/" + p.slug}>/{p.slug}</button>
+                          {/* Tags */}
+                          <span className="flex min-w-0 items-center gap-1">
+                            <button title={"Edit tags — pushed to WordPress with the post and used by related-post widgets\nNow: " + ((p.tags || []).join(", ") || "none")}
+                              onClick={async () => {
+                                const v = await askInput({ title: "Post tags", message: "Comma-separated — kept consistent with services/products so related posts match:", value: (p.tags || []).join(", "), confirmLabel: "Save tags" });
+                                if (v != null) patchPost(p.id, { tags: splitTagList(v).slice(0, 8) });
+                              }}
+                              className="ll-mono shrink-0 rounded-lg border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-gray-300">
+                              #{(p.tags || []).length}
+                            </button>
+                            <span className="min-w-0 truncate text-[9px] text-gray-400" title={(p.tags || []).join(", ")}>{(p.tags || []).map((t) => "#" + t).join(" ")}</span>
+                          </span>
+                          {/* Status */}
+                          <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+                            {p.dup && !p.dupResolved && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-700">duplicate?</span>}
                             {p.status === "published"
                               ? <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">published</span>
                               : p.status === "scheduled"
-                              ? <span className="ll-mono shrink-0 rounded-full bg-blue-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-blue-700">scheduled · {new Date(p.scheduledAt).toISOString().slice(0, 10)}</span>
-                              : p.content && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">written</span>}
-                          </button>
-                          {/* the site's REAL category for this post — scraped from the
-                              connected WordPress; disabled (with the default) until a site
-                              is connected. The pusher publishes into exactly this category. */}
-                          <button title={"Edit tags — pushed to WordPress with the post and used by related-post widgets\nNow: " + ((p.tags || []).join(", ") || "none")}
-                            onClick={async () => {
-                              const v = await askInput({ title: "Post tags", message: "Comma-separated — kept consistent with services/products so related posts match:", value: (p.tags || []).join(", "), confirmLabel: "Save tags" });
-                              if (v != null) patchPost(p.id, { tags: splitTagList(v).slice(0, 8) });
-                            }}
-                            className="ll-mono shrink-0 rounded-lg border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-gray-300">
-                            #{(p.tags || []).length}
-                          </button>
+                              ? <span className="ll-mono shrink-0 rounded-full bg-blue-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-blue-700" title={"Scheduled for " + new Date(p.scheduledAt).toISOString().slice(0, 10)}>{new Date(p.scheduledAt).toISOString().slice(5, 10)}</span>
+                              : p.content
+                              ? <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[8.5px] font-bold uppercase text-emerald-700">written</span>
+                              : <span className="text-[9px] text-gray-300">—</span>}
+                          </span>
+                          {/* WP category — the site's REAL categories once connected;
+                              the pusher publishes into exactly this one */}
                           <select value={p.wpCategory || ""} disabled={!wpCats}
                             title={wpCats ? "WordPress category the pusher will publish into" : "Connect WordPress in the Connector tab to load the site's categories"}
                             onChange={(e) => patchPost(p.id, { wpCategory: e.target.value || null })}
-                            className="ll-mono w-28 shrink-0 rounded-lg border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] text-gray-600 disabled:opacity-40">
+                            className="ll-mono w-full min-w-0 rounded-lg border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] text-gray-600 disabled:opacity-40">
                             <option value="">{p.category === "answer" ? "Answer" : "Blog"} (default)</option>
                             {(wpCats || []).map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
                           </select>
-                          {/* right-side actions once the content is written */}
-                          {p.content && p.status !== "published" && (
-                            schedFor?.id === p.id ? (
-                              <span className="flex shrink-0 items-center gap-1">
-                                <input type="date" value={schedFor.date} min={new Date().toISOString().slice(0, 10)}
-                                  onChange={(e) => setSchedFor({ id: p.id, date: e.target.value })}
-                                  className={"ll-mono " + inputCls + " w-auto py-0.5 text-[10.5px]"} />
-                                <button onClick={() => publishRow(p, schedFor.date)} disabled={rowBusy === p.id}
-                                  className="rounded-lg px-2 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
-                                  {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : "Set"}
-                                </button>
-                                <button onClick={() => setSchedFor(null)} className="rounded p-1 text-gray-300 hover:text-gray-500"><X size={12} /></button>
-                              </span>
-                            ) : (
-                              <span className="flex shrink-0 items-center gap-1">
-                                <button onClick={() => publishRow(p, null)} disabled={!!rowBusy} title={canLive ? "Publish to WordPress right now" : "WordPress not connected — demo publish into the Posts tab"}
-                                  className="rounded-lg px-2.5 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
-                                  {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : p.status === "scheduled" ? "Publish now" : "Publish"}
-                                </button>
-                                <button onClick={() => setSchedFor({ id: p.id, date: new Date(Date.now() + 864e5).toISOString().slice(0, 10) })}
-                                  disabled={!!rowBusy}
-                                  className="rounded-lg border px-2.5 py-1 text-[10.5px] font-bold disabled:opacity-50" style={{ borderColor: accent + "66", color: accent }}>
-                                  {p.status === "scheduled" ? "Reschedule" : "Schedule"}
-                                </button>
-                              </span>
-                            )
-                          )}
-                          <button onClick={async () => { if (await askDelete(`the post "${p.title || "this post"}"`)) patchPost(p.id, { status: "removed" }); }} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
+                          {/* Actions */}
+                          <span className="flex items-center justify-end gap-1">
+                            {p.content && p.status !== "published" && (
+                              schedFor?.id === p.id ? (
+                                <>
+                                  <input type="date" value={schedFor.date} min={new Date().toISOString().slice(0, 10)}
+                                    onChange={(e) => setSchedFor({ id: p.id, date: e.target.value })}
+                                    className={"ll-mono " + inputCls + " w-auto py-0.5 text-[10.5px]"} />
+                                  <button onClick={() => publishRow(p, schedFor.date)} disabled={rowBusy === p.id}
+                                    className="rounded-lg px-2 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
+                                    {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : "Set"}
+                                  </button>
+                                  <button onClick={() => setSchedFor(null)} className="rounded p-1 text-gray-300 hover:text-gray-500"><X size={12} /></button>
+                                </>
+                              ) : (
+                                <>
+                                  <button onClick={() => publishRow(p, null)} disabled={!!rowBusy} title={canLive ? "Publish to WordPress right now" : "WordPress not connected — demo publish into the Posts tab"}
+                                    className="rounded-lg px-2.5 py-1 text-[10.5px] font-bold text-white disabled:opacity-50" style={{ background: accent }}>
+                                    {rowBusy === p.id ? <RefreshCw size={11} className="animate-spin" /> : p.status === "scheduled" ? "Publish now" : "Publish"}
+                                  </button>
+                                  <button onClick={() => setSchedFor({ id: p.id, date: new Date(Date.now() + 864e5).toISOString().slice(0, 10) })}
+                                    disabled={!!rowBusy}
+                                    className="rounded-lg border px-2.5 py-1 text-[10.5px] font-bold disabled:opacity-50" style={{ borderColor: accent + "66", color: accent }}>
+                                    {p.status === "scheduled" ? "Reschedule" : "Schedule"}
+                                  </button>
+                                </>
+                              )
+                            )}
+                            <button onClick={async () => { if (await askDelete(`the post "${p.title || "this post"}"`)) patchPost(p.id, { status: "removed" }); }} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
+                          </span>
                         </div>
                         {rowErr?.id === p.id && <div className="pl-9 text-[10px] text-red-600">{rowErr.msg}</div>}
                       </div>
                     ))}
+                      </div>
+                    </div>
                   </div>
                   {/* add your own topic + extend with fresh AI topics */}
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
