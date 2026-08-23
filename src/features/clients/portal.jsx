@@ -22,6 +22,7 @@ import { ProjectManagementView } from "../pm/board.jsx";
 import { AdsPerformanceView } from "../ads/dashboard.jsx";
 import { ROLE_CLIENT_LABEL } from "../../data/seed.js";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
+import { chatRead, chatReact, chatSend, newMsgId } from "../../lib/chat.js";
 
 /* white-label client's own DataForSEO credentials — powers rank tracking,
    geo-grid scans and index checks for THEIR projects (the agency's account is
@@ -419,20 +420,50 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   /* private owner ↔ client line (the owner answers from the dashboard chat) */
   const ownerChat = client.ownerChat || { msgs: [], reads: {} };
   const msgUnread = (ownerChat.msgs || []).filter((m) => m.author !== client.contact && m.ts > ((ownerChat.reads || {})[client.contact] || 0)).length;
+  /* every chat action goes through the chat lane (instant delivery, no
+     portal save round-trip) as well as into local state */
+  const ownerThread = { kind: "owner", clientId: client.id };
   const sendOwnerMsg = (text, replyTo = null) => {
     const now = Date.now();
-    onUpdateClient?.((c) => ({ ownerChat: { msgs: capMsgs([...((c.ownerChat || {}).msgs || []), { id: "km" + now, ts: now, author: client.contact, text, replyTo }]), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: now } } }));
+    const msg = { id: newMsgId("km"), ts: now, author: client.contact, text, replyTo };
+    chatSend(ownerThread, msg);
+    onUpdateClient?.((c) => ({ ownerChat: { msgs: capMsgs([...((c.ownerChat || {}).msgs || []), msg]), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: now } } }));
   };
-  const reactOwnerMsg = (msgId, emoji) => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], reads: {}, ...(c.ownerChat || {}), msgs: ((c.ownerChat || {}).msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) } }));
+  const reactOwnerMsg = (msgId, emoji) => {
+    chatReact(ownerThread, msgId, emoji);
+    onUpdateClient?.((c) => ({ ownerChat: { reads: {}, ...(c.ownerChat || {}), msgs: ((c.ownerChat || {}).msgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, client.contact), rts: Date.now() } : m)) } }));
+  };
+  const readOwner = () => {
+    chatRead(ownerThread);
+    onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }));
+  };
   /* 3-way member threads — one per team member the agency assigned */
   const patchTrioC = (mid, fn) => onUpdateClient?.((c) => ({ memberChats: { ...(c.memberChats || {}), [mid]: { msgs: [], reads: {}, ...((c.memberChats || {})[mid] || {}), ...fn((c.memberChats || {})[mid] || { msgs: [], reads: {} }) } } }));
-  const sendTrioMsg = (mid, text, replyTo = null) => { const now = Date.now(); patchTrioC(mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), { id: "tm" + now, ts: now, author: client.contact, text, replyTo }]), reads: { ...(ch.reads || {}), [client.contact]: now } })); };
-  const reactTrioMsg = (mid, msgId, emoji) => patchTrioC(mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) }));
-  const readTrio = (mid) => patchTrioC(mid, (ch) => ({ reads: { ...(ch.reads || {}), [client.contact]: Date.now() } }));
+  const trioThread = (mid) => ({ kind: "trio", clientId: client.id, memberId: mid });
+  const sendTrioMsg = (mid, text, replyTo = null) => {
+    const now = Date.now();
+    const msg = { id: newMsgId("tm"), ts: now, author: client.contact, text, replyTo };
+    chatSend(trioThread(mid), msg);
+    patchTrioC(mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), msg]), reads: { ...(ch.reads || {}), [client.contact]: now } }));
+  };
+  const reactTrioMsg = (mid, msgId, emoji) => {
+    chatReact(trioThread(mid), msgId, emoji);
+    patchTrioC(mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, client.contact), rts: Date.now() } : m)) }));
+  };
+  const readTrio = (mid) => { chatRead(trioThread(mid)); patchTrioC(mid, (ch) => ({ reads: { ...(ch.reads || {}), [client.contact]: Date.now() } })); };
   /* project-channel chat from the portal — same thread the team sees */
-  const sendChanMsg = (pid, text, replyTo = null) => { const now = Date.now(); onUpdateProject(pid, (p) => ({ chatMsgs: capMsgs([...(p.chatMsgs || []), { id: "cm" + now, ts: now, author: client.contact, text, replyTo }]), chatReads: { ...(p.chatReads || {}), [client.contact]: now } })); };
-  const reactChanMsg = (pid, msgId, emoji) => onUpdateProject(pid, (p) => ({ chatMsgs: (p.chatMsgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) }));
-  const readChan = (pid) => onUpdateProject(pid, (p) => ({ chatReads: { ...(p.chatReads || {}), [client.contact]: Date.now() } }));
+  const chanThread = (pid) => ({ kind: "project", clientId: client.id, projectId: pid });
+  const sendChanMsg = (pid, text, replyTo = null) => {
+    const now = Date.now();
+    const msg = { id: newMsgId("cm"), ts: now, author: client.contact, text, replyTo };
+    chatSend(chanThread(pid), msg);
+    onUpdateProject(pid, (p) => ({ chatMsgs: capMsgs([...(p.chatMsgs || []), msg]), chatReads: { ...(p.chatReads || {}), [client.contact]: now } }));
+  };
+  const reactChanMsg = (pid, msgId, emoji) => {
+    chatReact(chanThread(pid), msgId, emoji);
+    onUpdateProject(pid, (p) => ({ chatMsgs: (p.chatMsgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, client.contact), rts: Date.now() } : m)) }));
+  };
+  const readChan = (pid) => { chatRead(chanThread(pid)); onUpdateProject(pid, (p) => ({ chatReads: { ...(p.chatReads || {}), [client.contact]: Date.now() } })); };
   /* privacy wall: clients never see the agency's team roster — they can only be
      shown themselves. Team members render by ROLE ("SEO Manager", "Content
      Developer"…) with the agency/white-label brand tile instead of a photo. */
@@ -571,7 +602,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
                   <ClientChatPane client={client} company={company} brand={brand} accent={accent} maskName={maskName}
                     roleLabelOf={roleLabelOf} channels={chatChannels} owner={owner}
                     onSendOwner={sendOwnerMsg} onReactOwner={reactOwnerMsg}
-                    onReadOwner={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))}
+                    onReadOwner={readOwner}
                     onSendTrio={sendTrioMsg} onReactTrio={reactTrioMsg} onReadTrio={readTrio}
                     onSendChannel={sendChanMsg} onReactChannel={reactChanMsg} onReadChannel={readChan} />
                 </AvaMaskCtx.Provider>

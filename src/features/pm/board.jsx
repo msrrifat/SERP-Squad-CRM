@@ -18,6 +18,7 @@ import { askConfirm, askDelete, askInput, AssignPicker, Ava, Card, inputCls, NEG
 import { fmtDay, fmtTs2, relTime, todayISO } from "../../lib/format.jsx";
 import { inlineFmt } from "../../lib/text.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
+import { chatRead, chatReact, chatSend, newMsgId } from "../../lib/chat.js";
 import { MeetingNotesTab } from "./meetings.jsx";
 
 export const taskState = (t) => (t.completedAt ? "done" : t.dueDate && t.dueDate < todayISO() ? "overdue" : "open");
@@ -398,24 +399,32 @@ export function WikiView({ project, onUpdate, canEdit, accent, log }) {
 export const chatUnreadCount = (project, user) =>
   (project?.chatMsgs || []).filter((m) => m.author !== user && m.ts > ((project?.chatReads || {})[user] || 0)).length;
 
-export function ChatView({ project, currentUser, canWrite = true, accent, onUpdate, maskName = (n) => n, mentionables = [] }) {
+export function ChatView({ project, currentUser, canWrite = true, accent, onUpdate, maskName = (n) => n, mentionables = [], chatThread = null }) {
   const msgs = project.chatMsgs || [];
+  /* every action goes out through the chat lane (instant, no autosave
+     banner) as well as into local state; chatThread identifies the channel */
   /* opening the thread (or receiving messages while it's open) marks it read */
   useEffect(() => {
     const last = msgs[msgs.length - 1];
-    if (last && ((project.chatReads || {})[currentUser] || 0) < last.ts)
+    if (last && ((project.chatReads || {})[currentUser] || 0) < last.ts) {
+      if (chatThread) chatRead(chatThread);
       onUpdate((pr) => ({ chatReads: { ...(pr.chatReads || {}), [currentUser]: Date.now() } }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msgs.length]);
   const send = (text, replyTo) => {
     const now = Date.now();
+    const msg = { id: newMsgId("cm"), ts: now, author: currentUser, text, replyTo: replyTo || null };
+    if (chatThread) chatSend(chatThread, msg);
     onUpdate((pr) => ({
-      chatMsgs: capMsgs([...(pr.chatMsgs || []), { id: "cm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: currentUser, text, replyTo: replyTo || null }]),
+      chatMsgs: capMsgs([...(pr.chatMsgs || []), msg]),
       chatReads: { ...(pr.chatReads || {}), [currentUser]: now },
     }));
   };
-  const react = (msgId, emoji) =>
-    onUpdate((pr) => ({ chatMsgs: (pr.chatMsgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, currentUser) : m)) }));
+  const react = (msgId, emoji) => {
+    if (chatThread) chatReact(chatThread, msgId, emoji);
+    onUpdate((pr) => ({ chatMsgs: (pr.chatMsgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, currentUser), rts: Date.now() } : m)) }));
+  };
   return (
     <Card className="flex flex-col overflow-hidden p-0" style={{ minHeight: 460 }}>
       <div className="border-b border-gray-100 px-5 py-3.5">
@@ -428,7 +437,7 @@ export function ChatView({ project, currentUser, canWrite = true, accent, onUpda
 }
 
 export function ProjectManagementView({ project, people, perms, currentUser, accent, onUpdate, log, maskName = (n) => n, canChat = true, initialOpenId = null, jumpKey = 0,
-  templates = null, onSaveTemplate = null, onDeleteTemplate = null, meetingsUser = null }) {
+  templates = null, onSaveTemplate = null, onDeleteTemplate = null, meetingsUser = null, chatThread = null }) {
   const records = project.records || [];
   /* board lists (kanban columns) — every record belongs to one; the same
      columns are mirrored across the All/Open/Overdue/Completed filters */
@@ -523,7 +532,7 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
         <MeetingNotesTab project={project} user={meetingsUser} accent={accent} onUpdate={onUpdate} people={people} />
       )}
       {pmTab === "wiki" && <WikiView project={project} onUpdate={onUpdate} canEdit={perms.manage} accent={accent} log={log} />}
-      {pmTab === "chat" && canChat && <ChatView project={project} currentUser={currentUser} canWrite={perms.comment !== false} accent={accent} onUpdate={onUpdate} maskName={maskName} mentionables={people.map((p2) => p2.name)} />}
+      {pmTab === "chat" && canChat && <ChatView project={project} currentUser={currentUser} canWrite={perms.comment !== false} accent={accent} onUpdate={onUpdate} maskName={maskName} mentionables={people.map((p2) => p2.name)} chatThread={chatThread} />}
       {pmTab === "records" && (<>
       <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => {

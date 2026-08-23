@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CornerUpLeft, Send, Smile, X } from "lucide-react";
 import { Ava, inputCls } from "../../ui/primitives.jsx";
+import { useMsgStatus } from "../../lib/chat.js";
 
 /* quick reactions shown on hover; the full set feeds the composer picker */
 export const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
@@ -42,6 +43,8 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
   const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef(null);
   const taRef = useRef(null);
+  /* delivery state of messages sent from this tab (chat lane) */
+  const msgStatus = useMsgStatus();
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [msgs.length]);
 
   const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
@@ -160,7 +163,13 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
                   )}
                   {m.replyTo && !quoted && <div className={"mb-1 text-[10px] italic " + (own ? "text-white/60" : "text-gray-400")}>replying to an earlier message</div>}
                   <div className={"whitespace-pre-wrap break-words leading-relaxed " + fs}>{renderText(m.text, own)}</div>
-                  <div className={"mt-0.5 text-right text-[8.5px] " + (own ? "text-white/70" : "text-gray-400")}>{hhmm(m.ts)}</div>
+                  <div className={"mt-0.5 text-right text-[8.5px] " + (own ? "text-white/70" : "text-gray-400")}>
+                    {own && msgStatus.get(m.id)?.state === "pending" && <span className="mr-1 opacity-80">Sending…</span>}
+                    {own && msgStatus.get(m.id)?.state === "failed" && (
+                      <button onClick={() => msgStatus.get(m.id)?.retry?.()} className="mr-1 rounded bg-red-600 px-1 py-px font-semibold text-white">Not sent · Retry</button>
+                    )}
+                    {hhmm(m.ts)}
+                  </div>
                   {reactions.length > 0 && (
                     <div className={"absolute -bottom-3 flex gap-1 " + (own ? "right-2" : "left-2")}>
                       {reactions.map(([emoji, names]) => (

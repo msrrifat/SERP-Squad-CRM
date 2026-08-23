@@ -28,6 +28,7 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | Posts Architect (Blog/Answer post architecture, anchor-variety internal linking, media auto-images, duplicate cross-check) | src/features/optimization/postsarchitect.jsx |
 | Brand Voice tab (business info + shared brand properties + tone/files fed to all writing tools) | src/features/optimization/brandvoice.jsx |
 | AI agent (scoped brain: agent.js; chat panel: AgentPanel.jsx) | src/features/agent/ |
+| Chat lane: instant send/react/read + 5 s polling, delivery status, notifications (server: handleChat* in server/index.js; union-merge rules shared in chatmerge.js) | src/lib/chat.js, src/lib/chatmerge.js |
 | Seed company/clients/projects, ROLE_PRESETS, demo teamAccess grants | src/data/seed.js |
 | Shared UI primitives (Card, StatCard, Modal, Toggle, inputs, FONT_CSS) | src/ui/primitives.jsx |
 | Dashboard views: Overview, Rank Tracking, GBP, Website Perf, NAV | src/features/performance/views.jsx |

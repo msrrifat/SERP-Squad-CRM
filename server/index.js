@@ -31,6 +31,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
+import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
 
 const PORT = process.env.PORT || 8787;
 const DFS_BASE = process.env.DFS_BASE || "https://api.dataforseo.com/v3"; // override for offline tests
@@ -933,7 +934,10 @@ function handleStateDomains(req, body) {
     }
   }
   try {
-    const out = saveDomainDocs(docs);
+    /* chat is multi-writer: fold in whatever the store already holds so a
+       document built before someone's message arrived cannot erase it */
+    const merged = (docs.core || docs.pm) ? mergeChatDocs(docs, loadDomains() || {}) : docs;
+    const out = saveDomainDocs(merged);
     return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now() }];
   } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
@@ -1050,7 +1054,10 @@ function handleStateSave(req, body) {
   }
   /* per-document revisions come back too, so the browser can go straight to
      granular saves afterwards instead of failing one first */
-  try { const rev = saveState(body.state); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev, revs: loadRevs() }]; }
+  try {
+    const stored = loadDomains();
+    const toSave = stored ? joinWorkspace(mergeChatDocs(splitWorkspace(body.state), stored)) : body.state;
+    const rev = saveState(toSave); return [200, { ok: true, bytes: raw.length, at: Date.now(), rev, revs: loadRevs() }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
 
@@ -1203,6 +1210,230 @@ function handleClientStateSave(req, body) {
   try { const rev = saveState(state); return [200, { ok: true, rev }]; }
   catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
+/* =====================================================================
+   CHAT LANE — instant messaging, separate from the workspace autosave.
+
+   A message used to be just another state mutation: it sat in the browser
+   for the 1.2 s debounce, rode up inside a whole tool document, and lit the
+   "Saving changes… don't close this tab" banner as if it were an edit. And
+   nothing ever pulled messages DOWN — the other party saw them on reload.
+
+   Now every send/react/read is one small POST handled here, written the
+   moment it arrives, and /api/chat/since lets every open tab poll for what
+   is new. Chat writes deliberately do NOT bump document revisions: they are
+   union-merged (see src/lib/chatmerge.js) on every write path instead, so a
+   workspace save built on an older copy can neither collide with a message
+   nor erase one.
+   ===================================================================== */
+const CHAT_TEXT_CAP = 4000;
+const str = (v, cap) => (typeof v === "string" ? v.slice(0, cap) : "");
+
+/* who the session is, in chat terms — team members by NAME (the identity
+   key every thread uses), clients by their contact name */
+function chatIdentity(sess, state) {
+  if (!sess || !state) return null;
+  if (sess.kind === "team") {
+    const m = (state.company?.team || []).find((x) => x && x.id === sess.id);
+    if (!m) return null;
+    return { kind: "team", id: m.id, name: m.name, isOwner: !!m.isOwner, isAdmin: !!m.isOwner || m.role === "Admin", member: m };
+  }
+  if (sess.kind === "client") {
+    const c = (state.clients || []).find((x) => x && x.id === sess.id);
+    if (!c) return null;
+    return { kind: "client", id: c.id, name: c.contact || "", client: c };
+  }
+  return null;
+}
+
+/* may this identity read/post in a project channel? Mirrors the dashboard's
+   channel roster: admins and the owner always; an assigned member unless
+   the project's Team grant switched chat off; the client when granted. */
+function canProjectChat(who, client, project) {
+  if (!client || !project) return false;
+  if (who.kind === "client") {
+    if (client.id !== who.id) return false;
+    const lg = client.login || {};
+    return (Array.isArray(lg.projectIds) && lg.projectIds.includes(project.id)) && (!!lg.canChat || !!project.clientInChannel);
+  }
+  if (who.isAdmin) return true;
+  const m = who.member;
+  const manual = (project.teamAccess || {})[m.id] || {};
+  if (manual.chat === true) return true;
+  if (manual.chat === false) return false;
+  return m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(project.id))
+    || Object.values(manual).some(Boolean);
+}
+
+/* Resolve a thread descriptor to { domain, get(), set(ch) } against a
+   workspace object, enforcing who may touch it. Returns a string error
+   code when refused. */
+function resolveChatThread(state, who, t) {
+  if (!t || typeof t !== "object") return "bad_thread";
+  const kind = t.kind;
+  if (kind === "dm") {
+    if (who.kind !== "team") return "forbidden";
+    const other = str(t.other, 120);
+    if (!other || !(state.company?.team || []).some((m) => m && m.name === other)) return "not_found";
+    const key = [who.name, other].sort().join("|");
+    return { domain: "core", key,
+      get: () => ({ msgs: (state.company.dms || {})[key] || [], reads: (state.company.dmReads || {})[key] || {} }),
+      set: (ch) => { state.company.dms = { ...(state.company.dms || {}), [key]: ch.msgs }; state.company.dmReads = { ...(state.company.dmReads || {}), [key]: ch.reads }; } };
+  }
+  if (kind === "group") {
+    if (who.kind !== "team") return "forbidden";
+    const g = (state.company?.chatGroups || []).find((x) => x && x.id === t.groupId);
+    if (!g) return "not_found";
+    if (!(g.members || []).includes(who.name)) return "forbidden";
+    return { domain: "core", get: () => ({ msgs: g.msgs || [], reads: g.reads || {} }),
+      set: (ch) => { state.company.chatGroups = state.company.chatGroups.map((x) => (x.id === g.id ? { ...x, msgs: ch.msgs, reads: ch.reads } : x)); } };
+  }
+  const client = (state.clients || []).find((c) => c && c.id === t.clientId);
+  if (!client) return "not_found";
+  const ci = state.clients.indexOf(client);
+  if (kind === "project") {
+    const p = (client.projects || []).find((x) => x && x.id === t.projectId);
+    if (!p) return "not_found";
+    if (!canProjectChat(who, client, p)) return "forbidden";
+    return { domain: "pm", get: () => ({ msgs: p.chatMsgs || [], reads: p.chatReads || {} }),
+      set: (ch) => { state.clients[ci] = { ...client, projects: client.projects.map((x) => (x.id === p.id ? { ...x, chatMsgs: ch.msgs, chatReads: ch.reads } : x)) }; } };
+  }
+  if (kind === "owner") {
+    if (!(who.kind === "client" ? client.id === who.id : who.isOwner)) return "forbidden";
+    return { domain: "core", get: () => ({ msgs: client.ownerChat?.msgs || [], reads: client.ownerChat?.reads || {} }),
+      set: (ch) => { state.clients[ci] = { ...client, ownerChat: { ...(client.ownerChat || {}), msgs: ch.msgs, reads: ch.reads } }; } };
+  }
+  if (kind === "trio") {
+    const mid = str(t.memberId, 80);
+    if (!mid || !(client.chatMembers || []).includes(mid)) return "not_found";
+    const ok = who.kind === "client" ? client.id === who.id : (who.isOwner || who.id === mid);
+    if (!ok) return "forbidden";
+    return { domain: "core", get: () => ({ msgs: (client.memberChats || {})[mid]?.msgs || [], reads: (client.memberChats || {})[mid]?.reads || {} }),
+      set: (ch) => { state.clients[ci] = { ...client, memberChats: { ...(client.memberChats || {}), [mid]: { ...((client.memberChats || {})[mid] || {}), msgs: ch.msgs, reads: ch.reads } } }; } };
+  }
+  return "bad_thread";
+}
+
+/* write ONE document back without bumping its revision (see header) */
+function writeChatDomain(domain, state) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const docs = splitWorkspace(state);
+  writeJsonAtomic(domFile(domain), docs[domain] ?? {});
+  try { refreshCombined(); } catch { /* best-effort */ }
+}
+
+const CHAT_ERR = {
+  bad_thread: [400, { error: "bad_thread", detail: "Unknown thread." }],
+  not_found: [404, { error: "not_found", detail: "That thread does not exist." }],
+  forbidden: [403, { error: "forbidden", detail: "You are not a member of that thread." }],
+};
+
+function chatPrelude(req) {
+  const sess = sessionFromReq(req);
+  if (!sess) return [null, [401, { error: "unauthorized", detail: "Session required." }]];
+  const state = loadState();
+  if (!state) return [null, [409, { error: "no_state", detail: "No stored workspace." }]];
+  const who = chatIdentity(sess, state);
+  if (!who || !who.name) return [null, [403, { error: "forbidden", detail: "No chat identity for this session." }]];
+  return [{ sess, state, who }, null];
+}
+
+function handleChatSend(req, body) {
+  const [ctx, err] = chatPrelude(req); if (err) return err;
+  const { state, who } = ctx;
+  const th = resolveChatThread(state, who, body?.thread);
+  if (typeof th === "string") return CHAT_ERR[th];
+  const m = body?.msg || {};
+  const text = str(m.text, CHAT_TEXT_CAP).trim();
+  if (!text) return [400, { error: "bad_request", detail: "Empty message." }];
+  const now = Date.now();
+  const id = str(m.id, 60) || ("m" + now + Math.random().toString(36).slice(2, 6));
+  const cur = th.get();
+  if (cur.msgs.some((x) => x && x.id === id)) return [200, { ok: true, msg: cur.msgs.find((x) => x.id === id), now }]; // idempotent retry
+  const msg = { id, ts: now, author: who.name, text, ...(m.replyTo ? { replyTo: str(m.replyTo, 60) } : {}) };
+  th.set({ msgs: mergeMsgList(cur.msgs, [msg]), reads: mergeReadMap(cur.reads, { [who.name]: now }) });
+  try { writeChatDomain(th.domain, state); } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+  return [200, { ok: true, msg, now }];
+}
+
+function handleChatReact(req, body) {
+  const [ctx, err] = chatPrelude(req); if (err) return err;
+  const { state, who } = ctx;
+  const th = resolveChatThread(state, who, body?.thread);
+  if (typeof th === "string") return CHAT_ERR[th];
+  const msgId = str(body?.msgId, 60), emoji = str(body?.emoji, 16);
+  if (!msgId || !emoji) return [400, { error: "bad_request", detail: "msgId and emoji required." }];
+  const cur = th.get();
+  const target = cur.msgs.find((x) => x && x.id === msgId);
+  if (!target) return [404, { error: "not_found", detail: "Message not found." }];
+  const now = Date.now();
+  const list = (target.reactions || {})[emoji] || [];
+  const want = typeof body.on === "boolean" ? body.on : !list.includes(who.name);
+  const next = want ? (list.includes(who.name) ? list : [...list, who.name]) : list.filter((x) => x !== who.name);
+  const reactions = { ...(target.reactions || {}) };
+  if (next.length) reactions[emoji] = next; else delete reactions[emoji];
+  const updated = { ...target, reactions, rts: now };
+  th.set({ msgs: cur.msgs.map((x) => (x.id === msgId ? updated : x)), reads: cur.reads });
+  try { writeChatDomain(th.domain, state); } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+  return [200, { ok: true, msg: updated, now }];
+}
+
+function handleChatRead(req, body) {
+  const [ctx, err] = chatPrelude(req); if (err) return err;
+  const { state, who } = ctx;
+  const th = resolveChatThread(state, who, body?.thread);
+  if (typeof th === "string") return CHAT_ERR[th];
+  const now = Date.now();
+  const cur = th.get();
+  if ((+cur.reads[who.name] || 0) >= now) return [200, { ok: true, now }];
+  th.set({ msgs: cur.msgs, reads: mergeReadMap(cur.reads, { [who.name]: now }) });
+  try { writeChatDomain(th.domain, state); } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+  return [200, { ok: true, now }];
+}
+
+/* every thread this identity can see, with only what moved since `ts` */
+function handleChatSince(req) {
+  const [ctx, err] = chatPrelude(req); if (err) return err;
+  const { state, who } = ctx;
+  const since = +((/[?&]ts=(\d+)/.exec(req.url) || [])[1]) || 0;
+  const now = Date.now();
+  const threads = [];
+  const fresh = (msgs) => (msgs || []).filter((m) => m && Math.max(+m.ts || 0, +m.rts || 0) > since);
+  const readsMoved = (reads) => Object.values(reads || {}).some((v) => (+v || 0) > since);
+  const push = (desc, ch, meta = null) => {
+    const msgs = fresh(ch.msgs);
+    if (!msgs.length && !readsMoved(ch.reads) && !meta) return;
+    threads.push({ ...desc, msgs, reads: ch.reads || {}, ...(meta ? { meta } : {}) });
+  };
+  const co = state.company || {};
+  if (who.kind === "team") {
+    for (const [key, msgs] of Object.entries(co.dms || {})) {
+      if (!key.split("|").includes(who.name)) continue;
+      push({ kind: "dm", key }, { msgs, reads: (co.dmReads || {})[key] || {} });
+    }
+    for (const g of co.chatGroups || []) {
+      if (!g || !(g.members || []).includes(who.name)) continue;
+      /* a room created or renamed since the last poll arrives with its shape */
+      const meta = (+g.createdAt || 0) > since || (+g.updatedAt || 0) > since
+        ? { id: g.id, name: g.name, members: g.members, createdBy: g.createdBy, createdAt: g.createdAt, updatedAt: g.updatedAt } : null;
+      push({ kind: "group", groupId: g.id }, { msgs: g.msgs, reads: g.reads }, meta);
+    }
+  }
+  for (const c of state.clients || []) {
+    if (!c) continue;
+    if (who.kind === "client" && c.id !== who.id) continue;
+    if (who.kind === "client" || who.isOwner) push({ kind: "owner", clientId: c.id }, c.ownerChat || {});
+    for (const mid of c.chatMembers || []) {
+      if (who.kind === "team" && !(who.isOwner || who.id === mid)) continue;
+      push({ kind: "trio", clientId: c.id, memberId: mid }, (c.memberChats || {})[mid] || {});
+    }
+    for (const p of c.projects || []) {
+      if (!p || !canProjectChat(who, c, p)) continue;
+      push({ kind: "project", clientId: c.id, projectId: p.id }, { msgs: p.chatMsgs, reads: p.chatReads });
+    }
+  }
+  return [200, { ok: true, now, since, threads }];
+}
+
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
 function handleStateBackups(req) {
   const sess = sessionFromReq(req);
@@ -4591,6 +4822,7 @@ http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/state/slice?")) { const [c2, p2] = handleStateSlice(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url.startsWith("/api/chat/since")) { const [c2, p2] = handleChatSince(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
     if (req.method === "GET" && req.url.startsWith("/api/oauth/social/callback")) {
       const html = await handleSocialCallback(req.url);
@@ -4624,7 +4856,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -4724,6 +4956,9 @@ http.createServer(async (req, res) => {
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
         : req.url === "/api/state/client" ? handleClientStateSave(req, body)
+        : req.url === "/api/chat/send" ? handleChatSend(req, body)
+        : req.url === "/api/chat/react" ? handleChatReact(req, body)
+        : req.url === "/api/chat/read" ? handleChatRead(req, body)
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)

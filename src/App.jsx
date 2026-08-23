@@ -61,6 +61,8 @@ async function postState(token, state, baseRev, keep = []) {
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
+import { stripChatDocs } from "./lib/chatmerge.js";
+import { applyChatBatch, chatRead, chatReact, chatSend, consumeChatLocal, ensureNotifyPermission, markChatLocal, newMsgId, notifyNewMessages, useChatSync, useTitleBadge } from "./lib/chat.js";
 import { setAppOrigin } from "./lib/appOrigin.js";
 import { applyOptWork, ensureMonthlyWorkRecord } from "./lib/worklog.jsx";
 
@@ -345,7 +347,7 @@ export default function App() {
   /* record every tool document exactly as the server holds it */
   const noteServerDocs = useCallback((state, revs) => {
     try {
-      const docs = splitWorkspace(state || {});
+      const docs = stripChatDocs(splitWorkspace(state || {}));
       const out = {};
       for (const d of DOMAINS) out[d] = JSON.stringify(docs[d] ?? {});
       serverDocs.current = out;
@@ -402,13 +404,17 @@ export default function App() {
     const token = localStorage.getItem("ss_token");
     if (!token) return;
     clearTimeout(saveTimer.current);
+    /* a chat-only change (message, reaction, read marker) already went out
+       through /api/chat/* the instant it happened — the save pass below still
+       runs, finds no document changed, and must not show the banner */
+    const quiet = consumeChatLocal();
     /* from this moment until the POST returns, the change exists only in this
        tab. That window used to be ~5 seconds of silence on a large workspace,
        which is long enough to close the tab and lose the work without ever
        being told — so it is now both visible and guarded. */
-    setSaveState("pending");
+    if (!quiet) setSaveState("pending");
     saveTimer.current = setTimeout(async () => {
-      setSaveState("saving");
+      if (!quiet) setSaveState("saving");
       try {
         /* No revision to pin `keep` against AND a slice still missing: this tab
            cannot express a safe write at all. Fetch what's missing first rather
@@ -432,6 +438,9 @@ export default function App() {
         if (Number.isFinite(stateRev.current) && Object.keys(serverDocs.current).length) {
           try {
             const docs = splitWorkspace(full);
+            /* chat fields are compared stripped: they are written through the
+               chat lane and union-merged server-side on every save anyway */
+            const bare = stripChatDocs(docs);
             /* a document holding a slice this tab never loaded would be sent
                EMPTY and wipe it — those are excluded until the slice arrives */
             const blocked = new Set([...unloaded.current]
@@ -439,7 +448,7 @@ export default function App() {
             const fp = {};
             const changed = DOMAINS.filter((d) => {
               if (blocked.has(d)) return false;
-              fp[d] = JSON.stringify(docs[d] ?? {});
+              fp[d] = JSON.stringify(bare[d] ?? {});
               return fp[d] !== serverDocs.current[d];
             });
             if (!changed.length) { setSaveWarn(null); setSaveState("saved"); return; }
@@ -590,6 +599,8 @@ export default function App() {
     if (!token) return;
     if (!clientsRef.current.some((x) => x.id === session.clientId)) return;
     clearTimeout(clientSaveTimer.current);
+    /* a chat-only change already reached the server through the chat lane */
+    if (consumeChatLocal()) return;
     clientSaveTimer.current = setTimeout(async () => {
       try {
         const live = clientsRef.current.find((x) => x.id === session.clientId);
@@ -603,10 +614,9 @@ export default function App() {
               phone: live.phone, address: live.address, logo: live.logo ?? null,
               whiteLabel: live.whiteLabel, dfs: live.dfs || {},
             },
-            ownerChat: live.ownerChat || null,
-            memberChats: live.memberChats || null,
+            /* chat (owner line, 3-way threads, channels) goes through
+               /api/chat/* the moment it happens — it no longer rides here */
             projects: Object.fromEntries((live.projects || []).filter((p) => ids.has(p.id)).map((p) => [p.id, {
-              chatMsgs: p.chatMsgs || [], chatReads: p.chatReads || {},
               /* records travel as a completion/comment skeleton — the server
                  only reads comments and per-task completedAt from it */
               records: (p.records || []).map((rr) => ({
@@ -935,45 +945,72 @@ export default function App() {
   const lateAssigned = visibleClients.reduce((n, c) => n + c.projects.reduce((n2, p) => n2 + (p.records || []).reduce((n3, r) =>
     n3 + (r.checklists || []).flatMap((cl) => cl.tasks).filter((t) => (t.assignees || []).includes(meName) && !t.completedAt && t.dueDate && t.dueDate < todayISO()).length, 0), 0), 0);
 
-  const sendDm = (other, text, replyTo = null) => setCompany((c) => {
+  /* every chat action below does two things in the same tick: the local
+     update (instant bubble) and the chat-lane request (instant delivery).
+     chatSend/chatReact/chatRead also flag the change as chat-only so the
+     workspace autosave neither re-sends it nor shows "Saving changes…". */
+  const sendDm = (other, text, replyTo = null) => {
     const k = dmKey(meName, other), now = Date.now();
-    return { ...c,
-      dms: { ...(c.dms || {}), [k]: capMsgs([...((c.dms || {})[k] || []), { id: "dm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]) },
+    const msg = { id: newMsgId("dm"), ts: now, author: meName, text, replyTo };
+    chatSend({ kind: "dm", other }, msg);
+    setCompany((c) => ({ ...c,
+      dms: { ...(c.dms || {}), [k]: capMsgs([...((c.dms || {})[k] || []), msg]) },
       dmReads: { ...(c.dmReads || {}), [k]: { ...((c.dmReads || {})[k] || {}), [meName]: now } },
-    };
-  });
-  const reactDm = (other, msgId, emoji) => setCompany((c) => {
-    const k = dmKey(meName, other);
-    return { ...c, dms: { ...(c.dms || {}), [k]: ((c.dms || {})[k] || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) } };
-  });
-  const markDmRead = (other) => setCompany((c) => {
-    const k = dmKey(meName, other);
-    return { ...c, dmReads: { ...(c.dmReads || {}), [k]: { ...((c.dmReads || {})[k] || {}), [meName]: Date.now() } } };
-  });
+    }));
+  };
+  const reactDm = (other, msgId, emoji) => {
+    chatReact({ kind: "dm", other }, msgId, emoji);
+    setCompany((c) => {
+      const k = dmKey(meName, other);
+      return { ...c, dms: { ...(c.dms || {}), [k]: ((c.dms || {})[k] || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, meName), rts: Date.now() } : m)) } };
+    });
+  };
+  const markDmRead = (other) => {
+    chatRead({ kind: "dm", other });
+    setCompany((c) => {
+      const k = dmKey(meName, other);
+      return { ...c, dmReads: { ...(c.dmReads || {}), [k]: { ...((c.dmReads || {})[k] || {}), [meName]: Date.now() } } };
+    });
+  };
   const patchAnyProject = (cid, pid, fn) => setClients((cs) => cs.map((c) => c.id !== cid ? c : {
     ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...fn(p) } : p)),
   }));
   const sendProjectChat = (cid, pid, text, replyTo = null) => {
     const now = Date.now();
+    const msg = { id: newMsgId("cm"), ts: now, author: meName, text, replyTo };
+    chatSend({ kind: "project", clientId: cid, projectId: pid }, msg);
     patchAnyProject(cid, pid, (p) => ({
-      chatMsgs: capMsgs([...(p.chatMsgs || []), { id: "cm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]),
+      chatMsgs: capMsgs([...(p.chatMsgs || []), msg]),
       chatReads: { ...(p.chatReads || {}), [meName]: now },
     }));
   };
-  const reactProjectChat = (cid, pid, msgId, emoji) =>
-    patchAnyProject(cid, pid, (p) => ({ chatMsgs: (p.chatMsgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) }));
-  const markProjectChatRead = (cid, pid) => patchAnyProject(cid, pid, (p) => ({ chatReads: { ...(p.chatReads || {}), [meName]: Date.now() } }));
+  const reactProjectChat = (cid, pid, msgId, emoji) => {
+    chatReact({ kind: "project", clientId: cid, projectId: pid }, msgId, emoji);
+    patchAnyProject(cid, pid, (p) => ({ chatMsgs: (p.chatMsgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, meName), rts: Date.now() } : m)) }));
+  };
+  const markProjectChatRead = (cid, pid) => {
+    chatRead({ kind: "project", clientId: cid, projectId: pid });
+    patchAnyProject(cid, pid, (p) => ({ chatReads: { ...(p.chatReads || {}), [meName]: Date.now() } }));
+  };
   /* ---- owner ↔ client private line (only the owner ever sees these) ---- */
   const patchClientChat = (cid, fn) => setClients((cs) => cs.map((c) => (c.id !== cid ? c : { ...c, ownerChat: { msgs: [], reads: {}, ...(c.ownerChat || {}), ...fn(c.ownerChat || { msgs: [], reads: {} }) } })));
   const sendClientMsg = (cid, text, replyTo = null) => {
     const now = Date.now();
+    const msg = { id: newMsgId("km"), ts: now, author: meName, text, replyTo };
+    chatSend({ kind: "owner", clientId: cid }, msg);
     patchClientChat(cid, (ch) => ({
-      msgs: capMsgs([...(ch.msgs || []), { id: "km" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]),
+      msgs: capMsgs([...(ch.msgs || []), msg]),
       reads: { ...(ch.reads || {}), [meName]: now },
     }));
   };
-  const reactClientMsg = (cid, msgId, emoji) => patchClientChat(cid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) }));
-  const markClientRead = (cid) => patchClientChat(cid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
+  const reactClientMsg = (cid, msgId, emoji) => {
+    chatReact({ kind: "owner", clientId: cid }, msgId, emoji);
+    patchClientChat(cid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, meName), rts: Date.now() } : m)) }));
+  };
+  const markClientRead = (cid) => {
+    chatRead({ kind: "owner", clientId: cid });
+    patchClientChat(cid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
+  };
   const clientChats = isOwnerUser ? clients.map((c) => ({ clientId: c.id, name: c.name, contact: c.contact, chat: c.ownerChat || { msgs: [], reads: {} } })) : null;
   const clientUnreadTotal = (clientChats || []).reduce((n, cc) => n + (cc.chat.msgs || []).filter((m) => m.author !== meName && m.ts > ((cc.chat.reads || {})[meName] || 0)).length, 0);
   /* ---- 3-way client chats: assigned member + owner + client -------------
@@ -1000,10 +1037,18 @@ export default function App() {
   }));
   const sendTrioMsg = (cid, mid, text, replyTo = null) => {
     const now = Date.now();
-    patchTrio(cid, mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), { id: "tm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]), reads: { ...(ch.reads || {}), [meName]: now } }));
+    const msg = { id: newMsgId("tm"), ts: now, author: meName, text, replyTo };
+    chatSend({ kind: "trio", clientId: cid, memberId: mid }, msg);
+    patchTrio(cid, mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), msg]), reads: { ...(ch.reads || {}), [meName]: now } }));
   };
-  const reactTrioMsg = (cid, mid, msgId, emoji) => patchTrio(cid, mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) }));
-  const markTrioRead = (cid, mid) => patchTrio(cid, mid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
+  const reactTrioMsg = (cid, mid, msgId, emoji) => {
+    chatReact({ kind: "trio", clientId: cid, memberId: mid }, msgId, emoji);
+    patchTrio(cid, mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, meName), rts: Date.now() } : m)) }));
+  };
+  const markTrioRead = (cid, mid) => {
+    chatRead({ kind: "trio", clientId: cid, memberId: mid });
+    patchTrio(cid, mid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
+  };
   const trioUnreadTotal = trioChats.reduce((n, t) => n + (t.chat.msgs || []).filter((m) => m.author !== meName && m.ts > ((t.chat.reads || {})[meName] || 0)).length, 0);
   /* channel membership for the CLIENT — toggled from the channel's member list */
   const setClientInChannel = (cid, pid, v) => {
@@ -1016,20 +1061,47 @@ export default function App() {
     ...c,
     chatGroups: [...(c.chatGroups || []), { id: "grp" + Date.now(), name, members: [...new Set([meName, ...members])], createdBy: meName, createdAt: Date.now(), msgs: [], reads: { [meName]: Date.now() } }],
   }));
-  const updateGroup = (gid, patch) => patchGroup(gid, (g) => ({ ...patch, ...(patch.members ? { members: [...new Set(patch.members)] } : {}) }));
+  const updateGroup = (gid, patch) => patchGroup(gid, (g) => ({ ...patch, ...(patch.members ? { members: [...new Set(patch.members)] } : {}), updatedAt: Date.now() }));
   const deleteGroup = (gid) => setCompany((c) => ({ ...c, chatGroups: (c.chatGroups || []).filter((g) => g.id !== gid) }));
   const sendGroupMsg = (gid, text, replyTo = null) => {
     const now = Date.now();
+    const msg = { id: newMsgId("gm"), ts: now, author: meName, text, replyTo };
+    chatSend({ kind: "group", groupId: gid }, msg);
     patchGroup(gid, (g) => ({
-      msgs: capMsgs([...(g.msgs || []), { id: "gm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]),
+      msgs: capMsgs([...(g.msgs || []), msg]),
       reads: { ...(g.reads || {}), [meName]: now },
     }));
   };
-  const reactGroupMsg = (gid, msgId, emoji) => patchGroup(gid, (g) => ({ msgs: (g.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) }));
-  const markGroupRead = (gid) => patchGroup(gid, (g) => ({ reads: { ...(g.reads || {}), [meName]: Date.now() } }));
+  const reactGroupMsg = (gid, msgId, emoji) => {
+    chatReact({ kind: "group", groupId: gid }, msgId, emoji);
+    patchGroup(gid, (g) => ({ msgs: (g.msgs || []).map((m) => (m.id === msgId ? { ...toggleReaction(m, emoji, meName), rts: Date.now() } : m)) }));
+  };
+  const markGroupRead = (gid) => {
+    chatRead({ kind: "group", groupId: gid });
+    patchGroup(gid, (g) => ({ reads: { ...(g.reads || {}), [meName]: Date.now() } }));
+  };
   const groupUnreadTotal = (company.chatGroups || []).filter((g) => g.members.includes(meName))
     .reduce((n, g) => n + (g.msgs || []).filter((m) => m.author !== meName && m.ts > ((g.reads || {})[meName] || 0)).length, 0);
   const chatTotalUnread = dmUnreadTotal + channelUnreadTotal + groupUnreadTotal + clientUnreadTotal + trioUnreadTotal;
+  /* ---- live inbound: poll the chat lane and fold new messages in --------
+     Applies to team sessions here; the client portal runs its own (same
+     hook) further down. New messages for me raise a desktop notification
+     when the tab is not being looked at, and the title carries the count. */
+  const chatMe = teamSession ? meName : (clients.find((c) => c.id === session?.clientId)?.contact || "");
+  useChatSync({
+    enabled: hydrated && !!(teamSession || session) && (stateSync === "loaded" || stateSync === "empty"),
+    onBatch: (threads) => {
+      const r = applyChatBatch(threads, { company: companyRef.current, clients: clientsRef.current, me: chatMe });
+      if (r.company !== companyRef.current || r.clients !== clientsRef.current) {
+        markChatLocal();
+        if (r.company !== companyRef.current) setCompany(r.company);
+        if (r.clients !== clientsRef.current) setClients(r.clients);
+      }
+      notifyNewMessages(r.fresh, company.name || "SERP Squad");
+    },
+  });
+  useEffect(() => { if (teamSession || session) ensureNotifyPermission(); }, [teamSession, session]);
+  useTitleBadge(teamSession ? chatTotalUnread : 0);
   /* profile edits; a rename follows the name across tasks, comments, chat and DMs
      (names are the identity key everywhere in this prototype) */
   const updateMember = (patch) => {
@@ -1676,7 +1748,7 @@ export default function App() {
             <Lazy><AdsView project={project} accent={accent} onUpdate={updateProject} log={logActivity} company={company} aiConfig={aiConfig} /></Lazy>
           )}
           {project && activeSection === "management" && (
-            <Lazy><ProjectManagementView project={project} people={people}
+            <Lazy><ProjectManagementView project={project} people={people} chatThread={{ kind: "project", clientId: activeClient?.id, projectId: project.id }}
               perms={pmPerms} maskName={pmMaskName} canChat={!access || !!access.chat}
               initialOpenId={pmJump?.recordId} jumpKey={pmJump?.k || 0}
               templates={company.recordTemplates || []}
