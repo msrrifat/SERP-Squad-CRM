@@ -196,7 +196,7 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
               <div>
                 <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Est. time</div>
                 <div className="mt-0.5 text-[12px]">
-                  <TimeSpent minutes={record.estMinutes} size={12} canEdit={perms.manage}
+                  <TimeSpent minutes={record.estMinutes} size={12} align="left" canEdit={perms.manage}
                     onCommit={(mins) => patch({ estMinutes: mins }, mins ? `set time taken to ${fmtMinutes(mins)}` : "cleared time taken")} />
                 </div>
                 {taskMinutes > 0 && <div className="mt-0.5 text-[9.5px] text-gray-400">Tasks add up to {fmtMinutes(taskMinutes)}</div>}
@@ -423,29 +423,60 @@ export function WikiView({ project, onUpdate, canEdit, accent, log }) {
 
 /* ---- time taken on a task: hours + minutes --------------------------
    Stored as one number (minutes) so totals are trivial to add up later;
-   edited as two small borderless fields that read like the date columns
-   beside them. Blank means "not recorded". */
+   shown as a compact hh:mm that reads like the date columns beside it and
+   opens a picker (hours grid + 5-minute steps). 00:00 means "not recorded". */
 export const fmtMinutes = (mins) => {
   const m = Math.max(0, Math.round(+mins || 0));
   if (!m) return "\u2014";
   const h = Math.floor(m / 60), r = m % 60;
   return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m`;
 };
-function TimeSpent({ minutes, canEdit, onCommit, size = 10 }) {
+function TimeSpent({ minutes, canEdit, onCommit, size = 10, align = "right" }) {
   const total = Math.max(0, Math.round(+minutes || 0));
   const h = Math.floor(total / 60), m = total % 60;
-  const set = (hh, mm) => {
-    const next = Math.max(0, (parseInt(hh, 10) || 0)) * 60 + Math.min(59, Math.max(0, (parseInt(mm, 10) || 0)));
-    if (next !== total) onCommit(next || null);
-  };
-  if (!canEdit) return <span className="ll-mono leading-tight" style={{ fontSize: size, color: total ? "#6B7280" : "#C3CAD6" }}>{fmtMinutes(total)}</span>;
-  const field = "ll-mono w-[26px] bg-transparent p-0 text-right leading-tight outline-none focus:text-gray-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none";
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc); document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const label = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const color = total ? "#6B7280" : "#C3CAD6";
+  const set = (hh, mm) => { const next = hh * 60 + mm; if (next !== total) onCommit(next || null); };
+  const cell = (on) => "ll-mono flex h-7 w-7 items-center justify-center rounded-lg text-[11.5px] " + (on ? "bg-sky-100 font-bold text-sky-600" : "bg-gray-50 text-gray-700 hover:bg-gray-100");
+  if (!canEdit) return <span className="ll-mono leading-tight" style={{ fontSize: size, color }}>{label}</span>;
   return (
-    <span className="ll-mono flex items-baseline leading-tight" style={{ fontSize: size, color: total ? "#6B7280" : "#C3CAD6" }}>
-      <input type="number" min={0} value={total ? h : ""} placeholder="0" aria-label="Hours" title="Hours"
-        onChange={(e) => set(e.target.value, m)} className={field} style={{ fontSize: size, height: size + 4, width: size * 2.6 }} />h
-      <input type="number" min={0} max={59} value={total ? m : ""} placeholder="0" aria-label="Minutes" title="Minutes"
-        onChange={(e) => set(h, e.target.value)} className={field + " ml-1"} style={{ fontSize: size, height: size + 4, width: size * 2.6 }} />m
+    <span ref={ref} className="relative inline-block">
+      <button type="button" onClick={() => setOpen((v) => !v)} title="Set time taken" aria-label="Time taken"
+        className="ll-mono rounded px-0.5 leading-tight hover:bg-gray-100" style={{ fontSize: size, color }}>{label}</button>
+      {open && (
+        <div className={"absolute top-full z-30 mt-1 w-[320px] rounded-xl border border-gray-200 bg-white p-3 text-left shadow-xl " + (align === "left" ? "left-0" : "right-0")}
+          onMouseDown={(e) => e.stopPropagation()}>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <div className="mb-1.5 text-[11px] font-medium text-gray-500">Hours</div>
+              <div className="grid grid-cols-6 gap-1">
+                {Array.from({ length: 24 }, (_, i) => <button key={i} type="button" onClick={() => set(i, m)} className={cell(i === h)}>{i}</button>)}
+              </div>
+            </div>
+            <div className="ll-display self-center text-[16px] font-bold text-gray-400">:</div>
+            <div className="w-[116px]">
+              <div className="mb-1.5 text-[11px] font-medium text-gray-500">Minutes</div>
+              <div className="grid grid-cols-3 gap-1">
+                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((v) => <button key={v} type="button" onClick={() => set(h, v)} className={cell(v === m)}>{String(v).padStart(2, "0")}</button>)}
+              </div>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <button type="button" onClick={() => { onCommit(null); setOpen(false); }} className="text-[11px] text-gray-400 hover:text-red-500">Clear</button>
+            <span className="ll-mono text-[12px] font-semibold text-gray-700">{label}</span>
+            <button type="button" onClick={() => setOpen(false)} className="text-[11px] font-semibold text-gray-500 hover:text-gray-800">Close</button>
+          </div>
+        </div>
+      )}
     </span>
   );
 }
