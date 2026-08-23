@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, Camera, CheckCircle2, ClipboardList, Hash, KeyRound,
   MessageSquare, Moon, Shield, Sun, Trash2, User, Users,
 } from "lucide-react";
-import { askDelete, Ava, Card, inputCls, shrinkImage, Toggle } from "../../ui/primitives.jsx";
+import { askDelete, Ava, Card, inputCls, ProjectMark, shrinkImage, Toggle } from "../../ui/primitives.jsx";
 import { ROLE_AUTO_SECTIONS } from "../../data/seed.js";
 import { relTime, todayISO } from "../../lib/format.jsx";
 import { MessageThread } from "../chat/thread.jsx";
@@ -225,7 +225,8 @@ const dmKeyOf = (a, b) => [a, b].sort().join("|");
 export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, canManageGroups,
   onSendDm, onReactDm, onMarkDmRead, onSendProject, onReactProject, onMarkProjectRead,
   onCreateGroup, onUpdateGroup, onDeleteGroup, onSendGroup, onReactGroup, onMarkGroupRead,
-  clientChats = null, onSendClient, onReactClient, onMarkClientRead, maskName = (n) => n }) {
+  clientChats = null, onSendClient, onReactClient, onMarkClientRead, maskName = (n) => n,
+  trioChats = [], onSendTrio, onReactTrio, onMarkTrioRead, onSetClientInChannel = null }) {
   const others = team.filter((m) => m.name !== me);
   const [sel, setSel] = useState(others.length ? { type: "dm", name: others[0].name } : (channels[0] ? { type: "proj", projectId: channels[0].project.id } : null));
   const [newGroup, setNewGroup] = useState(null); // { name, members: Set }
@@ -238,17 +239,20 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
   const myGroups = (groups || []).filter((g) => g.members.includes(me));
   const grpUnread = (g) => (g.msgs || []).filter((m) => m.author !== me && m.ts > ((g.reads || {})[me] || 0)).length;
   const clUnread = (cc) => (cc.chat.msgs || []).filter((m) => m.author !== me && m.ts > ((cc.chat.reads || {})[me] || 0)).length;
+  const trioUnreadOf = (t) => (t.chat.msgs || []).filter((m) => m.author !== me && m.ts > ((t.chat.reads || {})[me] || 0)).length;
   const [fwd, setFwd] = useState(null); // message being forwarded to a group
 
   const selDm = sel?.type === "dm" ? sel.name : null;
   const selCh = sel?.type === "proj" ? channels.find((c2) => c2.project.id === sel.projectId) : null;
   const selGrp = sel?.type === "group" ? myGroups.find((g) => g.id === sel.groupId) : null;
   const selCl = sel?.type === "client" ? (clientChats || []).find((cc) => cc.clientId === sel.clientId) : null;
+  const selTrio = sel?.type === "trio" ? trioChats.find((t) => t.clientId === sel.clientId && t.memberId === sel.memberId) : null;
   useEffect(() => {
     if (selDm && dmUnread(selDm) > 0) onMarkDmRead(selDm);
     if (selCh && projUnread(selCh) > 0) onMarkProjectRead(selCh.clientId, selCh.project.id);
     if (selGrp && grpUnread(selGrp) > 0) onMarkGroupRead(selGrp.id);
     if (selCl && clUnread(selCl) > 0) onMarkClientRead(selCl.clientId);
+    if (selTrio && trioUnreadOf(selTrio) > 0) onMarkTrioRead(selTrio.clientId, selTrio.memberId);
   }); // cheap guards — always converges
 
   const preview = (msgs) => { const last = msgs[msgs.length - 1]; return last ? `${last.author === me ? "You" : maskName(last.author).split(" ")[0]}: ${last.text}` : "No messages yet"; };
@@ -266,8 +270,8 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
     const manual = (ch.project.teamAccess || {})[m.id] || {};
     return manual.chat !== undefined ? !!manual.chat : (auto === "all" || auto.includes("chat"));
   });
-  /* who can be @mentioned in the open thread */
-  const channelMembers = (ch) => channelRoster(ch).map((m) => m.name);
+  /* who can be @mentioned in the open thread — the client included when added */
+  const channelMembers = (ch) => [...channelRoster(ch).map((m) => m.name), ...(ch.project.clientInChannel ? ["Client"] : [])];
   const createGroup = () => {
     const name = newGroup.name.trim();
     if (!name || newGroup.members.size === 0) return;
@@ -326,6 +330,27 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
           </>
         )}
 
+        {trioChats.length > 0 && (
+          <>
+            <div className="mt-2 border-t border-gray-100"><SectionLabel>Client chats — 3-way</SectionLabel></div>
+            {trioChats.map((t) => {
+              const active = selTrio?.clientId === t.clientId && selTrio?.memberId === t.memberId;
+              return (
+                <button key={t.clientId + t.memberId} onClick={() => setSel({ type: "trio", clientId: t.clientId, memberId: t.memberId })}
+                  className="flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-gray-50" style={active ? { background: accent + "10" } : {}}>
+                  <span className="relative shrink-0"><Ava name={t.clientLabel} size={30} />
+                    <span className="absolute -bottom-1 -right-1 flex h-[15px] w-[15px] items-center justify-center rounded-full border border-white text-white" style={{ background: accent }}><Users size={8} /></span></span>
+                  <span className="min-w-0 flex-1">
+                    <span className={"block truncate text-[12.5px] font-semibold " + (active ? "" : "text-gray-800")} style={active ? { color: accent } : {}}>{t.name}</span>
+                    <span className="block truncate text-[10.5px] text-gray-400">{preview(t.chat.msgs || [])}</span>
+                  </span>
+                  {trioUnreadOf(t) > 0 && <span className="ll-mono shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold text-white" style={{ background: accent }}>{trioUnreadOf(t)}</span>}
+                </button>
+              );
+            })}
+          </>
+        )}
+
         <div className="mt-2 flex items-center border-t border-gray-100 pr-2">
           <SectionLabel>Groups</SectionLabel>
           <button onClick={() => setNewGroup(newGroup ? null : { name: "", members: new Set() })} title="New group"
@@ -376,7 +401,8 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
           return (
             <button key={ch.project.id} onClick={() => setSel({ type: "proj", projectId: ch.project.id })}
               className="flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-gray-50" style={active ? { background: (ch.project.accent || accent) + "10" } : {}}>
-              <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg text-white" style={{ background: ch.project.accent || accent }}><Hash size={13} /></span>
+              {/* the project's own logo, synced from the sidebar — not a generic # */}
+              <ProjectMark project={ch.project} size="md" />
               <span className="min-w-0 flex-1">
                 <span className={"block truncate text-[12.5px] font-semibold " + (active ? "" : "text-gray-800")} style={active ? { color: ch.project.accent || accent } : {}}>{ch.project.name}</span>
                 <span className="block truncate text-[10.5px] text-gray-400">{preview(projMsgs(ch))}</span>
@@ -470,11 +496,27 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
             )}
           </>
         )}
+        {selTrio && (
+          <>
+            <div className="flex items-center gap-2.5 border-b border-gray-200 bg-white px-4 py-2.5">
+              <span className="relative"><Ava name={selTrio.clientLabel} size={30} />
+                <span className="absolute -bottom-1 -right-1 flex h-[15px] w-[15px] items-center justify-center rounded-full border border-white text-white" style={{ background: accent }}><Users size={8} /></span></span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-bold text-gray-800">{selTrio.name}</div>
+                <div className="truncate text-[10px] text-gray-400">3-way — the client, {selTrio.memberName} and the owner. The client sees designations, never names or photos.</div>
+              </div>
+              <span className="flex -space-x-1.5"><Ava name={selTrio.clientLabel} size={22} /><Ava name={selTrio.memberName} img={selTrio.memberAvatar} size={22} /></span>
+            </div>
+            <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName} mentionables={[me, selTrio.memberName]}
+              onSend={(text, replyTo) => onSendTrio(selTrio.clientId, selTrio.memberId, text, replyTo)}
+              onReact={(msgId, emoji) => onReactTrio(selTrio.clientId, selTrio.memberId, msgId, emoji)} />
+          </>
+        )}
         {selCh && (
           <>
             <div className="border-b border-gray-200 bg-white">
               <div className="flex items-center gap-2.5 px-4 py-2.5">
-                <span className="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-white" style={{ background: selCh.project.accent || accent }}><Hash size={13} /></span>
+                <ProjectMark project={selCh.project} size="md" />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-bold text-gray-800">{selCh.project.name}</div>
                   <div className="truncate text-[10px] text-gray-400">{selCh.clientName} · synced with Project Management → Chat</div>
@@ -498,9 +540,23 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                         <span className="text-[9px] uppercase tracking-wide text-gray-400">{m.isOwner ? "Owner" : m.role}</span>
                       </span>
                     ))}
+                    {selCh.project.clientInChannel && (
+                      <span className="flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 py-0.5 pl-0.5 pr-2">
+                        <Ava name="Client" size={18} />
+                        <span className="text-[11px] font-medium text-emerald-800">Client</span>
+                        <span className="text-[9px] uppercase tracking-wide text-emerald-600">portal</span>
+                      </span>
+                    )}
                   </div>
+                  {onSetClientInChannel && (
+                    <button onClick={() => onSetClientInChannel(selCh.clientId, selCh.project.id, !selCh.project.clientInChannel)}
+                      className={"mt-2 rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold " + (selCh.project.clientInChannel ? "border-gray-200 text-gray-500 hover:border-red-200 hover:text-red-600" : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300")}>
+                      {selCh.project.clientInChannel ? "Remove client from this channel" : "+ Add client to this channel"}
+                    </button>
+                  )}
                   <div className="mt-1.5 text-[10px] text-gray-400">
                     Assigning a member to this project (Company Settings → Team &amp; permissions) adds them here automatically; unassigning removes them.
+                    {onSetClientInChannel && <> When the client is in the channel, their messages show as <b>"Client"</b> to the team, and they see members by designation only.</>}
                   </div>
                 </div>
               )}

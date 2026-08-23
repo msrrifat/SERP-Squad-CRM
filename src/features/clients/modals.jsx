@@ -20,9 +20,9 @@ import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
 import { ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
 
-export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
+export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", company = null }) {
   /* every field here stays a local draft until Save is clicked */
-  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "logo", "whiteLabel", "login", "dfs"]);
+  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "logo", "whiteLabel", "login", "dfs", "chatMembers"]);
   const c = draft;
   const wl = draft.whiteLabel;
   const setWl = (patch) => set({ whiteLabel: { ...draft.whiteLabel, ...patch } });
@@ -148,6 +148,38 @@ export function ClientSettingsBody({ client, onChange, accent = "#0E7C66" }) {
                   })}
                 </div>
               </Labeled>
+              {/* ---- client chat: direct-message access ----
+                  The OWNER always has a private line with the client. Each team
+                  member assigned here becomes a 3-way chat — member + owner +
+                  client — that shows up in the client's portal (as the member's
+                  DESIGNATION, never their name) and in both team dashboards. */}
+              <div className="rounded-lg border border-gray-100 p-2.5">
+                <div className="mb-1 text-[13px] font-medium text-gray-800">Client chat — direct messages</div>
+                <div className="mb-2 text-[11px] leading-relaxed text-gray-400">
+                  You (the owner) always have a private line with this client. Assign team members who may also message them —
+                  each assignment is its own 3-way chat (member + you + client). The client sees the member only by designation
+                  (e.g. "Web Developer"), and the member sees the client only as "Client".
+                </div>
+                <div className="space-y-1">
+                  {((company?.team || []).filter((m) => !m.isOwner)).map((m) => {
+                    const on = (draft.chatMembers || []).includes(m.id);
+                    return (
+                      <button key={m.id}
+                        onClick={() => set({ chatMembers: on ? (draft.chatMembers || []).filter((x) => x !== m.id) : [...(draft.chatMembers || []), m.id] })}
+                        className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left text-[12.5px]"
+                        style={{ borderColor: on ? "#86EFAC" : "#E5E7EB", background: on ? "#F0FDF4" : "#fff" }}>
+                        <CheckCircle2 size={14} style={{ color: on ? "#16A34A" : "#D1D5DB" }} />
+                        <Ava name={m.name} img={m.avatar} size={22} />
+                        <span className="min-w-0 flex-1 truncate font-medium text-gray-700">{m.name}</span>
+                        <span className="shrink-0 text-[10px] text-gray-400">{m.role}</span>
+                      </button>
+                    );
+                  })}
+                  {((company?.team || []).filter((m) => !m.isOwner)).length === 0 && (
+                    <div className="text-[11.5px] text-gray-400">No team members yet — invite people in Company settings → Team.</div>
+                  )}
+                </div>
+              </div>
               {/* layered permissions — same pattern as team access: a master toggle
                   per section; subsection toggles appear only when the section is on */}
               <div className="space-y-2">
@@ -257,7 +289,7 @@ export function ClientSettingsModal({ client, company, onChange, onUpdateProject
       <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
         Client details are visible to <b>admins only</b> — team members see the alias (if set) and never this window.
       </div>
-      <ClientSettingsBody client={client} onChange={onChange} />
+      <ClientSettingsBody client={client} onChange={onChange} company={company} />
       {onDelete && (
         <div className="mt-5 rounded-xl border border-red-200 bg-red-50/60 p-4">
           <div className="text-[12.5px] font-semibold text-red-700">Delete client</div>

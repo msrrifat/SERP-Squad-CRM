@@ -1143,6 +1143,18 @@ function handleClientStateSave(req, body) {
     const ch = cur.ownerChat || { msgs: [], reads: {} };
     next.ownerChat = { ...ch, msgs: mergeMsgs(ch.msgs, body.ownerChat.msgs), reads: mergeReads(ch.reads, body.ownerChat.reads) };
   }
+  /* 3-way member chats (member + owner + client) — the client may only write
+     into threads for members the AGENCY assigned in Client settings */
+  if (body?.memberChats && typeof body.memberChats === "object") {
+    const assigned = new Set(Array.isArray(cur.chatMembers) ? cur.chatMembers : []);
+    const nextMc = { ...(cur.memberChats || {}) };
+    for (const [mid, inCh] of Object.entries(body.memberChats)) {
+      if (!assigned.has(mid) || !inCh || typeof inCh !== "object") continue;
+      const ch = nextMc[mid] || { msgs: [], reads: {} };
+      nextMc[mid] = { ...ch, msgs: mergeMsgs(ch.msgs, inCh.msgs), reads: mergeReads(ch.reads, inCh.reads) };
+    }
+    next.memberChats = nextMc;
+  }
 
   /* per-project: chat (if granted), record comments (if granted), and
      completion ticks on tasks ASSIGNED TO this client (if granted) —
@@ -1153,7 +1165,7 @@ function handleClientStateSave(req, body) {
       const inP = body.projects[pr.id];
       if (!inP || typeof inP !== "object" || !allowedPids.has(pr.id)) return pr;
       let out = pr;
-      if (lg.canChat && (inP.chatMsgs || inP.chatReads)) {
+      if ((lg.canChat || pr.clientInChannel) && (inP.chatMsgs || inP.chatReads)) {
         out = { ...out, chatMsgs: mergeMsgs(out.chatMsgs, inP.chatMsgs), chatReads: mergeReads(out.chatReads, inP.chatReads) };
       }
       if ((lg.canComment || lg.canManageTasks) && Array.isArray(inP.records)) {

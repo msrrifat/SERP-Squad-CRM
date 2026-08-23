@@ -604,6 +604,7 @@ export default function App() {
               whiteLabel: live.whiteLabel, dfs: live.dfs || {},
             },
             ownerChat: live.ownerChat || null,
+            memberChats: live.memberChats || null,
             projects: Object.fromEntries((live.projects || []).filter((p) => ids.has(p.id)).map((p) => [p.id, {
               chatMsgs: p.chatMsgs || [], chatReads: p.chatReads || {},
               /* records travel as a completion/comment skeleton — the server
@@ -975,6 +976,40 @@ export default function App() {
   const markClientRead = (cid) => patchClientChat(cid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
   const clientChats = isOwnerUser ? clients.map((c) => ({ clientId: c.id, name: c.name, contact: c.contact, chat: c.ownerChat || { msgs: [], reads: {} } })) : null;
   const clientUnreadTotal = (clientChats || []).reduce((n, cc) => n + (cc.chat.msgs || []).filter((m) => m.author !== meName && m.ts > ((cc.chat.reads || {})[meName] || 0)).length, 0);
+  /* ---- 3-way client chats: assigned member + owner + client -------------
+     Assignments live in Client settings → Client chat. Each one is its own
+     thread on the client record (client.memberChats[memberId]), visible to
+     the owner, THAT member, and the client's portal. The member never sees
+     the client's identity (label "Client"); the client sees the member's
+     designation only — masking is applied where each side renders. */
+  const trioChats = [];
+  clients.forEach((c) => (c.chatMembers || []).forEach((mid) => {
+    const m = (company.team || []).find((x) => x.id === mid);
+    if (!m || m.isOwner) return;
+    if (!(isOwnerUser || currentUser?.id === mid)) return;
+    const clientLabel = isOwnerUser ? (c.contact || c.name) : "Client";
+    trioChats.push({
+      clientId: c.id, memberId: mid, memberName: m.name, memberAvatar: m.avatar, clientLabel,
+      name: `${clientLabel} · ${m.name.split(" ")[0]}`,
+      sub: isOwnerUser ? `${c.name} — 3-way with ${m.name}` : "3-way client chat — you, the owner and the client",
+      chat: (c.memberChats || {})[mid] || { msgs: [], reads: {} },
+    });
+  }));
+  const patchTrio = (cid, mid, fn) => setClients((cs) => cs.map((c) => c.id !== cid ? c : {
+    ...c, memberChats: { ...(c.memberChats || {}), [mid]: { msgs: [], reads: {}, ...((c.memberChats || {})[mid] || {}), ...fn((c.memberChats || {})[mid] || { msgs: [], reads: {} }) } },
+  }));
+  const sendTrioMsg = (cid, mid, text, replyTo = null) => {
+    const now = Date.now();
+    patchTrio(cid, mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), { id: "tm" + now + Math.random().toString(36).slice(2, 5), ts: now, author: meName, text, replyTo }]), reads: { ...(ch.reads || {}), [meName]: now } }));
+  };
+  const reactTrioMsg = (cid, mid, msgId, emoji) => patchTrio(cid, mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, meName) : m)) }));
+  const markTrioRead = (cid, mid) => patchTrio(cid, mid, (ch) => ({ reads: { ...(ch.reads || {}), [meName]: Date.now() } }));
+  const trioUnreadTotal = trioChats.reduce((n, t) => n + (t.chat.msgs || []).filter((m) => m.author !== meName && m.ts > ((t.chat.reads || {})[meName] || 0)).length, 0);
+  /* channel membership for the CLIENT — toggled from the channel's member list */
+  const setClientInChannel = (cid, pid, v) => {
+    patchAnyProject(cid, pid, () => ({ clientInChannel: !!v }));
+    logActivity(v ? "Added the client to a project channel" : "Removed the client from a project channel");
+  };
   /* ---- group chats: ad-hoc rooms of selected teammates ---- */
   const patchGroup = (gid, fn) => setCompany((c) => ({ ...c, chatGroups: (c.chatGroups || []).map((g) => (g.id === gid ? { ...g, ...(typeof fn === "function" ? fn(g) : fn) } : g)) }));
   const createGroup = (name, members) => setCompany((c) => ({
@@ -994,7 +1029,7 @@ export default function App() {
   const markGroupRead = (gid) => patchGroup(gid, (g) => ({ reads: { ...(g.reads || {}), [meName]: Date.now() } }));
   const groupUnreadTotal = (company.chatGroups || []).filter((g) => g.members.includes(meName))
     .reduce((n, g) => n + (g.msgs || []).filter((m) => m.author !== meName && m.ts > ((g.reads || {})[meName] || 0)).length, 0);
-  const chatTotalUnread = dmUnreadTotal + channelUnreadTotal + groupUnreadTotal + clientUnreadTotal;
+  const chatTotalUnread = dmUnreadTotal + channelUnreadTotal + groupUnreadTotal + clientUnreadTotal + trioUnreadTotal;
   /* profile edits; a rename follows the name across tasks, comments, chat and DMs
      (names are the identity key everywhere in this prototype) */
   const updateMember = (patch) => {
@@ -1527,7 +1562,9 @@ export default function App() {
                   onSendProject={sendProjectChat} onReactProject={reactProjectChat} onMarkProjectRead={markProjectChatRead}
                   onCreateGroup={createGroup} onUpdateGroup={updateGroup} onDeleteGroup={deleteGroup}
                   onSendGroup={sendGroupMsg} onReactGroup={reactGroupMsg} onMarkGroupRead={markGroupRead}
-                  clientChats={clientChats} onSendClient={sendClientMsg} onReactClient={reactClientMsg} onMarkClientRead={markClientRead} />
+                  clientChats={clientChats} onSendClient={sendClientMsg} onReactClient={reactClientMsg} onMarkClientRead={markClientRead}
+                  trioChats={trioChats} onSendTrio={sendTrioMsg} onReactTrio={reactTrioMsg} onMarkTrioRead={markTrioRead}
+                  onSetClientInChannel={isAdmin ? setClientInChannel : null} />
               )}
               {accountView === "team" && isAdmin && (
                 <TeamView team={company.team || []} clients={clients} activity={company.activity || []} dms={company.dms || {}}

@@ -148,22 +148,79 @@ function ClientCompanySettings({ client, brand, accent, onUpdateClient }) {
   );
 }
 
-/* the client's side of the private owner ↔ client line */
-function MessagesPane({ client, brand, accent, maskName, onSend, onReact, onRead }) {
-  const ch = client.ownerChat || { msgs: [], reads: {} };
+/* ---- the client's chat hub -------------------------------------------
+   DIRECT MESSAGES: the owner's private line (always there) plus one 3-way
+   thread per team member the agency assigned in Client settings — each
+   shown by DESIGNATION only ("Web Developer"), never a name, email or
+   photo. PROJECT CHANNELS: the channels the team added the client to,
+   listed with the project logo. All masking comes from maskName/AvaMask. */
+function ClientChatPane({ client, company, brand, accent, maskName, roleLabelOf, channels,
+  onSendOwner, onReactOwner, onReadOwner, onSendTrio, onReactTrio, onReadTrio, onSendChannel, onReactChannel, onReadChannel }) {
+  const me = client.contact;
+  const ownerChat = client.ownerChat || { msgs: [], reads: {} };
+  /* duplicate designations stay distinct: "Web Developer", "Web Developer 2" */
+  const seen = {};
+  const trios = (client.chatMembers || []).map((mid) => {
+    const m = (company.team || []).find((x) => x.id === mid);
+    if (!m || m.isOwner) return null;
+    const base = roleLabelOf(m.name);
+    seen[base] = (seen[base] || 0) + 1;
+    return { mid, label: seen[base] > 1 ? `${base} ${seen[base]}` : base, chat: (client.memberChats || {})[mid] || { msgs: [], reads: {} } };
+  }).filter(Boolean);
+  const unread = (ch) => (ch.msgs || []).filter((m) => m.author !== me && m.ts > ((ch.reads || {})[me] || 0)).length;
+  const chUnread = (p) => (p.chatMsgs || []).filter((m) => m.author !== me && m.ts > ((p.chatReads || {})[me] || 0)).length;
+  const [sel, setSel] = useState({ type: "owner" });
+  const selTrio = sel.type === "trio" ? trios.find((t) => t.mid === sel.mid) : null;
+  const selChan = sel.type === "chan" ? channels.find((p) => p.id === sel.pid) : null;
   useEffect(() => {
-    const last = (ch.msgs || [])[(ch.msgs || []).length - 1];
-    if (last && ((ch.reads || {})[client.contact] || 0) < last.ts) onRead();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [(ch.msgs || []).length]);
+    if (sel.type === "owner" && unread(ownerChat) > 0) onReadOwner();
+    if (selTrio && unread(selTrio.chat) > 0) onReadTrio(selTrio.mid);
+    if (selChan && chUnread(selChan) > 0) onReadChannel(selChan.id);
+  }); // cheap guards — always converges
+  const preview = (msgs) => { const last = (msgs || [])[(msgs || []).length - 1]; return last ? `${last.author === me ? "You" : maskName(last.author)}: ${last.text}` : "No messages yet"; };
+  const row = (key, active, onClick, icon, label, sub, n) => (
+    <button key={key} onClick={onClick} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left hover:bg-gray-50" style={active ? { background: accent + "10" } : {}}>
+      {icon}
+      <span className="min-w-0 flex-1">
+        <span className={"block truncate text-[12.5px] font-semibold " + (active ? "" : "text-gray-800")} style={active ? { color: accent } : {}}>{label}</span>
+        <span className="block truncate text-[10.5px] text-gray-400">{sub}</span>
+      </span>
+      {n > 0 && <span className="ll-mono shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold text-white" style={{ background: accent }}>{n}</span>}
+    </button>
+  );
+  const sectionLabel = (t) => <div className="px-3.5 pb-1 pt-3 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{t}</div>;
+  const brandTile = <BrandMark name={brand.name} logo={brand.logo} accent={brand.accent || accent} />;
   return (
-    <Card className="flex flex-col overflow-hidden p-0" style={{ minHeight: 480 }}>
-      <div className="border-b border-gray-100 px-5 py-3.5">
-        <div className="ll-display text-[15px] font-semibold">Messages</div>
-        <div className="text-[11px] text-gray-400">Your private line with the {brand.name} team.</div>
+    <Card className="flex overflow-hidden p-0" style={{ height: "min(72vh, 640px)" }}>
+      <div className="flex w-60 shrink-0 flex-col overflow-y-auto border-r border-gray-100 bg-white">
+        {sectionLabel("Direct messages")}
+        {row("owner", sel.type === "owner", () => setSel({ type: "owner" }), brandTile, "Owner", `${brand.name} — private line`, unread(ownerChat))}
+        {trios.map((t) => row(t.mid, selTrio?.mid === t.mid, () => setSel({ type: "trio", mid: t.mid }),
+          <Ava name={t.label} size={28} />, t.label, "3-way with the owner", unread(t.chat)))}
+        <div className="mt-1 border-t border-gray-100">{sectionLabel("Project channels")}</div>
+        {channels.length === 0 && <div className="px-3.5 py-1.5 text-[10.5px] leading-relaxed text-gray-300">Your team hasn't added you to a project channel yet.</div>}
+        {channels.map((p) => row(p.id, selChan?.id === p.id, () => setSel({ type: "chan", pid: p.id }),
+          <ProjectMark project={p} />, p.name, preview(p.chatMsgs), chUnread(p)))}
       </div>
-      <MessageThread msgs={ch.msgs || []} me={client.contact} accent={accent} maskName={maskName}
-        onSend={onSend} onReact={onReact} />
+      <div className="flex min-w-0 flex-1 flex-col bg-[#FAFBFC]">
+        {sel.type === "owner" && (<>
+          <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5">{brandTile}
+            <div><div className="text-[13px] font-bold text-gray-800">Owner</div><div className="text-[10px] text-gray-400">Your private line with the {brand.name} owner.</div></div></div>
+          <MessageThread msgs={ownerChat.msgs || []} me={me} accent={accent} maskName={maskName} onSend={onSendOwner} onReact={onReactOwner} />
+        </>)}
+        {selTrio && (<>
+          <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><Ava name={selTrio.label} size={28} />
+            <div><div className="text-[13px] font-bold text-gray-800">{selTrio.label}</div><div className="text-[10px] text-gray-400">3-way chat — you, the owner and your {selTrio.label.toLowerCase()}.</div></div></div>
+          <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName}
+            onSend={(text, replyTo) => onSendTrio(selTrio.mid, text, replyTo)} onReact={(msgId, emoji) => onReactTrio(selTrio.mid, msgId, emoji)} />
+        </>)}
+        {selChan && (<>
+          <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><ProjectMark project={selChan} size="md" />
+            <div><div className="text-[13px] font-bold text-gray-800">{selChan.name}</div><div className="text-[10px] text-gray-400">Project channel — the whole project team sees these messages.</div></div></div>
+          <MessageThread msgs={selChan.chatMsgs || []} me={me} accent={selChan.accent || accent} maskName={maskName}
+            onSend={(text, replyTo) => onSendChannel(selChan.id, text, replyTo)} onReact={(msgId, emoji) => onReactChannel(selChan.id, msgId, emoji)} />
+        </>)}
+      </div>
     </Card>
   );
 }
@@ -321,7 +378,12 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
     : { name: company.name, logo: company.logo, website: "", accent: company.accent };
 
   const lg = client.login;
-  const canChat = !!lg.canChat;      // PM options are opt-in for clients now
+  /* a client is in a project channel when the team ADDED them there (channel
+     member list → Add client) — the legacy account-wide canChat flag keeps
+     working for clients set up before per-channel membership existed */
+  const inChannel = (p) => !!lg.canChat || !!p?.clientInChannel;
+  const chatChannels = allowed.filter(inChannel);
+  const canChat = inChannel(project);
   const canPm = !!lg.canManageTasks || !!lg.canComment || canChat;
   const unreadChat = (project?.chatMsgs || []).filter((m) => m.author !== client.contact && m.ts > ((project?.chatReads || {})[client.contact] || 0)).length;
   /* the same per-view gates as before, expressed like the team dashboard's
@@ -356,6 +418,15 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
     onUpdateClient?.((c) => ({ ownerChat: { msgs: capMsgs([...((c.ownerChat || {}).msgs || []), { id: "km" + now, ts: now, author: client.contact, text, replyTo }]), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: now } } }));
   };
   const reactOwnerMsg = (msgId, emoji) => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], reads: {}, ...(c.ownerChat || {}), msgs: ((c.ownerChat || {}).msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) } }));
+  /* 3-way member threads — one per team member the agency assigned */
+  const patchTrioC = (mid, fn) => onUpdateClient?.((c) => ({ memberChats: { ...(c.memberChats || {}), [mid]: { msgs: [], reads: {}, ...((c.memberChats || {})[mid] || {}), ...fn((c.memberChats || {})[mid] || { msgs: [], reads: {} }) } } }));
+  const sendTrioMsg = (mid, text, replyTo = null) => { const now = Date.now(); patchTrioC(mid, (ch) => ({ msgs: capMsgs([...(ch.msgs || []), { id: "tm" + now, ts: now, author: client.contact, text, replyTo }]), reads: { ...(ch.reads || {}), [client.contact]: now } })); };
+  const reactTrioMsg = (mid, msgId, emoji) => patchTrioC(mid, (ch) => ({ msgs: (ch.msgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) }));
+  const readTrio = (mid) => patchTrioC(mid, (ch) => ({ reads: { ...(ch.reads || {}), [client.contact]: Date.now() } }));
+  /* project-channel chat from the portal — same thread the team sees */
+  const sendChanMsg = (pid, text, replyTo = null) => { const now = Date.now(); onUpdateProject(pid, (p) => ({ chatMsgs: capMsgs([...(p.chatMsgs || []), { id: "cm" + now, ts: now, author: client.contact, text, replyTo }]), chatReads: { ...(p.chatReads || {}), [client.contact]: now } })); };
+  const reactChanMsg = (pid, msgId, emoji) => onUpdateProject(pid, (p) => ({ chatMsgs: (p.chatMsgs || []).map((m) => (m.id === msgId ? toggleReaction(m, emoji, client.contact) : m)) }));
+  const readChan = (pid) => onUpdateProject(pid, (p) => ({ chatReads: { ...(p.chatReads || {}), [client.contact]: Date.now() } }));
   /* privacy wall: clients never see the agency's team roster — they can only be
      shown themselves. Team members render by ROLE ("SEO Manager", "Content
      Developer"…) with the agency/white-label brand tile instead of a photo. */
@@ -382,8 +453,15 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   /* personal screens — the client's equivalent of the team sidebar's
      "Personal Dashboard" block (Messages replaces team Chat; Company settings
      is where the client edits their own details, branding and API account) */
+  /* chat badge: owner line + 3-way member threads + project channels */
+  const trioUnread = (client.chatMembers || []).reduce((n, mid) => {
+    const ch = (client.memberChats || {})[mid] || {};
+    return n + (ch.msgs || []).filter((m) => m.author !== client.contact && m.ts > ((ch.reads || {})[client.contact] || 0)).length;
+  }, 0);
+  const chanUnreadTotal = chatChannels.reduce((n, p) => n + (p.chatMsgs || []).filter((m) => m.author !== client.contact && m.ts > ((p.chatReads || {})[client.contact] || 0)).length, 0);
+  const chatBadge = msgUnread + trioUnread + chanUnreadTotal;
   const personal = [
-    ["messages", "Messages", MessageSquare, msgUnread > 0 ? { n: msgUnread, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
+    ["messages", "Chat", MessageSquare, chatBadge > 0 ? { n: chatBadge, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
     ["company", "Company settings", Settings, null],
   ];
   const selectProject = (id) => { setPid(id); setSection("performance"); setView("overview"); setAccountView(null); };
@@ -466,7 +544,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ messages: "Messages", company: "Company settings" }[accountView]}
+                {{ messages: "Chat", company: "Company settings" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -481,9 +559,12 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
             <div className="mx-auto max-w-6xl p-5">
               {accountView === "messages" && (
                 <AvaMaskCtx.Provider value={avaMask}>
-                  <MessagesPane client={client} brand={brand} accent={accent} maskName={maskName}
-                    onSend={sendOwnerMsg} onReact={reactOwnerMsg}
-                    onRead={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))} />
+                  <ClientChatPane client={client} company={company} brand={brand} accent={accent} maskName={maskName}
+                    roleLabelOf={roleLabelOf} channels={chatChannels}
+                    onSendOwner={sendOwnerMsg} onReactOwner={reactOwnerMsg}
+                    onReadOwner={() => onUpdateClient?.((c) => ({ ownerChat: { msgs: [], ...(c.ownerChat || {}), reads: { ...((c.ownerChat || {}).reads || {}), [client.contact]: Date.now() } } }))}
+                    onSendTrio={sendTrioMsg} onReactTrio={reactTrioMsg} onReadTrio={readTrio}
+                    onSendChannel={sendChanMsg} onReactChannel={reactChanMsg} onReadChannel={readChan} />
                 </AvaMaskCtx.Provider>
               )}
               {accountView === "company" && (

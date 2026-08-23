@@ -549,7 +549,7 @@ export function Ava({ name, size = 22, img = null }) {
   const dir = React.useContext(AvaDirCtx) || AVA_DIR;
   if (mask && mask.match(name)) {
     return (
-      <span title={name} onClick={onRemove}
+      <span title={name}
         className="ll-display inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold text-white"
         style={{ width: size, height: size, fontSize: size * 0.38, background: mask.accent || "#1F2A44" }}>
         {mask.logo ? <img src={mask.logo} alt={name} className="h-full w-full object-cover" /> : (mask.brandName || "A").split(" ").map((w) => w[0]).slice(0, 2).join("")}
