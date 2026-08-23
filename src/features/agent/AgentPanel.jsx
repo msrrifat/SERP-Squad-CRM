@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { RefreshCw, Send, Shield, X, Zap } from "lucide-react";
 import { agentReply, snapshot } from "./agent.js";
-import { runSeoResearch } from "./research.js";
+import { buildFixRecord, parseAssignees, runSeoResearch } from "./research.js";
 
 /* ================= SERP Squad AI — chat panel =================
    Floating assistant, permission-scoped by the caller (App / ClientPortal).
@@ -40,6 +40,9 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(() => new Set()); // executed action message idx
   const bodyRef = useRef(null);
+  /* last research run — lets "create tasks from the audit and assign Mia"
+     work as a follow-up without re-crawling anything */
+  const lastResearch = useRef(null);
   useEffect(() => { bodyRef.current?.scrollTo({ top: 1e9, behavior: "smooth" }); }, [messages, busy]);
 
   const send = (raw) => {
@@ -48,6 +51,22 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
     setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
+    /* follow-up: turn the LAST audit's findings into assigned tasks */
+    if (/(create|make|add|turn).*(task|record)|task.*(from|for).*(audit|finding|issue)/i.test(text) && /audit|finding|issue|fix|crawl|these|them|it/i.test(text) && lastResearch.current) {
+      const lr = lastResearch.current;
+      if (ctx.isClient) { setMessages((m) => [...m, { role: "agent", text: "Task creation is handled by your agency team — I can give you performance info anytime." }]); setBusy(false); return; }
+      if (!ctx.canPlan) { setMessages((m) => [...m, { role: "agent", text: "You don't have task-management permission, so I can't create tasks." }]); setBusy(false); return; }
+      const roster = ctx.assignableFor ? ctx.assignableFor(lr.snap.project.id) : (ctx.assignableNames || []);
+      const named = parseAssignees(text, roster);
+      const record = buildFixRecord(lr.kind, lr.data, lr.snap, named.length ? named : roster);
+      if (!record) { setMessages((m) => [...m, { role: "agent", text: "The last audit had no actionable findings to turn into tasks — run a new audit first." }]); setBusy(false); return; }
+      const n = record.checklists.reduce((x, c) => x + c.tasks.length, 0);
+      setMessages((m) => [...m, { role: "agent",
+        text: `From the last ${lr.kind === "gbp" ? "Business Profile" : lr.kind} audit I drafted **${record.name}** — ${n} task${n === 1 ? "" : "s"} in ${record.checklists.length} checklist${record.checklists.length === 1 ? "" : "s"}${record.assignees.length ? `, assigned to ${record.assignees.join(", ")}` : ""}:\n` +
+          record.checklists.map((c) => `• ${c.name}: ${c.tasks.length}`).join("\n"),
+        action: { type: "plan", label: "Create in Project Management", projectId: lr.snap.project.id, clientId: lr.snap.client.id, record } }]);
+      setBusy(false); return;
+    }
     const reply = agentReply(text, ctx);
     /* ---- SEO research lane: crawl live sources, then answer against the
        Google SEO PRO Guides. Progress streams into one live bubble. ---- */
@@ -58,7 +77,8 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
         try {
           const snap = snapshot(reply.research.scope.client, reply.research.scope.project);
           const res = await runSeoResearch(reply.research, snap, ctx, onStep);
-          setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: res.text } : x)));
+          if (res.data && res.kind !== "question") lastResearch.current = { kind: res.kind, data: res.data, snap };
+          setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: res.text, ...(res.action ? { action: res.action } : {}) } : x)));
         } catch (e) {
           setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: "The research run failed: " + (e?.message || e) } : x)));
         }
@@ -77,7 +97,7 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
     setMessages((m) => [...m, {
       role: "agent",
       text: action.type === "plan"
-        ? "✓ Done — the plan is now in Project Management with tasks assigned. I logged it in the activity feed."
+        ? "✓ Done — the record and its tasks are now in Project Management, assigned and logged in the activity feed."
         : "✓ Opening the report builder with this project's live data…",
     }]);
   };

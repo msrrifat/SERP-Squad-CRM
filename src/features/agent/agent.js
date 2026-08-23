@@ -223,6 +223,7 @@ export function agentReply(input, ctx) {
       "Ask me things like:",
       "• \"overview\" / \"how is Bright Smile doing\"",
       "• \"audit the website\" — I crawl every page live and report against Google's SEO guidelines",
+      "• after an audit: \"create tasks from the findings and assign Mia\" — I turn the issues into an assigned record",
       "• \"audit our Google Business Profile\" · \"competitor content gap\" · \"who ranks for 'plumber near me'\"",
       "• any SEO question — I answer from Google's official Search documentation",
       "• \"compare vs 6 months ago\"",

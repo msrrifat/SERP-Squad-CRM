@@ -184,18 +184,104 @@ export async function runSeoResearch(research, s, ctx, onStep) {
     `Answer the request now.`,
   ].filter(Boolean).join("\n\n");
 
+  /* findings → an assigned, permission-gated Project-management record.
+     Members named in the request get every task; otherwise round-robin. */
+  let action = null;
+  if (!ctx.isClient && ctx.canPlan && kind !== "question") {
+    const roster = ctx.assignableFor ? ctx.assignableFor(s.project.id) : (ctx.assignableNames || []);
+    const named = parseAssignees(input, roster);
+    const record = buildFixRecord(kind, data, s, named.length ? named : roster);
+    if (record) {
+      const n = record.checklists.reduce((x, c) => x + c.tasks.length, 0);
+      action = { type: "plan", label: `Create ${n} fix task${n === 1 ? "" : "s"} in Project Management${named.length ? ` (assigned to ${named.join(", ")})` : ""}`,
+        projectId: s.project.id, clientId: s.client.id, record };
+    }
+  }
+
   if (ctx.aiConfig?.key) {
     onStep("Writing the analysis…");
     try {
       const text = await aiGenerate(ctx.aiConfig, { system: PERSONA + "\n\n" + seoGuideBlock(...topicByKind[kind]), prompt });
-      return { text };
+      return { text, action, data, kind };
     } catch (e) {
-      return { text: `The AI provider failed (${e.message}). Here is the raw data I gathered so nothing is lost:\n\n${fallbackReport(kind, data, sections)}` };
+      return { text: `The AI provider failed (${e.message}). Here is the raw data I gathered so nothing is lost:\n\n${fallbackReport(kind, data, sections)}`, action, data, kind };
     }
   }
   /* no provider: still useful — the findings and the guideline text, honestly labeled */
-  return { text: `No AI provider is connected (Company Settings → API settings), so here are the LIVE findings and the matching Google guidelines without AI analysis:\n\n${fallbackReport(kind, data, sections)}` };
+  return { text: `No AI provider is connected (Company Settings → API settings), so here are the LIVE findings and the matching Google guidelines without AI analysis:\n\n${fallbackReport(kind, data, sections)}`, action, data, kind };
 }
+
+/* ---------- findings → Project-management tasks ------------------------
+   Deterministic: every task comes straight from a finding in the gathered
+   data (never invented), grouped into checklists by discipline, assigned
+   round-robin across the chosen members, due in two weeks. The caller
+   wires it into the existing "plan" action, so creating it goes through
+   the exact same permission-gated pipeline as the monthly plan. */
+const few = (arr, n = 3) => arr.slice(0, n).join(", ") + (arr.length > n ? ` +${arr.length - n} more` : "");
+
+export function buildFixRecord(kind, data, s, assignees) {
+  const groups = [];
+  const g = (name) => { const grp = { name, tasks: [] }; groups.push(grp); return (title) => grp.tasks.push(title); };
+  const iss = data.siteCrawl?.issues;
+  if (iss) {
+    const t1 = g("Titles & snippets (Google: unique, descriptive on every page)");
+    if (iss.missingTitle?.length) t1(`Write unique <title> tags for ${iss.missingTitle.length} pages: ${few(iss.missingTitle)}`);
+    if (iss.missingMetaDesc?.length) t1(`Write unique meta descriptions for ${iss.missingMetaDesc.length} pages: ${few(iss.missingMetaDesc)}`);
+    if (iss.duplicateTitles?.length) t1(`Differentiate ${iss.duplicateTitles.length} duplicate title groups (e.g. "${iss.duplicateTitles[0]?.title || ""}")`);
+    if (iss.duplicateDescs?.length) t1(`Differentiate ${iss.duplicateDescs.length} duplicate meta-description groups`);
+    if (iss.noH1?.length) t1(`Add one clear, dominant H1 to: ${few(iss.noH1)}`);
+    const t2 = g("Content quality (Google: helpful, people-first)");
+    if (iss.thin?.length) t2(`Expand, merge or noindex ${iss.thin.length} thin pages: ${few(iss.thin.map((x) => x.split(" (")[0]))}`);
+    const t3 = g("Architecture & internal links");
+    if (iss.orphans?.length) t3(`Add contextual internal links to ${iss.orphans.length} orphan pages: ${few(iss.orphans)}`);
+    if (iss.missingCanonical?.length) t3(`Add rel="canonical" to: ${few(iss.missingCanonical)}`);
+    const t4 = g("Technical & page experience");
+    if (iss.httpErrors?.length) t4(`Fix or remove ${iss.httpErrors.length} broken sitemap URLs: ${few(iss.httpErrors)}`);
+    if (iss.slow?.length) t4(`Improve load time on: ${few(iss.slow)}`);
+    if (iss.noindex?.length) t4(`Review noindex flags on: ${few(iss.noindex)} (intended?)`);
+  }
+  const gp = data.businessProfile;
+  if (gp && !gp.error) {
+    const t = g("Google Business Profile");
+    if (!gp.description || gp.description.length < 200) t("Expand the GBP business description toward the 750-char limit with services + areas");
+    if ((gp.photosVisible ?? 0) < 5 && !gp.photosCapped) t(`Upload fresh photos to the profile (only ${gp.photosVisible ?? 0} visible)`);
+    if ((gp.reviews ?? 0) < 20) t(`Run an honest review-generation push (currently ${gp.reviews ?? 0} reviews)`);
+    if (gp.rating && gp.rating < 4.5) t(`Respond to recent reviews and address complaints (rating ${gp.rating})`);
+    if (!gp.hours?.length) t("Add complete opening hours to the Business Profile");
+    if (!gp.website) t("Add the website link to the Business Profile");
+  }
+  const own = data.serp?.ownDomain;
+  for (const sp of data.serp?.serps || []) {
+    if (sp.error || !sp.results) continue;
+    const mine = sp.results.find((r) => r.domain === own);
+    const t = g("Rankings & content gaps");
+    if (!mine) t(`Create/strengthen the page targeting "${sp.keyword}" — not in the top ${sp.results.length} (${sp.location})`);
+    else if (mine.rank > 3) t(`Re-optimize the page ranking #${mine.rank} for "${sp.keyword}" toward the top 3`);
+  }
+  const flat = groups.filter((x) => x.tasks.length);
+  if (!flat.length) return null;
+  const now = new Date();
+  const due = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14).toISOString().slice(0, 10);
+  const people = (assignees || []).filter(Boolean);
+  let ti = 0;
+  const mk = (title) => ({ id: "t" + Date.now() + ti++, title, createdAt: Date.now(), dueDate: due, completedAt: null,
+    assignees: people.length ? [people[ti % people.length]] : [] });
+  const checklists = flat.map((x, i) => ({ id: "cl" + Date.now() + i, name: x.name, tasks: x.tasks.map(mk) }));
+  return {
+    id: "r" + Date.now(),
+    name: `SEO Fixes — ${{ site: "Website audit", gbp: "Business Profile audit", serp: "SERP check", competitors: "Competitor gap analysis" }[kind] || "Audit"} ${now.toLocaleDateString("en", { month: "short", day: "numeric" })}`,
+    createdAt: Date.now(), updatedAt: Date.now(), dueDate: due, completedAt: null,
+    assignees: [...new Set(checklists.flatMap((c) => c.tasks.flatMap((t) => t.assignees)))],
+    checklists, comments: [],
+    activity: [{ id: "pa" + Date.now(), ts: Date.now(), author: "AI Agent", text: "created these tasks from live audit findings" }],
+  };
+}
+
+/* which team members did the user name? empty = distribute across everyone */
+export const parseAssignees = (input, names) => {
+  const q = String(input).toLowerCase();
+  return (names || []).filter((n) => q.includes(n.toLowerCase()) || q.includes(n.split(" ")[0].toLowerCase()));
+};
 
 function fallbackReport(kind, data, sections) {
   const lines = [];

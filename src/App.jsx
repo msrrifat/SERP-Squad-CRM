@@ -825,6 +825,9 @@ export default function App() {
     placesKey: company.apis?.googlePlaces?.values?.apiKey,
     dfsFor: (cid) => dfsForClient(clients.find((c) => c.id === cid)),
     assignableNames: (company.team || []).filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(activeProjectId))).map((m) => m.name),
+    /* roster for a SPECIFIC project — the research lane may be scoped to a
+       project other than the one open in the sidebar */
+    assignableFor: (pid) => (company.team || []).filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(pid))).map((m) => m.name),
   };
   const runAgentAction = (action) => {
     const projName = clients.find((c) => c.id === action.clientId)?.projects.find((pr) => pr.id === action.projectId)?.name || "";
