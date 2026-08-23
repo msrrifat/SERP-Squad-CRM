@@ -184,7 +184,7 @@ function ClientChatPane({ client, company, brand, accent, maskName, roleLabelOf,
       {icon}
       <span className="min-w-0 flex-1">
         <span className={"block truncate text-[12.5px] font-semibold " + (active ? "" : "text-gray-800")} style={active ? { color: accent } : {}}>{label}</span>
-        <span className="block truncate text-[10.5px] text-gray-400">{sub}</span>
+        {sub ? <span className="block truncate text-[10.5px] text-gray-400">{sub}</span> : null}
       </span>
       {n > 0 && <span className="ll-mono shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold text-white" style={{ background: accent }}>{n}</span>}
     </button>
@@ -197,7 +197,7 @@ function ClientChatPane({ client, company, brand, accent, maskName, roleLabelOf,
         {sectionLabel("Direct messages")}
         {/* the owner by NAME and photo — the one person the client knows */}
         {row("owner", sel.type === "owner", () => setSel({ type: "owner" }),
-          <Ava name={ownerName} img={owner?.avatar} size={28} />, ownerName, `Owner — ${brand.name}`, unread(ownerChat))}
+          <Ava name={ownerName} img={owner?.avatar} size={28} />, ownerName, "", unread(ownerChat))}
         {/* each assigned specialist is a 3-member group: them + owner + you */}
         <div className="mt-1 border-t border-gray-100">{sectionLabel("Groups")}</div>
         {trios.length === 0 && <div className="px-3.5 py-1.5 text-[10.5px] leading-relaxed text-gray-300">No group chats yet — your team can open a 3-way group with a specialist for you.</div>}
@@ -211,7 +211,7 @@ function ClientChatPane({ client, company, brand, accent, maskName, roleLabelOf,
       <div className="flex min-w-0 flex-1 flex-col bg-[#FAFBFC]">
         {sel.type === "owner" && (<>
           <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><Ava name={ownerName} img={owner?.avatar} size={28} />
-            <div><div className="text-[13px] font-bold text-gray-800">{ownerName}</div><div className="text-[10px] text-gray-400">Owner of {brand.name} — your private line.</div></div></div>
+            <div><div className="text-[13px] font-bold text-gray-800">{ownerName}</div><div className="text-[10px] text-gray-400">Your private line.</div></div></div>
           <MessageThread msgs={ownerChat.msgs || []} me={me} accent={accent} maskName={maskName} onSend={onSendOwner} onReact={onReactOwner} />
         </>)}
         {selTrio && (<>
