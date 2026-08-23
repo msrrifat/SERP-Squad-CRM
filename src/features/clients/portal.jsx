@@ -355,7 +355,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   const [section, setSection] = useState("performance");
   const [view, setView] = useState("overview");
   const [accountView, setAccountView] = useState(null); // null | "messages" | "apisettings"
-  const [cmp, setCmp] = useState(3);
+  const [cmp, setCmp] = useState(1); // workspace opens on 1 month of performance by default
   const [range, setRange] = useState(DEFAULT_RANGE);
   const project = allowed.find((p) => p.id === pid) || allowed[0];
 

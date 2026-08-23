@@ -108,7 +108,7 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState(SEED_CLIENTS[0]?.projects[0]?.id || null);
   const [expanded, setExpanded] = useState(() => new Set(SEED_CLIENTS.map((c) => c.id)));
   const [view, setView] = useState("overview");
-  const [cmp, setCmp] = useState(3);
+  const [cmp, setCmp] = useState(1); // workspace opens on 1 month of performance by default
   const [clientView, setClientView] = useState(false);
   const [modal, setModal] = useState(null); // {type:"addClient"|"addProject"|"clientSettings"|"companySettings", clientId?}
   /* LOGIN-FIRST: nobody (owner included) sees the dashboard without signing
