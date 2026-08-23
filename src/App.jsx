@@ -62,6 +62,7 @@ import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
 import { stripChatDocs } from "./lib/chatmerge.js";
+import { pruneMemberFromClients, pruneMemberFromCompany } from "./lib/team.js";
 import { applyChatBatch, chatRead, chatReact, chatSend, consumeChatLocal, ensureNotifyPermission, markChatLocal, newMsgId, notifyNewMessages, useChatSync, useTitleBadge } from "./lib/chat.js";
 import { setAppOrigin } from "./lib/appOrigin.js";
 import { applyOptWork, ensureMonthlyWorkRecord } from "./lib/worklog.jsx";
@@ -1298,7 +1299,15 @@ export default function App() {
      set the screen from /company or /tools — so the GATE lives here, where it
      can't be walked around by typing an address */
   if (screen === "company" && isAdmin) {
-    return <><DialogHost accent={accent} /><Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy></>;
+    /* keep projects in step with the team: unassigning someone (or removing
+       them from the team) strips their grants, assignments and chat
+       memberships, so they leave Project management at the same moment */
+    const pruneMember = (member, projectIds = null) => {
+      setClients((cs) => pruneMemberFromClients(cs, member, projectIds));
+      if (projectIds == null) setCompany((c) => pruneMemberFromCompany(c, member));
+      logActivity(projectIds == null ? "Removed a team member" : `Unassigned a team member from ${projectIds.length} project${projectIds.length === 1 ? "" : "s"}`, member?.name || "");
+    };
+    return <><DialogHost accent={accent} /><Lazy><CompanyPage company={company} onChange={updateCompany} clients={clients} onTeamPrune={pruneMember} onBack={() => setScreen("app")} dark={dark} setDark={setDark} /></Lazy></>;
   }
   if (screen === "tools" && isAdmin) {
     return <><DialogHost accent={accent} /><Lazy><ToolsPage company={company} onChange={updateCompany} accent={company.accent} aiConfig={aiConfig}

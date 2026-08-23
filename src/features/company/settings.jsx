@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { GuideTip, Ava, BrandMark, Card, DarkToggle, FONT_CSS, Labeled, LogoUpload, NEG, POS, ProjectMark, RoleBadge, SaveBar, Seg, Toggle, askDelete, askDisconnect, inputCls, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { ROLE_PRESETS } from "../../data/seed.js";
+import { assignedIds } from "../../lib/team.js";
 import { isoDate } from "../../lib/months.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { AccountingSection } from "./accounting.jsx";
@@ -710,14 +711,26 @@ function MemberPanel({ member, company, allProjects, permMeta, accent, onSave, o
   );
 }
 
-export function TeamSection({ company, onChange, clients }) {
+export function TeamSection({ company, onChange, clients, onPrune = null }) {
   const [openId, setOpenId] = useState(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: "", email: "", password: "", role: "Manager" });
   const team = company.team || [];
   const allProjects = clients.flatMap((c) => c.projects.map((p) => ({ ...p, clientName: c.name })));
 
-  const patchMember = (id, p) => onChange({ team: team.map((m) => (m.id === id ? { ...m, ...p } : m)) });
+  const allIds = allProjects.map((p) => p.id);
+  /* Membership on a project is derived from this assignment list, so taking
+     a project away has to cascade: the project's grants for them, their name
+     on records and tasks — otherwise they linger in Project management. */
+  const patchMember = (id, p) => {
+    const m = team.find((x) => x.id === id);
+    onChange({ team: team.map((x) => (x.id === id ? { ...x, ...p } : x)) });
+    if (m && onPrune && "projects" in p) {
+      const after = new Set(assignedIds({ projects: p.projects }, allIds));
+      const dropped = assignedIds(m, allIds).filter((pid) => !after.has(pid));
+      if (dropped.length) onPrune(m, dropped);
+    }
+  };
   const setRole = (m, role) => patchMember(m.id, { role, perms: { ...ROLE_PRESETS[role] }, projects: role === "Admin" ? "all" : m.projects === "all" ? [] : m.projects });
   const removeMember = async (id) => {
     /* removing a member drops their access and their assignment history —
@@ -725,6 +738,8 @@ export function TeamSection({ company, onChange, clients }) {
     const m = team.find((x) => x.id === id);
     if (!await askDelete(`${m?.name || "this team member"} from the team`)) return;
     onChange({ team: team.filter((x) => x.id !== id) });
+    /* …and from every project: grants, assignments, 3-way chats, groups */
+    if (m && onPrune) onPrune(m, null);
   };
   const toggleProject = (m, pid) => {
     const cur = m.projects === "all" ? allProjects.map((p) => p.id) : m.projects;
@@ -1243,7 +1258,7 @@ export function InvoiceSection({ company, onChange, clients }) {
   );
 }
 
-export function CompanyPage({ company, onChange, clients, onBack, dark, setDark }) {
+export function CompanyPage({ company, onChange, clients, onBack, dark, setDark, onTeamPrune = null }) {
   const [tab, setTab] = useState("company");
   const TABS = [
     { key: "company", label: "Company settings", icon: Building2, sub: "Brand customization & identity" },
@@ -1295,7 +1310,7 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark 
         <div className="mx-auto max-w-5xl p-5">
           {tab === "company" && <CompanyBrandSection company={company} onChange={onChange} onGoApis={() => setTab("apis")} />}
           {tab === "apis" && <ApiSettingsSection company={company} onChange={onChange} />}
-          {tab === "team" && <TeamSection company={company} onChange={onChange} clients={clients} />}
+          {tab === "team" && <TeamSection company={company} onChange={onChange} clients={clients} onPrune={onTeamPrune} />}
           {tab === "accounting" && <AccountingSection company={company} onChange={onChange} clients={clients} />}
           {tab === "invoice" && <InvoiceSection company={company} onChange={onChange} clients={clients} />}
           {tab === "activity" && <ActivitySection company={company} />}
