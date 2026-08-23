@@ -431,7 +431,7 @@ export function ChatView({ project, currentUser, canWrite = true, accent, onUpda
         <div className="ll-display flex items-center gap-2 text-[15px] font-semibold"><MessageSquare size={15} style={{ color: accent }} /> Project chat</div>
         <div className="text-[11px] text-gray-400">Everyone assigned to {project.name} — agency team and client — shares this thread. Hover a message to react, right-click to reply.</div>
       </div>
-      <MessageThread msgs={msgs} me={currentUser} accent={accent} canWrite={canWrite} onSend={send} onReact={react} maskName={maskName} mentionables={mentionables} />
+      <MessageThread msgs={msgs} me={currentUser} accent={accent} canWrite={canWrite} onSend={send} onReact={react} maskName={maskName} mentionables={mentionables} reads={project.chatReads || {}} thread={chatThread} />
     </Card>
   );
 }

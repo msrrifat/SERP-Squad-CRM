@@ -34,6 +34,32 @@ export function useMsgStatus() {
   return useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => snapshot);
 }
 
+/* stable key for a thread descriptor — the same string the server uses */
+export const threadKey = (t, me) => !t ? "" : t.kind === "dm" ? `dm:${t.key || [me, t.other].sort().join("|")}` : t.kind === "group" ? `group:${t.groupId}`
+  : t.kind === "project" ? `project:${t.clientId}:${t.projectId}` : t.kind === "owner" ? `owner:${t.clientId}` : `trio:${t.clientId}:${t.memberId}`;
+
+/* ---- who is typing, per thread (ephemeral, refreshed by every poll) ---- */
+let typingSnap = { v: 0, map: new Map() };
+const typingListeners = new Set();
+const setTyping = (list) => {
+  const map = new Map((list || []).map((t) => [t.key, t.names || []]));
+  typingSnap = { v: typingSnap.v + 1, map };
+  typingListeners.forEach((l) => l());
+};
+export function useTyping(key) {
+  const snap = useSyncExternalStore((l) => { typingListeners.add(l); return () => typingListeners.delete(l); }, () => typingSnap);
+  return key ? (snap.map.get(key) || []) : [];
+}
+const lastTyped = new Map();
+/* throttled: at most one ping per thread every 2.5 s while the user types */
+export function chatTyping(thread, me) {
+  if (!thread || !localStorage.getItem("ss_token")) return;
+  const key = threadKey(thread, me), now = Date.now();
+  if (now - (lastTyped.get(key) || 0) < 2500) return;
+  lastTyped.set(key, now);
+  post("/api/chat/typing", { thread }).catch(() => {});
+}
+
 const tokenHeaders = () => ({ "Content-Type": "application/json", "X-SS-Token": localStorage.getItem("ss_token") || "" });
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: tokenHeaders(), body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
@@ -70,11 +96,11 @@ export function chatRead(thread) {
 }
 
 /* ---- polling ----------------------------------------------------------
-   5 s while the tab is visible, 20 s in the background (so a desktop
+   3 s while the tab is visible, 20 s in the background (so a desktop
    notification still arrives), plus an immediate pull on focus. `since`
    is the server clock from the previous answer, so nothing is missed
    across clock skew; overlap is harmless — everything is a union. */
-export function useChatSync({ enabled, onBatch, visibleMs = 5000, hiddenMs = 20000 }) {
+export function useChatSync({ enabled, onBatch, visibleMs = 3000, hiddenMs = 20000 }) {
   const cb = useRef(onBatch); cb.current = onBatch;
   const since = useRef(0);
   useEffect(() => {
@@ -92,6 +118,7 @@ export function useChatSync({ enabled, onBatch, visibleMs = 5000, hiddenMs = 200
           const j = await r.json();
           if (j && Number.isFinite(+j.now)) {
             if (j.threads?.length) cb.current?.(j.threads);
+            setTyping(j.typing);
             since.current = +j.now;
           }
         }

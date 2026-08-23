@@ -426,7 +426,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                 <div className="text-[10px] text-gray-400">{selMember?.title || selMember?.role} · Private — only the two of you can see this</div>
               </div>
             </div>
-            <MessageThread msgs={dmMsgs(selDm)} me={me} accent={accent} mentionables={[me, selDm]}
+            <MessageThread msgs={dmMsgs(selDm)} me={me} accent={accent} mentionables={[me, selDm]} reads={(dmReads || {})[dmKeyOf(me, selDm)] || {}} thread={{ kind: "dm", other: selDm }}
               onSend={(text, replyTo) => onSendDm(selDm, text, replyTo)}
               onReact={(msgId, emoji) => onReactDm(selDm, msgId, emoji)} />
           </>
@@ -461,7 +461,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                 </div>
               )}
             </div>
-            <MessageThread msgs={selGrp.msgs || []} me={me} accent={accent} mentionables={selGrp.members}
+            <MessageThread msgs={selGrp.msgs || []} me={me} accent={accent} mentionables={selGrp.members} reads={selGrp.reads || {}} thread={{ kind: "group", groupId: selGrp.id }}
               onSend={(text, replyTo) => onSendGroup(selGrp.id, text, replyTo)}
               onReact={(msgId, emoji) => onReactGroup(selGrp.id, msgId, emoji)} />
           </>
@@ -475,7 +475,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                 <div className="truncate text-[10px] text-gray-400">{selCl.name} · Private owner ↔ client line · hover a client message to forward it to a group</div>
               </div>
             </div>
-            <MessageThread msgs={selCl.chat.msgs || []} me={me} accent={accent} mentionables={[me, selCl.contact]}
+            <MessageThread msgs={selCl.chat.msgs || []} me={me} accent={accent} mentionables={[me, selCl.contact]} reads={selCl.chat.reads || {}} thread={{ kind: "owner", clientId: selCl.clientId }}
               onSend={(text, replyTo) => onSendClient(selCl.clientId, text, replyTo)}
               onReact={(msgId, emoji) => onReactClient(selCl.clientId, msgId, emoji)}
               onForward={myGroups.length ? (m) => setFwd(m) : null} />
@@ -507,7 +507,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
               </div>
               <span className="flex -space-x-1.5"><Ava name={selTrio.clientLabel} size={22} /><Ava name={selTrio.memberName} img={selTrio.memberAvatar} size={22} /></span>
             </div>
-            <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName} mentionables={[me, selTrio.memberName]}
+            <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName} mentionables={[me, selTrio.memberName]} reads={selTrio.chat.reads || {}} thread={{ kind: "trio", clientId: selTrio.clientId, memberId: selTrio.memberId }}
               onSend={(text, replyTo) => onSendTrio(selTrio.clientId, selTrio.memberId, text, replyTo)}
               onReact={(msgId, emoji) => onReactTrio(selTrio.clientId, selTrio.memberId, msgId, emoji)} />
           </>
@@ -561,7 +561,7 @@ export function ChatHome({ me, team, dms, dmReads, channels, groups, accent, can
                 </div>
               )}
             </div>
-            <MessageThread msgs={projMsgs(selCh)} me={me} accent={selCh.project.accent || accent} maskName={maskName}
+            <MessageThread msgs={projMsgs(selCh)} me={me} accent={selCh.project.accent || accent} maskName={maskName} reads={selCh.project.chatReads || {}} thread={{ kind: "project", clientId: selCh.clientId, projectId: selCh.project.id }}
               mentionables={channelMembers(selCh)}
               onSend={(text, replyTo) => onSendProject(selCh.clientId, selCh.project.id, text, replyTo)}
               onReact={(msgId, emoji) => onReactProject(selCh.clientId, selCh.project.id, msgId, emoji)} />

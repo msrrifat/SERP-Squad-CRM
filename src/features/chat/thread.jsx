@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CornerUpLeft, Send, Smile, X } from "lucide-react";
+import { Check, CheckCheck, CornerUpLeft, Send, Smile, X } from "lucide-react";
 import { Ava, inputCls } from "../../ui/primitives.jsx";
-import { useMsgStatus } from "../../lib/chat.js";
+import { chatTyping, threadKey, useMsgStatus, useTyping } from "../../lib/chat.js";
 
 /* quick reactions shown on hover; the full set feeds the composer picker */
 export const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
@@ -34,7 +34,8 @@ const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
    Type @ to mention someone from the thread.
    onSend(text, replyToId) · onReact(msgId, emoji)
    ===================================================================== */
-export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onReact, onForward = null, maskName = (n) => n, mentionables = [], dense = false }) {
+export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onReact, onForward = null, maskName = (n) => n, mentionables = [], dense = false,
+  reads = {}, thread = null }) {
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -45,6 +46,16 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
   const taRef = useRef(null);
   /* delivery state of messages sent from this tab (chat lane) */
   const msgStatus = useMsgStatus();
+  /* ---- receipts -------------------------------------------------------
+     `reads` is the thread's read-marker map (reader → last time they had the
+     thread open). A message is SEEN by everyone whose marker is at or past
+     its timestamp; DELIVERED once the server acknowledged it. The word
+     ("Delivered" / "Seen by …") shows on the latest own message only; every
+     own message carries the tick icon. */
+  const seenBy = (m) => Object.entries(reads || {}).filter(([u, ts]) => u !== me && u !== m.author && (+ts || 0) >= (m.ts || 0)).map(([u]) => u);
+  const lastOwnId = [...msgs].reverse().find((m) => m.author === me)?.id;
+  const typists = useTyping(threadKey(thread, me));
+  const typingLine = typists.length ? `${typists.map(maskName).join(", ")} ${typists.length === 1 ? "is" : "are"} typing…` : null;
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [msgs.length]);
 
   const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
@@ -59,6 +70,7 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
   const candidates = mentionables.filter((n) => n && n !== me);
   const onDraftChange = (e) => {
     const val = e.target.value; setDraft(val);
+    if (val.trim()) chatTyping(thread, me);
     const upto = val.slice(0, e.target.selectionStart ?? val.length);
     const at = upto.lastIndexOf("@");
     if (at >= 0 && (at === 0 || /\s/.test(upto[at - 1]))) {
@@ -169,6 +181,19 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
                       <button onClick={() => msgStatus.get(m.id)?.retry?.()} className="mr-1 rounded bg-red-600 px-1 py-px font-semibold text-white">Not sent · Retry</button>
                     )}
                     {hhmm(m.ts)}
+                    {own && (() => {
+                      const st = msgStatus.get(m.id)?.state;
+                      if (st) return null;
+                      const seen = seenBy(m);
+                      const last = m.id === lastOwnId;
+                      const names = seen.map(maskName).join(", ");
+                      return (
+                        <span className="ml-1 inline-flex items-center gap-0.5 align-middle" title={seen.length ? `Seen by ${names}` : "Delivered"}>
+                          {seen.length ? <CheckCheck size={11} className="text-sky-200" /> : <Check size={11} className="opacity-70" />}
+                          {last && <span className={seen.length ? "text-sky-100" : "opacity-70"}>{seen.length ? (seen.length > 1 ? `Seen by ${names}` : "Seen") : "Delivered"}</span>}
+                        </span>
+                      );
+                    })()}
                   </div>
                   {reactions.length > 0 && (
                     <div className={"absolute -bottom-3 flex gap-1 " + (own ? "right-2" : "left-2")}>
@@ -188,6 +213,12 @@ export function MessageThread({ msgs, me, accent, canWrite = true, onSend, onRea
             </React.Fragment>
           );
         })}
+        {typingLine && (
+          <div className="flex items-center gap-1.5 px-1 pt-1 text-[10.5px] italic text-gray-400">
+            <span className="inline-flex gap-0.5">{[0, 1, 2].map((i) => <span key={i} className="h-1 w-1 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: `${i * 0.15}s` }} />)}</span>
+            {typingLine}
+          </div>
+        )}
       </div>
 
       {canWrite ? (

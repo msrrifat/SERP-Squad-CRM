@@ -1390,16 +1390,45 @@ function handleChatRead(req, body) {
   return [200, { ok: true, now }];
 }
 
+/* ---- typing indicators: ephemeral, in memory, never stored -------------
+   key → Map(name → last keystroke ts). A poll returns whoever typed in the
+   last few seconds; nothing to clean up because stale entries just age out. */
+const TYPING_TTL = 8000;
+const typingByThread = new Map();
+const chatKeyOf = (t) => t.kind === "dm" ? `dm:${t.key}` : t.kind === "group" ? `group:${t.groupId}`
+  : t.kind === "project" ? `project:${t.clientId}:${t.projectId}` : t.kind === "owner" ? `owner:${t.clientId}` : `trio:${t.clientId}:${t.memberId}`;
+function handleChatTyping(req, body) {
+  const [ctx, err] = chatPrelude(req); if (err) return err;
+  const { state, who } = ctx;
+  const th = resolveChatThread(state, who, body?.thread);
+  if (typeof th === "string") return CHAT_ERR[th];
+  const key = chatKeyOf({ ...body.thread, key: th.key });
+  if (!typingByThread.has(key)) typingByThread.set(key, new Map());
+  typingByThread.get(key).set(who.name, Date.now());
+  return [200, { ok: true }];
+}
+const typistsOf = (key, exceptName) => {
+  const m = typingByThread.get(key); if (!m) return [];
+  const cutoff = Date.now() - TYPING_TTL;
+  const out = [];
+  for (const [name, ts] of m) { if (ts < cutoff) m.delete(name); else if (name !== exceptName) out.push(name); }
+  if (!m.size) typingByThread.delete(key);
+  return out;
+};
+
 /* every thread this identity can see, with only what moved since `ts` */
 function handleChatSince(req) {
   const [ctx, err] = chatPrelude(req); if (err) return err;
   const { state, who } = ctx;
   const since = +((/[?&]ts=(\d+)/.exec(req.url) || [])[1]) || 0;
   const now = Date.now();
-  const threads = [];
+  const threads = [], typing = [];
   const fresh = (msgs) => (msgs || []).filter((m) => m && Math.max(+m.ts || 0, +m.rts || 0) > since);
   const readsMoved = (reads) => Object.values(reads || {}).some((v) => (+v || 0) > since);
   const push = (desc, ch, meta = null) => {
+    const key = chatKeyOf(desc);
+    const names = typistsOf(key, who.name);
+    if (names.length) typing.push({ key, names });
     const msgs = fresh(ch.msgs);
     if (!msgs.length && !readsMoved(ch.reads) && !meta) return;
     threads.push({ ...desc, msgs, reads: ch.reads || {}, ...(meta ? { meta } : {}) });
@@ -1431,7 +1460,7 @@ function handleChatSince(req) {
       push({ kind: "project", clientId: c.id, projectId: p.id }, { msgs: p.chatMsgs, reads: p.chatReads });
     }
   }
-  return [200, { ok: true, now, since, threads }];
+  return [200, { ok: true, now, since, threads, typing }];
 }
 
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
@@ -4856,7 +4885,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -4959,6 +4988,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/chat/send" ? handleChatSend(req, body)
         : req.url === "/api/chat/react" ? handleChatReact(req, body)
         : req.url === "/api/chat/read" ? handleChatRead(req, body)
+        : req.url === "/api/chat/typing" ? handleChatTyping(req, body)
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)

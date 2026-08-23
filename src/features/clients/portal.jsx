@@ -213,18 +213,18 @@ function ClientChatPane({ client, company, brand, accent, maskName, roleLabelOf,
         {sel.type === "owner" && (<>
           <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><Ava name={ownerName} img={owner?.avatar} size={28} />
             <div><div className="text-[13px] font-bold text-gray-800">{ownerName}</div><div className="text-[10px] text-gray-400">Your private line.</div></div></div>
-          <MessageThread msgs={ownerChat.msgs || []} me={me} accent={accent} maskName={maskName} onSend={onSendOwner} onReact={onReactOwner} />
+          <MessageThread msgs={ownerChat.msgs || []} me={me} accent={accent} maskName={maskName} onSend={onSendOwner} onReact={onReactOwner} reads={ownerChat.reads || {}} thread={{ kind: "owner", clientId: client.id }} />
         </>)}
         {selTrio && (<>
           <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><Ava name={selTrio.label} size={28} />
             <div><div className="text-[13px] font-bold text-gray-800">{selTrio.label}</div><div className="text-[10px] text-gray-400">3-way group — you, {ownerName} and your {selTrio.label.toLowerCase()}.</div></div></div>
-          <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName}
+          <MessageThread msgs={selTrio.chat.msgs || []} me={me} accent={accent} maskName={maskName} reads={selTrio.chat.reads || {}} thread={{ kind: "trio", clientId: client.id, memberId: selTrio.mid }}
             onSend={(text, replyTo) => onSendTrio(selTrio.mid, text, replyTo)} onReact={(msgId, emoji) => onReactTrio(selTrio.mid, msgId, emoji)} />
         </>)}
         {selChan && (<>
           <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-4 py-2.5"><ProjectMark project={selChan} size="md" />
             <div><div className="text-[13px] font-bold text-gray-800">{selChan.name}</div><div className="text-[10px] text-gray-400">Project channel — the whole project team sees these messages.</div></div></div>
-          <MessageThread msgs={selChan.chatMsgs || []} me={me} accent={selChan.accent || accent} maskName={maskName}
+          <MessageThread msgs={selChan.chatMsgs || []} me={me} accent={selChan.accent || accent} maskName={maskName} reads={selChan.chatReads || {}} thread={{ kind: "project", clientId: client.id, projectId: selChan.id }}
             onSend={(text, replyTo) => onSendChannel(selChan.id, text, replyTo)} onReact={(msgId, emoji) => onReactChannel(selChan.id, msgId, emoji)} />
         </>)}
       </div>
