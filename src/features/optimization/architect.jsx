@@ -19,6 +19,7 @@ import {
 import { CharCount, Toggle } from "../../ui/primitives.jsx";
 import { buildDeployPlan, demoReviews, exportSiteZip, parseContentMd, scheduleDates, serializeElementor, serializeGutenberg, serializeHtml, serializeWpBody, webflowItems } from "../../lib/webdeploy.js";
 import { findDuplicate } from "./postsarchitect.jsx";
+import { seoGuideBlock } from "../../lib/seoknowledge.js";
 
 /* ================= Website Mapping & Content Architect =================
    AI-FIRST: every stage calls the configured provider (Company Settings →
@@ -58,16 +59,16 @@ Rules you always apply:
 - Always include: homepage, about, contact, a reviews/trust page.
 - Page types must be exactly one of: home, hub, service, location, article, about, trust, contact.
 - FULL TOPICAL-AUTHORITY COVERAGE (mandatory): one page for EVERY service and EVERY location provided — no sampling, no "top" subset, no shortening the map to save output space. Add the sub-service and blog spokes complete coverage of the niche requires; a map that omits provided services or locations is a failed output.
-Return STRICT JSON only, no commentary: {"pages":[{"title":string,"url":string,"type":string,"primaryKw":string,"children":[same shape]}]}`;
+Return STRICT JSON only, no commentary: {"pages":[{"title":string,"url":string,"type":string,"primaryKw":string,"children":[same shape]}]}` + "\n\n" + seoGuideBlock("architecture", "links");
 
 const SYS_STRUCTURE = `You are a technical SEO content strategist. You reverse-engineer what Google rewards for a query by analyzing the pages that already rank.
 Method: sections covered by MOST competitors are table stakes (must cover); angles competitors miss are differentiators; entities recurring across competitor titles/descriptions define required semantic coverage. Add an E-E-A-T section and an FAQ targeting People-Also-Ask.
-Return STRICT JSON only: {"sections":[{"h2":string,"note":string,"kind":"table-stakes"|"differentiator"|"secondary"|"eeat"}],"sharedEntities":[string],"differentiators":[string],"faqs":[string],"wordTarget":number,"internalLinks":[string],"schemaHints":[string]}`;
+Return STRICT JSON only: {"sections":[{"h2":string,"note":string,"kind":"table-stakes"|"differentiator"|"secondary"|"eeat"}],"sharedEntities":[string],"differentiators":[string],"faqs":[string],"wordTarget":number,"internalLinks":[string],"schemaHints":[string]}` + "\n\n" + seoGuideBlock("architecture", "posts");
 
 const SYS_AUDIT = `You are a ruthless SEO content auditor. Audit the given content structure for: search-intent match, E-E-A-T signals, SERP-feature opportunities (FAQ/PAA, featured snippets), semantic completeness vs the entity list, differentiation vs the SERP, and depth vs the word target.
-Return STRICT JSON only: {"score":number 0-100,"summary":string,"issues":[{"sev":"high"|"med"|"low","text":string,"fix":string}]}`;
+Return STRICT JSON only: {"score":number 0-100,"summary":string,"issues":[{"sev":"high"|"med"|"low","text":string,"fix":string}]}` + "\n\n" + seoGuideBlock("audit", "writing");
 
-const SYS_ADJUST = `You are a technical SEO content strategist. Apply EVERY audit fix to the content structure. Keep what already works. Return the FULL adjusted structure as STRICT JSON in exactly this schema: {"sections":[{"h2":string,"note":string,"kind":"table-stakes"|"differentiator"|"secondary"|"eeat"}],"sharedEntities":[string],"differentiators":[string],"faqs":[string],"wordTarget":number,"internalLinks":[string],"schemaHints":[string]}`;
+const SYS_ADJUST = `You are a technical SEO content strategist. Apply EVERY audit fix to the content structure. Keep what already works. Return the FULL adjusted structure as STRICT JSON in exactly this schema: {"sections":[{"h2":string,"note":string,"kind":"table-stakes"|"differentiator"|"secondary"|"eeat"}],"sharedEntities":[string],"differentiators":[string],"faqs":[string],"wordTarget":number,"internalLinks":[string],"schemaHints":[string]}` + "\n\n" + seoGuideBlock("writing");
 
 const SYS_WRITER = `You are an expert SEO content writer and on-page technical SEO. You write for humans first, search second — zero filler, every claim concrete.
 Hard requirements:
@@ -84,7 +85,7 @@ Description: <meta description, ≤160 chars, primary keyword + concrete benefit
 - Include 1-2 image suggestions as ![alt text](suggested: description) with keyword-bearing alt text.
 - Weave required entities naturally; never keyword-stuff. FAQ: bold question + genuinely useful 2-4 sentence answer.
 - Meet or exceed the word target. Follow the brand voice block exactly.
-- The OPTIMIZATION RULES block in the prompt is a HARD CONTRACT: satisfy every rule in it (research depth, local mode, required sections, structure handling and the per-section character targets). Output that ignores any rule is a failed output.`;
+- The OPTIMIZATION RULES block in the prompt is a HARD CONTRACT: satisfy every rule in it (research depth, local mode, required sections, structure handling and the per-section character targets). Output that ignores any rule is a failed output.` + "\n\n" + seoGuideBlock("writing", "titles", "links", "local", "structured");
 
 /* per-section CONTENT BLOCK — what renders with/after the section's copy on
    the published page. Chosen in the structure panel; the writer shapes the

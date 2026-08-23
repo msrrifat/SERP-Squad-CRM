@@ -4,6 +4,7 @@
    provider or a clear error; nothing is silently fabricated. */
 import React, { useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
+import { seoGuideBlock } from "./seoknowledge.js";
 
 /* maxTokens is legacy — the server runs every call at the provider's own
    maximum and ignores it (artificial caps starved reasoning models mid-plan) */
@@ -87,7 +88,7 @@ const SYS_COPY = `You are the brand's senior marketing copywriter. You write pla
 Hard rules:
 - Follow the BRAND VOICE block exactly (tone, always/never lists, banned words).
 - Respect the HARD CHARACTER LIMIT — the entire response must fit within it.
-- Output ONLY the copy itself: no quotes around it, no headings, no markdown, no alternatives, no commentary.`;
+- Output ONLY the copy itself: no quotes around it, no headings, no markdown, no alternatives, no commentary.` + "\n\n" + seoGuideBlock("writing", "titles");
 
 /* Drop-in "AI write" button for any content field. Always injects the brand
    voice and clamps the output to the field's character limit. */

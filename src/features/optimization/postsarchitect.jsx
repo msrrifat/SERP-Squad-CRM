@@ -10,6 +10,7 @@ import { parseAiJson } from "../../lib/jsonrepair.js";
 import { useWork } from "../../lib/worklog.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { escHtml } from "../../lib/text.jsx";
+import { seoGuideBlock } from "../../lib/seoknowledge.js";
 
 /* ================= Posts Architect =================
    Blog architecture for TOPICAL AUTHORITY + LOCAL PROXIMITY, in two
@@ -265,7 +266,7 @@ Rules:
 - Cover EVERY provided service with both categories. No two posts targeting the same query (no cannibalization).
 - When real Search Console queries are provided, prioritize turning genuine question-style queries into "answer" posts.
 - Slugs: kebab-case, short, no stop words. Each post names the ONE service page it supports.
-Return STRICT JSON only: {"posts":[{"category":"blog"|"answer","title":string,"slug":string,"primaryKw":string,"service":string,"serviceUrl":string,"note":string}]}`;
+Return STRICT JSON only: {"posts":[{"category":"blog"|"answer","title":string,"slug":string,"primaryKw":string,"service":string,"serviceUrl":string,"note":string}]}` + "\n\n" + seoGuideBlock("posts", "writing");
 
 const SYS_POST_WRITER = `You are an expert SEO blog writer and technical on-page SEO. Write for humans first — concrete, useful, zero filler.
 Output EXACTLY this format:
@@ -281,7 +282,7 @@ Rules:
 - CITY ANCHORS: when a plan entry is marked CITY PAGE, its anchor MUST contain that exact city name — this keeps every city page's local keyword relevance steady.
 - Cite business facts from the brand block exactly; never invent details, prices you weren't given, or reviews.
 - FAQ section at the end for answer posts (2-3 related questions).
-- Meet the word target. Follow the brand voice block exactly.`;
+- Meet the word target. Follow the brand voice block exactly.` + "\n\n" + seoGuideBlock("writing", "posts", "titles", "links");
 
 /* ---------- deterministic fallback (no AI key → labeled draft) ---------- */
 function draftArchitecture(services, market, niche) {
@@ -684,7 +685,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         const existing = [...existingTitles, ...planned.map((p) => p.title)];
         const shown = existing.slice(0, 90);
         const text = await aiGenerate(aiConfig, {
-          system: prompts.system, json: true,
+          system: prompts.system + "\n\n" + seoGuideBlock("posts", "writing"), json: true,
           prompt: fillPrompt(prompts.batch, {
             brand, website: project.website, niche: w.architecture?.niche || project.name, market,
             locations: locations.join(", ") || market,
@@ -749,7 +750,7 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
         const existing = [...baseTitles, ...fresh.map((f) => f.title)];
         const shown = existing.slice(0, 90);
         const text = await aiGenerate(aiConfig, {
-          system: prompts.system, json: true,
+          system: prompts.system + "\n\n" + seoGuideBlock("posts", "writing"), json: true,
           prompt: fillPrompt(prompts.batch, {
             brand, website: project.website, niche: w.architecture?.niche || project.name, market,
             locations: locations.join(", ") || market,

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { RefreshCw, Send, Shield, X, Zap } from "lucide-react";
-import { agentReply } from "./agent.js";
+import { agentReply, snapshot } from "./agent.js";
+import { runSeoResearch } from "./research.js";
 
 /* ================= SERP Squad AI — chat panel =================
    Floating assistant, permission-scoped by the caller (App / ClientPortal).
@@ -10,21 +11,25 @@ import { agentReply } from "./agent.js";
 
 const QUICK = (isClient) => [
   "Project overview",
+  ...(isClient ? [] : ["Audit the website", "Audit our Google Business Profile", "Competitor content gap"]),
   "Keyword opportunities",
   "Rankings",
-  "Compare vs 3 months",
   ...(isClient ? [] : ["Create a monthly plan", "Generate a report"]),
 ];
 
-/* minimal markdown-ish: **bold** + line breaks + bullets */
+/* minimal markdown-ish: **bold**, # headings, line breaks + bullets */
 const rich = (t) =>
-  t.split("\n").map((line, i) => (
-    <div key={i} className={line.startsWith("•") ? "pl-1" : ""}>
-      {line.split(/(\*\*[^*]+\*\*)/g).map((seg, j) =>
-        seg.startsWith("**") ? <b key={j}>{seg.slice(2, -2)}</b> : <span key={j}>{seg}</span>
-      )}
-    </div>
-  ));
+  t.split("\n").map((line, i) => {
+    const head = line.match(/^#{1,4}\s+(.*)$/);
+    const body = head ? head[1] : line;
+    return (
+      <div key={i} className={(line.startsWith("•") || line.startsWith("- ") ? "pl-1 " : "") + (head ? "mt-1.5 font-bold text-gray-800" : "")}>
+        {body.split(/(\*\*[^*]+\*\*)/g).map((seg, j) =>
+          seg.startsWith("**") ? <b key={j}>{seg.slice(2, -2)}</b> : <span key={j}>{seg}</span>
+        )}
+      </div>
+    );
+  });
 
 export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
   const [messages, setMessages] = useState(() => [{
@@ -43,8 +48,25 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
     setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
-    setTimeout(() => { // PROD: stream from the configured AI provider with agent.js functions as tools
-      const reply = agentReply(text, ctx);
+    const reply = agentReply(text, ctx);
+    /* ---- SEO research lane: crawl live sources, then answer against the
+       Google SEO PRO Guides. Progress streams into one live bubble. ---- */
+    if (reply.research) {
+      setMessages((m) => [...m, { role: "agent", text: reply.text }, { role: "agent", text: "⏳ Starting…", live: true }]);
+      const onStep = (t2) => setMessages((m) => m.map((x) => (x.live ? { ...x, text: "⏳ " + t2 } : x)));
+      (async () => {
+        try {
+          const snap = snapshot(reply.research.scope.client, reply.research.scope.project);
+          const res = await runSeoResearch(reply.research, snap, ctx, onStep);
+          setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: res.text } : x)));
+        } catch (e) {
+          setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: "The research run failed: " + (e?.message || e) } : x)));
+        }
+        setBusy(false);
+      })();
+      return;
+    }
+    setTimeout(() => {
       setMessages((m) => [...m, { role: "agent", ...reply }]);
       setBusy(false);
     }, 700);

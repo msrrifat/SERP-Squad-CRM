@@ -1463,6 +1463,44 @@ function handleChatSince(req) {
   return [200, { ok: true, now, since, threads, typing }];
 }
 
+/* ===== SEO GUIDE KNOWLEDGE BASE ==========================================
+   The complete "Google SEO PRO Guides" corpus (Google Search Central docs,
+   60 chapters / 290 sections) lives in data/seo-guide.json. The AI agent
+   and any tool can pull the sections relevant to a question, so answers
+   quote Google's actual guidance instead of a model's recollection of it. */
+let seoGuideCache = null;
+const loadSeoGuide = () => (seoGuideCache ||= readJson(new URL("./knowledge/seo-guide.json", import.meta.url), []));
+
+function handleSeoGuideQuery(req, body) {
+  if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  const q = String(body?.q || "").toLowerCase();
+  const limit = Math.min(12, Math.max(1, +body?.limit || 6));
+  const terms = [...new Set(q.split(/[^a-z0-9-]+/).filter((w) => w.length > 2))];
+  if (!terms.length) return [400, { error: "bad_request", detail: "q (a question or topic) is required." }];
+  const scored = [];
+  for (const ch of loadSeoGuide()) {
+    for (const sec of ch.s || []) {
+      const head = (ch.t + " " + sec.h).toLowerCase();
+      const text = String(sec.x || "");
+      const lower = text.toLowerCase();
+      let score = 0;
+      for (const t of terms) {
+        if (head.includes(t)) score += 4;
+        let i = 0, c = 0;
+        while ((i = lower.indexOf(t, i)) >= 0 && c < 5) { c++; i += t.length; }
+        score += c;
+      }
+      if (score > 2) scored.push({ score, chapter: ch.t, heading: sec.h, text: text.slice(0, 2600) });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return [200, { ok: true, count: scored.length, sections: scored.slice(0, limit) }];
+}
+function handleSeoGuideToc(req) {
+  if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  return [200, { ok: true, chapters: loadSeoGuide().map((ch) => ({ title: ch.t, sections: (ch.s || []).map((x) => x.h) })) }];
+}
+
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
 function handleStateBackups(req) {
   const sess = sessionFromReq(req);
@@ -4852,6 +4890,7 @@ http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url.startsWith("/api/state/slice?")) { const [c2, p2] = handleStateSlice(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/chat/since")) { const [c2, p2] = handleChatSince(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url === "/api/seo-guide/toc") { const [c2, p2] = handleSeoGuideToc(req); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
     if (req.method === "GET" && req.url.startsWith("/api/oauth/social/callback")) {
       const html = await handleSocialCallback(req.url);
@@ -4885,7 +4924,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -4989,6 +5028,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/chat/react" ? handleChatReact(req, body)
         : req.url === "/api/chat/read" ? handleChatRead(req, body)
         : req.url === "/api/chat/typing" ? handleChatTyping(req, body)
+        : req.url === "/api/seo-guide" ? handleSeoGuideQuery(req, body)
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)

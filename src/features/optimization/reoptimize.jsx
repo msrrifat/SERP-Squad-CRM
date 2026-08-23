@@ -25,6 +25,7 @@ import { aiGenerate, brandVoiceBlock } from "../../lib/aiwrite.jsx";
 import { OptimizeControls, ResearchChecklist, defaultOptimizeSpec, optimizeRulesBlock } from "../../lib/optimizespec.jsx";
 import { realDfs } from "./indexcheck.jsx";
 import { useWork } from "../../lib/worklog.jsx";
+import { seoGuideBlock } from "../../lib/seoknowledge.js";
 
 const SYS_REOPT = `You are a senior SEO content strategist and writer who rewrites existing pages to outrank the current SERP.
 You write for humans first: concrete, specific, zero filler, no AI-sounding openers.
@@ -35,7 +36,7 @@ Description: <meta description, ≤160 chars, benefit + CTA>
 ---CONTENT---
 <pure markdown: one H1, then ## sections (### where a section has sub-blocks)>
 ---NOTES---
-<3-6 bullet lines: what you changed and why, each starting with "- ">`;
+<3-6 bullet lines: what you changed and why, each starting with "- ">` + "\n\n" + seoGuideBlock("writing", "titles", "links");
 
 /* Word-openable .doc (HTML with the Word MIME header) — no dependencies */
 const downloadDoc = (filename, title, markdown, meta) => {

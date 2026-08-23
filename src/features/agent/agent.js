@@ -14,6 +14,7 @@
    AI provider configured in Company Settings → API settings. The tools stay
    exactly these functions; only the natural-language layer changes. */
 import { genSiteData, hydrate } from "../../data/gen.js";
+import { detectResearch } from "./research.js";
 import { genPageQueries } from "../../lib/seo.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { isoDate } from "../../lib/months.jsx";
@@ -196,12 +197,34 @@ export function agentReply(input, ctx) {
   const s = snapshot(scoped.client, scoped.project);
   const cmp = monthsBack(q);
 
+  /* 2.5 SEO research lane — live crawls + the Google SEO PRO Guides corpus.
+     Detected BEFORE the generic intents so "audit the site" or "competitor
+     content gap" never falls through to a canned answer. The panel runs the
+     async work (research.js) and streams progress. */
+  const research = detectResearch(q);
+  if (research) {
+    if (ctx.isClient && research.kind !== "question") {
+      return { text: "Live audits, SERP reads and competitor research run on the agency side — ask your agency team for the report. I can answer general SEO questions anytime." };
+    }
+    const label = { site: `a full crawl and technical/content audit of ${scoped.project.name}'s website`,
+      gbp: `a live audit of ${scoped.project.name}'s Google Business Profile`,
+      serp: "a live read of the geo-targeted Google SERP",
+      competitors: "a live SERP read, competitor page analysis and content-gap comparison",
+      question: "the answer, checked against Google's official SEO documentation" }[research.kind];
+    return { text: `On it — running ${label}.`,
+      research: { ...research, input, scope: { client: scoped.client, project: scoped.project } } };
+  }
+
+
   /* 3. intents */
   if (/^(hi|hello|hey)\b|help|what can you/.test(q)) {
     return { text: [
       `Hi${ctx.userName ? " " + ctx.userName.split(" ")[0] : ""}! I'm scoped to ${ctx.allowed.length} project${ctx.allowed.length > 1 ? "s" : ""}: ${ctx.allowed.map((a) => a.project.name).join(", ")}.`,
       "Ask me things like:",
       "• \"overview\" / \"how is Bright Smile doing\"",
+      "• \"audit the website\" — I crawl every page live and report against Google's SEO guidelines",
+      "• \"audit our Google Business Profile\" · \"competitor content gap\" · \"who ranks for 'plumber near me'\"",
+      "• any SEO question — I answer from Google's official Search documentation",
       "• \"compare vs 6 months ago\"",
       "• \"keyword opportunities\" · \"rankings\"",
       ...(ctx.isClient ? [] : [

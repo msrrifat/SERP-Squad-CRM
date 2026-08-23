@@ -819,6 +819,11 @@ export default function App() {
     activeProjectId, isClient: false,
     userName: currentUser?.name,
     canPlan: pmPerms.manage, canReports,
+    /* SEO research lane: live crawls + AI analysis. aiConfig is declared
+       further down the component; a getter defers the read to click time. */
+    get aiConfig() { return aiConfig; },
+    placesKey: company.apis?.googlePlaces?.values?.apiKey,
+    dfsFor: (cid) => dfsForClient(clients.find((c) => c.id === cid)),
     assignableNames: (company.team || []).filter((m) => m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(activeProjectId))).map((m) => m.name),
   };
   const runAgentAction = (action) => {
