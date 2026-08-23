@@ -492,27 +492,46 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
 }
 
 
-export function CitySelect({ value, onChange, accent = "#0E7C66" }) {
+/* location picker — searches DataForSEO's OWN locations database (the exact
+   list the rank scans validate against) whenever credentials are connected,
+   so every town DataForSEO can scan is selectable: "newmarket" offers
+   "Newmarket, Ontario, Canada" AND the UK one. The built-in city list is only
+   the offline fallback, and free-text "add any city" is gone — a location
+   that isn't in DataForSEO's list could never be scanned anyway. */
+export function CitySelect({ value, onChange, accent = "#0E7C66", dfs = null }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [remote, setRemote] = useState(null);   // null = unavailable/idle, [] = searched & none
+  const [looking, setLooking] = useState(false);
   const boxRef = useRef(null);
   useEffect(() => {
     const close = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, []);
-  /* infer the country from a typed "City, UK" / "City, England" suffix */
-  const COUNTRIES = Object.keys(COUNTRY_LABEL);
-  const inferCountry = (s) => {
-    const tail = (s.split(",")[1] || "").trim().toLowerCase();
-    if (!tail) return "United States";
-    if (/^uk$|kingdom|england|scotland|wales|britain|gb$/.test(tail)) return "United Kingdom";
-    if (/^us$|usa|states|america/.test(tail)) return "United States";
-    return COUNTRIES.find((c) => c.toLowerCase().includes(tail) || tail.includes(c.toLowerCase())) || "United States";
+  const dfsReady = !!(dfs?.login && dfs?.password && !String(dfs.login).includes("demo@serpsquad"));
+  useEffect(() => {
+    if (!dfsReady || q.trim().length < 2) { setRemote(null); setLooking(false); return; }
+    let dead = false;
+    const t = setTimeout(async () => {
+      setLooking(true);
+      try {
+        /* the first search after a server restart caches the full list — long timeout */
+        const r = await fetch("/api/kw/locations", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(150000),
+          body: JSON.stringify({ q: q.trim(), dfs: { login: dfs.login, password: dfs.password } }) });
+        const d = await r.json().catch(() => ({}));
+        if (!dead) setRemote(r.ok ? (d.rows || []) : null);
+      } catch { if (!dead) setRemote(null); }
+      if (!dead) setLooking(false);
+    }, 350);
+    return () => { dead = true; clearTimeout(t); };
+  }, [q, dfsReady, dfs?.login, dfs?.password]); // eslint-disable-line
+  /* a picked DataForSEO name maps onto the tracker's {city, region, country} —
+     scans then resolve it back to the exact same location_name */
+  const fromDfsName = (name) => {
+    const parts = String(name).split(",").map((s) => s.trim()).filter(Boolean);
+    return { city: parts[0] || name, region: parts.length > 2 ? parts.slice(1, -1).join(", ") : "", country: parts[parts.length - 1] || "" };
   };
-  const [customCountry, setCustomCountry] = useState("United States");
-  useEffect(() => { if (q.includes(",")) setCustomCountry(inferCountry(q)); }, [q]); // eslint-disable-line
-  const cityPart = q.split(",")[0].trim();
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return ALL_CITIES.slice(0, 8);
@@ -521,12 +540,7 @@ export function CitySelect({ value, onChange, accent = "#0E7C66" }) {
       c.city.toLowerCase().includes(cp) || c.region.toLowerCase().includes(cp) || c.country.toLowerCase().includes(cp)
     ).slice(0, 8);
   }, [q]);
-  const exactMatch = results.some((c) => c.city.toLowerCase() === cityPart.toLowerCase());
-  const addCustom = () => {
-    if (!cityPart) return;
-    onChange({ city: cityPart, region: "", country: customCountry, custom: true });
-    setOpen(false); setQ("");
-  };
+  const showRemote = q.trim().length >= 2 && Array.isArray(remote) && remote.length > 0;
 
   return (
     <div ref={boxRef} className="relative">
@@ -537,39 +551,40 @@ export function CitySelect({ value, onChange, accent = "#0E7C66" }) {
             <MapPin size={13} className="text-gray-400" />
             {cityLabel(value)} <span className="text-[11px] text-gray-400">· {COUNTRY_LABEL[value.country] || value.country}</span>
           </span>
-        ) : <span className="text-gray-400">Search or type any city…</span>}
+        ) : <span className="text-gray-400">Search any city…</span>}
         <ChevronDown size={14} className="text-gray-400" />
       </button>
       {open && (
         <div className="absolute z-50 mt-1 w-full rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && cityPart && !exactMatch) addCustom(); }}
-            placeholder="Type any city — e.g. York, or York, UK"
+            placeholder={dfsReady ? "Search every city DataForSEO covers — e.g. Newmarket" : "Search a city…"}
             className="mb-1.5 w-full rounded-lg border border-gray-200 px-3 py-2 text-[13px]" />
           <div className="max-h-52 overflow-y-auto">
-            {results.map((c) => (
+            {showRemote && remote.map((r) => {
+              const c = fromDfsName(r.name);
+              return (
+                <button key={r.name} onClick={() => { onChange(c); setOpen(false); setQ(""); }}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] hover:bg-gray-50">
+                  <span className="min-w-0 truncate"><span className="font-medium">{c.city}</span>{c.region ? <span className="text-gray-400">, {c.region}</span> : null}</span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    {r.type && r.type !== "City" && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-gray-400">{r.type}</span>}
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">{COUNTRY_LABEL[c.country] || c.country}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {!showRemote && results.map((c) => (
               <button key={cityKey(c)} onClick={() => { onChange(c); setOpen(false); setQ(""); }}
                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] hover:bg-gray-50">
                 <span><span className="font-medium">{c.city}</span><span className="text-gray-400">, {c.region}</span></span>
                 <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">{COUNTRY_LABEL[c.country]}</span>
               </button>
             ))}
-            {/* free-text: add ANY city (DataForSEO validates it) — covers every town, not just the presets */}
-            {cityPart && !exactMatch && (
-              <div className="mt-1 rounded-lg border border-dashed border-gray-200 p-2">
-                <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-gray-500">
-                  <MapPin size={11} style={{ color: accent }} /> Add <b className="mx-0.5">"{cityPart}"</b> in
-                  <select value={customCountry} onChange={(e) => setCustomCountry(e.target.value)}
-                    className="ml-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold">
-                    {COUNTRIES.map((c) => <option key={c} value={c}>{COUNTRY_LABEL[c]}</option>)}
-                  </select>
-                </div>
-                <button onClick={addCustom} className="w-full rounded-lg py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
-                  Use "{cityPart}"
-                </button>
-              </div>
+            {looking && <div className="px-3 py-2 text-[11.5px] text-gray-400">Searching DataForSEO's locations… <span className="text-gray-300">(the first search after a restart caches the full list — up to a minute)</span></div>}
+            {!looking && q.trim().length >= 2 && !showRemote && results.length === 0 && (
+              <div className="px-3 py-2 text-[12px] text-gray-400">{dfsReady ? "No matching location in DataForSEO's database." : "No match — connect DataForSEO in API settings to search every city it covers."}</div>
             )}
-            {results.length === 0 && !cityPart && <div className="px-3 py-2 text-[12px] text-gray-400">Type a city name…</div>}
+            {results.length === 0 && !q.trim() && <div className="px-3 py-2 text-[12px] text-gray-400">Type a city name…</div>}
           </div>
         </div>
       )}
@@ -577,7 +592,7 @@ export function CitySelect({ value, onChange, accent = "#0E7C66" }) {
   );
 }
 
-export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent }) {
+export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent, dfs = null }) {
   const [domain, setDomain] = useState(project.website);
   const [keywords, setKeywords] = useState("");
   const [engine, setEngine] = useState("Google");
@@ -617,7 +632,7 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent 
             </Labeled>
           </div>
           <Labeled label="Targeted city">
-            <CitySelect value={city} onChange={setCity} accent={accent} />
+            <CitySelect value={city} onChange={setCity} accent={accent} dfs={dfs} />
           </Labeled>
           <Labeled label="Reporting type">
             <Seg options={["One time", "Recurring"]} value={reportingType} onChange={setReportingType} accent={accent} />
@@ -1411,7 +1426,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
       )}
 
       {showModal && (
-        <AddKeywordModal project={project} dfsConnected={dfsConnected} accent={accent} onClose={() => setShowModal(false)}
+        <AddKeywordModal project={project} dfsConnected={dfsConnected} accent={accent} dfs={dfs} onClose={() => setShowModal(false)}
           onAdd={(entries) => {
             onAdd(entries); setShowModal(false);
             /* real projects: run the initial scan right away so positions appear
