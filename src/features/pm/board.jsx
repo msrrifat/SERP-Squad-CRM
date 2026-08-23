@@ -109,6 +109,7 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
   const mayComment = perms.comment && (perms.admin || isAssignee);
   const done = flatTasks(record).filter((t) => t.completedAt).length;
   const total = flatTasks(record).length;
+  const taskMinutes = record.checklists.reduce((n, c) => n + c.tasks.reduce((n2, t) => n2 + (Math.round(+t.estMinutes || 0) || 0), 0), 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-3" onClick={onClose}>
@@ -147,7 +148,7 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
               </div>
             </div>
             {/* fixed fields */}
-            <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-6">
               <div>
                 <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Created at</div>
                 <div className="ll-mono mt-0.5 text-[12px] text-gray-600">{fmtTs2(record.createdAt)}</div>
@@ -169,9 +170,15 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
               </div>
               <div>
                 <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Due date</div>
-                <input type="date" value={record.dueDate || ""} disabled={!perms.manage}
-                  onChange={(e) => patch({ dueDate: e.target.value || null }, `set due date to ${fmtDay(e.target.value)}`)}
-                  className="ll-mono mt-0.5 rounded border border-gray-200 px-1.5 py-0.5 text-[11px]" />
+                {/* reads like Created / Completed; the picker sits invisibly on top */}
+                <div className="relative mt-0.5 inline-block">
+                  <span className="ll-mono text-[12px]" style={{ color: record.dueDate ? "#6B7280" : "#C3CAD6" }}>{record.dueDate ? fmtDay(record.dueDate) : "\u2014"}</span>
+                  {perms.manage && (
+                    <input type="date" value={record.dueDate || ""} title="Set due date" aria-label="Due date"
+                      onChange={(e) => patch({ dueDate: e.target.value || null }, e.target.value ? `set due date to ${fmtDay(e.target.value)}` : "cleared the due date")}
+                      className="absolute inset-0 w-full cursor-pointer opacity-0" style={{ minWidth: 24 }} />
+                  )}
+                </div>
               </div>
               <div>
                 <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Completed at</div>
@@ -185,6 +192,14 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                     </button>
                   )}
                 </div>
+              </div>
+              <div>
+                <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Est. time</div>
+                <div className="mt-0.5 text-[12px]">
+                  <TimeSpent minutes={record.estMinutes} size={12} canEdit={perms.manage}
+                    onCommit={(mins) => patch({ estMinutes: mins }, mins ? `set time taken to ${fmtMinutes(mins)}` : "cleared time taken")} />
+                </div>
+                {taskMinutes > 0 && <div className="mt-0.5 text-[9.5px] text-gray-400">Tasks add up to {fmtMinutes(taskMinutes)}</div>}
               </div>
             </div>
             {total > 0 && (
@@ -241,16 +256,28 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                               <span className="text-[8px] font-semibold uppercase tracking-wider text-gray-300">Created</span>
                               <span className="ll-mono text-[10px] leading-tight">{fmtTs2(t.createdAt)}</span>
                             </span>
+                            {/* Due reads like Created / Done — plain mono text; the
+                                date picker sits invisibly on top so clicking it still edits */}
                             <span className="flex flex-col items-start">
                               <span className="text-[8px] font-semibold uppercase tracking-wider" style={{ color: st === "overdue" ? NEG : "#D1D5DB" }}>Due</span>
-                              <input type="date" value={t.dueDate || ""} disabled={!perms.manage}
-                                onChange={(e) => mutTask(cl.id, t.id, (x) => ({ ...x, dueDate: e.target.value || null }), `set task due date to ${fmtDay(e.target.value)}`)}
-                                className="ll-mono w-[86px] rounded border border-gray-100 bg-transparent px-1 leading-tight"
-                                style={{ fontSize: 10, height: 16, color: st === "overdue" ? NEG : "#6B7280" }} />
+                              <span className="relative inline-block">
+                                <span className="ll-mono text-[10px] leading-tight" style={{ color: st === "overdue" ? NEG : t.dueDate ? "#6B7280" : "#C3CAD6" }}>{t.dueDate ? fmtDay(t.dueDate) : "\u2014"}</span>
+                                {perms.manage && (
+                                  <input type="date" value={t.dueDate || ""} title="Set due date" aria-label="Due date"
+                                    onChange={(e) => mutTask(cl.id, t.id, (x) => ({ ...x, dueDate: e.target.value || null }), e.target.value ? `set task due date to ${fmtDay(e.target.value)}` : "cleared task due date")}
+                                    className="absolute inset-0 w-full cursor-pointer opacity-0" style={{ minWidth: 22 }} />
+                                )}
+                              </span>
                             </span>
                             <span className="flex flex-col items-start">
                               <span className="text-[8px] font-semibold uppercase tracking-wider" style={{ color: t.completedAt ? POS : "#D1D5DB" }}>Done</span>
                               <span className="ll-mono text-[10px] leading-tight" style={{ color: t.completedAt ? POS : "#C3CAD6" }}>{t.completedAt ? fmtTs2(t.completedAt) : "\u2014"}</span>
+                            </span>
+                            {/* time the task took, as hours + minutes, in the same column style */}
+                            <span className="flex flex-col items-start">
+                              <span className="text-[8px] font-semibold uppercase tracking-wider" style={{ color: t.estMinutes ? "#6B7280" : "#D1D5DB" }}>Est. time</span>
+                              <TimeSpent minutes={t.estMinutes} canEdit={perms.manage || (perms.complete && t.assignees.includes(currentUser))}
+                                onCommit={(mins) => mutTask(cl.id, t.id, (x) => ({ ...x, estMinutes: mins }), mins ? `set time taken to ${fmtMinutes(mins)}` : "cleared time taken")} />
                             </span>
                             <div className="flex -space-x-1.5">
                               {t.assignees.map((a) => (
@@ -391,6 +418,35 @@ export function WikiView({ project, onUpdate, canEdit, accent, log }) {
         <div className="py-10 text-center text-[12.5px] text-gray-300">No wiki yet {canEdit ? "\u2014 click Edit wiki to describe this project for your team." : "."}</div>
       )}
     </Card>
+  );
+}
+
+/* ---- time taken on a task: hours + minutes --------------------------
+   Stored as one number (minutes) so totals are trivial to add up later;
+   edited as two small borderless fields that read like the date columns
+   beside them. Blank means "not recorded". */
+export const fmtMinutes = (mins) => {
+  const m = Math.max(0, Math.round(+mins || 0));
+  if (!m) return "\u2014";
+  const h = Math.floor(m / 60), r = m % 60;
+  return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m`;
+};
+function TimeSpent({ minutes, canEdit, onCommit, size = 10 }) {
+  const total = Math.max(0, Math.round(+minutes || 0));
+  const h = Math.floor(total / 60), m = total % 60;
+  const set = (hh, mm) => {
+    const next = Math.max(0, (parseInt(hh, 10) || 0)) * 60 + Math.min(59, Math.max(0, (parseInt(mm, 10) || 0)));
+    if (next !== total) onCommit(next || null);
+  };
+  if (!canEdit) return <span className="ll-mono leading-tight" style={{ fontSize: size, color: total ? "#6B7280" : "#C3CAD6" }}>{fmtMinutes(total)}</span>;
+  const field = "ll-mono w-[26px] bg-transparent p-0 text-right leading-tight outline-none focus:text-gray-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none";
+  return (
+    <span className="ll-mono flex items-baseline leading-tight" style={{ fontSize: size, color: total ? "#6B7280" : "#C3CAD6" }}>
+      <input type="number" min={0} value={total ? h : ""} placeholder="0" aria-label="Hours" title="Hours"
+        onChange={(e) => set(e.target.value, m)} className={field} style={{ fontSize: size, height: size + 4, width: size * 2.6 }} />h
+      <input type="number" min={0} max={59} value={total ? m : ""} placeholder="0" aria-label="Minutes" title="Minutes"
+        onChange={(e) => set(h, e.target.value)} className={field + " ml-1"} style={{ fontSize: size, height: size + 4, width: size * 2.6 }} />m
+    </span>
   );
 }
 
