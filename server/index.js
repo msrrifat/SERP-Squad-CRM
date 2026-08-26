@@ -4419,13 +4419,33 @@ const SOCIAL_PROVIDERS = {
     },
   },
   linkedin: {
-    label: "LinkedIn Page", credKey: "linkedinApp", pkce: false,
+    label: "LinkedIn", credKey: "linkedinApp", pkce: false,
     auth: "https://www.linkedin.com/oauth/v2/authorization",
     token: "https://www.linkedin.com/oauth/v2/accessToken",
     scope: "openid profile w_member_social",
+    /* the personal profile is always postable (w_member_social); company
+       Pages appear here only once LinkedIn grants the Community Management
+       API — the fetch simply finds none until then, never errors out. */
+    accounts: async (t) => {
+      const me = await fetch("https://api.linkedin.com/v2/userinfo", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      const list = me.sub ? [{ id: "member:" + me.sub, name: me.name || "Personal profile", handle: "Personal profile" }] : [];
+      try {
+        const r = await fetch("https://api.linkedin.com/v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&projection=(elements*(organization,organization~(localizedName)))",
+          { headers: { Authorization: "Bearer " + t, "X-Restli-Protocol-Version": "2.0.0" } });
+        if (r.ok) {
+          const d = await r.json();
+          (d.elements || []).forEach((e) => {
+            const org = e["organization~"];
+            if (e.organization && org?.localizedName) list.push({ id: e.organization, name: org.localizedName, handle: "Company Page" });
+          });
+        }
+      } catch { /* org access not granted yet — personal profile stands alone */ }
+      return list;
+    },
     profile: async (t) => {
-      const d = await fetch("https://api.linkedin.com/v2/userinfo", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
-      return d.name ? { name: d.name, handle: d.email || d.sub } : null;
+      const list = await SOCIAL_PROVIDERS.linkedin.accounts(t);
+      const p = list[0];
+      return p ? { name: p.name, handle: p.handle, selectedId: p.id, postAs: "member", accounts: list } : null;
     },
   },
   x: {
@@ -4444,10 +4464,17 @@ const SOCIAL_PROVIDERS = {
     token: "https://oauth2.googleapis.com/token",
     scope: "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload",
     extraAuth: { access_type: "offline", prompt: "consent" },
+    /* channels visible to THIS Google identity. A brand-account channel is a
+       different identity — Google's own account chooser at connect time is
+       where that choice happens; reconnecting switches it. */
+    accounts: async (t) => {
+      const d = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true&maxResults=50", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
+      return (d.items || []).map((c) => ({ id: c.id, name: c.snippet.title, handle: c.snippet.customUrl || c.id }));
+    },
     profile: async (t) => {
-      const d = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", { headers: { Authorization: "Bearer " + t } }).then((r) => r.json());
-      const c = d.items?.[0];
-      return c ? { name: c.snippet.title, handle: c.snippet.customUrl || c.id, channelId: c.id } : null;
+      const list = await SOCIAL_PROVIDERS.youtube.accounts(t);
+      const c = list[0];
+      return c ? { name: c.name, handle: c.handle, channelId: c.id, selectedId: c.id, accounts: list } : null;
     },
   },
   tiktok: {
@@ -4618,7 +4645,10 @@ function handleSocialSelect(body) {
   const acc = (d.extra?.accounts || []).find((a) => a.id === accountId);
   if (!acc) return [404, { error: "not_found", detail: "That page isn't in this connection — reload the page list." }];
   d.extra.selectedId = acc.id;
-  if (platform === "instagram") { d.extra.igId = acc.id; d.extra.igPageId = acc.pageId || null; } else d.extra.pageId = acc.id;
+  if (platform === "instagram") { d.extra.igId = acc.id; d.extra.igPageId = acc.pageId || null; }
+  else if (platform === "linkedin") { d.extra.postAs = acc.id.startsWith("member:") ? "member" : "organization"; d.extra.orgUrn = acc.id.startsWith("member:") ? null : acc.id; }
+  else if (platform === "youtube") d.extra.channelId = acc.id;
+  else d.extra.pageId = acc.id;
   d.name = acc.name; d.handle = acc.handle;
   writeFileSync(socialFile(owner, platform), JSON.stringify(d));
   return [200, { ok: true, selectedId: acc.id, name: acc.name, handle: acc.handle }];

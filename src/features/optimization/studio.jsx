@@ -89,7 +89,20 @@ export function OptimizationView({ project, accent, onUpdate, log, work = null, 
   };
   const effOpt = { ...opt, gbp: provOpt("gbp"), bing: provOpt("bing"), apple: provOpt("apple") };
 
-  const connectedSocial = opt.social.accounts.filter((a) => a.connected).length;
+  /* live connection count from the SERVER, where the tokens actually live —
+     the workspace `connected` flags predate the real OAuth connectors and
+     undercounted (showed 1 when six platforms were authorized). Primary and
+     secondary connector groups each have their own owner id. */
+  const [liveSocial, setLiveSocial] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    Promise.all([`${project.id}`, `${project.id}:2`].map((ownerId) =>
+      fetch("/api/social/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerId }) })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null)))
+      .then((rs) => { if (!dead) setLiveSocial(rs.reduce((n, d) => n + Object.keys(d?.accounts || {}).length, 0)); });
+    return () => { dead = true; };
+  }, [project.id]);
+  const connectedSocial = liveSocial ?? opt.social.accounts.filter((a) => a.connected).length;
   const PROPS = [
     { key: "brandvoice", label: "Brand Voice", icon: Mic, tool: true, on: !!(opt.brandVoice && (opt.brandVoice.toneWords || opt.brandVoice.brandInfo || (opt.brandVoice.files || []).length)), sub: (opt.brandVoice?.files || []).length ? `${opt.brandVoice.files.length} guideline file(s)` : "Writing guidelines & brand info" },
     { key: "gbp", label: "Google Business Profile", icon: GoogleGIcon, bp: true },

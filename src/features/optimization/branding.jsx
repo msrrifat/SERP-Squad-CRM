@@ -376,6 +376,19 @@ const SOCIAL_CRED_KEY = Object.fromEntries(SOCIAL_PLATFORMS.map((p) => [p.id, p.
 const LEGACY_CRED = { facebook: "meta", instagram: "meta" };
 const SOCIAL_REDIRECT = () => `${window.location.origin}/api/oauth/social/callback`;
 
+/* which platforms get the identity picker, and the honest platform limits */
+const PICKER_LABEL = {
+  facebook: "Page this project maintains",
+  instagram: "Account this project maintains",
+  linkedin: "Posts as",
+  youtube: "Channel this project maintains",
+};
+const PICKER_NOTE = {
+  facebook: "Meta's API can't post to personal profiles — only Pages the login manages appear here.",
+  linkedin: "Personal profile posts work now; your company Page appears here once LinkedIn approves Community Management API access.",
+  youtube: "A brand-account channel is a separate Google identity — to switch to one, disconnect and reconnect picking it in Google's account chooser.",
+};
+
 function SocialConnectors({ accounts, onPatch, accent, log, title, note, project, company, ownerSuffix = "" }) {
   const [editId, setEditId] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -544,11 +557,11 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
                 </div>
               </div>
             )}
-            {/* multi-page profiles: pick the ONE page this project maintains */}
-            {on && (a.id === "facebook" || a.id === "instagram") && (
-              <div className="flex items-center gap-2 border-t border-gray-50 px-3 py-2">
+            {/* multi-page profiles: pick the ONE identity this project posts as */}
+            {on && PICKER_LABEL[a.id] && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-gray-50 px-3 py-2">
                 <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-wide text-gray-400">
-                  {a.id === "instagram" ? "Account" : "Page"} this project maintains
+                  {PICKER_LABEL[a.id]}
                 </span>
                 {(on.pageOptions || []).length ? (
                   <select value={on.selectedId || ""} disabled={pickBusy === a.id}
@@ -566,6 +579,7 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
                   className="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-medium text-gray-500 hover:border-gray-300 disabled:opacity-50">
                   {pickBusy === a.id ? "…" : "Reload list"}
                 </button>
+                {PICKER_NOTE[a.id] && <span className="w-full text-[9.5px] leading-snug text-gray-400">{PICKER_NOTE[a.id]}</span>}
               </div>
             )}
             {editing && on && (
