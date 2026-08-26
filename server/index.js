@@ -4378,10 +4378,16 @@ const SOCIAL_PROVIDERS = {
     auth: "https://www.facebook.com/v21.0/dialog/oauth",
     token: "https://graph.facebook.com/v21.0/oauth/access_token",
     scope: "pages_show_list,pages_manage_posts,pages_read_engagement,business_management",
+    /* every Page the login manages — the project then picks which ONE it
+       maintains. The first is only the default, never the decision. */
+    accounts: async (t) => {
+      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=name,username,id&limit=100&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
+      return (me.data || []).map((p) => ({ id: p.id, name: p.name, handle: p.username ? "@" + p.username : p.id }));
+    },
     profile: async (t) => {
-      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=name,username,id&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
-      const p = me.data?.[0];
-      return p ? { name: p.name, handle: p.username ? "@" + p.username : p.id, pageId: p.id } : null;
+      const list = await SOCIAL_PROVIDERS.facebook.accounts(t);
+      const p = list[0];
+      return p ? { name: p.name, handle: p.handle, pageId: p.id, selectedId: p.id, accounts: list } : null;
     },
   },
   instagram: {
@@ -4389,10 +4395,17 @@ const SOCIAL_PROVIDERS = {
     auth: "https://www.facebook.com/v21.0/dialog/oauth",
     token: "https://graph.facebook.com/v21.0/oauth/access_token",
     scope: "instagram_basic,instagram_content_publish,pages_show_list,business_management",
+    accounts: async (t) => {
+      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=name,instagram_business_account{username,name}&limit=100&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
+      return (me.data || []).filter((x) => x.instagram_business_account).map((x) => {
+        const ig = x.instagram_business_account;
+        return { id: ig.id, name: ig.name || ig.username, handle: "@" + ig.username, pageId: x.id };
+      });
+    },
     profile: async (t) => {
-      const me = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account{username,name}&access_token=${encodeURIComponent(t)}`).then((r) => r.json());
-      const ig = me.data?.map((x) => x.instagram_business_account).find(Boolean);
-      return ig ? { name: ig.name || ig.username, handle: "@" + ig.username, igId: ig.id } : null;
+      const list = await SOCIAL_PROVIDERS.instagram.accounts(t);
+      const ig = list[0];
+      return ig ? { name: ig.name, handle: ig.handle, igId: ig.id, selectedId: ig.id, accounts: list } : null;
     },
   },
   threads: {
@@ -4561,9 +4574,54 @@ function handleSocialStatus(body) {
   const out = {};
   for (const platform of [...Object.keys(SOCIAL_PROVIDERS), "bluesky"]) {
     const d = readJson(socialFile(owner, platform), null);
-    if (d) out[platform] = { connected: true, name: d.name, handle: d.handle, at: d.at, scope: d.scope || null };
+    if (d) out[platform] = { connected: true, name: d.name, handle: d.handle, at: d.at, scope: d.scope || null,
+      pageOptions: d.extra?.accounts || null, selectedId: d.extra?.selectedId || d.extra?.pageId || d.extra?.igId || null };
   }
   return [200, { ok: true, accounts: out, available: [...Object.keys(SOCIAL_PROVIDERS), "bluesky"] }];
+}
+
+/* ---- WHICH page does this project maintain? -------------------------
+   A Facebook login can manage many Pages (an agency profile usually does).
+   The connection stores them all; each project picks exactly one, and that
+   choice is what every publish path reads. */
+async function handleSocialPages(body) {
+  const owner = String(body?.ownerId || "").trim();
+  const platform = String(body?.platform || "");
+  const p = SOCIAL_PROVIDERS[platform];
+  if (!owner || !p) return [400, { error: "bad_request", detail: "ownerId and a known platform required" }];
+  if (!p.accounts) return [400, { error: "single_account", detail: `${p.label} connections carry a single account — nothing to choose.` }];
+  const d = readJson(socialFile(owner, platform), null);
+  if (!d) return [404, { error: "not_connected", detail: `${p.label} isn't connected for this project.` }];
+  try {
+    const list = await p.accounts(d.accessToken);
+    if (list.length) {
+      d.extra = { ...(d.extra || {}), accounts: list };
+      if (!list.some((a) => a.id === d.extra.selectedId)) {
+        const first = list[0];
+        d.extra.selectedId = first.id;
+        if (platform === "instagram") d.extra.igId = first.id; else d.extra.pageId = first.id;
+        d.name = first.name; d.handle = first.handle;
+      }
+      writeFileSync(socialFile(owner, platform), JSON.stringify(d));
+    }
+    return [200, { ok: true, accounts: d.extra?.accounts || [], selectedId: d.extra?.selectedId || null }];
+  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e).slice(0, 140) }]; }
+}
+
+function handleSocialSelect(body) {
+  const owner = String(body?.ownerId || "").trim();
+  const platform = String(body?.platform || "");
+  const accountId = String(body?.accountId || "").trim();
+  if (!owner || !platform || !accountId) return [400, { error: "bad_request", detail: "ownerId, platform and accountId required" }];
+  const d = readJson(socialFile(owner, platform), null);
+  if (!d) return [404, { error: "not_connected", detail: "Not connected." }];
+  const acc = (d.extra?.accounts || []).find((a) => a.id === accountId);
+  if (!acc) return [404, { error: "not_found", detail: "That page isn't in this connection — reload the page list." }];
+  d.extra.selectedId = acc.id;
+  if (platform === "instagram") { d.extra.igId = acc.id; d.extra.igPageId = acc.pageId || null; } else d.extra.pageId = acc.id;
+  d.name = acc.name; d.handle = acc.handle;
+  writeFileSync(socialFile(owner, platform), JSON.stringify(d));
+  return [200, { ok: true, selectedId: acc.id, name: acc.name, handle: acc.handle }];
 }
 
 function handleSocialDisconnect(body) {
@@ -4943,7 +5001,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5054,6 +5112,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/social/start" ? handleSocialStart(body)
         : req.url === "/api/social/status" ? handleSocialStatus(body)
         : req.url === "/api/social/disconnect" ? handleSocialDisconnect(body)
+        : req.url === "/api/social/pages" ? await handleSocialPages(body)
+        : req.url === "/api/social/select" ? handleSocialSelect(body)
         : req.url === "/api/social/bluesky" ? await handleSocialBluesky(body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)

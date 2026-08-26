@@ -446,6 +446,33 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
     setBusyId(null);
   };
 
+  /* which Page/account of the connected profile THIS project maintains —
+     a Facebook login usually manages several; the choice is stored on the
+     server next to the token, so every publish path reads the same answer */
+  const [pickBusy, setPickBusy] = useState(null);
+  const choosePage = async (platform, accountId, label) => {
+    setPickBusy(platform); setErr(null);
+    try {
+      const r = await fetch("/api/social/select", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerId, platform, accountId }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(d.detail || "Could not set the page.");
+      else { await refresh(); log?.(`Set ${label} page to ${d.name || accountId}`, project.name); }
+    } catch { setErr("API server unreachable."); }
+    setPickBusy(null);
+  };
+  const reloadPages = async (platform) => {
+    setPickBusy(platform); setErr(null);
+    try {
+      const r = await fetch("/api/social/pages", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerId, platform }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(d.detail || "Could not load the page list.");
+      else await refresh();
+    } catch { setErr("API server unreachable."); }
+    setPickBusy(null);
+  };
+
   const disconnect = async (platform, label) => {
     if (!await askDisconnect(label)) return;
     await fetch("/api/social/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerId, platform }) });
@@ -515,6 +542,30 @@ function SocialConnectors({ accounts, onPatch, accent, log, title, note, project
                   </button>
                   <button onClick={() => setBsky(null)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] text-gray-500">Cancel</button>
                 </div>
+              </div>
+            )}
+            {/* multi-page profiles: pick the ONE page this project maintains */}
+            {on && (a.id === "facebook" || a.id === "instagram") && (
+              <div className="flex items-center gap-2 border-t border-gray-50 px-3 py-2">
+                <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-wide text-gray-400">
+                  {a.id === "instagram" ? "Account" : "Page"} this project maintains
+                </span>
+                {(on.pageOptions || []).length ? (
+                  <select value={on.selectedId || ""} disabled={pickBusy === a.id}
+                    onChange={(e) => choosePage(a.id, e.target.value, a.label)}
+                    className="ll-mono min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11.5px] text-gray-700">
+                    {(on.pageOptions || []).map((pg) => (
+                      <option key={pg.id} value={pg.id}>{pg.name} {pg.handle && pg.handle !== pg.id ? `(${pg.handle})` : ""}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="ll-mono flex-1 truncate text-[11px] text-gray-400">{on.name || "—"}</span>
+                )}
+                <button onClick={() => reloadPages(a.id)} disabled={pickBusy === a.id}
+                  title="Re-fetch the list of pages this login manages"
+                  className="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-medium text-gray-500 hover:border-gray-300 disabled:opacity-50">
+                  {pickBusy === a.id ? "…" : "Reload list"}
+                </button>
               </div>
             )}
             {editing && on && (
