@@ -537,6 +537,10 @@ const GOOGLE_SCOPES = [
      why the check below asks for a reconnect rather than letting Google
      return a confusing permission error. */
   "https://www.googleapis.com/auth/business.manage",
+  /* Google Ads — without this scope the Ads dashboards can list nothing,
+     regardless of the developer token. Same reconnect rule as Business
+     Profile: tokens minted before this was added don't carry it. */
+  "https://www.googleapis.com/auth/adwords",
   "openid", "email",
 ];
 const GBP_SCOPE = "https://www.googleapis.com/auth/business.manage";
