@@ -595,7 +595,7 @@ function ConnectAdsModal({ platform, project, company, accent, current, onConnec
     try {
       const res = await fetch("/api/ads/accounts", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({ platform, creds }),
+        body: JSON.stringify({ platform, creds, connectionId: project?.google?.connectionId || null }),
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok) setAccounts({ live: true, items: d.accounts || [] });
@@ -703,7 +703,7 @@ function CampaignWizard({ draft, setDraft, project, accent, aiConfig, accounts, 
       try {
         const res = await fetch("/api/ads/publish", {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({ platform: c.platform, accountId: acct.id, campaign: { name: c.name, objective: c.objective, budget: c.budget, budgetType: c.budgetType } }),
+          body: JSON.stringify({ platform: c.platform, accountId: acct.id, connectionId: project?.google?.connectionId || null, campaign: { name: c.name, objective: c.objective, budget: c.budget, budgetType: c.budgetType } }),
         });
         const d = await res.json().catch(() => ({}));
         if (res.ok) { onSave({ ...c, demo: false, providerCampaignId: d.campaignId, providerNote: d.note }, true); return; }

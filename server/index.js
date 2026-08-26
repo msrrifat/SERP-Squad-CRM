@@ -2061,14 +2061,32 @@ async function handleProfileListings(body) {
    "live" data. The UI offers a clearly-labeled demo mode instead. */
 const ADS_META = {
   meta:     { name: "Meta Ads",     needs: "Marketing API access token (Company Settings → API settings → Meta Ads)" },
-  google:   { name: "Google Ads",   needs: "Google OAuth access token + developer token (API settings → Google Ads API)" },
+  google:   { name: "Google Ads",   needs: "a Google connection (Project settings → Data sources → Connect Google, reconnected after Aug 2026 so it carries the Ads permission) plus the developer token in Company Settings → API settings → Google Ads API" },
   tiktok:   { name: "TikTok Ads",   needs: "Marketing API access token (API settings → TikTok Ads)" },
   reddit:   { name: "Reddit Ads",   needs: "OAuth client + refresh token (API settings → Reddit Ads)" },
   nextdoor: { name: "Nextdoor Ads", needs: "NAM API key (API settings → Nextdoor Ads)" },
   yelp:     { name: "Yelp Ads",     needs: "Yelp partner API key (API settings → Yelp Ads; partner approval required)" },
 };
 const adsToken = (body, envKey) => body?.creds?.accessToken || body?.creds?.apiKey || process.env[envKey];
-const no503 = (platform) => [503, { error: "not_configured", detail: `${ADS_META[platform].name} is not connected. ${ADS_META[platform].needs}.` }];
+const no503 = (platform) => [503, { error: "not_configured", detail: `${ADS_META[platform].name} is not connected. Needs: ${ADS_META[platform].needs}.` }];
+/* Google Ads auth: an access token minted from the project's stored Google
+   connection (same refresh-token store GA4/GSC use) + the developer token.
+   Nothing in the browser ever holds a Google access token. */
+async function googleAdsAuth(body) {
+  const dev = body?.creds?.developerToken || process.env.GOOGLE_ADS_DEV_TOKEN;
+  if (!dev) return null;
+  let tk = body?.creds?.oauthToken || null;
+  if (!tk && body?.connectionId) {
+    try { tk = (await googleAccess(body.connectionId)).accessToken; }
+    catch (e) { throw Object.assign(new Error("The project's Google connection failed to authorize: " + String(e?.message || e).slice(0, 120) + ". Reconnect Google in Project settings → Data sources (the Ads permission is only on connections made after the Ads scope was added)."), { adsAuth: true }); }
+  }
+  if (!tk) tk = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || null;
+  if (!tk) return null;
+  const headers = { Authorization: "Bearer " + tk, "developer-token": dev };
+  const mcc = String(body?.creds?.loginCustomerId || "").replace(/[^0-9]/g, "");
+  if (mcc) headers["login-customer-id"] = mcc;
+  return headers;
+}
 const provErr = (name, r, extra) => [502, { error: "provider_error", detail: `${name} rejected the request (HTTP ${r.status})${extra ? ": " + extra : ""}` }];
 
 async function handleAdsAccounts(body) {
@@ -2082,11 +2100,9 @@ async function handleAdsAccounts(body) {
       return [200, { live: true, accounts: (d.data || []).map((a) => ({ id: a.account_id, name: a.name, currency: a.currency })) }];
     }
     if (pf === "google") {
-      const tk = body?.creds?.oauthToken || process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
-      const dev = body?.creds?.developerToken || process.env.GOOGLE_ADS_DEV_TOKEN;
-      if (!tk || !dev) return no503(pf);
-      const r = await fetch("https://googleads.googleapis.com/v16/customers:listAccessibleCustomers", {
-        headers: { Authorization: "Bearer " + tk, "developer-token": dev } });
+      const headers = await googleAdsAuth(body);
+      if (!headers) return no503(pf);
+      const r = await fetch("https://googleads.googleapis.com/v16/customers:listAccessibleCustomers", { headers });
       const d = await r.json(); if (!r.ok) return provErr("Google Ads", r, d.error?.message);
       return [200, { live: true, accounts: (d.resourceNames || []).map((rn) => ({ id: rn.replace("customers/", ""), name: rn })) }];
     }
@@ -2114,7 +2130,7 @@ async function handleAdsAccounts(body) {
       const d = await r.json(); if (!r.ok) return provErr("Yelp", r, d.error?.description);
       return [200, { live: true, accounts: [{ id: d.id, name: d.name }] }];
     }
-  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e) }]; }
+  } catch (e) { return [e?.adsAuth ? 503 : 502, { error: e?.adsAuth ? "not_configured" : "provider_error", detail: String(e?.message || e) }]; }
 }
 
 async function handleAdsMetrics(body) {
@@ -2129,12 +2145,11 @@ async function handleAdsMetrics(body) {
       return [200, { live: true, rows: d.data || [] }];
     }
     if (pf === "google") {
-      const tk = body?.creds?.oauthToken || process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
-      const dev = body?.creds?.developerToken || process.env.GOOGLE_ADS_DEV_TOKEN;
-      if (!tk || !dev) return no503(pf);
+      const headers = await googleAdsAuth(body);
+      if (!headers) return no503(pf);
       const gaql = `SELECT segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`;
       const r = await fetch(`https://googleads.googleapis.com/v16/customers/${encodeURIComponent(acct)}/googleAds:searchStream`, {
-        method: "POST", headers: { Authorization: "Bearer " + tk, "developer-token": dev, "content-type": "application/json" },
+        method: "POST", headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ query: gaql }) });
       const d = await r.json(); if (!r.ok) return provErr("Google Ads", r, d[0]?.error?.message || d.error?.message);
       return [200, { live: true, rows: d }];
@@ -2142,7 +2157,7 @@ async function handleAdsMetrics(body) {
     /* TikTok / Reddit / Nextdoor / Yelp reporting endpoints follow the same shape */
     const tk = adsToken(body, pf.toUpperCase() + "_ADS_TOKEN"); if (!tk) return no503(pf);
     return [502, { error: "provider_error", detail: `${ADS_META[pf].name} reporting call not reachable from this environment.` }];
-  } catch (e) { return [502, { error: "provider_error", detail: String(e?.message || e) }]; }
+  } catch (e) { return [e?.adsAuth ? 503 : 502, { error: e?.adsAuth ? "not_configured" : "provider_error", detail: String(e?.message || e) }]; }
 }
 
 async function handleAdsPublish(body) {
