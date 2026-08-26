@@ -1,6 +1,5 @@
-# Only the marketing homepage is meant for search engines.
-# /privacy and /terms stay crawlable (Google's OAuth verification fetches
-# them) but carry a robots noindex meta tag; everything else is app UI.
+# The marketing homepage and the public legal pages (/privacy, /terms) are
+# crawlable and indexable; everything else is app UI.
 User-agent: *
 Allow: /$
 Allow: /privacy$

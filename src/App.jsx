@@ -224,6 +224,10 @@ export default function App() {
   }, [hydrated, clients]); // eslint-disable-line
   useEffect(() => {
     if (!hydrated || !deepLinked.current) return;
+    /* the marketing homepage and the public legal pages may be indexed */
+    let m = document.querySelector('meta[name="robots"]');
+    if (!m) { m = document.createElement("meta"); m.name = "robots"; document.head.appendChild(m); }
+    m.content = ["/", "/privacy", "/terms"].includes(window.location.pathname) ? "index,follow" : "noindex,nofollow";
     if (["/privacy", "/terms"].includes(window.location.pathname)) return; // public pages own their URL
     const want = pathForState();
     if (window.location.pathname !== want) {
@@ -231,10 +235,6 @@ export default function App() {
       else history.pushState(null, "", want);
     }
     popNav.current = false;
-    /* only the marketing homepage may be indexed */
-    let m = document.querySelector('meta[name="robots"]');
-    if (!m) { m = document.createElement("meta"); m.name = "robots"; document.head.appendChild(m); }
-    m.content = window.location.pathname === "/" ? "index,follow" : "noindex,nofollow";
   }); // runs after every render — cheap, and never misses a navigation source
 
   /* on load with a token: pull the persisted workspace from the server and
