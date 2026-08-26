@@ -50,7 +50,7 @@ const Reveal = ({ children, delay = 0, className = "" }) => {
 };
 
 /* ---------- hero visuals ---------- */
-/* the REAL geo-grid look: radial scan pins over actual map tiles (same CARTO
+/* the REAL geo-grid look: radial scan pins over actual map tiles (same OSM
    basemap the tracker itself renders), healing red → green in a ripple */
 const lon2x = (lon, z) => ((lon + 180) / 360) * 256 * 2 ** z;
 const lat2y = (lat, z) => { const r = (lat * Math.PI) / 180; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 256 * 2 ** z; };
@@ -83,8 +83,8 @@ function MapGridHero() {
         {/* one subdomain only: a single preconnected HTTP/2 connection beats
             sharding, and the LCP tile gets fetchpriority=high */}
         {tiles.map((tl, i) => (
-          <img key={i} alt="" draggable={false} fetchpriority="high" src={`https://a.basemaps.cartocdn.com/rastertiles/voyager/${HERO_Z}/${tl.tx}/${tl.ty}.png`}
-            className="pointer-events-none absolute select-none" style={{ left: tl.left, top: tl.top, width: 256, height: 256 }} />
+          <img key={i} alt="" draggable={false} fetchpriority="high" src={`https://tile.openstreetmap.org/${HERO_Z}/${tl.tx}/${tl.ty}.png`}
+            className="pointer-events-none absolute select-none" style={{ left: tl.left, top: tl.top, width: 256, height: 256, filter: "saturate(0.82)" }} />
         ))}
         {pins.map((p, i) => {
           const x = HERO_W / 2 + p.ring * STEP * Math.sin(p.a);
@@ -101,7 +101,7 @@ function MapGridHero() {
             </div>
           );
         })}
-        <span className="absolute bottom-0 right-0 rounded-tl bg-white/85 px-1.5 py-0.5 text-[8px] text-gray-500">© OpenStreetMap © CARTO</span>
+        <span className="absolute bottom-0 right-0 rounded-tl bg-white/85 px-1.5 py-0.5 text-[8px] text-gray-500">© OpenStreetMap contributors</span>
       </div>
       <div className="ll-mono flex items-center gap-4 border-t border-gray-100 px-3.5 py-2 text-[9.5px] font-bold text-gray-500">
         <span>ARP <b className="text-gray-800">#2.4</b></span>

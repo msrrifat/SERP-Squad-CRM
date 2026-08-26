@@ -1129,8 +1129,8 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
   return (
     <div className="relative mx-auto overflow-hidden rounded-xl border border-gray-200" style={{ width: px, height: px, maxWidth: "100%" }}>
       {tiles.map((t, i) => (
-        <img key={i} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${t.tx}/${t.ty}.png`}
-          className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256 }} draggable={false} crossOrigin="anonymous" />
+        <img key={i} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
+          className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256, filter: "saturate(0.82)" }} draggable={false} crossOrigin="anonymous" />
       ))}
       {/* soften the basemap (building blocks read as dark noise behind the grid) —
           streets/labels stay visible, rank bubbles stay the hero */}
@@ -1156,7 +1156,7 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
           </div>
         );
       })}
-      <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OSM © CARTO</span>
+      <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OpenStreetMap contributors</span>
     </div>
   );
 }
