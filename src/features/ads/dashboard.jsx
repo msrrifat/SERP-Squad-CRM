@@ -148,7 +148,14 @@ async function aiGenerate(ai, { system, prompt, json = false, maxTokens = 1200 }
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(240000),
     body: JSON.stringify({ provider: ai.provider, apiKey: ai.key, model: ai.model, system, prompt, json, maxTokens }),
   });
-  if (res.ok) return (await res.json()).text;
+  /* a deploy restarts the API for ~20s; the web server then answers with the
+     app page instead of JSON — surface that as a human retry message, never
+     as "Unexpected token '<'" */
+  if (res.ok) {
+    const d = await res.json().catch(() => null);
+    if (!d) { const e = new Error("The API server is restarting (a deploy just finished) — try again in a few seconds."); e.code = 503; throw e; }
+    return d.text;
+  }
   const err = await res.json().catch(() => ({}));
   const e = new Error(err.detail || err.error || `HTTP ${res.status}`); e.code = res.status; throw e;
 }
