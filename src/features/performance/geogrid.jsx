@@ -17,8 +17,9 @@ import { startScanJob, useScanJobs } from "../../lib/scanjobs.js";
    targeted Google Maps SERP requests via DataForSEO (location_coordinate
    "lat,lng,15z") — each point returns what a searcher at that spot sees.
    Business matched by place_id/CID first, normalized name second.
-   The result map is REAL OpenStreetMap tiles with rank bubbles projected via
-   Web-Mercator math — no map library, no API key, proper attribution. */
+   The result map is REAL OpenStreetMap standard tiles (street + neighborhood
+   detail) with rank bubbles projected via Web-Mercator math — no map library,
+   no API key, proper attribution. */
 
 /* ---------- metrics ---------- */
 export const gridMetrics = (points) => {
@@ -131,9 +132,12 @@ const latToY = (lat, z) => {
   return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 256 * 2 ** z;
 };
 const zoomFor = (extentKm, lat, px) => {
-  // ground resolution m/px = 156543.03392 * cos(lat) / 2^z  →  fit extent into px
+  // ground resolution m/px = 156543.03392 * cos(lat) / 2^z  →  fit extent into px.
+  // Round (not floor): the extent already carries a 35% margin, so the nearest
+  // level still fits the grid while sitting up to a full level closer — where
+  // the basemap draws neighborhoods and road names instead of bare city labels.
   const z = Math.log2((156543.03392 * Math.cos((lat * Math.PI) / 180) * px) / (extentKm * 1000));
-  return Math.max(3, Math.min(18, Math.floor(z)));
+  return Math.max(3, Math.min(18, Math.round(z)));
 };
 
 const xToLon = (x, z) => (x / (256 * 2 ** z)) * 360 - 180;
@@ -186,10 +190,12 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
         style={{ height: PX_H, cursor: drag.current ? "grabbing" : "grab" }}
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}
         onWheel={(e) => { e.preventDefault(); setZ((cur) => Math.max(3, Math.min(19, cur + (e.deltaY < 0 ? 1 : -1)))); }}>
-        {/* CARTO light basemap — the clean Google-Maps-like style from the reference */}
+        {/* OSM standard basemap — far denser street/neighborhood labeling than
+           CARTO voyager at grid-fitting zooms (suburbs from ~z12, road names
+           from ~z13); slight desaturation keeps the rank bubbles dominant */}
         {tiles.map((t, i) => (
-          <img key={`${z}-${t.tx}-${t.ty}-${i}`} alt="" src={`https://${"abcd"[(t.tx + t.ty) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${t.tx}/${t.ty}.png`}
-            className="pointer-events-none absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256 }} draggable={false} />
+          <img key={`${z}-${t.tx}-${t.ty}-${i}`} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
+            className="pointer-events-none absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256, filter: "saturate(0.82)" }} draggable={false} />
         ))}
         {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
           const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
@@ -223,7 +229,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
             <Crosshair size={14} />
           </button>
         </div>
-        <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1.5 py-0.5 text-[9px] text-gray-500">© OpenStreetMap contributors © CARTO</span>
+        <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1.5 py-0.5 text-[9px] text-gray-500">© OpenStreetMap contributors</span>
       </div>
       <Legend size={size} spacingKm={spacingKm} count={points.filter((p) => !p.skipped).length} radial={points.some((p) => p.ring != null)} />
     </div>
