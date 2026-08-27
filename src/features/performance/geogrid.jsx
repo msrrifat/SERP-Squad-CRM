@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import {
   ArrowLeft, Building2, Calendar, ChevronDown, Crosshair, List, MapPin, Plus,
@@ -140,10 +141,34 @@ const zoomFor = (extentKm, lat, px) => {
   return Math.max(3, Math.min(18, Math.round(z)));
 };
 
+/* one scan-point bubble + change badge — shared by the OSM and Google canvases */
+function RankBubble({ p, half, bubble, prev, preview, left, top }) {
+  const isCenter = isCenterPt(p, half);
+  const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
+  const top3 = (p.results || []).slice(0, 3);
+  return (
+    <div className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
+      title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not ranked in the scanned results"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
+      <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
+        style={preview
+          ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
+          : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
+        {preview ? "+" : p.error ? "!" : p.rank ?? "100+"}
+      </div>
+      {delta != null && delta !== 0 && (
+        <span className="absolute flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow-md"
+          style={{ right: -bubble * 0.14, top: -bubble * 0.14, height: bubble * 0.44, minWidth: bubble * 0.44, fontSize: bubble * 0.24, padding: "0 3px", color: delta > 0 ? "#16A34A" : "#DC2626" }}>
+          {delta > 0 ? `+${delta}` : delta}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const xToLon = (x, z) => (x / (256 * 2 ** z)) * 360 - 180;
 const yToLat = (y, z) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / (256 * 2 ** z)))) * 180) / Math.PI;
 
-export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, height = 660, preview = false }) {
+function OsmMapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, height = 660, preview = false }) {
   const points = fillCoords(rawPts, center, size, spacingKm);
   const wrapRef = useRef(null);
   const [pxW, setPxW] = useState(900);           // full card width — measured live, no wasted side space
@@ -200,27 +225,7 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
         {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
           const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
           if (left < -60 || left > pxW + 60 || top < -60 || top > PX_H + 60) return null;
-          const isCenter = isCenterPt(p, half);
-          const prev = prevAt(p);
-          const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
-          const top3 = (p.results || []).slice(0, 3);
-          return (
-            <div key={`${p.row}-${p.col}`} className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
-              title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not ranked in the scanned results"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
-              <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
-                style={preview
-                  ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
-                  : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
-                {preview ? "+" : p.error ? "!" : p.rank ?? "100+"}
-              </div>
-              {delta != null && delta !== 0 && (
-                <span className="absolute flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow-md"
-                  style={{ right: -bubble * 0.14, top: -bubble * 0.14, height: bubble * 0.44, minWidth: bubble * 0.44, fontSize: bubble * 0.24, padding: "0 3px", color: delta > 0 ? "#16A34A" : "#DC2626" }}>
-                  {delta > 0 ? `+${delta}` : delta}
-                </span>
-              )}
-            </div>
-          );
+          return <RankBubble key={`${p.row}-${p.col}`} p={p} half={half} bubble={bubble} prev={prevAt(p)} preview={preview} left={left} top={top} />;
         })}
         <div className="absolute bottom-4 right-4 flex flex-col gap-1.5">
           <button className={zoomBtn} onClick={(e) => { e.stopPropagation(); setZ((c) => Math.min(19, c + 1)); }} onPointerDown={(e) => e.stopPropagation()}>+</button>
@@ -234,6 +239,102 @@ export function MapCanvas({ center, points: rawPts, size, spacingKm, prevPoints,
       <Legend size={size} spacingKm={spacingKm} count={points.filter((p) => !p.skipped).length} radial={points.some((p) => p.ring != null)} />
     </div>
   );
+}
+
+/* ---------- Google Maps basemap (the real Google look) ----------
+   Used automatically when a Google API key is configured in API settings
+   (the same key the grid uses for Places lookup) AND the key can load the
+   Maps JavaScript API. Any failure — no key, API not enabled on the key,
+   billing problem — falls back to the OSM canvas, silently and forever
+   for the session (gm_authFailure is global and unrecoverable). The
+   public share page never calls setMapsKey, so the key stays off it. */
+let MAPS_KEY = null;
+let gmFailed = false;
+const gmSubs = new Set();
+export const setMapsKey = (k) => { MAPS_KEY = k || null; };
+let mapsPromise = null;
+function loadMapsJs(key) {
+  if (gmFailed || !key) return Promise.resolve(false);
+  if (window.google?.maps?.Map) return Promise.resolve(true);
+  if (!mapsPromise) {
+    mapsPromise = new Promise((resolve) => {
+      const fail = () => { gmFailed = true; gmSubs.forEach((f) => f()); resolve(false); };
+      window.gm_authFailure = fail;                 // Google calls this on key/API/billing errors
+      window.__ssMapsReady = () => resolve(true);
+      const sc = document.createElement("script");
+      sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__ssMapsReady`;
+      sc.async = true;
+      sc.onerror = fail;
+      document.head.appendChild(sc);
+    });
+  }
+  return mapsPromise;
+}
+
+function GoogleMapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, height = 660, preview = false }) {
+  const points = fillCoords(rawPts, center, size, spacingKm);
+  const half = (size - 1) / 2;
+  const wrapRef = useRef(null), mapRef = useRef(null), overlayRef = useRef(null), initZRef = useRef(13);
+  const [ready, setReady] = useState(false);
+  const [zoom, setZoom] = useState(13);
+  const [, setTick] = useState(0);                  // bumped by draw() → bubbles reproject
+  const extentKm = Math.max(0.5, half * 2 * spacingKm * 1.35);
+
+  useEffect(() => {
+    let dead = false;
+    loadMapsJs(MAPS_KEY).then((ok) => {
+      if (dead || !ok || !wrapRef.current || mapRef.current) return;
+      const g = window.google.maps;
+      const initZ = zoomFor(extentKm, center.lat, Math.min(wrapRef.current.clientWidth || 900, height));
+      initZRef.current = initZ;
+      const map = new g.Map(wrapRef.current, {
+        center: { lat: center.lat, lng: center.lng }, zoom: initZ,
+        disableDefaultUI: true, zoomControl: true, clickableIcons: false,
+        gestureHandling: "greedy", backgroundColor: "#e8eaed",
+      });
+      mapRef.current = map;
+      setZoom(initZ);
+      const self = { setReady, setZoom, setTick };
+      class GridOverlay extends g.OverlayView {
+        onAdd() { this.holder = document.createElement("div"); this.holder.style.position = "absolute"; this.getPanes().overlayMouseTarget.appendChild(this.holder); self.setReady(true); }
+        draw() { self.setZoom(this.getMap().getZoom()); self.setTick((t) => t + 1); }
+        onRemove() { this.holder?.remove(); this.holder = null; }
+      }
+      const ov = new GridOverlay();
+      ov.setMap(map);
+      overlayRef.current = ov;
+    });
+    return () => { dead = true; overlayRef.current?.setMap(null); overlayRef.current = null; mapRef.current = null; };
+  }, []); // eslint-disable-line
+  useEffect(() => { mapRef.current?.setCenter({ lat: center.lat, lng: center.lng }); }, [center.lat, center.lng]);
+
+  const ov = overlayRef.current;
+  const proj = ready && ov?.getProjection?.();
+  const base = size >= 11 ? 34 : size >= 9 ? 40 : 46;
+  const bubble = Math.max(28, Math.min(60, base + (zoom - initZRef.current) * 6));
+  const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
+
+  return (
+    <div className="w-full">
+      <div className="relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#e8eaed]" style={{ height }}>
+        <div ref={wrapRef} className="absolute inset-0" />
+        {proj && ov?.holder && createPortal(
+          points.filter((p) => !p.skipped && p.lat != null).map((p) => {
+            const px = proj.fromLatLngToDivPixel(new window.google.maps.LatLng(p.lat, p.lng));
+            if (!px) return null;
+            return <RankBubble key={`${p.row}-${p.col}`} p={p} half={half} bubble={bubble} prev={prevAt(p)} preview={preview} left={px.x} top={px.y} />;
+          }), ov.holder)}
+      </div>
+      <Legend size={size} spacingKm={spacingKm} count={points.filter((p) => !p.skipped).length} radial={points.some((p) => p.ring != null)} />
+    </div>
+  );
+}
+
+/* the exported map: Google basemap when a key is set and healthy, OSM otherwise */
+export function MapCanvas(props) {
+  const [, force] = useState(0);
+  useEffect(() => { const f = () => force((x) => x + 1); gmSubs.add(f); return () => gmSubs.delete(f); }, []);
+  return MAPS_KEY && !gmFailed ? <GoogleMapCanvas {...props} /> : <OsmMapCanvas {...props} />;
 }
 
 /* abstract fallback when the business has no coordinates yet */
@@ -562,6 +663,7 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
    full, but everything that runs, edits, shares or deletes is absent, and the
    scheduled auto-run must NEVER fire from a client's browser (scans are paid). */
 export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [], readOnly = false }) {
+  setMapsKey(placesKey); // maps on this screen use the Google basemap when the key allows it
   const geo = project.geoGrid || {};
   const gbpLoc = project.opt?.gbp || {};
   const bizBase = geo.business || { name: gbpLoc.bizName || project.name, address: gbpLoc.address || "" };
