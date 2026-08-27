@@ -433,23 +433,30 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       <Card className="p-5">
         <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
         {topRanked.length > 0 ? (
-          <div className="grid gap-2">
-            {topRanked.map((t, i) => (
-              <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span className="ll-mono w-5 shrink-0 text-right text-[11px] font-semibold text-gray-400">{i + 1}.</span>
-                  <div className="min-w-0">
-                    <div className="truncate text-[13px] font-medium text-gray-800">{t.keyword}</div>
-                    <div className="flex items-center gap-1 text-[11px] text-gray-400"><MapPin size={11} /> {cityLabel(t.city)}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <RankChip pos={t.stats.cur} />
-                  <PosChange value={t.change} />
-                </div>
-              </div>
-            ))}
-          </div>
+          <table className="w-full text-left text-[13px]">
+            <thead>
+              <tr className="border-b border-gray-100 text-[10px] uppercase tracking-wider text-gray-400">
+                <th className="w-6 py-2 pr-1 font-semibold"></th>
+                <th className="py-2 pr-3 font-semibold">Keyword</th>
+                <th className="py-2 pr-3 font-semibold">Location</th>
+                <th className="py-2 pr-3 font-semibold">Position</th>
+                <th className="py-2 font-semibold">30d</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topRanked.map((t, i) => (
+                <tr key={i} className="border-b border-gray-50 last:border-0">
+                  <td className="ll-mono py-2 pr-1 text-right text-[11px] font-semibold text-gray-400">{i + 1}.</td>
+                  <td className="py-2 pr-3"><span className="block max-w-44 truncate font-medium text-gray-800" title={t.keyword}>{t.keyword}</span></td>
+                  <td className="py-2 pr-3 text-[12px] text-gray-500">
+                    <span className="inline-flex max-w-36 items-center gap-1"><MapPin size={11} className="shrink-0 text-gray-400" /><span className="truncate" title={cityLabel(t.city)}>{cityLabel(t.city)}</span></span>
+                  </td>
+                  <td className="py-2 pr-3"><RankChip pos={t.stats.cur} /></td>
+                  <td className="py-2"><PosChange value={t.change} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : (
           <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
             <Target size={17} className="text-gray-300" />
