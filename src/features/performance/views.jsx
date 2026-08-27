@@ -237,7 +237,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   const srcRows = (liveMode && gaLive
     ? (gaLive.sources || []).map((x) => ({ name: x.name, value: x.value, pct: x.prev > 0 ? pctDelta(x.value, x.prev) : null }))
     : (data.sources || []).map((s2) => ({ name: s2.name, value: s2.series?.[12] ?? 0, pct: pctDelta(s2.series?.[12], s2.series?.[12 - cmp]) }))
-  ).filter((x) => x.value > 0).sort((x, y) => y.value - x.value).slice(0, 8);
+  ).filter((x) => x.value > 0).sort((x, y) => y.value - x.value).slice(0, 14);
   const maxSrc = Math.max(...srcRows.map((x) => x.value), 1);
   const topRanked = [...tracking]
     .filter((t) => t.stats.cur != null)
@@ -429,7 +429,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       </Card>
 
       {/* top ranked keywords + traffic sources — honest empty states */}
-      <div className="grid items-start gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
       <Card className="p-5">
         <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
         {topRanked.length > 0 ? (
