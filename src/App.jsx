@@ -1260,6 +1260,9 @@ export default function App() {
       const u = updates.find((x) => x.id === t.id);
       return u ? { ...t, sv: u.sv } : t;
     }) }));
+  /* per-widget client-visibility toggle (the eye on each dashboard widget) */
+  const setWidgetFlag = (group, key, val) =>
+    updateProject((p) => ({ widgets: { ...p.widgets, [group]: { ...(p.widgets?.[group] || {}), [key]: val } } }));
   const applyRerun = (updates) => {
     const ts = Date.now();
     /* functional update: scans finish long after the click, and keywords may
@@ -1795,7 +1798,7 @@ export default function App() {
               regardless of the demo/aggregated `data` and need no connection. */}
           {project && activeSection === "performance" && SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} onSetPaused={setTrackingPaused} readOnly={!canKeywords} dfs={activeDfs} />}
+              {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} onSetPaused={setTrackingPaused} readOnly={!canKeywords} dfs={activeDfs} clientView={clientView} onSetWidget={setWidgetFlag} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
                   dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
@@ -1805,7 +1808,7 @@ export default function App() {
           {/* real project (no demo data): the Overview ALWAYS renders its designed
               layout — live Google data inside it, "Not connected" cards elsewhere */}
           {project && !data && activeSection === "performance" && activeView === "overview" && (
-            <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} liveMode />
+            <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} liveMode onSetWidget={setWidgetFlag} />
           )}
           {/* the web view ALWAYS offers the Google integration — unconnected it
               shows the "Connect Google" flow right here (it used to hide in the
@@ -1825,9 +1828,9 @@ export default function App() {
             && activeView !== "web" && <NoDataPanel project={project} accent={accent} />}
           {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
             <>
-              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} />}
-              {activeView === "gbp" && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
-              {activeView === "web" && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />}
+              {activeView === "overview" && <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView={clientView} onSetWidget={setWidgetFlag} />}
+              {activeView === "gbp" && <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} clientView={clientView} onSetWidget={setWidgetFlag} />}
+              {activeView === "web" && <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} clientView={clientView} onSetWidget={setWidgetFlag} />}
               {activeView === "adsperf" && <Lazy><AdsPerformanceView project={project} accent={accent} /></Lazy>}
             </>
           )}

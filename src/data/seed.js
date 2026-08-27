@@ -18,6 +18,7 @@ import { findCity } from "../lib/geo.js";
 import { isoDate } from "../lib/months.jsx";
 
 export const DEFAULT_WIDGETS = {
+  overview: { snapshot: true, social: true, trend: true, topKeywords: true },
   gbp: { views: true, breakdown: true, calls: true, directions: true, websiteClicks: true, searchKeywords: true, platformDevice: true },
   bing: { impressions: true, clicks: true, calls: true, directions: true },
   apple: { views: true, calls: true, directions: true, websiteTaps: true },

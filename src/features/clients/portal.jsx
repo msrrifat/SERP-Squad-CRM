@@ -694,20 +694,20 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
                 ? <OverviewView project={project} data={data} tracking={tracking} cmp={cmp} accent={accent} clientView />
                 : <OverviewView project={project} data={liveData} tracking={tracking} cmp={cmp} accent={accent} clientView liveMode />)}
               {/* rank trackers pull their OWN real data — they render with or without `data` */}
-              {activeView === "ranks" && ranksShown && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly />}
+              {activeView === "ranks" && ranksShown && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly clientView />}
               {activeView === "geogrid" && geogridShown && (
                 <React.Suspense fallback={viewLoader}>
                   <GeoGridViewLazy project={project} accent={accent} onUpdate={() => {}} dfs={{}} readOnly />
                 </React.Suspense>
               )}
               {activeView === "gbp" && gbpShown && (data
-                ? <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} />
+                ? <GbpView project={project} data={data} range={range} setRange={setRange} accent={accent} clientView />
                 : <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
                     Your Business Profile dashboards are being connected — data appears here as soon as your
                     SEO team finishes linking the profile sources. Nothing is shown until it's real.
                   </Card>)}
               {activeView === "web" && webShown && (data
-                ? <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} />
+                ? <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} clientView />
                 : googleConnected
                   ? <React.Suspense fallback={viewLoader}><GoogleLiveDataLazy project={project} accent={accent} /></React.Suspense>
                   : <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">

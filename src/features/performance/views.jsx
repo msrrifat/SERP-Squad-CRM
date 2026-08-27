@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  Activity, AlignLeft, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardPaste, Clock, Columns3, Copy, Eye, Facebook, FileText as FileTextIcon, Folder, FolderOpen, Globe, History, ImagePlus, Instagram, KeyRound, LayoutDashboard, Link2, Linkedin, List, ListOrdered, ListTodo, Lock, LogIn, LogOut, MapPin, MessageSquare, Minus, Monitor, Moon, MousePointerClick, Music2, Navigation, Palette, Pause, Phone, PieChart as PieIcon, Pin, Play, Plus, Printer, Quote, Receipt, RefreshCw, Rocket, Search, Send, Settings, Settings2, Share2, Shield, Smartphone, Sparkles, Star, Sun, Table2, Target, Trash2, Twitter, Type, Upload, UserPlus, Users, Wallet, X, Youtube, Zap,
+  Activity, AlignLeft, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardPaste, Clock, Columns3, Copy, Eye, Facebook, FileText as FileTextIcon, Folder, FolderOpen, Globe, History, ImagePlus, Instagram, KeyRound, LayoutDashboard, Link2, Linkedin, List, ListOrdered, ListTodo, Lock, LogIn, LogOut, MapPin, MessageSquare, Minus, Monitor, Moon, MousePointerClick, Music2, Navigation, Palette, Pause, Phone, PieChart as PieIcon, Pin, Play, Plus, Printer, Quote, Receipt, RefreshCw, Rocket, EyeOff, Search, Send, Settings, Settings2, Share2, Shield, Smartphone, Sparkles, Star, Sun, Table2, Target, Trash2, Twitter, Type, Upload, UserPlus, Users, Wallet, X, Youtube, Zap,
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
@@ -160,7 +160,33 @@ export function SocialSearchSection({ project, accent }) {
   );
 }
 
-export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView, liveMode = false }) {
+/* ---- per-widget client visibility ------------------------------------
+   widgets[group][key] !== false = the CLIENT sees this block on their
+   dashboard (and in client reports). The agency dashboard always renders
+   every widget; when an edit callback is provided, each one carries an
+   eye toggle in its top-right corner — EyeOff (always visible, amber)
+   means hidden from clients, Eye (on hover) means visible. Client portal
+   and the agency's "Client view" preview pass no callback, so disabled
+   widgets disappear there — the flags behave exactly as before. */
+export function makeVis(widgets, set) {
+  return function Vis(g, k, node) {
+    const on = widgets?.[g]?.[k] !== false;
+    if (!set) return on ? node : null;
+    return (
+      <div className="group/vis relative">
+        <div className={on ? undefined : "opacity-60"}>{node}</div>
+        <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
+          title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
+          className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-opacity " +
+            (on ? "border-gray-200 text-gray-400 opacity-0 hover:text-gray-600 focus:opacity-100 group-hover/vis:opacity-100" : "border-amber-300 text-amber-500 hover:text-amber-600")}>
+          {on ? <Eye size={13} /> : <EyeOff size={13} />}
+        </button>
+      </div>
+    );
+  };
+}
+
+export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView, liveMode = false, onSetWidget = null }) {
   const [metric, setMetric] = useState("gbpViews");
   /* the comparison window lives here now (moved out of the top bar);
      the AI agent still drives it through the cmp prop */
@@ -168,6 +194,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   useEffect(() => { setCmp(cmpDefault); }, [cmpDefault]);
   const cur = data.months[12], prev = data.months[12 - cmp];
   const W = project.widgets;
+  const Vis = makeVis(W, clientView ? null : onSetWidget);
   /* liveMode: GA/GSC count as connected only when a real Google source is
      picked in Data sources — the integration flags alone can predate it */
   const I = liveMode
@@ -276,7 +303,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       {/* comparison picker: STICKY — stays reachable however far the page scrolls */}
       <div className="no-print sticky top-2 z-30 -mb-2 flex shadow-sm" style={{ width: "fit-content", marginLeft: "auto" }}>{cmpPicker}</div>
       {/* insight strip */}
-      {summary.length > 0 && (
+      {summary.length > 0 && Vis("overview", "snapshot",
         <Card className="overflow-hidden p-0">
           <div className="flex items-center gap-2 px-5 pt-4">
             <span className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: accent + "18", color: accent }}><Activity size={13} /></span>
@@ -295,14 +322,14 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       {/* KPI cards — the designed grid is always present; unconnected sources
           render a NotConnectedCard instead of disappearing */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {W.gbp.views && (anyProfile ? (
+        {Vis("gbp", "views", anyProfile ? (
           <StatCard icon={Eye} label="Profile views" source={[I.gbp && "GBP", I.bing && "BING", I.apple && "APPLE"].filter(Boolean).join("+")} accent={accent}
             value={fmt(profileViewsSeries[12])} pct={pctDelta(profileViewsSeries[12], profileViewsSeries[12 - cmp])}
             spark={profileViewsSeries} sub="all business profiles" />
         ) : (
           <NotConnectedCard icon={Eye} label="Profile views" hint="Connect Google Business Profile, Bing Places or Apple Maps in Project settings → Data sources." />
         ))}
-        {W.gbp.calls && (anyProfile ? (
+        {Vis("gbp", "calls", anyProfile ? (
           <StatCard icon={Phone} label="Phone calls" source={[anyProfile && "PROFILES", I.ga && "GA4"].filter(Boolean).join("+")} accent={accent}
             value={fmt(callsSeries[12])} pct={pctDelta(callsSeries[12], callsSeries[12 - cmp])}
             spark={callsSeries} sub="profiles + call events" />
@@ -317,7 +344,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         ) : (
           <NotConnectedCard icon={Phone} label="Phone calls" hint="Syncs from business profiles and GA4 call events once connected." />
         ))}
-        {W.ga.users && (liveMode ? (gaLive ? (
+        {Vis("ga", "users", liveMode ? (gaLive ? (
           <StatCard icon={Users} label="Website users" source="GA4" accent={accent}
             value={fmt(gaLive.totals.users)} pct={halfDelta(gaSeries("users"))}
             spark={gaSeries("users")} sub={`last ${liveDays} days · live`} />
@@ -332,7 +359,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         ) : (
           <NotConnectedCard icon={Users} label="Website users" hint="Connect Google Analytics 4 in Project settings → Data sources." />
         ))}
-        {W.gsc.clicks && (liveMode ? (gscLive ? (
+        {Vis("gsc", "clicks", liveMode ? (gscLive ? (
           <StatCard icon={MousePointerClick} label="Search clicks" source="GSC" accent={accent}
             value={fmt(gscLive.totals.clicks)} pct={halfDelta(gscSeries("clicks"))}
             spark={gscSeries("clicks")} sub={`last ${liveDays} days · live`} />
@@ -347,31 +374,31 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         ) : (
           <NotConnectedCard icon={MousePointerClick} label="Search clicks" hint="Connect Google Search Console in Project settings → Data sources." />
         ))}
-        {W.ranks.insights && (tracking.length > 0 ? (<>
-          <StatCard icon={Target} label="Avg. rank position" source="Ranks" accent={accent}
+        {tracking.length > 0 ? (<>
+          {Vis("ranks", "insights", <StatCard icon={Target} label="Avg. rank position" source="Ranks" accent={accent}
             value={avgNow != null ? "#" + avgNow.toFixed(1) : "—"} pct={avgPrev != null && avgNow != null ? pctDelta(avgNow, avgPrev) : null} invert
-            spark={LABELS.map((_, i) => avgPosDaysAgo(tracking, (12 - i) * 30)).filter((v) => v != null)} />
-          <StatCard icon={Target} label="Keywords in top 3" source="Ranks" accent={accent}
-            value={top3} pct={top3 - top3Prev} deltaSuffix="" sub="vs comparison" />
+            spark={LABELS.map((_, i) => avgPosDaysAgo(tracking, (12 - i) * 30)).filter((v) => v != null)} />)}
+          {Vis("ranks", "insights", <StatCard icon={Target} label="Keywords in top 3" source="Ranks" accent={accent}
+            value={top3} pct={top3 - top3Prev} deltaSuffix="" sub="vs comparison" />)}
         </>) : (
-          <NotConnectedCard icon={Target} label="Keyword rankings" hint="Track keywords in Website Rank Tracking to see ranking insights here." />
-        ))}
-        {liveMode && gaLive && gaLive.events?.[0] && (
+          Vis("ranks", "insights", <NotConnectedCard icon={Target} label="Keyword rankings" hint="Track keywords in Website Rank Tracking to see ranking insights here." />)
+        )}
+        {liveMode && gaLive && gaLive.events?.[0] && Vis("ga", "events", 
           <StatCard icon={Zap} label={gaLive.events[0].name} source="GA4" accent={accent}
             value={fmt(gaLive.events[0].value)} pct={halfDelta(gaLive.events[0].series)}
             spark={gaLive.events[0].series} sub={`top event · last ${liveDays} days`} />
         )}
-        {!liveMode && I.ga && W.ga.events && (
+        {!liveMode && I.ga && Vis("ga", "events", 
           <StatCard icon={Zap} label={topEvents[0]?.name || "events"} source="GA4" accent={accent}
             value={fmt(topEvents[0]?.series[12])} pct={pctDelta(topEvents[0]?.series[12], topEvents[0]?.series[12 - cmp])}
             spark={topEvents[0]?.series} sub="top event" />
         )}
-        {liveMode && gaLive && W.ga.conversions && (
+        {liveMode && gaLive && Vis("ga", "conversions", 
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
             value={fmt(gaLive.totals.conversions)} pct={halfDelta(gaSeries("conversions"))}
             spark={gaSeries("conversions")} sub={`last ${liveDays} days · live`} />
         )}
-        {!liveMode && I.ga && W.ga.conversions && (
+        {!liveMode && I.ga && Vis("ga", "conversions", 
           <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent}
             value={fmt(cur.ga.conversions)} pct={pctDelta(cur.ga.conversions, prev.ga.conversions)}
             spark={data.months.map((m) => m.ga.conversions)} />
@@ -381,10 +408,11 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       {/* social profiles in Google Search — after the core 8, one block per
           platform: impressions left, clicks right, deltas vs the selected
           comparison window */}
-      <SocialSearchCards project={project} liveMode={liveMode} cmp={cmp} days={liveDays} accent={accent} />
+      {Vis("overview", "social", <SocialSearchCards project={project} liveMode={liveMode} cmp={cmp} days={liveDays} accent={accent} />)}
 
       {/* range-aware trend — the card is always present; without any connected
           source it shows an honest empty state instead of a flat zero line */}
+      {Vis("overview", "trend",
       <Card className="p-5">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -426,10 +454,11 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
             <Area type="monotone" dataKey="value" name={mCfg.label} stroke={mCfg.color} strokeWidth={2.4} fill="url(#ovGrad)" dot={chartData.length <= 6 ? { r: 3, fill: mCfg.color } : false} activeDot={{ r: 5 }} />
           </AreaChart>
         </ResponsiveContainer>}
-      </Card>
+      </Card>)}
 
       {/* top ranked keywords + traffic sources — honest empty states */}
       <div className="grid gap-4 lg:grid-cols-2">
+      {Vis("overview", "topKeywords",
       <Card className="p-5">
         <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
         {topRanked.length > 0 ? (
@@ -464,8 +493,8 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
             <div className="text-[11px] text-gray-400">Add keywords in Website Rank Tracking — the best-ranking ones appear here.</div>
           </div>
         )}
-      </Card>
-      {W.ga.sources && (
+      </Card>)}
+      {Vis("ga", "sources",
         <Card className="p-5">
           <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">GA4 · sessions · {liveMode && gaLive ? `last ${liveDays} days · live` : "this month"}</span></div>
           <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines, social, direct and AI assistants</div>
@@ -719,7 +748,8 @@ const FeatBadge = ({ cur, prev }) => {
   return <span className={"absolute -bottom-1.5 -right-1.5 rounded border border-gray-100 bg-white px-0.5 text-[8px] font-bold leading-[11px] shadow-sm " + (d > 0 ? "text-emerald-600" : "text-red-500")}>{d > 0 ? "\u25b2" : "\u25bc"}{Math.abs(d)}</span>;
 };
 
-export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, onSetPaused = null, readOnly = false, dfs }) {
+export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, onSetPaused = null, readOnly = false, dfs, clientView = false, onSetWidget = null }) {
+  const Vis = makeVis(project.widgets, clientView ? null : onSetWidget);
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -1092,7 +1122,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     <div className="ll-fade space-y-5">
       {/* sticky compare bar — DIRECT child of the view root so it stays pinned
           for the entire page, not just the stat-card block */}
-      {W.insights && (
+      {Vis("ranks", "insights", 
         <div className="no-print sticky top-2 z-30 flex justify-end">
           <div className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1.5 shadow-sm">
             <span className="mx-1 text-[10.5px] font-medium uppercase tracking-wide text-gray-400">Compare vs</span>
@@ -1106,7 +1136,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
           </div>
         </div>
       )}
-      {W.insights && (
+      {Vis("ranks", "insights", 
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
             <StatCard icon={Target} label="Keywords tracked" source="Ranks" accent={accent} value={rows.length} sub={`${cities.length} cit${cities.length === 1 ? "y" : "ies"}`} />
@@ -1119,7 +1149,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         </div>
       )}
 
-      {W.distribution && rows.length > 0 && (
+      {rows.length > 0 && Vis("ranks", "distribution", 
         <Card className="p-5">
           <div className="ll-display mb-3 text-[15px] font-semibold">Ranking distribution</div>
           <ResponsiveContainer width="100%" height={120}>
@@ -1133,7 +1163,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         </Card>
       )}
 
-      {W.table && (
+      {Vis("ranks", "table", 
         <Card className="overflow-hidden">
           {/* tab bar: live table ↔ dated scan history */}
           <div className="flex items-center gap-1 border-b border-gray-100 px-5 pt-2 no-print">
@@ -1524,7 +1554,8 @@ function ProfileNotConnected({ name, accent, location }) {
   );
 }
 
-export function GbpView({ project, data, range, setRange, accent }) {
+export function GbpView({ project, data, range, setRange, accent, clientView = false, onSetWidget = null }) {
+  const Vis = makeVis(project.widgets, clientView ? null : onSetWidget);
   /* location groups: franchise projects hold one profile set per location */
   const locs = data.locations || [];
   const [locId, setLocId] = useState(locs.length > 1 ? "all" : (locs[0]?.id || "all"));
@@ -1705,14 +1736,14 @@ export function GbpView({ project, data, range, setRange, accent }) {
       {provider === "gbp" && !I.gbp && <ProfileNotConnected name="Google Business Profile" accent={accent} location={locSel?.name} />}
       {provider === "gbp" && I.gbp && (<>
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {W.views && <StatCard icon={Eye} label="Total profile views" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.views))} pct={ptc((m) => m.gbp.views)} spark={spark((m) => m.gbp.views)} />}
-        {W.calls && <StatCard icon={Phone} label="Calls" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.calls))} pct={ptc((m) => m.gbp.calls)} spark={spark((m) => m.gbp.calls)} />}
-        {W.directions && <StatCard icon={Navigation} label="Direction requests" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.directions))} pct={ptc((m) => m.gbp.directions)} spark={spark((m) => m.gbp.directions)} />}
-        {W.websiteClicks && <StatCard icon={Globe} label="Website clicks" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.websiteClicks))} pct={ptc((m) => m.gbp.websiteClicks)} spark={spark((m) => m.gbp.websiteClicks)} />}
+        {Vis("gbp", "views", <StatCard icon={Eye} label="Total profile views" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.views))} pct={ptc((m) => m.gbp.views)} spark={spark((m) => m.gbp.views)} />)}
+        {Vis("gbp", "calls", <StatCard icon={Phone} label="Calls" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.calls))} pct={ptc((m) => m.gbp.calls)} spark={spark((m) => m.gbp.calls)} />)}
+        {Vis("gbp", "directions", <StatCard icon={Navigation} label="Direction requests" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.directions))} pct={ptc((m) => m.gbp.directions)} spark={spark((m) => m.gbp.directions)} />)}
+        {Vis("gbp", "websiteClicks", <StatCard icon={Globe} label="Website clicks" source="GBP" accent={accent} value={fmt(tot((m) => m.gbp.websiteClicks))} pct={ptc((m) => m.gbp.websiteClicks)} spark={spark((m) => m.gbp.websiteClicks)} />)}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {W.breakdown && (
+        {Vis("gbp", "breakdown", 
           <Card className="p-5">
             <div className="ll-display mb-4 text-[15px] font-semibold">Where people found you <span className="text-xs font-normal text-gray-400">Search vs Maps · {LABELS[a]} – {LABELS[b]}</span></div>
             <ResponsiveContainer width="100%" height={240}>
@@ -1746,7 +1777,7 @@ export function GbpView({ project, data, range, setRange, accent }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-5">
-        {W.platformDevice && (
+        {Vis("gbp", "platformDevice", 
           <Card className="p-5 lg:col-span-2">
             <div className="ll-display mb-2 text-[15px] font-semibold">Views by platform & device <span className="text-xs font-normal text-gray-400">selected range</span></div>
             <ResponsiveContainer width="100%" height={170}>
@@ -1770,7 +1801,7 @@ export function GbpView({ project, data, range, setRange, accent }) {
             </div>
           </Card>
         )}
-        {W.searchKeywords && (
+        {Vis("gbp", "searchKeywords", 
           <Card className="overflow-hidden lg:col-span-3">
             <div className="border-b border-gray-100 px-5 py-4">
               <div className="ll-display text-[15px] font-semibold">Searches by keywords</div>
@@ -1811,7 +1842,8 @@ export function GbpView({ project, data, range, setRange, accent }) {
   );
 }
 
-export function WebsitePerformanceView({ project, data, range, setRange, accent }) {
+export function WebsitePerformanceView({ project, data, range, setRange, accent, clientView = false, onSetWidget = null }) {
+  const Vis = makeVis(project.widgets, clientView ? null : onSetWidget);
   /* keyword opportunities: GSC queries per page — same generator the
      Optimization Studio editors use, so both surfaces always agree */
   const [oppOpen, setOppOpen] = useState(null);
@@ -1887,10 +1919,10 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
         <>
           <SectionHeader icon={BarChart3} title="Website traffic & conversions" sub={`Google Analytics 4 · ${rangeLabel}`} accent={accent} />
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {Wga.users && <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.users))} pct={ptc((m) => m.ga.users)} spark={spark((m) => m.ga.users)} />}
-            {Wga.sessions && <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.sessions))} pct={ptc((m) => m.ga.sessions)} spark={spark((m) => m.ga.sessions)} />}
-            {Wga.engagement && <StatCard icon={MousePointerClick} label="Engagement rate" source="GA4" accent={accent} value={(data.engRate * 100).toFixed(0) + "%"} pct={null} sub="range average" />}
-            {Wga.conversions && <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.conversions))} pct={ptc((m) => m.ga.conversions)} spark={spark((m) => m.ga.conversions)} />}
+            {Vis("ga", "users", <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.users))} pct={ptc((m) => m.ga.users)} spark={spark((m) => m.ga.users)} />)}
+            {Vis("ga", "sessions", <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.sessions))} pct={ptc((m) => m.ga.sessions)} spark={spark((m) => m.ga.sessions)} />)}
+            {Vis("ga", "engagement", <StatCard icon={MousePointerClick} label="Engagement rate" source="GA4" accent={accent} value={(data.engRate * 100).toFixed(0) + "%"} pct={null} sub="range average" />)}
+            {Vis("ga", "conversions", <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent} value={fmt(tot((m) => m.ga.conversions))} pct={ptc((m) => m.ga.conversions)} spark={spark((m) => m.ga.conversions)} />)}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-5">
@@ -1908,7 +1940,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
                 </LineChart>
               </ResponsiveContainer>
             </Card>
-            {Wga.channels && (
+            {Vis("ga", "channels", 
               <Card className="p-5 lg:col-span-2">
                 <div className="ll-display mb-2 text-[15px] font-semibold">Traffic channels <span className="text-xs font-normal text-gray-400">{rangeLabel}</span></div>
                 <ResponsiveContainer width="100%" height={190}>
@@ -1932,7 +1964,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            {Wga.sources && (
+            {Vis("ga", "sources", 
               <Card className="p-5">
                 <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">sessions · {rangeLabel}</span></div>
                 <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines, social, direct and AI assistants</div>
@@ -1952,7 +1984,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
                 </div>
               </Card>
             )}
-            {Wga.events && (
+            {Vis("ga", "events", 
               <Card className="overflow-hidden">
                 <div className="border-b border-gray-100 px-5 py-4">
                   <div className="ll-display text-[15px] font-semibold">Event counts</div>
@@ -1982,7 +2014,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
             )}
           </div>
 
-          {Wga.topPages && (
+          {Vis("ga", "topPages", 
             <Card className="overflow-hidden">
               <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top landing pages <span className="text-xs font-normal text-gray-400">latest month</span></div>
               <table className="w-full text-left text-[13px]">
@@ -2012,10 +2044,10 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
         <>
           <SectionHeader icon={Search} title="Organic search visibility" sub={`Google Search Console · ${rangeLabel}`} accent={accent} />
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {Wgsc.clicks && <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(clicksSeg)} pct={ptc((m) => m.gsc.clicks)} spark={spark((m) => m.gsc.clicks)} />}
-            {Wgsc.impressions && <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(imprSeg)} pct={ptc((m) => m.gsc.impressions)} spark={spark((m) => m.gsc.impressions)} />}
-            {Wgsc.ctr && <StatCard icon={Target} label="Avg. CTR" source="GSC" accent={accent} value={ctrNow.toFixed(1) + "%"} pct={ctrPrev != null ? pctDelta(ctrNow, ctrPrev) : null} />}
-            {Wgsc.position && <StatCard icon={Search} label="Avg. position" source="GSC" accent={accent} value={"#" + posNow.toFixed(1)} pct={posPrev != null ? pctDelta(posNow, posPrev) : null} invert spark={spark((m) => m.gsc.position)} />}
+            {Vis("gsc", "clicks", <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(clicksSeg)} pct={ptc((m) => m.gsc.clicks)} spark={spark((m) => m.gsc.clicks)} />)}
+            {Vis("gsc", "impressions", <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(imprSeg)} pct={ptc((m) => m.gsc.impressions)} spark={spark((m) => m.gsc.impressions)} />)}
+            {Vis("gsc", "ctr", <StatCard icon={Target} label="Avg. CTR" source="GSC" accent={accent} value={ctrNow.toFixed(1) + "%"} pct={ctrPrev != null ? pctDelta(ctrNow, ctrPrev) : null} />)}
+            {Vis("gsc", "position", <StatCard icon={Search} label="Avg. position" source="GSC" accent={accent} value={"#" + posNow.toFixed(1)} pct={posPrev != null ? pctDelta(posNow, posPrev) : null} invert spark={spark((m) => m.gsc.position)} />)}
           </div>
           <Card className="p-5">
             <div className="ll-display mb-4 text-[15px] font-semibold">Clicks & impressions <span className="text-xs font-normal text-gray-400">{rangeLabel}</span></div>
@@ -2032,7 +2064,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
               </LineChart>
             </ResponsiveContainer>
           </Card>
-          {Wgsc.topQueries && (
+          {Vis("gsc", "topQueries", 
             <Card className="overflow-hidden">
               <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top search queries <span className="text-xs font-normal text-gray-400">latest month</span></div>
               <table className="w-full text-left text-[13px]">
@@ -2128,6 +2160,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent 
 /* layered per data source — Google, Bing and Apple each have their OWN section,
    and every Performance Studio area (incl. Ads) is represented */
 export const WIDGET_META = {
+  overview: { title: "Performance Overview", items: { snapshot: "Insight snapshot", social: "Social profiles in Google Search", trend: "Trend chart", topKeywords: "Top ranked keywords" } },
   gbp: { title: "Business Profiles — Google Business Profile", items: { views: "Profile views", breakdown: "Search vs Maps breakdown", calls: "Phone calls", directions: "Direction requests", websiteClicks: "Website clicks", searchKeywords: "Searches by keywords", platformDevice: "Views by platform & device" } },
   bing: { title: "Business Profiles — Bing Places", items: { impressions: "Impressions", clicks: "Clicks", calls: "Calls", directions: "Direction requests" } },
   apple: { title: "Business Profiles — Apple Maps", items: { views: "Place card views", calls: "Call taps", directions: "Direction taps", websiteTaps: "Website taps" } },
@@ -2218,7 +2251,7 @@ export function WidgetsCard({ widgets, setWidget, accent }) {
   return (
     <Card className="p-5">
       <div className="mb-1 flex items-center gap-2"><LayoutDashboard size={16} style={{ color: accent }} /><span className="ll-display text-[15px] font-semibold">Choose what to show</span></div>
-      <p className="mb-4 text-[12px] text-gray-400">Turn insights on or off per data source — applies to every project of this client; only enabled widgets appear on dashboards and in client reports.</p>
+      <p className="mb-4 text-[12px] text-gray-400">Choose what CLIENTS see — disabled widgets disappear from the client dashboard and client reports. Your agency dashboards always show everything, with an eye toggle on each widget mirroring these switches.</p>
       <div className="space-y-3">
         {Object.entries(WIDGET_META).map(([group, meta]) => (
           <div key={group} className="rounded-xl border border-gray-100 p-3.5">
