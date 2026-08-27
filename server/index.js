@@ -3958,9 +3958,9 @@ async function handleRerun(body) {
         const { i, vi } = work[j];
         const e = list[i];
         if (r?.task) {
-          const { position, url, mapPos, packShown } = parseSerpRank(r.task, e.domain);
+          const { position, url, mapPos, packShown, aiPos, aiShown } = parseSerpRank(r.task, e.domain);
           const loc = locOf(e);
-          updated[i] = { id: e.id, position, url, mapPos, packShown,
+          updated[i] = { id: e.id, position, url, mapPos, packShown, aiPos, aiShown,
             location: loc?.name || variantsOf(e)[vi],
             /* "city" means this really is the local ranking; anything coarser
                is a wider result set and is labelled as such rather than being
@@ -4101,8 +4101,8 @@ async function handleRankStatus(body) {
          Persisting per item makes a restart cost nothing. */
       let dirty = 0;
       const land = (item, task) => {
-        const { position, absPos, url, mapPos, packShown } = parseSerpRank(task, item.domain);
-        item.result = { position, absPos, url, mapPos, packShown };
+        const { position, absPos, url, mapPos, packShown, aiPos, aiShown } = parseSerpRank(task, item.domain);
+        item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown };
         if (++dirty >= 5) { dirty = 0; saveJob(job); }
       };
       /* a keyword the queue cannot answer has to be run live. Re-POSTING it is

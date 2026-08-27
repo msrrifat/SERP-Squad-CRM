@@ -70,12 +70,37 @@ export function parseSerpRank(taskResult, domain) {
      rank_absolute is still returned as `absPos` — it is genuinely useful
      (how far down the page the listing actually sits) and nothing that reads
      `position` is affected by its presence. */
+  /* Google AI Overview — SAME response again, zero extra cost: whether the
+     query shows an AI overview, and the domain's 1-based position among the
+     overview's cited references (the order Google lists its sources).
+     Cached (synchronous) overviews are embedded in the HTML DataForSEO
+     already fetched; async-generated ones are NOT chased, because
+     load_async_ai_overview doubles the task price whenever one exists. */
+  const aio = items.find((it) => it.type === "ai_overview");
+  let aiPos = null;
+  if (aio) {
+    const seen = new Set();
+    const refs = [];
+    const collect = (r) => {
+      if (!r || typeof r !== "object") return;
+      const key = (r.domain || "") + "|" + (r.url || "");
+      if (seen.has(key)) return;
+      seen.add(key);
+      refs.push(r);
+    };
+    (aio.references || []).forEach(collect);
+    (aio.items || []).forEach((el) => (el?.references || []).forEach(collect));
+    const idx = refs.findIndex(matches);
+    aiPos = idx >= 0 ? idx + 1 : null;
+  }
   return {
     position: hit ? (hit.rank_group ?? hit.rank_absolute) : null,  // organic position; null = not in top `depth`
     absPos: hit ? hit.rank_absolute : null,            // position counting ads/AI/pack/PAA — display only
     url: hit ? hit.url : null,
     mapPos: mapIdx >= 0 ? mapIdx + 1 : null,           // 1–3 inside the pack; null = not in the pack
     packShown: pack.length > 0,                        // whether Google showed a map pack for this query at all
+    aiPos,                                             // 1-based citation position in the AI Overview; null = not cited
+    aiShown: !!aio,                                    // whether an AI overview appeared (cached/synchronous) for this query
   };
 }
 

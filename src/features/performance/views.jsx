@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
-  Activity, AlignLeft, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardPaste, Clock, Columns3, Copy, Eye, Facebook, FileText as FileTextIcon, Folder, FolderOpen, Globe, History, ImagePlus, Instagram, KeyRound, LayoutDashboard, Link2, Linkedin, List, ListOrdered, ListTodo, Lock, LogIn, LogOut, MapPin, MessageSquare, Minus, Monitor, Moon, MousePointerClick, Music2, Navigation, Palette, Pause, Phone, PieChart as PieIcon, Pin, Play, Plus, Printer, Quote, Receipt, RefreshCw, Rocket, Search, Send, Settings, Settings2, Share2, Shield, Smartphone, Star, Sun, Table2, Target, Trash2, Twitter, Type, Upload, UserPlus, Users, Wallet, X, Youtube, Zap,
+  Activity, AlignLeft, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Building2, Calendar, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, ClipboardPaste, Clock, Columns3, Copy, Eye, Facebook, FileText as FileTextIcon, Folder, FolderOpen, Globe, History, ImagePlus, Instagram, KeyRound, LayoutDashboard, Link2, Linkedin, List, ListOrdered, ListTodo, Lock, LogIn, LogOut, MapPin, MessageSquare, Minus, Monitor, Moon, MousePointerClick, Music2, Navigation, Palette, Pause, Phone, PieChart as PieIcon, Pin, Play, Plus, Printer, Quote, Receipt, RefreshCw, Rocket, Search, Send, Settings, Settings2, Share2, Shield, Smartphone, Sparkles, Star, Sun, Table2, Target, Trash2, Twitter, Type, Upload, UserPlus, Users, Wallet, X, Youtube, Zap,
 } from "lucide-react";
 import { Apple as AppleLogo } from "lucide-react";
 import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
@@ -704,6 +704,16 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent,
   );
 }
 
+/* tiny corner badge on Map-pack / AI-Overview chips: places moved since the
+   previous scan that captured that surface, or NEW on first appearance */
+const FeatBadge = ({ cur, prev }) => {
+  if (cur == null || prev === undefined) return null;
+  if (prev === null) return <span className="absolute -bottom-1.5 -right-1.5 rounded border border-emerald-100 bg-white px-0.5 text-[7.5px] font-bold leading-[11px] text-emerald-600 shadow-sm">NEW</span>;
+  const d = prev - cur;                       // positions are ranks: smaller = better
+  if (!d) return null;
+  return <span className={"absolute -bottom-1.5 -right-1.5 rounded border border-gray-100 bg-white px-0.5 text-[8px] font-bold leading-[11px] shadow-sm " + (d > 0 ? "text-emerald-600" : "text-red-500")}>{d > 0 ? "\u25b2" : "\u25bc"}{Math.abs(d)}</span>;
+};
+
 export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, onSetPaused = null, readOnly = false, dfs }) {
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
@@ -788,18 +798,42 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
     const r = mulberry32(hashStr("mp|" + t.id));
     return r() < 0.4 ? 1 + Math.floor(r() * 3) : null;
   };
+  /* AI Overview citation position — extracted from the SAME SERP scan (zero
+     extra DataForSEO cost), so it follows exactly the map-pack pattern */
+  const aiOf = (t) => {
+    if (project.demoMode === false) return t.aiPos ?? null;
+    const r = mulberry32(hashStr("ai|" + t.id));
+    return r() < 0.35 ? 1 + Math.floor(r() * 6) : null;
+  };
+  /* the surface's position on the PREVIOUS scan that captured it — feeds the
+     corner change badge. undefined = no earlier capture (no badge);
+     null = previously absent (the badge reads NEW). */
+  const prevFeature = (t, key) => {
+    const sc = (t.scans || []).filter((x) => x[key] !== undefined);
+    return sc.length >= 2 ? sc[sc.length - 2][key] : undefined;
+  };
+  const featPrev = (t, key, cur) => {
+    if (project.demoMode === false) return prevFeature(t, key);
+    if (cur == null) return undefined;
+    const r = mulberry32(hashStr(key + "prev|" + t.id));
+    const x = r();
+    if (x < 0.28) return null;                                  // newly picked up → NEW
+    if (x < 0.55) return cur;                                   // unchanged → no badge
+    if (x < 0.85) return cur + 1 + Math.floor(r() * 2);         // improved → ▲
+    return cur > 1 ? cur - 1 : cur;                             // slipped → ▼ (or flat at #1)
+  };
 
   /* column visibility — the "View" menu top-right; persisted per browser */
-  const COLS = [["volume", "Volume"], ["strend", "Search trend"], ["start", "Start"], ["current", "Current (web)"], ["map", "Map pack"], ["changes", "Change columns"], ["life", "Lifetime"], ["url", "Ranking URL"]];
+  const COLS = [["volume", "Volume"], ["strend", "Search trend"], ["start", "Start"], ["current", "Current (web)"], ["map", "Map pack"], ["ai", "AI Overview"], ["changes", "Change columns"], ["life", "Lifetime"], ["url", "Ranking URL"]];
   const [cols, setCols] = useState(() => { try { return JSON.parse(localStorage.getItem("ss_rank_cols") || "{}"); } catch { return {}; } });
   const colOn = (k) => cols[k] !== false;
   const toggleCol = (k) => setCols((c) => { const n = { ...c, [k]: !(c[k] !== false) }; try { localStorage.setItem("ss_rank_cols", JSON.stringify(n)); } catch { /* private mode */ } return n; });
   const [colsOpen, setColsOpen] = useState(false);
-  const visColCount = 3 + ["volume", "strend", "start", "current", "map", "life", "url"].filter(colOn).length + (colOn("changes") ? DELTA_DAYS.length : 0);
+  const visColCount = 3 + ["volume", "strend", "start", "current", "map", "ai", "life", "url"].filter(colOn).length + (colOn("changes") ? DELTA_DAYS.length : 0);
 
   /* column sorting — defaults to best current positions on top */
   const [sort, setSort] = useState({ key: "cur", dir: "asc" });
-  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key === "volume" ? svOf(t)?.v : sort.key === "map" ? mapOf(t) : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
+  const sortVal = (t) => (sort.key === "keyword" ? t.keyword.toLowerCase() : sort.key === "volume" ? svOf(t)?.v : sort.key === "map" ? mapOf(t) : sort.key === "ai" ? aiOf(t) : sort.key.startsWith("dd") ? deltaFor(t, +sort.key.slice(2)) : t.stats[sort.key]);
   const rows = tracking.filter((t) =>
     (cityFilter === "All cities" || cityLabel(t.city) === cityFilter) &&
     (!search.trim() || t.keyword.toLowerCase().includes(search.trim().toLowerCase()))
@@ -904,7 +938,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                  "All 32 scans failed" and quoted the first error as if it were
                  every keyword's. */
               if (fresh.length) {
-                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown })));
+                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown })));
                 ok += fresh.length;
               }
               setProgress({ done: applied + st.done, total: entries.length,
@@ -986,7 +1020,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 if (stt.busy) continue;                   // another pass is collecting
                 const fresh = (stt.updated || []).filter((u) => !seen2.has(u.id));
                 fresh.forEach((u) => seen2.add(u.id));
-                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown }))); ok += fresh.length; }
+                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown }))); ok += fresh.length; }
                 setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
                 if (!stt.pending) { billed += stt.billedTasks || 0; liveBilled += stt.liveTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
               }
@@ -1226,6 +1260,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   {colOn("start") && <SortTh k="start">Start</SortTh>}
                   {colOn("current") && <SortTh k="cur">Current</SortTh>}
                   {colOn("map") && <SortTh k="map" title="Position in Google's local map pack (3-pack) — from the same scan">Map pack</SortTh>}
+                  {colOn("ai") && <SortTh k="ai" title="Position among the sources Google's AI Overview cites for this search — from the same scan, no extra cost">AI Overview</SortTh>}
                   {colOn("changes") && DELTA_DAYS.map((d) => <SortTh key={d} k={"dd" + d} defDir="desc">{d}d</SortTh>)}
                   {colOn("life") && <SortTh k="life" defDir="desc">Lifetime</SortTh>}
                   {colOn("url") && <th className="px-3 py-3 font-semibold">Ranking URL</th>}
@@ -1287,11 +1322,21 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       </span>
                     </td>}
                     {colOn("map") && <td className="px-3 py-3">
-                      {(() => { const mp = mapOf(t); return (
-                        <span className="inline-flex items-center gap-1" title={mp ? `In Google's local map pack at position ${mp}` : t.packShown ? "Google shows a map pack for this search — the business isn't in it" : "No map-pack data yet — appears on the next scan"}>
+                      {(() => { const mp = mapOf(t); const pv = featPrev(t, "mp", mp); return (
+                        <span className="inline-flex items-center gap-1" title={mp ? `In Google's local map pack at position ${mp}${pv === null ? " — newly entered" : pv != null && pv !== mp ? ` (was #${pv} last scan)` : ""}` : t.packShown ? "Google shows a map pack for this search — the business isn't in it" : "No map-pack data yet — appears on the next scan"}>
                           <MapPin size={11} className={mp ? "shrink-0 text-emerald-600" : "shrink-0 text-gray-300"} />
                           {mp
-                            ? <span className="ll-mono inline-flex min-w-8 items-center justify-center rounded-md bg-emerald-100 px-1.5 py-0.5 text-[12.5px] font-semibold text-emerald-700">#{mp}</span>
+                            ? <span className="relative inline-flex"><span className="ll-mono inline-flex min-w-8 items-center justify-center rounded-md bg-emerald-100 px-1.5 py-0.5 text-[12.5px] font-semibold text-emerald-700">#{mp}</span><FeatBadge cur={mp} prev={pv} /></span>
+                            : <span className="text-gray-300">—</span>}
+                        </span>
+                      ); })()}
+                    </td>}
+                    {colOn("ai") && <td className="px-3 py-3">
+                      {(() => { const ai = aiOf(t); const pv = featPrev(t, "ai", ai); return (
+                        <span className="inline-flex items-center gap-1" title={ai ? `Cited by Google's AI Overview — source #${ai}${pv === null ? " — newly cited" : pv != null && pv !== ai ? ` (was #${pv} last scan)` : ""}` : t.aiShown ? "Google shows an AI Overview for this search — this site isn't cited in it" : "No AI Overview captured for this search yet"}>
+                          <Sparkles size={11} className={ai ? "shrink-0 text-violet-600" : "shrink-0 text-gray-300"} />
+                          {ai
+                            ? <span className="relative inline-flex"><span className="ll-mono inline-flex min-w-8 items-center justify-center rounded-md bg-violet-100 px-1.5 py-0.5 text-[12.5px] font-semibold text-violet-700">#{ai}</span><FeatBadge cur={ai} prev={pv} /></span>
                             : <span className="text-gray-300">—</span>}
                         </span>
                       ); })()}

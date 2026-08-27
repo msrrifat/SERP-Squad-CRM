@@ -297,7 +297,7 @@ function GoogleMapCanvas({ center, points: rawPts, size, spacingKm, prevPoints, 
       const self = { setReady, setZoom, setTick };
       class GridOverlay extends g.OverlayView {
         onAdd() { this.holder = document.createElement("div"); this.holder.style.position = "absolute"; this.getPanes().overlayMouseTarget.appendChild(this.holder); self.setReady(true); }
-        draw() { self.setZoom(this.getMap().getZoom()); self.setTick((t) => t + 1); }
+        draw() { const m = this.getMap(); if (m) self.setZoom(m.getZoom()); self.setTick((t) => t + 1); }
         onRemove() { this.holder?.remove(); this.holder = null; }
       }
       const ov = new GridOverlay();

@@ -1271,10 +1271,12 @@ export default function App() {
         ...t,
         extraPositions: [...(t.extraPositions || []), u.newPos],
         /* dated scan log — powers the Ranking history tab (mp = map-pack pos) */
-        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null, ...(u.mapPos !== undefined ? { mp: u.mapPos } : {}) }],
+        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null, ...(u.mapPos !== undefined ? { mp: u.mapPos } : {}), ...(u.aiPos !== undefined ? { ai: u.aiPos } : {}) }],
         rankUrl: u.url || t.rankUrl || null,
         /* latest local map-pack position — undefined on demo fallbacks keeps the old value */
         ...(u.mapPos !== undefined ? { mapPos: u.mapPos, packShown: !!u.packShown } : {}),
+        /* latest AI Overview citation position — same one-scan data, same rule */
+        ...(u.aiPos !== undefined ? { aiPos: u.aiPos, aiShown: !!u.aiShown } : {}),
       };
     }) }));
     logActivity(`Re-checked ${updates.length} keyword${updates.length > 1 ? "s" : ""}`, project?.name);
