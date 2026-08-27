@@ -155,6 +155,26 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
   const [err, setErr] = useState(null);
   const [sites, setSites] = useState(null);
   const [props, setProps] = useState(null);
+  /* manual property entry per social slot — Google's sites.list API does NOT
+     return auto-added social properties (a YouTube channel shows in the
+     Search Console UI but never in the API listing), so the URL can be
+     pasted and is verified with a real 7-day query before it's saved */
+  const [manual, setManual] = useState({}); // { [slot]: { open, val, busy, msg, ok } }
+  const setM = (key, patch) => setManual((m) => ({ ...m, [key]: { ...(m[key] || {}), ...patch } }));
+  const testAndSave = async (key) => {
+    const url = (manual[key]?.val || "").trim();
+    if (!url) return;
+    setM(key, { busy: true, msg: null });
+    try {
+      const r = await fetch("/api/google/gsc/query", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionId: conn.connectionId, siteUrl: url, days: 7, kpis: true }) });
+      const j = await r.json();
+      if (r.ok && j.live) {
+        setConn({ gscSocial: { ...(conn.gscSocial || {}), [key]: url } });
+        setM(key, { busy: false, open: false, val: "", ok: true, msg: null });
+      } else setM(key, { busy: false, ok: false, msg: j.detail || j.error || "Google refused the property." });
+    } catch (e) { setM(key, { busy: false, ok: false, msg: "API server unreachable — " + (e?.message || e) }); }
+  };
 
   const connect = async () => {
     setConnecting(true); setErr(null);
@@ -255,25 +275,51 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
         <div>
           <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Search Console — social properties</div>
           <div className="grid gap-3 sm:grid-cols-2">
-            {GSC_SOCIAL.map(([key, label]) => (
-              <Labeled key={key} label={label}>
-                <select value={(conn.gscSocial || {})[key] || ""}
-                  onChange={(e) => setConn({ gscSocial: { ...(conn.gscSocial || {}), [key]: e.target.value } })}
-                  className={inputCls + " bg-white"}>
-                  <option value="">Not connected</option>
-                  {Array.isArray(sites) && sites.map((s) => (
-                    <option key={s.url} value={s.url} disabled={s.readable === false}>
-                      {s.url}{s.readable === false ? "  (no read access)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </Labeled>
-            ))}
+            {GSC_SOCIAL.map(([key, label]) => {
+              const saved = (conn.gscSocial || {})[key] || "";
+              const inList = Array.isArray(sites) && sites.some((s) => s.url === saved);
+              const m = manual[key] || {};
+              return (
+                <Labeled key={key} label={label}>
+                  <select value={m.open ? "__manual" : saved}
+                    onChange={(e) => {
+                      if (e.target.value === "__manual") { setM(key, { open: true, val: saved && !inList ? saved : "" }); return; }
+                      setM(key, { open: false, msg: null });
+                      setConn({ gscSocial: { ...(conn.gscSocial || {}), [key]: e.target.value } });
+                    }}
+                    className={inputCls + " bg-white"}>
+                    <option value="">Not connected</option>
+                    {saved && !inList && <option value={saved}>{saved} (added by URL)</option>}
+                    {Array.isArray(sites) && sites.map((s) => (
+                      <option key={s.url} value={s.url} disabled={s.readable === false}>
+                        {s.url}{s.readable === false ? "  (no read access)" : ""}
+                      </option>
+                    ))}
+                    <option value="__manual">Paste a property URL…</option>
+                  </select>
+                  {m.open && (
+                    <div className="mt-1.5">
+                      <div className="flex gap-1.5">
+                        <input value={m.val || ""} onChange={(e) => setM(key, { val: e.target.value, msg: null })}
+                          placeholder="https://www.youtube.com/channel/UC… — exactly as Search Console shows it"
+                          className={inputCls + " bg-white"} />
+                        <button onClick={() => testAndSave(key)} disabled={m.busy || !(m.val || "").trim()}
+                          className="shrink-0 rounded-lg px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
+                          {m.busy ? "Checking…" : "Verify & save"}
+                        </button>
+                      </div>
+                      {m.msg && <div className="mt-1 text-[10.5px] text-amber-700">{m.msg}</div>}
+                    </div>
+                  )}
+                </Labeled>
+              );
+            })}
           </div>
           <div className="mt-1 text-[10.5px] leading-relaxed text-gray-400">
-            Each slot binds one Search Console property from this account. A YouTube channel appears here automatically
-            for the Google account that owns it; other profiles appear once verified in Search Console. If a platform
-            isn't in the list, that property doesn't exist on {conn.email || "this account"} yet.
+            Google's API only lists website properties — social properties (like a YouTube channel) show in the
+            Search Console UI but are never returned by the listing API. Pick <b>Paste a property URL…</b> and copy the
+            property exactly as Search Console's property selector shows it (e.g. <span className="ll-mono">https://www.youtube.com/channel/UC…/</span>).
+            The URL is verified with a real 7-day query against {conn.email || "this account"} before it's saved.
           </div>
         </div>
       )}
