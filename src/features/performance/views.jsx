@@ -230,9 +230,10 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   const windowSpan = isLiveMetric ? `last ${liveDays} days · daily · live` : `${data.months[rangeStart].label} – ${data.months[12].label}`;
   const trendTitle = isLiveMetric ? "Daily trend" : cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
 
-  const movers = [...tracking]
+  const topRanked = [...tracking]
+    .filter((t) => t.stats.cur != null)
     .map((t) => ({ ...t, change: t.stats.d30 ?? t.stats.life ?? 0 }))
-    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 5); // biggest movers either direction
+    .sort((a, b) => a.stats.cur - b.stats.cur).slice(0, 10); // best current positions first
   const topEvents = [...data.events].sort((a, b) => b.series[12] - a.series[12]).slice(0, 4);
 
   /* insight highlights — shown to everyone (compact for agency, framed for client) */
@@ -418,75 +419,35 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         </ResponsiveContainer>}
       </Card>
 
-      {/* movers + events — frames stay in place with honest empty states */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-5">
-          <div className="ll-display mb-3 text-[15px] font-semibold">Top keyword movers <span className="text-xs font-normal text-gray-400">last 30 days</span></div>
-          {tracking.length > 0 ? (
-            <div className="space-y-2">
-              {movers.map((t, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
+      {/* top ranked keywords — frame stays in place with an honest empty state */}
+      <Card className="p-5">
+        <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
+        {topRanked.length > 0 ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {topRanked.map((t, i) => (
+              <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="ll-mono w-5 shrink-0 text-right text-[11px] font-semibold text-gray-400">{i + 1}.</span>
                   <div className="min-w-0">
                     <div className="truncate text-[13px] font-medium text-gray-800">{t.keyword}</div>
                     <div className="flex items-center gap-1 text-[11px] text-gray-400"><MapPin size={11} /> {cityLabel(t.city)}</div>
                   </div>
-                  <div className="flex items-center gap-2.5">
-                    <RankChip pos={t.stats.cur} />
-                    <PosChange value={t.change} />
-                  </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
-              <Target size={17} className="text-gray-300" />
-              <div className="text-[12px] font-semibold text-gray-400">No keywords tracked yet</div>
-              <div className="text-[11px] text-gray-400">Add keywords in Website Rank Tracking — the biggest movers appear here.</div>
-            </div>
-          )}
-        </Card>
-        {W.ga.events && (I.ga && !liveMode ? (
-          <Card className="p-5">
-            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · this month</span></div>
-            <div className="space-y-2">
-              {topEvents.map((e, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
-                  <span className="ll-mono truncate text-[12.5px] text-gray-700">{e.name}</span>
-                  <span className="flex items-center gap-2.5">
-                    <span className="ll-display text-[15px] font-semibold">{fmt(e.series[12])}</span>
-                    <Delta pct={pctDelta(e.series[12], e.series[12 - cmp])} />
-                  </span>
+                <div className="flex items-center gap-2.5">
+                  <RankChip pos={t.stats.cur} />
+                  <PosChange value={t.change} />
                 </div>
-              ))}
-            </div>
-          </Card>
-        ) : liveMode && gaLive ? (
-          <Card className="p-5">
-            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · last {liveDays} days · live</span></div>
-            <div className="space-y-2">
-              {gaLive.events.slice(0, 4).map((e, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
-                  <span className="ll-mono truncate text-[12.5px] text-gray-700">{e.name}</span>
-                  <span className="flex items-center gap-2.5">
-                    <span className="ll-display text-[15px] font-semibold">{fmt(e.value)}</span>
-                    {halfDelta(e.series) != null && <Delta pct={halfDelta(e.series)} />}
-                  </span>
-                </div>
-              ))}
-              {!gaLive.events.length && <div className="py-6 text-center text-[11.5px] text-gray-400">No key events recorded in this window.</div>}
-            </div>
-          </Card>
-        ) : !I.ga ? (
-          <Card className="p-5">
-            <div className="ll-display mb-3 text-[15px] font-semibold">Key events <span className="text-xs font-normal text-gray-400">GA4 · this month</span></div>
-            <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
-              <Zap size={17} className="text-gray-300" />
-              <div className="text-[12px] font-semibold text-gray-400">Google Analytics not connected</div>
-              <div className="text-[11px] text-gray-400">Connect GA4 in Project settings → Data sources to see key events.</div>
-            </div>
-          </Card>
-        ) : null)}
-      </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
+            <Target size={17} className="text-gray-300" />
+            <div className="text-[12px] font-semibold text-gray-400">No ranked keywords yet</div>
+            <div className="text-[11px] text-gray-400">Add keywords in Website Rank Tracking — the best-ranking ones appear here.</div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
