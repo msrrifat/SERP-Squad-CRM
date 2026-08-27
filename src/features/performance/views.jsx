@@ -230,12 +230,14 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   const windowSpan = isLiveMetric ? `last ${liveDays} days · daily · live` : `${data.months[rangeStart].label} – ${data.months[12].label}`;
   const trendTitle = isLiveMetric ? "Daily trend" : cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
 
-  /* this month's traffic sources, biggest first — same series the analytics
-     tab charts, compared against the selected look-back like every Overview
-     number. Empty on real projects until GA4 data syncs — never fabricated. */
-  const srcRows = (data.sources || [])
-    .map((s2) => ({ name: s2.name, value: s2.series?.[12] ?? 0, pct: pctDelta(s2.series?.[12], s2.series?.[12 - cmp]) }))
-    .filter((x) => x.value > 0).sort((x, y) => y.value - x.value).slice(0, 8);
+  /* traffic sources, biggest first. LIVE projects read the same GA4 report
+     payload the analytics tab renders (gaLive.sources: {name, value, prev} —
+     already fetched, zero extra requests); demo/synced-monthly projects read
+     the monthly series. Never fabricated on either path. */
+  const srcRows = (liveMode && gaLive
+    ? (gaLive.sources || []).map((x) => ({ name: x.name, value: x.value, pct: x.prev > 0 ? pctDelta(x.value, x.prev) : null }))
+    : (data.sources || []).map((s2) => ({ name: s2.name, value: s2.series?.[12] ?? 0, pct: pctDelta(s2.series?.[12], s2.series?.[12 - cmp]) }))
+  ).filter((x) => x.value > 0).sort((x, y) => y.value - x.value).slice(0, 8);
   const maxSrc = Math.max(...srcRows.map((x) => x.value), 1);
   const topRanked = [...tracking]
     .filter((t) => t.stats.cur != null)
@@ -458,7 +460,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       </Card>
       {W.ga.sources && (
         <Card className="p-5">
-          <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">GA4 · sessions this month</span></div>
+          <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">GA4 · sessions · {liveMode && gaLive ? `last ${liveDays} days · live` : "this month"}</span></div>
           <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines, social, direct and AI assistants</div>
           {I.ga && srcRows.length > 0 ? (
             <div className="space-y-2.5">
