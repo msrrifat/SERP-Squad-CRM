@@ -230,6 +230,13 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
   const windowSpan = isLiveMetric ? `last ${liveDays} days · daily · live` : `${data.months[rangeStart].label} – ${data.months[12].label}`;
   const trendTitle = isLiveMetric ? "Daily trend" : cmp === 1 ? "Month-over-month trend" : `${cmp}-month trend`;
 
+  /* this month's traffic sources, biggest first — same series the analytics
+     tab charts, compared against the selected look-back like every Overview
+     number. Empty on real projects until GA4 data syncs — never fabricated. */
+  const srcRows = (data.sources || [])
+    .map((s2) => ({ name: s2.name, value: s2.series?.[12] ?? 0, pct: pctDelta(s2.series?.[12], s2.series?.[12 - cmp]) }))
+    .filter((x) => x.value > 0).sort((x, y) => y.value - x.value).slice(0, 8);
+  const maxSrc = Math.max(...srcRows.map((x) => x.value), 1);
   const topRanked = [...tracking]
     .filter((t) => t.stats.cur != null)
     .map((t) => ({ ...t, change: t.stats.d30 ?? t.stats.life ?? 0 }))
@@ -419,11 +426,12 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         </ResponsiveContainer>}
       </Card>
 
-      {/* top ranked keywords — frame stays in place with an honest empty state */}
+      {/* top ranked keywords + traffic sources — honest empty states */}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
       <Card className="p-5">
         <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
         {topRanked.length > 0 ? (
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2">
             {topRanked.map((t, i) => (
               <div key={i} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
                 <div className="flex min-w-0 items-center gap-2.5">
@@ -448,6 +456,33 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
           </div>
         )}
       </Card>
+      {W.ga.sources && (
+        <Card className="p-5">
+          <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">GA4 · sessions this month</span></div>
+          <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines, social, direct and AI assistants</div>
+          {I.ga && srcRows.length > 0 ? (
+            <div className="space-y-2.5">
+              {srcRows.map((x, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 truncate text-[12.5px] font-medium text-gray-700" title={x.name}>{x.name}</span>
+                  <span className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                    <span className="block h-full rounded-full" style={{ width: `${(x.value / maxSrc) * 100}%`, background: x.name === "ChatGPT" ? "#7C3AED" : accent }} />
+                  </span>
+                  <span className="ll-mono w-12 text-right text-[12px] font-semibold">{fmt(x.value)}</span>
+                  <span className="w-14 text-right">{x.pct != null ? <Delta pct={x.pct} /> : <span className="text-[11px] text-gray-300">—</span>}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-32 flex-col items-center justify-center gap-1 text-center">
+              <BarChart3 size={17} className="text-gray-300" />
+              <div className="text-[12px] font-semibold text-gray-400">{I.ga ? "No traffic data yet" : "Google Analytics not connected"}</div>
+              <div className="text-[11px] text-gray-400">{I.ga ? "Source data appears here as GA4 syncs." : "Connect GA4 in Project settings → Data sources to see where visitors come from."}</div>
+            </div>
+          )}
+        </Card>
+      )}
+      </div>
     </div>
   );
 }
