@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { RefreshCw, Send, Shield, X, Zap } from "lucide-react";
+import { RefreshCw, RotateCcw, Send, Shield, X, Zap } from "lucide-react";
 import { agentReply, llmContextPack, snapshot } from "./agent.js";
 import { aiGenerate } from "../../lib/aiwrite.jsx";
 import { SEO_CORE } from "../../lib/seoknowledge.js";
@@ -50,13 +50,32 @@ const agentSystem = (ctx) => [
 ].join("\n");
 
 export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
-  const [messages, setMessages] = useState(() => [{
+  /* the whole conversation persists across open/close (and reloads) until the
+     user hits Reset — stored per signed-in user, live progress bubbles
+     stripped. The selected project rides along in the same record. */
+  const storeKey = "ss_agent_chat_" + (ctx.isClient ? "client_" : "") + (ctx.userName || "me").replace(/\W+/g, "_");
+  const greeting = () => [{
     role: "agent",
     text: `Hi! I'm your SERP Squad AI agent${aiProvider ? ` (powered by ${aiProvider})` : ""}. I can see ${ctx.allowed.length} project${ctx.allowed.length === 1 ? "" : "s"} you have access to — ask me anything about them in plain language (pages, services, rankings, tasks…), or type "help" for quick commands.`,
-  }]);
+  }];
+  const stored = (() => { try { return JSON.parse(localStorage.getItem(storeKey) || "null"); } catch { return null; } })();
+  const [messages, setMessages] = useState(() =>
+    (stored?.messages || []).filter((m) => !m.live).length ? stored.messages.filter((m) => !m.live) : greeting());
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(() => new Set()); // executed action message idx
+  const [done, setDone] = useState(() => new Set(stored?.done || [])); // executed action message idx
+  /* project scope picker: "" = automatic (named project or the open one) */
+  const [projSel, setProjSel] = useState(() =>
+    ctx.allowed.some((a) => a.project.id === stored?.projSel) ? stored.projSel : "");
+  useEffect(() => {
+    try { localStorage.setItem(storeKey, JSON.stringify({ messages: messages.filter((m) => !m.live).slice(-60), done: [...done], projSel })); } catch { /* private mode */ }
+  }, [messages, done, projSel]); // eslint-disable-line
+  const resetChat = () => {
+    try { localStorage.removeItem(storeKey); } catch { /* ok */ }
+    setMessages(greeting()); setDone(new Set()); lastResearch.current = null;
+  };
+  /* queries answer about the picked project unless the user names another */
+  const scopedCtx = () => (projSel ? { ...ctx, aiConfig: ctx.aiConfig, activeProjectId: projSel } : ctx);
   const bodyRef = useRef(null);
   /* last research run — lets "create tasks from the audit and assign Mia"
      work as a follow-up without re-crawling anything */
@@ -85,7 +104,7 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
         action: { type: "plan", label: "Create in Project Management", projectId: lr.snap.project.id, clientId: lr.snap.client.id, record } }]);
       setBusy(false); return;
     }
-    const reply = agentReply(text, ctx);
+    const reply = agentReply(text, scopedCtx());
     /* ---- free-form lane: the real model, permission-scoped context ---- */
     if (reply.llm) {
       const ai = ctx.aiConfig;
@@ -158,8 +177,19 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
             <Shield size={9} /> scoped to {ctx.allowed.length} project{ctx.allowed.length === 1 ? "" : "s"}{aiProvider ? ` · via ${aiProvider}` : ""}
           </div>
         </div>
+        <button onClick={resetChat} title="Reset the conversation" className="rounded-lg p-1.5 text-gray-400 hover:bg-white/60"><RotateCcw size={13} /></button>
         <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-white/60"><X size={15} /></button>
       </div>
+      {ctx.allowed.length > 1 && (
+        <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Project</span>
+          <select value={projSel} onChange={(e) => setProjSel(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11.5px] outline-none focus:border-gray-300">
+            <option value="">Automatic — current project or the one you name</option>
+            {ctx.allowed.map((a) => <option key={a.project.id} value={a.project.id}>{a.project.name} ({a.client.name})</option>)}
+          </select>
+        </div>
+      )}
 
       <div ref={bodyRef} className="flex-1 space-y-2.5 overflow-y-auto p-3">
         {messages.map((m, i) => (
