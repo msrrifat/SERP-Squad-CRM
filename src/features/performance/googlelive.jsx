@@ -38,7 +38,9 @@ export const dayLabel = (d) => (String(d).length === 8 ? String(d).slice(4, 6) +
 export function makeVis(widgets, set) {
   return function Vis(g, k, node, cls = "") {
     const on = widgets?.[g]?.[k] !== false;
-    if (!set) return on ? node : null;
+    /* client / preview path: no toggle, but grid-placement classes that live
+       on the wrapper (col-spans) must survive — wrap whenever cls is set */
+    if (!set) return on ? (cls ? <div className={cls}>{node}</div> : node) : null;
     return (
       <div className={"group/vis relative " + cls}>
         <div className={"h-full" + (on ? "" : " opacity-60")}>{node}</div>
