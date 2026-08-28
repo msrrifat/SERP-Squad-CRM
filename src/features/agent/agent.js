@@ -176,6 +176,63 @@ export function buildMonthlyPlan(s, assignees) {
   };
 }
 
+/* ---------- permission-scoped context pack for the LLM lane ----------
+   Everything the model is allowed to know, and NOTHING else: built purely
+   from ctx.allowed, so a project outside the signed-in user's grants can
+   never appear in the prompt. The focused project (named in the question,
+   or the one open in the sidebar) gets deep detail; the rest get one-line
+   summaries so cross-project questions ("what projects do we run?") work
+   without blowing the context. No credentials, tokens or API keys exist
+   anywhere in this structure. */
+export function llmContextPack(ctx, focusId) {
+  const headings = (blocks) => (blocks || [])
+    .filter((b) => (b.kind === "heading" || b.level) && (b.text || "").trim())
+    .slice(0, 8).map((b) => b.text.trim().slice(0, 90));
+  return ctx.allowed.map(({ client, project }) => {
+    const base = {
+      project: project.name, client: client.name,
+      website: project.website || client.website || null,
+      dataMode: project.demoMode === false ? "live" : "demo (sample data)",
+    };
+    if (project.id !== focusId) {
+      const t = project.tracking || [];
+      return { ...base, trackedKeywords: t.length, records: (project.records || []).length };
+    }
+    const s = snapshot(client, project);
+    const bv = project.opt?.brandVoice?.biz || {};
+    const g = project.opt?.gbp || {};
+    const pages = (project.opt?.website?.pages || []).slice(0, 40).map((p) => ({
+      url: p.origUrl || p.url,
+      title: (p.metaTitle || "").slice(0, 90) || undefined,
+      description: (p.metaDesc || "").slice(0, 140) || undefined,
+      headings: headings(p.blocks),
+    }));
+    const posts = (project.opt?.website?.posts || []).slice(0, 20).map((p) => (p.metaTitle || p.title || p.url || "").slice(0, 90));
+    const cur = s.data.months[12];
+    return {
+      ...base, focus: true,
+      businessInfo: { name: bv.name, category: bv.category, description: bv.description,
+        services: bv.services, areas: bv.areas, hours: bv.hours, phone: bv.phone, address: bv.address },
+      googleBusinessProfile: { description: (g.description || "").slice(0, 400) || undefined,
+        category: g.category, posts: (g.posts || []).length, photos: (g.photos || []).length },
+      websitePages: pages,
+      blogPosts: posts,
+      trackedKeywords: (s.tracking || []).slice(0, 30).map((t) => ({
+        keyword: t.keyword, city: t.city?.city, device: t.device,
+        position: t.stats.cur, change30d: t.stats.d30 ?? null,
+        ...(t.mapPos != null ? { mapPack: t.mapPos } : {}), ...(t.aiPos != null ? { aiOverviewCited: t.aiPos } : {}),
+      })),
+      thisMonth: { profileViews: cur.gbp.views, calls: cur.gbp.calls, websiteUsers: cur.ga.users,
+        conversions: cur.ga.conversions, searchClicks: cur.gsc.clicks, searchImpressions: cur.gsc.impressions },
+      integrations: Object.entries(project.integrations || {}).filter(([, v]) => v).map(([k]) => k),
+      projectManagement: (project.records || []).slice(0, 25).map((r) => ({
+        record: r.name, completed: !!r.completedAt,
+        openTasks: (r.checklists || []).flatMap((c) => c.tasks).filter((t) => !t.completedAt).length,
+      })),
+    };
+  });
+}
+
 /* ---------- the router ---------- */
 export function agentReply(input, ctx) {
   const q = input.toLowerCase();
@@ -201,7 +258,13 @@ export function agentReply(input, ctx) {
      Detected BEFORE the generic intents so "audit the site" or "competitor
      content gap" never falls through to a canned answer. The panel runs the
      async work (research.js) and streams progress. */
-  const research = detectResearch(q);
+  let research = detectResearch(q);
+  /* a "question" that references the user's OWN data (we/our/us, or a project
+     name — which may itself contain the word "SEO") belongs to the workspace
+     LLM lane, which holds the scoped data pack; the corpus lane is for
+     general SEO-doctrine questions. Explicit audits/crawls are other kinds
+     and stay in the research lane. */
+  if (research?.kind === "question" && (hit || /\b(our|we|us|my)\b/.test(q))) research = null;
   if (research) {
     if (ctx.isClient && research.kind !== "question") {
       return { text: "Live audits, SERP reads and competitor research run on the agency side — ask your agency team for the report. I can answer general SEO questions anytime." };
@@ -292,7 +355,10 @@ export function agentReply(input, ctx) {
       action: { type: "recordComment", label: "Post comment", text: m[2], ...pmIds(rec) } };
   }
 
-  if (/plan/.test(q)) {
+  /* short inputs read as commands; longer natural-language questions go to
+     the model, which has the full scoped data pack and answers precisely */
+  const short = q.trim().split(/\s+/).length <= 7;
+  if (short && /plan/.test(q)) {
     if (ctx.isClient) return { text: "Planning and task automation is handled by your agency team — ask them to run a monthly plan. I can give you performance info anytime." };
     if (!ctx.canPlan) return { text: "You don't have task-management permission, so I can't create plans for you." };
     const record = buildMonthlyPlan(s, ctx.assignableNames || []);
@@ -303,7 +369,7 @@ export function agentReply(input, ctx) {
       action: { type: "plan", label: "Create plan in Project Management", projectId: s.project.id, clientId: s.client.id, record },
     };
   }
-  if (/report/.test(q)) {
+  if (short && /report/.test(q)) {
     if (ctx.isClient) return { text: "You can print/download the current view with the Report button in your portal header (if enabled). Full report building is on the agency side." };
     if (!ctx.canReports) return { text: "You don't have report-builder permission, so I can't open it for you." };
     const template = /work/.test(q) ? "work" : "performance";
@@ -317,10 +383,17 @@ export function agentReply(input, ctx) {
       action: { type: "report", label: `Open ${template} report`, template, cmp, aiSummary, projectId: s.project.id, clientId: s.client.id },
     };
   }
-  if (/compare|vs\b|versus/.test(q)) return { text: compareAnswer(s, cmp) };
-  if (/opportunit|striking|low.?hanging/.test(q)) return { text: opportunitiesAnswer(s) };
-  if (/rank|keyword|serp|position/.test(q)) return { text: ranksAnswer(s) };
-  if (/overview|how is|performance|status|summary|doing|info/.test(q)) return { text: overviewAnswer(s, cmp) };
+  if (short && /compare|vs\b|versus/.test(q)) return { text: compareAnswer(s, cmp) };
+  if (short && /opportunit|striking|low.?hanging/.test(q)) return { text: opportunitiesAnswer(s) };
+  if (short && /rank|keyword|serp|position/.test(q)) return { text: ranksAnswer(s) };
+  if (short && /overview|how is|performance|status|summary|doing|info/.test(q)) return { text: overviewAnswer(s, cmp) };
 
-  return { text: `I didn't catch that. Try "overview", "rankings", "keyword opportunities", "compare vs 6 months"${ctx.isClient ? "" : ", \"create a monthly plan\" or \"generate a report\""} — optionally with a project name (${ctx.allowed.map((a) => a.project.name).join(", ")}).` };
+  /* 4. everything else → the real model (LLM lane, run by the panel).
+     fallbackText is what renders when no AI provider is configured. */
+  return {
+    llm: true, focusProjectId: s.project.id,
+    fallbackText: ctx.isClient
+      ? `I couldn't match that to one of my commands. Try "overview", "rankings", "keyword opportunities" or "compare vs 6 months" — or ask your agency team, who can enable full AI answers.`
+      : `I couldn't match that to a built-in command, and no AI provider is connected yet — add a Claude (or OpenAI/Gemini/DeepSeek) API key in Company Settings → API settings and I'll answer free-form questions. Built-ins that always work: "overview", "rankings", "keyword opportunities", "compare vs 6 months", "create a monthly plan", "generate a report" — optionally with a project name (${ctx.allowed.map((a) => a.project.name).join(", ")}).`,
+  };
 }
