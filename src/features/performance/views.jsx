@@ -177,8 +177,8 @@ export function makeVis(widgets, set) {
         <div className={on ? undefined : "opacity-60"}>{node}</div>
         <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
           title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
-          className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-opacity " +
-            (on ? "border-gray-200 text-gray-400 opacity-0 hover:text-gray-600 focus:opacity-100 group-hover/vis:opacity-100" : "border-amber-300 text-amber-500 hover:text-amber-600")}>
+          className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-all " +
+            (on ? "border-gray-200 text-gray-400 opacity-80 hover:opacity-100 hover:text-gray-600" : "border-amber-300 text-amber-500 hover:text-amber-600")}>
           {on ? <Eye size={13} /> : <EyeOff size={13} />}
         </button>
       </div>
