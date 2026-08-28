@@ -25,7 +25,6 @@ export const DEFAULT_WIDGETS = {
   ga: { users: true, sessions: true, engagement: true, conversions: true, trend: true, channels: true, sources: true, events: true, topPages: true },
   gsc: { clicks: true, impressions: true, ctr: true, position: true, trend: true, topQueries: true },
   ranks: { insights: true, distribution: true, table: true },
-  geogrid: { metrics: true, map: true, competitors: true },
   ads: { kpis: true, charts: true, table: true },
 };
 export const cloneWidgets = () => JSON.parse(JSON.stringify(DEFAULT_WIDGETS));

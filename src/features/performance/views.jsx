@@ -2141,7 +2141,6 @@ export const WIDGET_META = {
   ga: { title: "Website Performance & Analytics — GA4", items: { users: "Users", sessions: "Sessions", engagement: "Engagement rate", conversions: "Conversions", trend: "Traffic chart", channels: "Traffic channels", sources: "Traffic sources", events: "Event counts", topPages: "Top landing pages" } },
   gsc: { title: "Website Performance & Analytics — Search Console", items: { clicks: "Clicks", impressions: "Impressions", ctr: "Average CTR", position: "Average position", trend: "Clicks & impressions chart", topQueries: "Top queries" } },
   ranks: { title: "Website Rank Tracking", items: { insights: "Insight cards", distribution: "Ranking distribution", table: "Tracking table" } },
-  geogrid: { title: "GBP Rank Tracking (geo-grid)", items: { metrics: "Score cards (ARP · ATRP · SoLV)", map: "Rank map", competitors: "Top performing businesses" } },
   ads: { title: "Ads Performance", items: { kpis: "Conversion summary cards", charts: "Spend & platform charts", table: "Campaign results table" } },
 };
 
