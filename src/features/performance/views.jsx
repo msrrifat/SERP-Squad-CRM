@@ -14,7 +14,7 @@ import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../li
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
-import { GoogleLiveData, useGoogleLive, useGscSocial, GSC_SOCIAL, halfDelta, dayLabel } from "./googlelive.jsx";
+import { GoogleLiveData, useGoogleLive, useGscSocial, GSC_SOCIAL, halfDelta, dayLabel, makeVis } from "./googlelive.jsx";
 import { startScanJob, clearScanJob, useScanJobs } from "../../lib/scanjobs.js";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 
@@ -158,32 +158,6 @@ export function SocialSearchSection({ project, accent }) {
       </Card>
     </>
   );
-}
-
-/* ---- per-widget client visibility ------------------------------------
-   widgets[group][key] !== false = the CLIENT sees this block on their
-   dashboard (and in client reports). The agency dashboard always renders
-   every widget; when an edit callback is provided, each one carries an
-   eye toggle in its top-right corner — EyeOff (always visible, amber)
-   means hidden from clients, Eye (on hover) means visible. Client portal
-   and the agency's "Client view" preview pass no callback, so disabled
-   widgets disappear there — the flags behave exactly as before. */
-export function makeVis(widgets, set) {
-  return function Vis(g, k, node) {
-    const on = widgets?.[g]?.[k] !== false;
-    if (!set) return on ? node : null;
-    return (
-      <div className="group/vis relative">
-        <div className={on ? undefined : "opacity-60"}>{node}</div>
-        <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
-          title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
-          className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-all " +
-            (on ? "border-gray-200 text-gray-400 opacity-80 hover:opacity-100 hover:text-gray-600" : "border-amber-300 text-amber-500 hover:text-amber-600")}>
-          {on ? <Eye size={13} /> : <EyeOff size={13} />}
-        </button>
-      </div>
-    );
-  };
 }
 
 export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, accent, clientView, liveMode = false, onSetWidget = null }) {
@@ -1660,12 +1634,12 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
 
       {provider === "bing" && (!I.bing ? <ProfileNotConnected name="Bing Places" accent={accent} location={locSel?.name} /> : (<>
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {(project.widgets.bing?.impressions !== false) && <StatCard icon={Eye} label="Impressions" source="BING" accent={accent} value={fmt(bingT.impr)} pct={ptc((m) => m.bing?.impressions || 0)} spark={spark((m) => m.bing?.impressions || 0)} />}
-          {(project.widgets.bing?.clicks !== false) && <StatCard icon={MousePointerClick} label="Clicks" source="BING" accent={accent} value={fmt(bingT.clicks)} pct={ptc((m) => m.bing?.clicks || 0)} spark={spark((m) => m.bing?.clicks || 0)} />}
-          {(project.widgets.bing?.calls !== false) && <StatCard icon={Phone} label="Calls" source="BING" accent={accent} value={fmt(bingT.calls)} pct={ptc((m) => m.bing?.calls || 0)} spark={spark((m) => m.bing?.calls || 0)} />}
-          {(project.widgets.bing?.directions !== false) && <StatCard icon={Navigation} label="Direction requests" source="BING" accent={accent} value={fmt(bingT.dirs)} pct={ptc((m) => m.bing?.directions || 0)} spark={spark((m) => m.bing?.directions || 0)} />}
+          {Vis("bing", "impressions", <StatCard icon={Eye} label="Impressions" source="BING" accent={accent} value={fmt(bingT.impr)} pct={ptc((m) => m.bing?.impressions || 0)} spark={spark((m) => m.bing?.impressions || 0)} />)}
+          {Vis("bing", "clicks", <StatCard icon={MousePointerClick} label="Clicks" source="BING" accent={accent} value={fmt(bingT.clicks)} pct={ptc((m) => m.bing?.clicks || 0)} spark={spark((m) => m.bing?.clicks || 0)} />)}
+          {Vis("bing", "calls", <StatCard icon={Phone} label="Calls" source="BING" accent={accent} value={fmt(bingT.calls)} pct={ptc((m) => m.bing?.calls || 0)} spark={spark((m) => m.bing?.calls || 0)} />)}
+          {Vis("bing", "directions", <StatCard icon={Navigation} label="Direction requests" source="BING" accent={accent} value={fmt(bingT.dirs)} pct={ptc((m) => m.bing?.directions || 0)} spark={spark((m) => m.bing?.directions || 0)} />)}
         </div>
-        <Card className="p-5">
+        {Vis("bing", "charts", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Bing Search & Maps visibility <span className="text-xs font-normal text-gray-400">impressions vs clicks</span></div>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={bingSeries} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
@@ -1679,8 +1653,8 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               <Line yAxisId="r" type="monotone" dataKey="Clicks" stroke={accent} strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
-        </Card>
-        <Card className="p-5">
+        </Card>)}
+        {Vis("bing", "charts", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Customer actions on Bing</div>
           <ResponsiveContainer width="100%" height={230}>
             <BarChart data={bingActions} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
@@ -1693,17 +1667,17 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               <Bar dataKey="Directions" fill={accent} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </Card>
+        </Card>)}
       </>))}
 
       {provider === "apple" && (!I.apple ? <ProfileNotConnected name="Apple Maps" accent={accent} location={locSel?.name} /> : (<>
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {(project.widgets.apple?.views !== false) && <StatCard icon={Eye} label="Place card views" source="APPLE" accent={accent} value={fmt(appleT.views)} pct={ptc((m) => m.apple?.views || 0)} spark={spark((m) => m.apple?.views || 0)} />}
-          {(project.widgets.apple?.calls !== false) && <StatCard icon={Phone} label="Call taps" source="APPLE" accent={accent} value={fmt(appleT.calls)} pct={ptc((m) => m.apple?.calls || 0)} spark={spark((m) => m.apple?.calls || 0)} />}
-          {(project.widgets.apple?.directions !== false) && <StatCard icon={Navigation} label="Direction taps" source="APPLE" accent={accent} value={fmt(appleT.dirs)} pct={ptc((m) => m.apple?.directions || 0)} spark={spark((m) => m.apple?.directions || 0)} />}
-          {(project.widgets.apple?.websiteTaps !== false) && <StatCard icon={Globe} label="Website taps" source="APPLE" accent={accent} value={fmt(appleT.taps)} pct={ptc((m) => m.apple?.websiteTaps || 0)} spark={spark((m) => m.apple?.websiteTaps || 0)} />}
+          {Vis("apple", "views", <StatCard icon={Eye} label="Place card views" source="APPLE" accent={accent} value={fmt(appleT.views)} pct={ptc((m) => m.apple?.views || 0)} spark={spark((m) => m.apple?.views || 0)} />)}
+          {Vis("apple", "calls", <StatCard icon={Phone} label="Call taps" source="APPLE" accent={accent} value={fmt(appleT.calls)} pct={ptc((m) => m.apple?.calls || 0)} spark={spark((m) => m.apple?.calls || 0)} />)}
+          {Vis("apple", "directions", <StatCard icon={Navigation} label="Direction taps" source="APPLE" accent={accent} value={fmt(appleT.dirs)} pct={ptc((m) => m.apple?.directions || 0)} spark={spark((m) => m.apple?.directions || 0)} />)}
+          {Vis("apple", "websiteTaps", <StatCard icon={Globe} label="Website taps" source="APPLE" accent={accent} value={fmt(appleT.taps)} pct={ptc((m) => m.apple?.websiteTaps || 0)} spark={spark((m) => m.apple?.websiteTaps || 0)} />)}
         </div>
-        <Card className="p-5">
+        {Vis("apple", "charts", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Apple Maps visibility <span className="text-xs font-normal text-gray-400">place card views (Apple Business Connect)</span></div>
           <ResponsiveContainer width="100%" height={250}>
             <AreaChart data={appleSeries} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
@@ -1715,8 +1689,8 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               <Area type="monotone" dataKey="Place card views" stroke="#111827" strokeWidth={2.2} fill="url(#appleFill)" />
             </AreaChart>
           </ResponsiveContainer>
-        </Card>
-        <Card className="p-5">
+        </Card>)}
+        {Vis("apple", "charts", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Taps on your place card</div>
           <ResponsiveContainer width="100%" height={230}>
             <BarChart data={appleActions} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
@@ -1730,7 +1704,7 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               <Bar dataKey="Website taps" fill="#94A3B8" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </Card>
+        </Card>)}
       </>))}
 
       {provider === "gbp" && !I.gbp && <ProfileNotConnected name="Google Business Profile" accent={accent} location={locSel?.name} />}
@@ -1759,7 +1733,7 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
             </ResponsiveContainer>
           </Card>
         )}
-        <Card className="p-5">
+        {Vis("gbp", "calls", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Customer actions <span className="text-xs font-normal text-gray-400">{LABELS[a]} – {LABELS[b]}</span></div>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={actions} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
@@ -1773,7 +1747,7 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               <Bar dataKey="Website clicks" fill="#D8DEE9" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </Card>
+        </Card>)}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-5">
@@ -2162,11 +2136,12 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent,
 export const WIDGET_META = {
   overview: { title: "Performance Overview", items: { snapshot: "Insight snapshot", social: "Social profiles in Google Search", trend: "Trend chart", topKeywords: "Top ranked keywords" } },
   gbp: { title: "Business Profiles — Google Business Profile", items: { views: "Profile views", breakdown: "Search vs Maps breakdown", calls: "Phone calls", directions: "Direction requests", websiteClicks: "Website clicks", searchKeywords: "Searches by keywords", platformDevice: "Views by platform & device" } },
-  bing: { title: "Business Profiles — Bing Places", items: { impressions: "Impressions", clicks: "Clicks", calls: "Calls", directions: "Direction requests" } },
-  apple: { title: "Business Profiles — Apple Maps", items: { views: "Place card views", calls: "Call taps", directions: "Direction taps", websiteTaps: "Website taps" } },
-  ga: { title: "Website Performance & Analytics — GA4", items: { users: "Users", sessions: "Sessions", engagement: "Engagement rate", conversions: "Conversions", channels: "Traffic channels", sources: "Traffic sources", events: "Event counts", topPages: "Top landing pages" } },
-  gsc: { title: "Website Performance & Analytics — Search Console", items: { clicks: "Clicks", impressions: "Impressions", ctr: "Average CTR", position: "Average position", topQueries: "Top queries" } },
+  bing: { title: "Business Profiles — Bing Places", items: { impressions: "Impressions", clicks: "Clicks", calls: "Calls", directions: "Direction requests", charts: "Visibility & actions charts" } },
+  apple: { title: "Business Profiles — Apple Maps", items: { views: "Place card views", calls: "Call taps", directions: "Direction taps", websiteTaps: "Website taps", charts: "Visibility & taps charts" } },
+  ga: { title: "Website Performance & Analytics — GA4", items: { users: "Users", sessions: "Sessions", engagement: "Engagement rate", conversions: "Conversions", trend: "Traffic chart", channels: "Traffic channels", sources: "Traffic sources", events: "Event counts", topPages: "Top landing pages" } },
+  gsc: { title: "Website Performance & Analytics — Search Console", items: { clicks: "Clicks", impressions: "Impressions", ctr: "Average CTR", position: "Average position", trend: "Clicks & impressions chart", topQueries: "Top queries" } },
   ranks: { title: "Website Rank Tracking", items: { insights: "Insight cards", distribution: "Ranking distribution", table: "Tracking table" } },
+  geogrid: { title: "GBP Rank Tracking (geo-grid)", items: { metrics: "Score cards (ARP · ATRP · SoLV)", map: "Rank map", competitors: "Top performing businesses" } },
   ads: { title: "Ads Performance", items: { kpis: "Conversion summary cards", charts: "Spend & platform charts", table: "Campaign results table" } },
 };
 

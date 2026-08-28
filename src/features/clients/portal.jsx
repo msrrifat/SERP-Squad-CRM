@@ -697,7 +697,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
               {activeView === "ranks" && ranksShown && <RankTrackingView project={project} tracking={tracking} dfsConnected accent={accent} onAdd={() => {}} onDelete={() => {}} readOnly clientView />}
               {activeView === "geogrid" && geogridShown && (
                 <React.Suspense fallback={viewLoader}>
-                  <GeoGridViewLazy project={project} accent={accent} onUpdate={() => {}} dfs={{}} readOnly />
+                  <GeoGridViewLazy project={project} accent={accent} onUpdate={() => {}} dfs={{}} readOnly clientView />
                 </React.Suspense>
               )}
               {activeView === "gbp" && gbpShown && (data
@@ -709,7 +709,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
               {activeView === "web" && webShown && (data
                 ? <WebsitePerformanceView project={project} data={data} range={range} setRange={setRange} accent={accent} clientView />
                 : googleConnected
-                  ? <React.Suspense fallback={viewLoader}><GoogleLiveDataLazy project={project} accent={accent} /></React.Suspense>
+                  ? <React.Suspense fallback={viewLoader}><GoogleLiveDataLazy project={project} accent={accent} clientView /></React.Suspense>
                   : <Card className="p-10 text-center text-[13px] leading-relaxed text-gray-400">
                       Your website analytics are being connected — data appears here as soon as your SEO team
                       finishes linking Google Search Console and Analytics. Nothing is shown until it's real.

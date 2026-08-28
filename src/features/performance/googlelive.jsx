@@ -6,7 +6,7 @@
    property; everything shown here is real (or an honest error). ---- */
 import React, { useEffect, useState } from "react";
 import { LineChart, Line, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Activity, BarChart3, CheckCircle2, Eye, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
+import { Activity, BarChart3, CheckCircle2, Eye, EyeOff, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
 import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { emptySiteData } from "../../data/gen.js";
@@ -27,6 +27,32 @@ export const dayLabel = (d) => (String(d).length === 8 ? String(d).slice(4, 6) +
 /* Self-fetching live GA4 + Search Console for the project's FIXED site/property.
    Shared by GoogleLiveData (full dashboard sections) and OverviewView (KPI
    cards), so both always show the same numbers. */
+/* ---- per-widget client visibility ------------------------------------
+   widgets[group][key] !== false = the CLIENT sees this block on their
+   dashboard (and in client reports). The agency dashboard always renders
+   every widget; when an edit callback is provided, each one carries an
+   eye toggle in its top-right corner — EyeOff (always visible, amber)
+   means hidden from clients, Eye (on hover) means visible. Client portal
+   and the agency's "Client view" preview pass no callback, so disabled
+   widgets disappear there — the flags behave exactly as before. */
+export function makeVis(widgets, set) {
+  return function Vis(g, k, node) {
+    const on = widgets?.[g]?.[k] !== false;
+    if (!set) return on ? node : null;
+    return (
+      <div className="group/vis relative">
+        <div className={on ? undefined : "opacity-60"}>{node}</div>
+        <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
+          title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
+          className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-all " +
+            (on ? "border-gray-200 text-gray-400 opacity-80 hover:opacity-100 hover:text-gray-600" : "border-amber-300 text-amber-500 hover:text-amber-600")}>
+          {on ? <Eye size={13} /> : <EyeOff size={13} />}
+        </button>
+      </div>
+    );
+  };
+}
+
 export function useGoogleLive(project, days = 28) {
   const conn = project?.google || {};
   const [gsc, setGsc] = useState(null);   // { busy } | { err } | data
@@ -333,7 +359,8 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
 /* Live GA4 + Search Console data cards for the FIXED site/property already
    selected in Data sources. Self-fetching; renders nothing until connected.
    Dropped straight into Overview + Website Performance dashboards. */
-export function GoogleLiveData({ project, accent }) {
+export function GoogleLiveData({ project, accent, clientView = false, onSetWidget = null }) {
+  const Vis = makeVis(project.widgets, clientView ? null : onSetWidget);
   /* timeline: live pulls honor the selected window (GSC data lags ~2 days
      and caps at 90; GA4 follows the same options for comparable windows) */
   const [days, setDays] = useState(28);
@@ -433,14 +460,14 @@ export function GoogleLiveData({ project, accent }) {
       {ga4?.live && (<>
         <SectionHeader icon={BarChart3} title="Website traffic & conversions" sub={`Google Analytics 4 · last ${days} days`} accent={accent} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />
-          <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />
-          <StatCard icon={MousePointerClick} label="Engagement rate" source="GA4" accent={accent} value={((ga4.totals.engRate || 0) * 100).toFixed(0) + "%"} pct={null} sub="range average" />
-          <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent} value={fmt(ga4.totals.conversions)} pct={halfDelta((ga4.byDate || []).map((r) => r.conversions))} spark={(ga4.byDate || []).map((r) => r.conversions)} />
+          {Vis("ga", "users", <StatCard icon={Users} label="Users" source="GA4" accent={accent} value={fmt(ga4.totals.users)} pct={halfDelta((ga4.byDate || []).map((r) => r.users))} spark={(ga4.byDate || []).map((r) => r.users)} />)}
+          {Vis("ga", "sessions", <StatCard icon={Eye} label="Sessions" source="GA4" accent={accent} value={fmt(ga4.totals.sessions)} pct={halfDelta((ga4.byDate || []).map((r) => r.sessions))} spark={(ga4.byDate || []).map((r) => r.sessions)} />)}
+          {Vis("ga", "engagement", <StatCard icon={MousePointerClick} label="Engagement rate" source="GA4" accent={accent} value={((ga4.totals.engRate || 0) * 100).toFixed(0) + "%"} pct={null} sub="range average" />)}
+          {Vis("ga", "conversions", <StatCard icon={BarChart3} label="Conversions" source="GA4" accent={accent} value={fmt(ga4.totals.conversions)} pct={halfDelta((ga4.byDate || []).map((r) => r.conversions))} spark={(ga4.byDate || []).map((r) => r.conversions)} />)}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-5">
-          <Card className="p-5 lg:col-span-3">
+          {Vis("ga", "trend", <Card className="p-5 lg:col-span-3">
             <div className="ll-display mb-4 text-[15px] font-semibold">Traffic <span className="text-xs font-normal text-gray-400">daily</span></div>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={gaDaily} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
@@ -453,9 +480,8 @@ export function GoogleLiveData({ project, accent }) {
                 <Line type="monotone" dataKey="Sessions" stroke="#94A3B8" strokeWidth={2} dot={false} strokeDasharray="5 4" />
               </LineChart>
             </ResponsiveContainer>
-          </Card>
-          {channels.length > 0 && (
-            <Card className="p-5 lg:col-span-2">
+          </Card>)}
+          {channels.length > 0 && Vis("ga", "channels", <Card className="p-5 lg:col-span-2">
               <div className="ll-display mb-2 text-[15px] font-semibold">Traffic channels <span className="text-xs font-normal text-gray-400">sessions</span></div>
               <ResponsiveContainer width="100%" height={190}>
                 <PieChart>
@@ -473,13 +499,11 @@ export function GoogleLiveData({ project, accent }) {
                   </div>
                 ))}
               </div>
-            </Card>
-          )}
+            </Card>)}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          {sources.length > 0 && (
-            <Card className="p-5">
+          {sources.length > 0 && Vis("ga", "sources", <Card className="p-5">
               <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">{`sessions · last ${days} days`}</span></div>
               <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines (organic &amp; paid), social, direct and AI assistants</div>
               <div className="space-y-2.5">
@@ -494,10 +518,8 @@ export function GoogleLiveData({ project, accent }) {
                   </div>
                 ))}
               </div>
-            </Card>
-          )}
-          {events.length > 0 && (
-            <Card className="overflow-hidden">
+            </Card>)}
+          {events.length > 0 && Vis("ga", "events", <Card className="overflow-hidden">
               <div className="border-b border-gray-100 px-5 py-4">
                 <div className="ll-display text-[15px] font-semibold">Event counts</div>
                 <div className="text-[11px] text-gray-400">{`GA4 events · last ${days} days`}</div>
@@ -522,12 +544,10 @@ export function GoogleLiveData({ project, accent }) {
                   ))}
                 </tbody>
               </table>
-            </Card>
-          )}
+            </Card>)}
         </div>
 
-        {topPages.length > 0 && (
-          <Card className="overflow-hidden">
+        {topPages.length > 0 && Vis("ga", "topPages", <Card className="overflow-hidden">
             <div className="ll-display border-b border-gray-100 px-5 py-4 text-[15px] font-semibold">Top landing pages <span className="text-xs font-normal text-gray-400">last {days} days</span></div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[440px] text-left text-[13px]">
@@ -549,20 +569,19 @@ export function GoogleLiveData({ project, accent }) {
                 </tbody>
               </table>
             </div>
-          </Card>
-        )}
+          </Card>)}
       </>)}
 
       {/* ---- Search Console: same layout as the designed dashboard ---- */}
       {gsc?.live && (<>
         <SectionHeader icon={Search} title="Organic search visibility" sub={`Google Search Console · last ${days} days`} accent={accent} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(gsc.totals.clicks)} pct={halfDelta((gsc.byDate || []).map((r) => r.clicks))} spark={(gsc.byDate || []).map((r) => r.clicks)} />
-          <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(gsc.totals.impressions)} pct={halfDelta((gsc.byDate || []).map((r) => r.impressions))} spark={(gsc.byDate || []).map((r) => r.impressions)} />
-          <StatCard icon={Target} label="Avg. CTR" source="GSC" accent={accent} value={pct1(gsc.totals.ctr)} sub="clicks / impressions" />
-          <StatCard icon={Search} label="Avg. position" source="GSC" accent={accent} value={gsc.totals.position ? "#" + gsc.totals.position.toFixed(1) : "—"} invert sub="lower is better" />
+          {Vis("gsc", "clicks", <StatCard icon={MousePointerClick} label="Clicks" source="GSC" accent={accent} value={fmt(gsc.totals.clicks)} pct={halfDelta((gsc.byDate || []).map((r) => r.clicks))} spark={(gsc.byDate || []).map((r) => r.clicks)} />)}
+          {Vis("gsc", "impressions", <StatCard icon={Eye} label="Impressions" source="GSC" accent={accent} value={fmt(gsc.totals.impressions)} pct={halfDelta((gsc.byDate || []).map((r) => r.impressions))} spark={(gsc.byDate || []).map((r) => r.impressions)} />)}
+          {Vis("gsc", "ctr", <StatCard icon={Target} label="Avg. CTR" source="GSC" accent={accent} value={pct1(gsc.totals.ctr)} sub="clicks / impressions" />)}
+          {Vis("gsc", "position", <StatCard icon={Search} label="Avg. position" source="GSC" accent={accent} value={gsc.totals.position ? "#" + gsc.totals.position.toFixed(1) : "—"} invert sub="lower is better" />)}
         </div>
-        <Card className="p-5">
+        {Vis("gsc", "trend", <Card className="p-5">
           <div className="ll-display mb-4 text-[15px] font-semibold">Clicks &amp; impressions <span className="text-xs font-normal text-gray-400">daily</span></div>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={gscDaily} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
@@ -576,9 +595,8 @@ export function GoogleLiveData({ project, accent }) {
               <Line yAxisId="r" type="monotone" dataKey="Impressions" stroke="#94A3B8" strokeWidth={2} dot={false} strokeDasharray="5 4" />
             </LineChart>
           </ResponsiveContainer>
-        </Card>
-        {(gsc.queries.length > 0 || (gsc.pages || []).length > 0) && (
-          <Card className="overflow-hidden">
+        </Card>)}
+        {(gsc.queries.length > 0 || (gsc.pages || []).length > 0) && Vis("gsc", "topQueries", <Card className="overflow-hidden">
             <div className="flex items-center gap-1 border-b border-gray-100 px-5 pt-2">
               {[["queries", "Queries", gsc.queries.length], ["pages", "Pages", (gsc.pages || []).length]].map(([k, label, n]) => (
                 <button key={k} onClick={() => { setGscTab(k); setQLimit(100); }}
@@ -677,8 +695,7 @@ export function GoogleLiveData({ project, accent }) {
               )}
             </div>
             )}
-          </Card>
-        )}
+          </Card>)}
       </>)}
     </div>
   );

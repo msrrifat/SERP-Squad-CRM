@@ -20,11 +20,12 @@ import { isoDate } from "../lib/months.jsx";
 export const DEFAULT_WIDGETS = {
   overview: { snapshot: true, social: true, trend: true, topKeywords: true },
   gbp: { views: true, breakdown: true, calls: true, directions: true, websiteClicks: true, searchKeywords: true, platformDevice: true },
-  bing: { impressions: true, clicks: true, calls: true, directions: true },
-  apple: { views: true, calls: true, directions: true, websiteTaps: true },
-  ga: { users: true, sessions: true, engagement: true, conversions: true, channels: true, sources: true, events: true, topPages: true },
-  gsc: { clicks: true, impressions: true, ctr: true, position: true, topQueries: true },
+  bing: { impressions: true, clicks: true, calls: true, directions: true, charts: true },
+  apple: { views: true, calls: true, directions: true, websiteTaps: true, charts: true },
+  ga: { users: true, sessions: true, engagement: true, conversions: true, trend: true, channels: true, sources: true, events: true, topPages: true },
+  gsc: { clicks: true, impressions: true, ctr: true, position: true, trend: true, topQueries: true },
   ranks: { insights: true, distribution: true, table: true },
+  geogrid: { metrics: true, map: true, competitors: true },
   ads: { kpis: true, charts: true, table: true },
 };
 export const cloneWidgets = () => JSON.parse(JSON.stringify(DEFAULT_WIDGETS));

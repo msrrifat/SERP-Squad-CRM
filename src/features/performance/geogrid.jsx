@@ -11,6 +11,7 @@ import { fmt, fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { realDfs } from "../optimization/indexcheck.jsx";
 import { startScanJob, useScanJobs } from "../../lib/scanjobs.js";
+import { makeVis } from "./googlelive.jsx";
 
 /* ================= GBP Geo-Grid Rank Tracker (report-based) =================
    SEO-Utils-style workflow: named reports (Map · Report & Keywords · Schedule),
@@ -662,7 +663,7 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
 /* readOnly: the client-portal mode — stored reports and snapshots render in
    full, but everything that runs, edits, shares or deletes is absent, and the
    scheduled auto-run must NEVER fire from a client's browser (scans are paid). */
-export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [], readOnly = false }) {
+export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [], readOnly = false, clientView = false, onSetWidget = null }) {
   setMapsKey(placesKey); // maps on this screen use the Google basemap when the key allows it
   const geo = project.geoGrid || {};
   const gbpLoc = project.opt?.gbp || {};
@@ -768,7 +769,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 
   const open = reports.find((rp) => rp.id === openReportId);
   if (open) return (
-    <ReportView report={open} biz={biz} accent={accent} readOnly={readOnly} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
+    <ReportView report={open} biz={biz} accent={accent} readOnly={readOnly} clientView={clientView} onSetWidget={onSetWidget} widgets={project.widgets} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
       onBack={() => setOpenReportId(null)} onRun={() => runSnapshot(open)} onEdit={() => setSetup(open)}
       onDeleteSnapshot={(sid) => patchReport(open.id, (cur) => ({ snapshots: cur.snapshots.filter((x) => x.id !== sid) }))}
       setupModal={setup && (
@@ -855,7 +856,8 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 }
 
 /* ================= report results ================= */
-function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSnapshot, scanState, err, setupModal, readOnly = false }) {
+function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSnapshot, scanState, err, setupModal, readOnly = false, clientView = false, onSetWidget = null, widgets = null }) {
+  const Vis = makeVis(widgets, clientView ? null : onSetWidget);
   const [kw, setKw] = useState(rp.keywords[0]);
   const [snapId, setSnapId] = useState(null);
   const [snapOpen, setSnapOpen] = useState(false);
@@ -1075,13 +1077,13 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
 
       {snap && points && tab === "overview" && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {Vis("geogrid", "metrics", <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <MetricCard label="ARP (avg rank)" value={m.arp != null ? "#" + m.arp.toFixed(1) : "—"} sub="where found" deltaVal={pm && m.arp != null && pm.arp != null ? +(pm.arp - m.arp).toFixed(1) : null} />
             <MetricCard label="ATRP" value={m.atrp != null ? "#" + m.atrp.toFixed(1) : "—"} sub="not-found = #21" deltaVal={pm && m.atrp != null && pm.atrp != null ? +(pm.atrp - m.atrp).toFixed(1) : null} />
             <MetricCard label="SoLV" value={m.solv.toFixed(0) + "%"} sub="points in top 3" deltaVal={pm ? +(m.solv - pm.solv).toFixed(0) : null} invert />
             <MetricCard label="Coverage" value={m.coverage.toFixed(0) + "%"} sub={`${m.found}/${m.total} in top 20`} deltaVal={pm ? +(m.coverage - pm.coverage).toFixed(0) : null} invert />
             <MetricCard label="Best / Worst" value={`#${m.best ?? "—"} / #${m.worst ?? "—"}`} sub="across the grid" />
-          </div>
+          </div>)}
           {viewBiz && (
             <div className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[12px]" style={{ borderColor: accent + "55", background: accent + "0A" }}>
               <Target size={13} style={{ color: accent }} />
@@ -1091,17 +1093,16 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
               </button>
             </div>
           )}
-          <Card className="p-2">
+          {Vis("geogrid", "map", <Card className="p-2">
             {center
               ? <MapCanvas center={center} points={points} size={snap.size} spacingKm={snap.spacingKm} prevPoints={prevPoints} />
               : <AbstractGrid points={points} size={snap.size} spacingKm={snap.spacingKm} prevPoints={prevPoints} />}
             {prevSnap && <div className="mt-1.5 text-center text-[10px] text-gray-400">small badges = change vs {fmtTs2(prevSnap.at)} · hover any point for the local top-3 · drag to pan, wheel/buttons to zoom</div>}
-          </Card>
+          </Card>)}
         </>
       )}
 
-      {snap && rawPoints && tab === "competitors" && (
-        <Card className="overflow-hidden">
+      {snap && rawPoints && tab === "competitors" && Vis("geogrid", "competitors", <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-3 border-b border-gray-100 px-5 py-3.5">
             <div>
               <div className="ll-display text-[14px] font-semibold">Top performing businesses for "{kw}"</div>
@@ -1147,8 +1148,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
               {competitors.length === 0 && <tr><td colSpan={7} className="px-5 py-6 text-center text-gray-400">No businesses captured in this snapshot — run a new scan (older snapshots predate competitor capture).</td></tr>}
             </tbody>
           </table>
-        </Card>
-      )}
+        </Card>)}
 
       {share && (
         <Modal title="Share this report" onClose={() => setShare(null)}>

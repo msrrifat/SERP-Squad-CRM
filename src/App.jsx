@@ -1801,7 +1801,8 @@ export default function App() {
               {activeView === "ranks" && <RankTrackingView project={project} tracking={tracking} dfsConnected={activeDfs.connected} accent={accent} onAdd={addTracking} onDelete={deleteTracking} onDeleteMany={deleteTrackingMany} onRerun={applyRerun} onSetVolumes={applyVolumes} onSetPaused={setTrackingPaused} readOnly={!canKeywords} dfs={activeDfs} clientView={clientView} onSetWidget={setWidgetFlag} />}
               {activeView === "geogrid" && (
                 <Lazy><GeoGridView project={project} accent={accent} onUpdate={updateProject}
-                  dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords} /></Lazy>
+                  dfs={activeDfs} placesKey={company.apis?.googlePlaces?.values?.apiKey} trackedKeywords={trackedKeywords}
+                  clientView={clientView} onSetWidget={setWidgetFlag} /></Lazy>
               )}
             </>
           )}
@@ -1816,7 +1817,7 @@ export default function App() {
               and for OAuth reviewers); connected it shows the live dashboards */}
           {project && !data && activeSection === "performance" && activeView === "web" && (
             googleConnected
-              ? <Lazy><GoogleLiveData project={project} accent={accent} /></Lazy>
+              ? <Lazy><GoogleLiveData project={project} accent={accent} clientView={clientView} onSetWidget={setWidgetFlag} /></Lazy>
               : <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
                   <div className="ll-display mb-1 text-[15px] font-semibold">Connect Google — Search Console &amp; Analytics</div>
                   <div className="mb-3 text-[11.5px] text-gray-400">Connect a Google account to pull this project's live Search Console and GA4 data into the dashboard. Read-only access; disconnect any time.</div>
