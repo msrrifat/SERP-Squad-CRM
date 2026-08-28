@@ -1752,7 +1752,7 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
 
       <div className="grid gap-4 lg:grid-cols-5">
         {Vis("gbp", "platformDevice", 
-          <Card className="p-5 lg:col-span-2">
+          <Card className="h-full p-5">
             <div className="ll-display mb-2 text-[15px] font-semibold">Views by platform & device <span className="text-xs font-normal text-gray-400">selected range</span></div>
             <ResponsiveContainer width="100%" height={170}>
               <PieChart>
@@ -1774,9 +1774,9 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               ))}
             </div>
           </Card>
-        )}
+        , "lg:col-span-2")}
         {Vis("gbp", "searchKeywords", 
-          <Card className="overflow-hidden lg:col-span-3">
+          <Card className="h-full overflow-hidden">
             <div className="border-b border-gray-100 px-5 py-4">
               <div className="ll-display text-[15px] font-semibold">Searches by keywords</div>
               <div className="text-[11px] text-gray-400">Search terms people used on Google to find this Business Profile · {LABELS[a]} – {LABELS[b]}</div>
@@ -1809,7 +1809,7 @@ export function GbpView({ project, data, range, setRange, accent, clientView = f
               </tbody>
             </table>
           </Card>
-        )}
+        , "lg:col-span-3")}
       </div>
       </>)}
     </div>
@@ -1915,7 +1915,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent,
               </ResponsiveContainer>
             </Card>
             {Vis("ga", "channels", 
-              <Card className="p-5 lg:col-span-2">
+              <Card className="h-full p-5">
                 <div className="ll-display mb-2 text-[15px] font-semibold">Traffic channels <span className="text-xs font-normal text-gray-400">{rangeLabel}</span></div>
                 <ResponsiveContainer width="100%" height={190}>
                   <PieChart>
@@ -1934,7 +1934,7 @@ export function WebsitePerformanceView({ project, data, range, setRange, accent,
                   ))}
                 </div>
               </Card>
-            )}
+            , "lg:col-span-2")}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">

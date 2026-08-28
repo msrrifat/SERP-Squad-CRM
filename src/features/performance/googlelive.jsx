@@ -36,11 +36,11 @@ export const dayLabel = (d) => (String(d).length === 8 ? String(d).slice(4, 6) +
    and the agency's "Client view" preview pass no callback, so disabled
    widgets disappear there — the flags behave exactly as before. */
 export function makeVis(widgets, set) {
-  return function Vis(g, k, node) {
+  return function Vis(g, k, node, cls = "") {
     const on = widgets?.[g]?.[k] !== false;
     if (!set) return on ? node : null;
     return (
-      <div className="group/vis relative">
+      <div className={"group/vis relative " + cls}>
         <div className={on ? undefined : "opacity-60"}>{node}</div>
         <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
           title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
@@ -467,7 +467,7 @@ export function GoogleLiveData({ project, accent, clientView = false, onSetWidge
         </div>
 
         <div className="grid gap-4 lg:grid-cols-5">
-          {Vis("ga", "trend", <Card className="p-5 lg:col-span-3">
+          {Vis("ga", "trend", <Card className="h-full p-5">
             <div className="ll-display mb-4 text-[15px] font-semibold">Traffic <span className="text-xs font-normal text-gray-400">daily</span></div>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={gaDaily} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
@@ -480,8 +480,8 @@ export function GoogleLiveData({ project, accent, clientView = false, onSetWidge
                 <Line type="monotone" dataKey="Sessions" stroke="#94A3B8" strokeWidth={2} dot={false} strokeDasharray="5 4" />
               </LineChart>
             </ResponsiveContainer>
-          </Card>)}
-          {channels.length > 0 && Vis("ga", "channels", <Card className="p-5 lg:col-span-2">
+          </Card>, "lg:col-span-3")}
+          {channels.length > 0 && Vis("ga", "channels", <Card className="h-full p-5">
               <div className="ll-display mb-2 text-[15px] font-semibold">Traffic channels <span className="text-xs font-normal text-gray-400">sessions</span></div>
               <ResponsiveContainer width="100%" height={190}>
                 <PieChart>
@@ -499,7 +499,7 @@ export function GoogleLiveData({ project, accent, clientView = false, onSetWidge
                   </div>
                 ))}
               </div>
-            </Card>)}
+            </Card>, "lg:col-span-2")}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
