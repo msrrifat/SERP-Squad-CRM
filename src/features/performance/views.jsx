@@ -433,7 +433,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
       {/* top ranked keywords + traffic sources — honest empty states */}
       <div className="grid gap-4 lg:grid-cols-2">
       {Vis("overview", "topKeywords",
-      <Card className="p-5">
+      <Card className="h-full p-5">
         <div className="ll-display mb-3 text-[15px] font-semibold">Top Ranked Keywords <span className="text-xs font-normal text-gray-400">best current positions · change vs 30 days ago</span></div>
         {topRanked.length > 0 ? (
           <table className="w-full text-left text-[13px]">
@@ -469,7 +469,7 @@ export function OverviewView({ project, data, tracking, cmp: cmpDefault = 3, acc
         )}
       </Card>)}
       {Vis("ga", "sources",
-        <Card className="p-5">
+        <Card className="h-full p-5">
           <div className="ll-display mb-1 text-[15px] font-semibold">Traffic sources <span className="text-xs font-normal text-gray-400">GA4 · sessions · {liveMode && gaLive ? `last ${liveDays} days · live` : "this month"}</span></div>
           <div className="mb-3 text-[11px] text-gray-400">Where visitors came from — search engines, social, direct and AI assistants</div>
           {I.ga && srcRows.length > 0 ? (

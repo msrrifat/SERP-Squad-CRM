@@ -41,7 +41,7 @@ export function makeVis(widgets, set) {
     if (!set) return on ? node : null;
     return (
       <div className={"group/vis relative " + cls}>
-        <div className={on ? undefined : "opacity-60"}>{node}</div>
+        <div className={"h-full" + (on ? "" : " opacity-60")}>{node}</div>
         <button type="button" onClick={(e) => { e.stopPropagation(); set(g, k, !on); }}
           title={on ? "Visible on the client dashboard — click to hide it from clients (you'll still see it here)" : "Hidden from the client dashboard — click to make it visible to clients"}
           className={"absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border bg-white shadow-sm transition-all " +
