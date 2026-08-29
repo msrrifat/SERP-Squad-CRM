@@ -460,14 +460,21 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
     setNewLocName("");
   };
 
-  const access = project.teamAccess || {};
+  /* Team permissions edit as a DRAFT — nothing touches the project until the
+     Save bar commits it, so half-finished toggling can't land (or be lost) */
+  const [accessDraft, setAccessDraft] = useState(() => project.teamAccess || {});
+  useEffect(() => { setAccessDraft(project.teamAccess || {}); }, [project.id]); // eslint-disable-line
+  const access = accessDraft;
+  const accessDirty = JSON.stringify(accessDraft) !== JSON.stringify(project.teamAccess || {});
+  const saveAccess = () => onUpdate({ teamAccess: accessDraft });
+  const resetAccess = () => setAccessDraft(project.teamAccess || {});
   const assigned = (company.team || []).filter((m) => !m.isOwner && (m.projects === "all" || (Array.isArray(m.projects) && m.projects.includes(project.id))));
   /* three-state per key: explicit true / explicit false / unset → role default */
   const autoSetOf = (m) => new Set(ROLE_AUTO_SECTIONS[m.role] === "all" ? ACCESS_TREE.flatMap((sec) => sec.items.map(([k]) => k)) : (ROLE_AUTO_SECTIONS[m.role] || []));
   const effOf = (m, k) => { const v = (access[m.id] || {})[k]; return v !== undefined ? !!v : autoSetOf(m).has(k); };
   const setMemberAccess = (mid, keys, val) =>
-    onUpdate((p) => ({ teamAccess: { ...(p.teamAccess || {}), [mid]: { ...((p.teamAccess || {})[mid] || {}), ...Object.fromEntries(keys.map((k) => [k, val])) } } }));
-  const resetMember = (mid) => onUpdate((p) => ({ teamAccess: { ...(p.teamAccess || {}), [mid]: {} } }));
+    setAccessDraft((cur) => ({ ...cur, [mid]: { ...(cur[mid] || {}), ...Object.fromEntries(keys.map((k) => [k, val])) } }));
+  const resetMember = (mid) => setAccessDraft((cur) => ({ ...cur, [mid]: {} }));
   const effCount = (m) => ACCESS_TREE.flatMap((sec) => sec.items.map(([k]) => k)).filter((k) => effOf(m, k)).length;
   const overrideCount = (m) => Object.keys(access[m.id] || {}).length;
 
@@ -667,6 +674,7 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
               No team members are assigned to this project yet — assign them in Company Settings → Team & permissions first.
             </div>
           )}
+          <SaveBar dirty={accessDirty} onSave={saveAccess} onReset={resetAccess} accent={accent} saveLabel="Save team permissions" />
         </div>
       )}
 
