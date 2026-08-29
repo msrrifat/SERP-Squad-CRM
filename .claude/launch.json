@@ -18,6 +18,14 @@
         "server/index.js"
       ],
       "port": 8787
+    },
+    {
+      "name": "website-rebuild",
+      "runtimeExecutable": "/Users/saifurrifat/.local/node/bin/node",
+      "runtimeArgs": [
+        "/Users/saifurrifat/SERP Squad/Website Rebuild By Claude/server.js"
+      ],
+      "port": 8790
     }
   ]
 }

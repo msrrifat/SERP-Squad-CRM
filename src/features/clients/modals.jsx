@@ -17,7 +17,7 @@ import {
 import { ACCENTS, askConfirm, askDisconnect, askInput, Ava, GuideTip, inputCls, Labeled, LogoUpload, Modal, ProjectMark, RoleBadge, SaveBar, Toggle, useDraft } from "../../ui/primitives.jsx";
 import { GoogleSourcesCard, ProjectDetailsCard, WidgetsCard } from "../performance/views.jsx";
 import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
-import { ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
+import { ROLE_PRESETS, ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
 
 export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", company = null }) {
@@ -613,7 +613,7 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
                     {/* the account-level switch outranks anything granted here —
                         without this note a Performance grant looks applied but
                         does nothing */}
-                    {m.role !== "Admin" && m.perms && !m.perms.viewData && (
+                    {m.role !== "Admin" && !((m.perms || ROLE_PRESETS[m.role] || {}).viewData) && (
                       <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-800">
                         <b>View dashboards is off</b> for {m.name.split(" ")[0]} in Company settings → Team, so the
                         Performance Studio grants below stay hidden on every project until it's turned back on.
