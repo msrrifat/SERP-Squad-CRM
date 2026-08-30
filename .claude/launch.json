@@ -25,7 +25,8 @@
       "runtimeArgs": [
         "/Users/saifurrifat/SERP Squad/Website Rebuild By Claude/server.js"
       ],
-      "port": 8790
+      "port": 8790,
+      "autoPort": true
     }
   ]
 }
