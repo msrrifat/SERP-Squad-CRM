@@ -726,20 +726,6 @@ async function handleGscQuery(body) {
     }
   } catch (e) { return gErr(e); }
 }
-/* what the Data API actually exposes for a property — used to detect whether
-   Google Business Profile metrics are queryable on this property (they appear
-   in GA4's Standard Reports UI, which does not guarantee Data API access) */
-async function handleGa4Metadata(body) {
-  if (!body?.connectionId || !body?.propertyId) return [400, { error: "bad_request", detail: "connectionId and propertyId required." }];
-  const pid = String(body.propertyId).replace(/^properties\//, "");
-  try { const { accessToken } = await googleAccess(body.connectionId);
-    const d = await gGet(accessToken, `https://analyticsdata.googleapis.com/v1beta/properties/${pid}/metadata`);
-    return [200, { live: true,
-      metrics: (d.metrics || []).map((m) => ({ api: m.apiName, ui: m.uiName })),
-      dimensions: (d.dimensions || []).map((x) => ({ api: x.apiName, ui: x.uiName })) }];
-  } catch (e) { return gErr(e); }
-}
-
 async function handleGa4Properties(body) {
   if (!body?.connectionId) return [503, { error: "not_connected", detail: "Connect a Google account first." }];
   try { const { accessToken } = await googleAccess(body.connectionId);
@@ -2067,77 +2053,6 @@ async function handleProfileListings(body) {
     return [503, { error: "not_configured", detail: "Bing Places has no public listings API. Microsoft grants access only through its location-partner programme, against a verified Bing Places account — request it from partneronbp@microsoft.com. This is not an Azure AD integration, so registering an app in the Azure portal will not help. Until access is granted, manage the content here and publish it at bingplaces.com." }];
   }
   return [400, { error: "bad_request", detail: "provider must be gbp, bing or apple" }];
-}
-
-/* ---- Google Business Profile performance (REAL daily metrics) ----------
-   The same numbers Google shows on the profile — and the same ones GA4's
-   Business Profile cards display — but read from the source API, which keeps
-   ~18 months (GA4 keeps a rolling 6) and accepts an arbitrary date range.
-   GA4's Data API cannot serve them at all: Business Profile metrics are
-   confined to GA4's Standard Reports UI (no Explorations, no Data API).
-   One call per location: locations/{id}:fetchMultiDailyMetricsTimeSeries. */
-const GBP_DAILY_METRICS = [
-  "BUSINESS_IMPRESSIONS_DESKTOP_MAPS", "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
-  "BUSINESS_IMPRESSIONS_MOBILE_MAPS", "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
-  "CALL_CLICKS", "WEBSITE_CLICKS", "BUSINESS_DIRECTION_REQUESTS",
-  "BUSINESS_CONVERSATIONS", "BUSINESS_BOOKINGS",
-];
-const isYmd = (x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x || ""));
-async function handleGbpPerformance(body) {
-  const locationId = String(body?.locationId || "").replace(/^locations\//, "");
-  if (!body?.connectionId || !locationId) return [400, { error: "bad_request", detail: "connectionId and locationId required." }];
-  if (!isYmd(body?.startDate) || !isYmd(body?.endDate)) return [400, { error: "bad_request", detail: "startDate and endDate must be YYYY-MM-DD." }];
-  const stored = loadGTokens()[body.connectionId];
-  if (!stored) return [503, { error: "not_connected", detail: "That Google connection no longer exists — reconnect the Google account." }];
-  if (stored.scope && !stored.scope.includes(GBP_SCOPE)) {
-    return [503, { error: "scope_missing", detail: "This Google account was connected before Business Profile access was requested. Reconnect it and approve the Business Profile permission." }];
-  }
-  const [sy, sm, sd] = body.startDate.split("-").map(Number);
-  const [ey, em, ed] = body.endDate.split("-").map(Number);
-  try {
-    const { accessToken } = await googleAccess(body.connectionId);
-    const qs = new URLSearchParams();
-    GBP_DAILY_METRICS.forEach((m) => qs.append("dailyMetrics", m));
-    qs.set("dailyRange.start_date.year", sy); qs.set("dailyRange.start_date.month", sm); qs.set("dailyRange.start_date.day", sd);
-    qs.set("dailyRange.end_date.year", ey); qs.set("dailyRange.end_date.month", em); qs.set("dailyRange.end_date.day", ed);
-    const url = `https://businessprofileperformance.googleapis.com/v1/locations/${encodeURIComponent(locationId)}:fetchMultiDailyMetricsTimeSeries?${qs}`;
-    const r = await fetch(url, { headers: { Authorization: "Bearer " + accessToken }, signal: AbortSignal.timeout(30000) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = d.error?.message || `HTTP ${r.status}`;
-      if (r.status === 403 || /quota|permission|not been used|disabled/i.test(msg)) {
-        return [502, { error: "gbp_not_approved", detail: `Google refused the Business Profile Performance API: ${msg}. Enable "Business Profile Performance API" in Cloud Console and wait for the access request to be approved — until then the quota is 0.` }];
-      }
-      return [502, { error: "provider_error", detail: msg }];
-    }
-    /* flatten Google's nested series into one row per day, keyed by our own
-       dashboard vocabulary — nothing is invented: a missing day reads 0 */
-    const byDate = new Map();
-    const row = (key) => { let x = byDate.get(key); if (!x) { x = { date: key, mapsDesktop: 0, mapsMobile: 0, searchDesktop: 0, searchMobile: 0, calls: 0, websiteClicks: 0, directions: 0, conversations: 0, bookings: 0 }; byDate.set(key, x); } return x; };
-    const FIELD = { BUSINESS_IMPRESSIONS_DESKTOP_MAPS: "mapsDesktop", BUSINESS_IMPRESSIONS_MOBILE_MAPS: "mapsMobile",
-      BUSINESS_IMPRESSIONS_DESKTOP_SEARCH: "searchDesktop", BUSINESS_IMPRESSIONS_MOBILE_SEARCH: "searchMobile",
-      CALL_CLICKS: "calls", WEBSITE_CLICKS: "websiteClicks", BUSINESS_DIRECTION_REQUESTS: "directions",
-      BUSINESS_CONVERSATIONS: "conversations", BUSINESS_BOOKINGS: "bookings" };
-    (d.multiDailyMetricTimeSeries || []).forEach((blk) => (blk.dailyMetricTimeSeries || []).forEach((ser) => {
-      const f = FIELD[ser.dailyMetric]; if (!f) return;
-      ((ser.timeSeries || {}).datedValues || []).forEach((dv) => {
-        const dt = dv.date || {}; if (!dt.year) return;
-        const key = `${dt.year}-${String(dt.month).padStart(2, "0")}-${String(dt.day).padStart(2, "0")}`;
-        row(key)[f] += Number(dv.value || 0);
-      });
-    }));
-    const byDay = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
-      .map((x) => ({ ...x, maps: x.mapsDesktop + x.mapsMobile, search: x.searchDesktop + x.searchMobile,
-        desktop: x.mapsDesktop + x.searchDesktop, mobile: x.mapsMobile + x.searchMobile,
-        views: x.mapsDesktop + x.mapsMobile + x.searchDesktop + x.searchMobile }));
-    const sum = (f) => byDay.reduce((n, x) => n + x[f], 0);
-    return [200, { live: true, byDay, totals: {
-      views: sum("views"), maps: sum("maps"), search: sum("search"), desktop: sum("desktop"), mobile: sum("mobile"),
-      calls: sum("calls"), websiteClicks: sum("websiteClicks"), directions: sum("directions"),
-      conversations: sum("conversations"), bookings: sum("bookings"),
-      interactions: sum("calls") + sum("websiteClicks") + sum("directions") + sum("conversations") + sum("bookings"),
-    } }];
-  } catch (e) { return gErr(e); }
 }
 
 /* ---- Ads platforms (Meta / Google / TikTok / Reddit / Nextdoor / Yelp) ----
@@ -5116,7 +5031,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/google/ga4/metadata", "/api/gbp/performance"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5235,8 +5150,6 @@ http.createServer(async (req, res) => {
         : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)
         : req.url === "/api/google/ga4/properties" ? await handleGa4Properties(body)
         : req.url === "/api/google/ga4/report" ? await handleGa4Report(body)
-        : req.url === "/api/google/ga4/metadata" ? await handleGa4Metadata(body)
-        : req.url === "/api/gbp/performance" ? await handleGbpPerformance(body)
         : await handleRerun(body);
       return send(code, payload);
     }

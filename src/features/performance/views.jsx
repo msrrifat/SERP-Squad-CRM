@@ -2250,7 +2250,7 @@ export function WidgetsCard({ widgets, setWidget, accent }) {
 
 /* shown instead of dashboards when a project has demo mode OFF and no real
    source is syncing yet — the honest empty state with exact requirements */
-export function NoDataPanel({ project, accent, gbpError = null }) {
+export function NoDataPanel({ project, accent }) {
   const I = project.integrations || {};
   const rows = [
     { on: I.gbp || I.bing || I.apple, name: "Business profiles (Google · Bing · Apple)", need: "Provider OAuth apps in Company Settings → API settings, then authorize each listing in Project settings → Data sources (location groups)." },
@@ -2260,13 +2260,6 @@ export function NoDataPanel({ project, accent, gbpError = null }) {
   ];
   return (
     <div className="ll-fade space-y-3">
-      {/* a connected listing that Google refused — the reason, not silence */}
-      {gbpError && (
-        <Card className="border-amber-200 bg-amber-50 p-4">
-          <div className="ll-display text-[13.5px] font-semibold text-amber-900">Business Profile metrics couldn't be read</div>
-          <p className="mt-1 text-[11.5px] leading-relaxed text-amber-800">{gbpError}</p>
-        </Card>
-      )}
       <Card className="p-6">
         <div className="ll-display text-[16px] font-semibold">No data syncing yet</div>
         <p className="mt-1 max-w-2xl text-[12.5px] leading-relaxed text-gray-500">

@@ -10,7 +10,6 @@ import { Activity, BarChart3, CheckCircle2, Eye, EyeOff, Link2, MousePointerClic
 import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { emptySiteData } from "../../data/gen.js";
-import { applyGbpMonths, fetchGbpMonths } from "../../lib/gbplive.js";
 import { MONTH_DATES } from "../../lib/months.jsx";
 
 const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
@@ -151,8 +150,6 @@ export function useLiveSiteData(project, enabled = true) {
           base.topPages = ga.topPages || [];
           base.engRate = ga.totals?.engRate || 0;
         }
-        const gbp = await fetchGbpMonths(project, conn).catch(() => null);
-        if (gbp?.live) applyGbpMonths(base, gbp);
         if (gsc?.live) {
           (gsc.byDate || []).forEach((r) => {
             const i = monthIdx(Date.parse(r.date));

@@ -59,7 +59,6 @@ async function postState(token, state, baseRev, keep = []) {
     headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extra }, body });
 }
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
-import { applyGbpMonths, useLiveGbp } from "./lib/gbplive.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
 import { stripChatDocs } from "./lib/chatmerge.js";
@@ -784,17 +783,9 @@ export default function App() {
   );
   /* real projects (no demo data): the Overview keeps its designed layout with
      all-zero series + "Not connected" placeholders — nothing is fabricated */
-  /* live Google Business Profile metrics for real projects — folded into the
-     same month grid the dashboards already read, so Overview + Business
-     Profiles show real numbers with no other changes */
-  const gbpLive = useLiveGbp(project);
   const liveData = useMemo(
-    () => {
-      if (!(project && project.demoMode === false)) return null;
-      const base = emptySiteData(project);
-      return gbpLive?.live ? applyGbpMonths(base, gbpLive) : base;
-    },
-    [project?.id, project?.demoMode, monthKey, locSig(project), gbpLive] // eslint-disable-line
+    () => (project && project.demoMode === false ? emptySiteData(project) : null),
+    [project?.id, project?.demoMode, monthKey, locSig(project)] // eslint-disable-line
   );
   const accent = project?.accent || "#1F2A44";
   /* white-label clients may run on their OWN DataForSEO account: when enabled,
@@ -1833,15 +1824,8 @@ export default function App() {
                   <Lazy><GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={updateProject} /></Lazy>
                 </div>
           )}
-          {/* Business Profiles on a real project: live profile metrics when a
-              listing is connected, otherwise the honest requirements panel */}
-          {project && !data && activeSection === "performance" && activeView === "gbp" && (
-            gbpLive?.live
-              ? <GbpView project={project} data={liveData} range={range} setRange={setRange} accent={accent} clientView={clientView} onSetWidget={setWidgetFlag} />
-              : <NoDataPanel project={project} accent={accent} gbpError={gbpLive?.err || null} />
-          )}
           {project && !data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView)
-            && activeView !== "overview" && activeView !== "gbp"
+            && activeView !== "overview"
             && activeView !== "web" && <NoDataPanel project={project} accent={accent} />}
           {project && data && activeSection === "performance" && !SELF_DATA_VIEWS.includes(activeView) && (
             <>
