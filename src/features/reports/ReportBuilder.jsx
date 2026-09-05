@@ -563,6 +563,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     if (r.top) return `${r.rows.length} of ${r.pool.length} tracked keywords${where} rank in the top ${r.top}, best current position first.`;
     return r.locLabel ? `All ${r.pool.length} tracked keywords${where}, best current position first.` : "";
   };
+  /* Fixed column widths for the ranking tables. With the browser's automatic
+     table layout the columns come out a few pixels different depending on
+     WHICH rows are in the table, so a cell that wraps in the hidden measuring
+     copy fits on one line on the page (or the reverse), and every row's
+     height is mis-predicted by a text line. Fixed widths make the measuring
+     copy and every printed part wrap identically. */
+  const RANK_COLS = ["30%", "16%", "10%", "10%", "7%", "9%", "18%"];
+  const RankCols = () => <colgroup>{RANK_COLS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>;
   const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1 };
   /* the row count a block will render, so pagination can divide it without
      first rendering the whole thing */
@@ -639,11 +647,15 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           ? elFirst.querySelectorAll("[data-rbrow]") : elFirst.querySelectorAll("tbody tr"))];
         if (fr.length) overheadFirst = Math.max(0, elFirst.offsetHeight - fr.reduce((n, r) => n + r.offsetHeight, 0));
       }
-      const next = { rowH, rowHs, overhead: Math.max(0, el.offsetHeight - rowsH), overheadFirst };
+      /* a work list repeats its checklist heading at the top of a page part
+         that starts mid-checklist — a height no row of the sample carries */
+      const headEl = el.querySelector("[data-rbhead]");
+      const headH = headEl ? headEl.offsetHeight + 4 : 0;
+      const next = { rowH, rowHs, overhead: Math.max(0, el.offsetHeight - rowsH), overheadFirst, headH };
       const prev = metricsRef.current[b.id];
       const sig = (m2) => (m2?.rowHs || []).join(",");
       if (!prev || sig(prev) !== sig(next) || Math.abs(prev.overhead - next.overhead) > 1
-          || Math.abs((prev.overheadFirst ?? 0) - next.overheadFirst) > 1) {
+          || Math.abs((prev.overheadFirst ?? 0) - next.overheadFirst) > 1 || Math.abs((prev.headH ?? 0) - headH) > 1) {
         metricsRef.current[b.id] = next; changed = true;
       }
     });
@@ -660,10 +672,23 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       /* the block that ran past the bottom is the LAST divided part on the
          page, not the first — charging the first is how an innocent block got
          trimmed down to nothing */
-      const parts = [...pg.querySelectorAll(".rb-block")]
-        .map((el) => el.getAttribute("data-block") || "").filter((id) => id.includes("#"));
-      if (!parts.length) return;
-      const src = parts[parts.length - 1].split("#")[0];
+      const els = [...pg.querySelectorAll(".rb-block")];
+      const lastEl = els[els.length - 1];
+      const lastId = lastEl?.getAttribute("data-block") || "";
+      /* only a divided part that is itself the last thing on the page — and
+         that STARTS inside the sheet — can be the reason the page runs long.
+         When an undivided block above it (a geo-grid map, an image, a block
+         still at its placeholder height) is what overflowed, trimming the
+         part's rows fixes nothing and leaves that many rows' worth of blank
+         space on every later page. */
+      if (!lastId.includes("#")) return;
+      if (lastEl.getBoundingClientRect().top - pg.getBoundingClientRect().top > PAGE_H - 120) return;
+      /* ...and only when the part really came out taller than the paginator
+         estimated for it. If it rendered at its estimate, the overflow belongs
+         to something else on the page (a block that grew after measuring). */
+      const est = +(lastEl.getAttribute("data-est") || 0);
+      if (est && lastEl.offsetHeight <= est + 2) return;
+      const src = lastId.split("#")[0];
       const cur = rowTrimRef.current[src] || 0;
       if (cur < MAX_ROW_TRIM) { rowTrimRef.current[src] = cur + 1; changed = true; }
     });
@@ -736,15 +761,24 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         cur().push(b); used += h; return;
       }
       let from = 0, part = 0;
+      const workRows = b.type === "work" ? workRowsOf(b) : null;
       while (from < rowCount) {
         const budget = USABLE - used - 10;
-        /* the first part carries the block's summary, a continuation does not */
-        const oh = part === 0 ? (m.overheadFirst ?? m.overhead) : m.overhead;
+        /* the first part carries the block's summary, a continuation does not;
+           a work part that opens in the middle of a checklist repeats that
+           checklist's heading */
+        const midGroup = workRows && from > 0 && workRows[from] && workRows[from - 1] && workRows[from].cl.id === workRows[from - 1].cl.id;
+        const oh = (part === 0 ? (m.overheadFirst ?? m.overhead) : m.overhead) + (midGroup ? (m.headH || 0) : 0);
         /* exact fit: walk the measured rows until the budget is spent (one
            average row kept back for rounding), then any learned trim */
         let fit;
-        if (m.rowHs && m.rowHs.length >= rowCount) {
-          let acc = oh + m.rowH, n = 0;
+        const exact = !!(m.rowHs && m.rowHs.length >= rowCount);
+        /* exact heights need only a few pixels of rounding slack; a whole
+           average row held back was leaving a row or two of blank space at
+           the bottom of every page */
+        const slack = exact ? 6 : m.rowH;
+        if (exact) {
+          let acc = oh + slack, n = 0;
           while (from + n < rowCount && acc + m.rowHs[from + n] <= budget) { acc += m.rowHs[from + n]; n += 1; }
           fit = n - (rowTrimRef.current[b.id] || 0);
         } else {
@@ -759,8 +793,8 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         if (tail > 0 && tail < MIN_ROWS && fit - (MIN_ROWS - tail) >= MIN_ROWS) fit -= MIN_ROWS - tail;
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
-        const est = oh + rowSum(from, to) + m.rowH;
-        cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount });
+        const est = oh + rowSum(from, to) + slack;
+        cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount, _est: Math.round(est) });
         used += est + 10;
         from = to; part += 1;
         if (from < rowCount) newPage();
@@ -922,7 +956,8 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const note = rankFootnote(rr);
       return (
       <div>
-        <table className="w-full text-[12.5px]">
+        <table className="w-full text-[12.5px]" style={{ tableLayout: "fixed" }}>
+          <RankCols />
           <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th><th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
           <tbody>{sliceRows(b, rr.rows).map((t) => (
             <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
@@ -1289,7 +1324,8 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           </div>
         )}
         {showKeywords && (
-        <table className="w-full text-[12px]">
+        <table className="w-full text-[12px]" style={{ tableLayout: "fixed" }}>
+          <RankCols />
           <thead><tr className="border-b border-gray-100">
             <th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th>
             <th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>URL</th>
@@ -1416,27 +1452,26 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
        name, status, dates or progress bar (add a heading block for context) */
     return (
       <div className="rounded-xl border border-gray-100 p-4">
-        <div className="space-y-3">
-          {cls.map((c) => (
-            <div key={c.id}>
-              <div className="mb-1 text-[13px] font-semibold text-gray-800">{linkify(c.name)}</div>
-              {/* clean client-facing list: just the finished task names — no
-                  strikethrough, no assignees or dates */}
-              <div className="space-y-1">
-                {c.tasks.map((t) => (
-                  <div key={t.id} data-rbrow className="flex items-start gap-2 border-b border-gray-50 py-1.5">
-                    <span className="mt-0.5 flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded border-2"
-                      style={{ background: POS, borderColor: POS, color: "#fff" }}>
-                      <CheckCircle2 size={10} strokeWidth={3.5} />
-                    </span>
-                    <span className="text-[12.5px] font-medium text-gray-800">{linkify(t.title)}</span>
-                  </div>
-                ))}
-              </div>
+        {/* Every measured row (data-rbrow) carries its own spacing and, for the
+            first task of a checklist, the checklist heading — as PADDING, not
+            margins. The paginator sums row heights; headings and margins that
+            sit outside the rows were being charged as a fixed overhead on
+            every page part, which left half of each page empty. */}
+        {cls.map((c, ci) => c.tasks.map((t, ti) => (
+          <div key={t.id} data-rbrow className={ti === 0 ? (ci > 0 ? "pt-3" : "") : "pt-1"}>
+            {ti === 0 && <div data-rbhead className="mb-1 text-[13px] font-semibold text-gray-800">{linkify(c.name)}</div>}
+            {/* clean client-facing list: just the finished task names — no
+                strikethrough, no assignees or dates */}
+            <div className="flex items-start gap-2 border-b border-gray-50 py-1.5">
+              <span className="mt-0.5 flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded border-2"
+                style={{ background: POS, borderColor: POS, color: "#fff" }}>
+                <CheckCircle2 size={10} strokeWidth={3.5} />
+              </span>
+              <span className="text-[12.5px] font-medium text-gray-800">{linkify(t.title)}</span>
             </div>
-          ))}
-          {cls.length === 0 && <div className="py-3 text-center text-[12px] text-gray-300">No completed tasks in this record yet — only finished work appears in reports.</div>}
-        </div>
+          </div>
+        )))}
+        {cls.length === 0 && <div className="py-3 text-center text-[12px] text-gray-300">No completed tasks in this record yet — only finished work appears in reports.</div>}
       </div>
     );
   };
@@ -2159,7 +2194,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                     const srcBlock = blocks.find((x) => x.id === src) || b;
                     const i = blocks.findIndex((x) => x.id === src);
                     return (
-                      <div key={b.id} ref={attachBlockRef(b.id)} data-block={b.id}
+                      <div key={b.id} ref={attachBlockRef(b.id)} data-block={b.id} data-est={b._est || undefined}
                         className={"rb-block group relative rounded-xl px-2 py-2 hover:bg-gray-50/80" + (tallBlocks.has(b._srcId || b.id) ? " rb-tall" : "")}
                         style={flashId === src ? { boxShadow: `0 0 0 2px ${accent}`, background: accent + "0A", transition: "box-shadow .3s" } : {}}>
                         {/* hover toolbar */}
