@@ -663,7 +663,10 @@ export default function App() {
         }
       } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     };
-    saveTimer.current = setTimeout(() => flush(false), 1200);
+    /* 400 ms after the last edit: long enough to fold a burst of keystrokes
+       into one save, short enough that the banner is gone before it is read.
+       Saves themselves are cheap now (only the changed project, gzipped). */
+    saveTimer.current = setTimeout(() => flush(false), 400);
     return () => clearTimeout(saveTimer.current);
   }, [company, clients, hydrated, teamSession, stateSync, staleState]);
 

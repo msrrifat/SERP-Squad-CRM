@@ -368,6 +368,26 @@ const domFile = (d) => new URL(`${d}.json`, STATE_DIR);
 const REVS_FILE = new URL("./data/state/revs.json", import.meta.url);
 
 const readJson = (u, fallback = null) => { try { return JSON.parse(readFileSync(u, "utf8")); } catch { return fallback; } };
+/* ---- IN-MEMORY DOCUMENTS ------------------------------------------------
+   A save used to re-read and re-parse the 17 MB performance document from
+   disk to check and merge a 45 KB change. Parsed documents are kept here,
+   keyed on the file's mtime+size so any write path — including one from
+   another process — invalidates them. READ-ONLY: callers spread or copy,
+   never mutate what comes back, because the same object serves the next
+   request. */
+const docCache = {};
+const docKey = (d) => { try { const st = statSync(domFile(d)); return `${st.mtimeMs}:${st.size}`; } catch { return null; } };
+function readDocCached(d, fallback = {}) {
+  const key = docKey(d);
+  if (!key) return fallback;
+  const hit = docCache[d];
+  if (hit && hit.key === key) return hit.doc;
+  const doc = readJson(domFile(d), fallback);
+  docCache[d] = { key, doc };
+  return doc;
+}
+/* after a write: the object just written IS the file's content */
+const rememberDoc = (d, doc) => { const key = docKey(d); if (key) docCache[d] = { key, doc }; };
 const loadRevs = () => readJson(REVS_FILE, {}) || {};
 const saveRevs = (r) => { try { mkdirSync(STATE_DIR, { recursive: true }); writeJsonAtomic(REVS_FILE, r); } catch { /* advisory */ } };
 function writeJsonAtomic(url, value) {
@@ -979,7 +999,7 @@ function handleStateDomains(req, body) {
   /* the core document is the skeleton every other one hangs off; losing it
      would orphan the lot, so it gets the same collapse guard as a full save */
   if (docs.core) {
-    const prev = readJson(domFile("core"), null);
+    const prev = readDocCached("core", null);
     const prevN = (prev?.clients || []).length, nextN = (docs.core.clients || []).length;
     if (prevN >= 1 && nextN < prevN && JSON.stringify(docs.core).length < JSON.stringify(prev).length * 0.35) {
       return [409, { error: "refused_overwrite",
@@ -996,7 +1016,7 @@ function handleStateDomains(req, body) {
   took.checks = Date.now() - t0;
   for (const d of names) {
     if (partial[d] && PROJECT_KEYED.includes(d)) {
-      const stored = readJson(domFile(d), {}) || {};
+      const stored = readDocCached(d, {}) || {};
       const sent = docs[d] && typeof docs[d] === "object" ? docs[d] : {};
       for (const k of Object.keys(sent)) {
         const why = stored[k] ? hollowed(d, { [k]: stored[k] }, { [k]: sent[k] }) : null;
@@ -1007,7 +1027,7 @@ function handleStateDomains(req, body) {
       docs[d] = merged;
       continue;
     }
-    const why = hollowed(d, readJson(domFile(d), {}), docs[d]);
+    const why = hollowed(d, readDocCached(d, {}), docs[d]);
     if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
   }
   try {
@@ -1016,10 +1036,11 @@ function handleStateDomains(req, body) {
        the two documents that carry chat are read — not the whole workspace. */
     took.merge = Date.now() - t0;
     const merged = (docs.core || docs.pm)
-      ? mergeChatDocs(docs, { core: readJson(domFile("core"), null), pm: readJson(domFile("pm"), {}) })
+      ? mergeChatDocs(docs, { core: readDocCached("core", null), pm: readDocCached("pm", {}) })
       : docs;
     took.chat = Date.now() - t0;
     const out = saveDomainDocs(merged);
+    for (const d of names) rememberDoc(d, merged[d] ?? {});
     took.write = Date.now() - t0;
     /* phase timings (ms since the request was parsed) — visible in the
        browser's network tab, so a slow save can be diagnosed without SSH */
