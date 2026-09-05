@@ -331,6 +331,7 @@ export default function App() {
      Only team accounts write; the token gates the API server-side too.
      Failed saves are NEVER silent — data that didn't persist shows a banner. */
   const saveTimer = useRef(null);
+  const saveInFlight = useRef(false);
   const [saveWarn, setSaveWarn] = useState(null);
   /* a save the server refused because the workspace moved on underneath us */
   const [staleState, setStaleState] = useState(false);
@@ -452,8 +453,34 @@ export default function App() {
     /* the durable copy: written the moment work is unconfirmed, dropped the
        moment the server confirms it (every `saved` below) */
     if (!quiet && pendingKey()) stashPending(pendingKey(), { company: companyRef.current, clients: clientsRef.current }, stateRev.current);
-    saveTimer.current = setTimeout(async () => {
-      if (!quiet) setSaveState("saving");
+    /* ---- ONE SAVE AT A TIME, AND NOTHING LEFT BEHIND ---------------------
+       A change made while a save is still in flight used to be compared
+       against the server copy as it was BEFORE that save. When the change
+       happened to restore the pre-save value (toggle something off, then on
+       again), the comparison saw "no difference" and dropped it — the server
+       kept the off state while the tab showed on. So a flush that finds a
+       save in flight waits for it, and every finished save re-checks the
+       live workspace and goes again if it has moved on. */
+    const dirtyAgain = () => {
+      try {
+        if (!Object.keys(serverDocs.current).length) return false;
+        const docs = stripChatDocs(splitWorkspace({ company: companyRef.current, clients: clientsRef.current }));
+        const blocked = new Set([...unloaded.current].map((p) => domainOfCompanyKey(p.slice("company.".length))));
+        return DOMAINS.some((d) => !blocked.has(d) && JSON.stringify(docs[d] ?? {}) !== serverDocs.current[d]);
+      } catch { return false; }
+    };
+    const flush = async (again = false) => {
+      if (saveInFlight.current) { saveTimer.current = setTimeout(() => flush(again), 400); return; }
+      saveInFlight.current = true;
+      if (!quiet || again) setSaveState("saving");
+      try {
+        await flushBody();
+      } finally {
+        saveInFlight.current = false;
+        if (dirtyAgain()) { setSaveState("pending"); saveTimer.current = setTimeout(() => flush(true), 100); }
+      }
+    };
+    const flushBody = async () => {
       try {
         /* No revision to pin `keep` against AND a slice still missing: this tab
            cannot express a safe write at all. Fetch what's missing first rather
@@ -635,7 +662,8 @@ export default function App() {
           setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());
         }
       } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
-    }, 1200);
+    };
+    saveTimer.current = setTimeout(() => flush(false), 1200);
     return () => clearTimeout(saveTimer.current);
   }, [company, clients, hydrated, teamSession, stateSync, staleState]);
 

@@ -907,6 +907,7 @@ function handleStateGet(req) {
    editing rank tracking while someone else edits tasks is not a conflict, and
    is no longer reported as one. */
 function handleStateDomains(req, body) {
+  const t0 = Date.now(); const took = {};
   const sess = sessionFromReq(req);
   if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
   if (sess.kind !== "team") return [403, { error: "forbidden", detail: "Only team accounts can write app state." }];
@@ -951,6 +952,7 @@ function handleStateDomains(req, body) {
      Each sent project gets the hollowing check on its own, since a single
      stripped project would never move the whole-document ratio. */
   const partial = body.partial && typeof body.partial === "object" ? body.partial : {};
+  took.checks = Date.now() - t0;
   for (const d of names) {
     if (partial[d] && PROJECT_KEYED.includes(d)) {
       const stored = readJson(domFile(d), {}) || {};
@@ -971,11 +973,16 @@ function handleStateDomains(req, body) {
     /* chat is multi-writer: fold in whatever the store already holds so a
        document built before someone's message arrived cannot erase it. Only
        the two documents that carry chat are read — not the whole workspace. */
+    took.merge = Date.now() - t0;
     const merged = (docs.core || docs.pm)
       ? mergeChatDocs(docs, { core: readJson(domFile("core"), null), pm: readJson(domFile("pm"), {}) })
       : docs;
+    took.chat = Date.now() - t0;
     const out = saveDomainDocs(merged);
-    return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now() }];
+    took.write = Date.now() - t0;
+    /* phase timings (ms since the request was parsed) — visible in the
+       browser's network tab, so a slow save can be diagnosed without SSH */
+    return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now(), took }];
   } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
 }
 
