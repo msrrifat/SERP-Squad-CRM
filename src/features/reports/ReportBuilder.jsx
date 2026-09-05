@@ -23,7 +23,7 @@ import { Distribution, ReportGridMap, gridCenterOf, gridMetrics, distFor } from 
 import { useLiveSiteData } from "../performance/googlelive.jsx";
 import { AD_PLATFORMS, PfBadge, campaignDaily, sumMetrics } from "../ads/dashboard.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
-import { cityLabel, urlSlug } from "../../lib/geo.js";
+import { cityLabel, cityKey, urlSlug } from "../../lib/geo.js";
 import { fmt, fmtDay, fmtTs2, linkify, pctDelta, uid } from "../../lib/format.jsx";
 
 export const chartShades = (c) => [c, c + "CC", c + "99", c + "66", c + "40", "#CBD5E1"];
@@ -532,6 +532,37 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     return rec.checklists.filter((c) => !exCl.has(c.id))
       .flatMap((c) => c.tasks.filter((t) => !exT.has(t.id) && t.completedAt).map((t) => ({ cl: c, t })));
   };
+  /* ---- keyword-ranking rows for a block -------------------------------
+     A project tracks the same keyword in several locations (cities); the
+     report can show one location or all of them together (`b.city` is a
+     cityKey or "all"). "Top N" means the keywords that currently RANK inside
+     the top N positions — not the first N rows — so "Top 100" lists every
+     keyword on page 1-10 and nothing that is unranked. */
+  const RANK_TIERS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  const rankLocsOf = (tr) => {
+    const seen = new Map();
+    (tr || []).forEach((t) => { if (t.city && typeof t.city === "object") { const k = cityKey(t.city); if (!seen.has(k)) seen.set(k, cityLabel(t.city)); } });
+    return [...seen].map(([key, label]) => ({ key, label }));
+  };
+  const rankRowsFor = (tr, b) => {
+    const all = tr || [];
+    const pool = b.city && b.city !== "all" ? all.filter((t) => t.city && typeof t.city === "object" && cityKey(t.city) === b.city) : all;
+    /* best CURRENT position first — a ranking report opens with what is
+       winning; keywords with no position yet sink to the bottom */
+    const sorted = [...pool].sort((x, y) => {
+      const px = x.stats?.cur, py = y.stats?.cur;
+      const vx = px == null || px > 100 ? 1e6 : px, vy = py == null || py > 100 ? 1e6 : py;
+      return vx - vy || (x.keyword || "").localeCompare(y.keyword || "");
+    });
+    const top = b.limit && b.limit !== "all" ? +b.limit : null;
+    const rows = top ? sorted.filter((t) => t.stats?.cur != null && t.stats.cur <= top) : sorted;
+    return { rows, pool, top, locLabel: b.city && b.city !== "all" ? (rankLocsOf(all).find((l) => l.key === b.city)?.label || "") : "" };
+  };
+  const rankFootnote = (r) => {
+    const where = r.locLabel ? ` in ${r.locLabel}` : "";
+    if (r.top) return `${r.rows.length} of ${r.pool.length} tracked keywords${where} rank in the top ${r.top}, best current position first.`;
+    return r.locLabel ? `All ${r.pool.length} tracked keywords${where}, best current position first.` : "";
+  };
   const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1 };
   /* the row count a block will render, so pagination can divide it without
      first rendering the whole thing */
@@ -543,12 +574,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     if (b.type === "table") {
       /* row counts for the data tables come from the same sources the renderer
          uses, so they are known before anything is drawn */
-      if (b.kind === "rank") return b.limit && b.limit !== "all" ? Math.min(+b.limit, tracking.length) : tracking.length;
+      if (b.kind === "rank") return rankRowsFor(tracking, b).rows.length;
       return 0;   // the remaining kinds are short by construction
     }
     if (b.type === "rankReport") {
-      const n = (projOf(b.projectId)?.tracking || []).length;
-      return b.show === "summary" ? 0 : (b.limit && b.limit !== "all" ? Math.min(+b.limit, n) : n);
+      return b.show === "summary" ? 0 : rankRowsFor(projOf(b.projectId)?.tracking, b).rows.length;
     }
     if (b.type === "work") return workRowsOf(b).length;
     return 0;
@@ -884,18 +914,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
        across pages, the slice of rows belonging to this part */
     const cap = (arr) => sliceRows(b, b.limit && b.limit !== "all" ? arr.slice(0, +b.limit) : arr);
     if (b.kind === "rank") {
-      /* best CURRENT position first — the report leads with what's winning;
-         unranked keywords (no position) sink to the bottom */
-      const ranked = [...tracking].sort((a, b2) => {
-        const pa = a.stats?.cur, pb = b2.stats?.cur;
-        const va = pa == null || pa > 100 ? 1e6 : pa, vb = pb == null || pb > 100 ? 1e6 : pb;
-        return va - vb || (a.keyword || "").localeCompare(b2.keyword || "");
-      });
+      const rr = rankRowsFor(tracking, b);
+      const note = rankFootnote(rr);
       return (
       <div>
         <table className="w-full text-[12.5px]">
           <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th><th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
-          <tbody>{cap(ranked).map((t) => (
+          <tbody>{sliceRows(b, rr.rows).map((t) => (
             <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
               <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
@@ -905,9 +930,8 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                   : <span className="text-gray-300">—</span>}</td></tr>
           ))}</tbody>
         </table>
-        {b.limit && b.limit !== "all" && tracking.length > +b.limit && (
-          <div className="pt-1.5 text-[10.5px] text-gray-400">Showing the top {b.limit} of {tracking.length} tracked keywords, best current position first.</div>
-        )}
+        {rr.rows.length === 0 && <div className="px-3 py-3 text-[12px] text-gray-400">No tracked keyword {rr.locLabel ? `in ${rr.locLabel} ` : ""}currently ranks in the top {rr.top}.</div>}
+        {note && <div className="pt-1.5 text-[10.5px] text-gray-400">{note}</div>}
       </div>
       );
     }
@@ -1220,17 +1244,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
   const renderRankReport = (b) => {
     const cp = projOf(b.projectId);
-    const tr = cp.tracking;
     const color = b.color || accent;
-    /* best CURRENT position first — a ranking report should open with what is
-       winning; keywords with no position yet sink to the bottom rather than
-       sitting wherever they happened to be added */
-    const sorted = [...tr].sort((x, y) => {
-      const px = x.stats?.cur, py = y.stats?.cur;
-      const vx = px == null || px > 100 ? 1e6 : px, vy = py == null || py > 100 ? 1e6 : py;
-      return vx - vy || (x.keyword || "").localeCompare(y.keyword || "");
-    });
-    const rows = sliceRows(b, b.limit && b.limit !== "all" ? sorted.slice(0, +b.limit) : sorted);
+    const rr = rankRowsFor(cp.tracking, b);
+    /* the summary counters describe the chosen location (or all of them) */
+    const tr = rr.pool;
+    const rows = sliceRows(b, rr.rows);
     /* averages only count keywords that actually have a position */
     const ranked = tr.filter((t) => t.stats?.cur != null);
     const avg = ranked.length ? ranked.reduce((x, t) => x + t.stats.cur, 0) / ranked.length : 0;
@@ -1251,10 +1269,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <ProjectMark project={cp.project} />
             <div>
               <div className="ll-display text-[15px] font-semibold leading-tight">{cp.project.name}</div>
-              <div className="text-[10.5px] text-gray-400">{[...new Set(tr.map((t) => cityLabel(t.city)))].join(" · ") || cp.project.website}</div>
+              <div className="text-[10.5px] text-gray-400">{rr.locLabel || [...new Set(cp.tracking.map((t) => cityLabel(t.city)))].join(" · ") || cp.project.website}</div>
             </div>
           </div>
-          <SourceTag label="Keyword rankings" />
+          <SourceTag label={rr.top ? `Top ${rr.top} rankings` : "Keyword rankings"} />
         </div>
         {showSummary && chips.length > 0 && (
           <div className="mb-3 grid gap-2.5" style={{ gridTemplateColumns: `repeat(${Math.min(chips.length, 6)}, minmax(0, 1fr))` }}>
@@ -1283,8 +1301,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           ))}</tbody>
         </table>
         )}
-        {showKeywords && b.limit && b.limit !== "all" && tr.length > +b.limit && (
-          <div className="pt-1.5 text-[10px] text-gray-400">Showing the best {b.limit} of {tr.length} tracked keywords by current position.</div>
+        {showKeywords && rows.length === 0 && !b._part && (
+          <div className="rounded-lg bg-gray-50 px-3 py-2 text-[12px] text-gray-400">No tracked keyword{rr.locLabel ? ` in ${rr.locLabel}` : ""} currently ranks in the top {rr.top}.</div>
+        )}
+        {showKeywords && rankFootnote(rr) && (
+          <div className="pt-1.5 text-[10px] text-gray-400">{rankFootnote(rr)}</div>
         )}
       </div>
     );
@@ -1670,13 +1691,32 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             {Object.entries(TABLE_KINDS).filter(([, d]) => d.show).map(([k, d]) => <option key={k} value={k}>{d.label}</option>)}
           </select>
         </Labeled>
-        <Labeled label="Rows to show">
-          <select value={b.limit || "all"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
-            {[3, 5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>Top {n}</option>)}
-            <option value="all">All rows</option>
-          </select>
-        </Labeled>
-        {cmpSelect(b)}
+        {b.kind === "rank" ? (
+          <>
+            <Labeled label="Location">
+              <select value={b.city || "all"} onChange={(e) => patch(b.id, { city: e.target.value })} className={inputCls + " bg-white"}>
+                <option value="all">All locations together</option>
+                {rankLocsOf(tracking).map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+              </select>
+            </Labeled>
+            <Labeled label="Keywords ranked in">
+              <select value={b.limit || "all"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
+                {RANK_TIERS.map((n) => <option key={n} value={n}>Top {n} positions</option>)}
+                <option value="all">All keywords</option>
+              </select>
+            </Labeled>
+          </>
+        ) : (
+          <>
+            <Labeled label="Rows to show">
+              <select value={b.limit || "all"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
+                {[3, 5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>Top {n}</option>)}
+                <option value="all">All rows</option>
+              </select>
+            </Labeled>
+            {cmpSelect(b)}
+          </>
+        )}
         <div className="sm:col-span-3"><Labeled label="Custom title (optional)"><input value={b.title || ""} onChange={(e) => patch(b.id, { title: e.target.value })} className={inputCls} /></Labeled></div>
       </div>
     );
@@ -1777,10 +1817,16 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           </>
         ) : (
           <>
-            <Labeled label="Keywords to list (best position first)">
+            <Labeled label="Location">
+              <select value={b.city || "all"} onChange={(e) => patch(b.id, { city: e.target.value })} className={inputCls + " bg-white"}>
+                <option value="all">All locations together</option>
+                {rankLocsOf(projOf(b.projectId)?.tracking).map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+              </select>
+            </Labeled>
+            <Labeled label="Keywords ranked in">
               <select value={b.limit || "10"} onChange={(e) => patch(b.id, { limit: e.target.value })} className={inputCls + " bg-white"}>
-                {[3, 5, 10, 15, 20, 30, 50, 100].map((n) => <option key={n} value={n}>Top {n}</option>)}
-                <option value="all">All rows</option>
+                {RANK_TIERS.map((n) => <option key={n} value={n}>Top {n} positions</option>)}
+                <option value="all">All keywords</option>
               </select>
             </Labeled>
             <Labeled label="Show">
