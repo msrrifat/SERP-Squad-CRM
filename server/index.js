@@ -1566,6 +1566,35 @@ function handleStateBackupExtract(req, body) {
       }));
       return [200, { live: true, file, projects }];
     }
+    /* geo-grid inventory: which map reports/snapshots each project held in
+       this backup — the way to find a scan that has since gone missing */
+    if (body?.want === "geo") {
+      const projects = [];
+      (st.clients || []).forEach((c) => (c.projects || []).forEach((p) => {
+        const reports = (p.geoGrid?.reports || []).map((r) => ({
+          id: r.id, name: r.name, keywords: (r.keywords || []).length,
+          snapshots: (r.snapshots || []).map((sn) => ({ id: sn.id, at: sn.at, live: !!sn.live, keywords: Object.keys(sn.grids || {}).length })),
+        }));
+        projects.push({ client: c.name, project: p.name, projectId: p.id, archived: !!p.archived,
+          business: p.geoGrid?.business?.name || null, reports, geoBytes: JSON.stringify(p.geoGrid || {}).length,
+          trackingEntries: (p.tracking || []).length, trackingScans: (p.tracking || []).reduce((n, t) => n + (t.scans || []).length, 0) });
+      }));
+      return [200, { live: true, file, projects }];
+    }
+    /* where the bytes live — tells which tool's data shrank between two copies */
+    if (body?.want === "sizes") {
+      const docs = splitWorkspace(st);
+      const sizes = Object.fromEntries(Object.entries(docs).map(([d, v]) => [d, JSON.stringify(v ?? {}).length]));
+      const perProject = {};
+      for (const d of ["pm", "performance", "optimization", "ads"]) for (const [pid, v] of Object.entries(docs[d] || {})) (perProject[pid] ||= {})[d] = JSON.stringify(v).length;
+      return [200, { live: true, file, total: JSON.stringify(st).length, sizes, perProject,
+        savedReports: (st.company?.savedReports || []).length, reportTemplates: (st.company?.reportTemplates || []).length }];
+    }
+    /* one whole project subtree, for a surgical put-back */
+    if (body?.want === "project" && body.projectId) {
+      for (const c of st.clients || []) { const p = (c.projects || []).find((x) => x.id === body.projectId); if (p) return [200, { live: true, file, clientId: c.id, clientName: c.name, project: p }]; }
+      return [404, { error: "not_found", detail: "No such project in that backup." }];
+    }
     return [200, { live: true, file,
       reportTemplates: (st.company?.reportTemplates || []),
       /* saved reports live on the COMPANY, keyed by project. The per-client
