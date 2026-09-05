@@ -23,7 +23,7 @@ import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerfo
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
 import { clearPending, readPending, stashPending } from "./lib/pendingstore.js";
-import { DOMAINS, splitWorkspace, domainOfCompanyKey } from "./lib/domains.js";
+import { DOMAINS, PROJECT_KEYED, splitWorkspace, domainOfCompanyKey } from "./lib/domains.js";
 import { useAppOutdated } from "./lib/version.js";
 
 /* The workspace is large, so every write is gzipped where the browser can do
@@ -47,18 +47,24 @@ function sliceFingerprints(state) {
   return out;
 }
 
-async function postState(token, state, baseRev, keep = []) {
-  const payload = JSON.stringify({ state, baseRev, keep });
-  let body = payload, extra = {};
+/* a JSON payload, gzipped when it is worth it. The workspace documents run to
+   double-digit megabytes and compress ~15x; sending them raw is what turned a
+   save into a ten-second upload. */
+async function gzipBody(payload) {
   if (typeof CompressionStream !== "undefined" && payload.length > 65536) {
     try {
-      body = await new Response(new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
-      extra = { "Content-Encoding": "gzip" };
-    } catch { body = payload; extra = {}; }
+      const body = await new Response(new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+      return { body, extra: { "Content-Encoding": "gzip" } };
+    } catch { /* fall back to plain */ }
   }
+  return { body: payload, extra: {} };
+}
+async function postState(token, state, baseRev, keep = []) {
+  const { body, extra } = await gzipBody(JSON.stringify({ state, baseRev, keep }));
   return fetch("/api/state", { method: "POST",
     headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extra }, body });
 }
+
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
@@ -359,6 +365,10 @@ export default function App() {
      Project-management edit writes pm.json and nothing else. */
   const serverDocs = useRef({});
   const serverRevs = useRef({});
+  /* per-project fingerprints inside each project-keyed document, so a save
+     can tell WHICH project's tracking or geo-grid changed and send only that
+     — the performance document alone is ~17 MB across every project */
+  const serverKeys = useRef({});
   const companyRef = useRef(company); companyRef.current = company;
   const clientsRef = useRef(clients); clientsRef.current = clients;
   /* Pull any lazy slice this tab hasn't got yet and fold it into state. Called
@@ -370,10 +380,13 @@ export default function App() {
   const noteServerDocs = useCallback((state, revs) => {
     try {
       const docs = stripChatDocs(splitWorkspace(state || {}));
-      const out = {};
-      for (const d of DOMAINS) out[d] = JSON.stringify(docs[d] ?? {});
-      serverDocs.current = out;
-    } catch { serverDocs.current = {}; }
+      const out = {}, keys = {};
+      for (const d of DOMAINS) {
+        out[d] = JSON.stringify(docs[d] ?? {});
+        if (PROJECT_KEYED.includes(d)) keys[d] = Object.fromEntries(Object.entries(docs[d] ?? {}).map(([k, v]) => [k, JSON.stringify(v)]));
+      }
+      serverDocs.current = out; serverKeys.current = keys;
+    } catch { serverDocs.current = {}; serverKeys.current = {}; }
     if (revs) serverRevs.current = revs;
   }, []);
   const loadSlices = useCallback(async () => {
@@ -478,16 +491,34 @@ export default function App() {
               return fp[d] !== serverDocs.current[d];
             });
             if (!changed.length) { setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey()); return; }
+            /* ---- PARTIAL DOCUMENTS: only the projects that changed -------
+               A tracked-keyword edit in one project used to re-send every
+               project's tracking and geo-grid snapshots. Now the projects
+               whose fingerprint moved go up, plus the ids of any that were
+               removed, and the server merges them into the stored document. */
+            const send = {}, partial = {}, nextKeys = {};
+            for (const d of changed) {
+              const doc = docs[d] ?? {};
+              const known = serverKeys.current[d];
+              if (!PROJECT_KEYED.includes(d) || !known) { send[d] = doc; continue; }
+              const mine = Object.fromEntries(Object.entries(bare[d] ?? {}).map(([k, v]) => [k, JSON.stringify(v)]));
+              const changedKeys = Object.keys(mine).filter((k) => mine[k] !== known[k]);
+              const del = Object.keys(known).filter((k) => !(k in mine));
+              send[d] = Object.fromEntries(changedKeys.map((k) => [k, doc[k]]));
+              partial[d] = { del };
+              nextKeys[d] = mine;
+            }
+            const { body, extra } = await gzipBody(JSON.stringify({
+              docs: send,
+              partial,
+              baseRevs: Object.fromEntries(changed.map((d) => [d, serverRevs.current[d] ?? 0])),
+            }));
             const rd = await fetch("/api/state/domains", {
-              method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
-              body: JSON.stringify({
-                docs: Object.fromEntries(changed.map((d) => [d, docs[d] ?? {}])),
-                baseRevs: Object.fromEntries(changed.map((d) => [d, serverRevs.current[d] ?? 0])),
-              }),
+              method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token, ...extra }, body,
             });
             if (rd.ok) {
               const dj = await rd.json().catch(() => ({}));
-              changed.forEach((d) => { serverDocs.current[d] = fp[d]; });
+              changed.forEach((d) => { serverDocs.current[d] = fp[d]; if (nextKeys[d]) serverKeys.current[d] = nextKeys[d]; });
               if (dj.revs) serverRevs.current = dj.revs;
               if (Number.isFinite(+dj.rev)) stateRev.current = +dj.rev;
               setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());

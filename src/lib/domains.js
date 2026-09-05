@@ -40,6 +40,8 @@ export const COMPANY_DOMAINS = {
 };
 
 export const DOMAINS = ["core", "pm", "performance", "optimization", "ads", "reports"];
+/* documents keyed by project id (a partial save can send just some projects) */
+export const PROJECT_KEYED = Object.keys(PROJECT_DOMAINS);
 
 const projectKeyDomain = (() => {
   const m = new Map();

@@ -30,7 +30,7 @@ import { gzip, gzipSync, gunzipSync } from "node:zlib";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
-import { DOMAINS, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
+import { DOMAINS, PROJECT_KEYED, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
 import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
 
@@ -431,8 +431,10 @@ function saveDomainDocs(partial) {
   }
   saveRevs(revs);
   try { writeFileSync(REV_FILE, String(next)); } catch { /* rev is advisory */ }
-  /* hourly-gated, so this costs nothing on a normal save */
-  try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ }
+  /* hourly-gated, and run AFTER the response goes out: rebuilding and
+     gzipping the 30 MB combined file takes seconds, and once an hour some
+     save used to sit behind it */
+  setTimeout(() => { try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ } }, 50);
   return { revs, rev: next };
 }
 /* the workspace revision: bumped on every accepted write. A browser sends the
@@ -942,14 +944,36 @@ function handleStateDomains(req, body) {
         detail: `Refused: this save would drop ${prevN - nextN} of ${prevN} client(s). Nothing was changed — reload the app.` }];
     }
   }
+  /* ---- PARTIAL DOCUMENTS ------------------------------------------------
+     `partial[d]` marks a project-keyed document of which only the changed
+     projects were sent (plus `del`, the ids removed). They are folded into
+     the stored document here; every untouched project stays byte-identical.
+     Each sent project gets the hollowing check on its own, since a single
+     stripped project would never move the whole-document ratio. */
+  const partial = body.partial && typeof body.partial === "object" ? body.partial : {};
   for (const d of names) {
+    if (partial[d] && PROJECT_KEYED.includes(d)) {
+      const stored = readJson(domFile(d), {}) || {};
+      const sent = docs[d] && typeof docs[d] === "object" ? docs[d] : {};
+      for (const k of Object.keys(sent)) {
+        const why = stored[k] ? hollowed(d, { [k]: stored[k] }, { [k]: sent[k] }) : null;
+        if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
+      }
+      const merged = { ...stored, ...sent };
+      for (const k of (Array.isArray(partial[d].del) ? partial[d].del : [])) delete merged[k];
+      docs[d] = merged;
+      continue;
+    }
     const why = hollowed(d, readJson(domFile(d), {}), docs[d]);
     if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
   }
   try {
     /* chat is multi-writer: fold in whatever the store already holds so a
-       document built before someone's message arrived cannot erase it */
-    const merged = (docs.core || docs.pm) ? mergeChatDocs(docs, loadDomains() || {}) : docs;
+       document built before someone's message arrived cannot erase it. Only
+       the two documents that carry chat are read — not the whole workspace. */
+    const merged = (docs.core || docs.pm)
+      ? mergeChatDocs(docs, { core: readJson(domFile("core"), null), pm: readJson(domFile("pm"), {}) })
+      : docs;
     const out = saveDomainDocs(merged);
     return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now() }];
   } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
