@@ -78,6 +78,17 @@ const isCenterPt = (p, half) => p.isCenter || (p.ring == null && p.row === half 
 
 /* points scanned before the business was located carry lat/lng = null —
    re-derive them from grid geometry so the map renders once a center exists */
+/* Where a scan actually happened. Every scanned point carries its own lat/lng,
+   so the grid's true centre is the mean of them — NOT the project's current
+   business location: `geo.business` is one record per project and gets
+   overwritten whenever another report (a second location / GBP) is set up,
+   which left every earlier report's map centred miles from its own points. */
+export const gridCenterOf = (points) => {
+  const c = (points || []).filter((p) => !p.skipped && p.lat != null && p.lng != null && isFinite(p.lat) && isFinite(p.lng));
+  if (!c.length) return null;
+  return { lat: c.reduce((n, p) => n + +p.lat, 0) / c.length, lng: c.reduce((n, p) => n + +p.lng, 0) / c.length };
+};
+
 const fillCoords = (points, center, size, spacingKm) => {
   if (!center || !points) return points;
   const half = (size - 1) / 2;
@@ -252,6 +263,7 @@ let MAPS_KEY = null;
 let gmFailed = false;
 const gmSubs = new Set();
 export const setMapsKey = (k) => { MAPS_KEY = k || null; };
+export const getMapsKey = () => MAPS_KEY;
 let mapsPromise = null;
 function loadMapsJs(key) {
   if (gmFailed || !key) return Promise.resolve(false);
@@ -894,7 +906,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
   const prevPoints = prevRaw ? (viewBiz ? gridForBiz(prevRaw, viewBiz) : prevRaw) : null;
   const m = points ? gridMetrics(points) : null;
   const pm = prevPoints ? gridMetrics(prevPoints) : null;
-  const center = isFinite(biz.lat) && isFinite(biz.lng) ? { lat: +biz.lat, lng: +biz.lng } : null;
+  const center = gridCenterOf(points) || (isFinite(biz.lat) && isFinite(biz.lng) ? { lat: +biz.lat, lng: +biz.lng } : null);
 
   /* leaderboard: avg rank of EVERY business across all grid points (screenshot-style) */
   const competitors = useMemo(() => {
@@ -1215,6 +1227,10 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
 
 export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoints, px = 420 }) {
   const points = fillCoords(rawPts, center, size, spacingKm);
+  /* Google basemap when the agency's key is registered (the live view uses
+     the same key); a failed image falls back to OSM tiles for this render */
+  const [gFailed, setGFailed] = useState(false);
+  const gKey = getMapsKey();
   if (!center) return (
     <div>
       <AbstractGrid points={points} size={size} spacingKm={spacingKm} prevPoints={prevPoints} />
@@ -1225,8 +1241,11 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
     </div>
   );
   const half = (size - 1) / 2;
-  const extentKm = Math.max(0.5, half * 2 * spacingKm * 1.35);
-  const z = zoomFor(extentKm, center.lat, px);
+  /* a report can't be panned, so the WHOLE grid has to fit: the zoom is the
+     largest level at which the grid (plus a bubble-sized margin) fits inside
+     px — floored, never rounded up */
+  const extentKm = Math.max(0.5, half * 2 * spacingKm * 1.18);
+  const z = Math.max(3, Math.min(18, Math.floor(Math.log2((156543.03392 * Math.cos((center.lat * Math.PI) / 180) * px) / (extentKm * 1000)))));
   const cx = lonToX(center.lng, z), cy = latToY(center.lat, z);
   const x0 = cx - px / 2, y0 = cy - px / 2;
   const t0x = Math.floor(x0 / 256), t0y = Math.floor(y0 / 256);
@@ -1236,15 +1255,16 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
   }
   const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
   const bubble = Math.max(20, Math.min(34, (px / size) * 0.62));
+  const useGoogle = !!gKey && !gFailed;
   return (
-    <div className="relative mx-auto overflow-hidden rounded-xl border border-gray-200" style={{ width: px, height: px, maxWidth: "100%" }}>
-      {tiles.map((t, i) => (
-        <img key={i} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
-          className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256, filter: "saturate(0.82)" }} draggable={false} crossOrigin="anonymous" />
-      ))}
-      {/* soften the basemap (building blocks read as dark noise behind the grid) —
-          streets/labels stay visible, rank bubbles stay the hero */}
-      <div className="pointer-events-none absolute inset-0 bg-white/55" />
+    <div className="relative mx-auto overflow-hidden rounded-xl border border-gray-200 bg-[#e8eaed]" style={{ width: px, height: px, maxWidth: "100%" }}>
+      {useGoogle
+        ? <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute inset-0 select-none" style={{ width: px, height: px }}
+            src={`https://maps.googleapis.com/maps/api/staticmap?center=${center.lat},${center.lng}&zoom=${z}&size=${px}x${px}&scale=2&maptype=roadmap&key=${encodeURIComponent(gKey)}`} />
+        : tiles.map((t, i) => (
+          <img key={i} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
+            className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256, filter: "saturate(0.82)" }} draggable={false} />
+        ))}
       {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
         const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
         if (left < -40 || left > px + 40 || top < -40 || top > px + 40) return null;
@@ -1254,8 +1274,8 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
         return (
           <div key={`${p.row}-${p.col}`} className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}>
             <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-2 ring-gray-900 ring-offset-1" : "")}
-              style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: rankColor(p.rank) }}>
-              {p.rank ?? "100+"}
+              style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
+              {p.error ? "!" : p.rank ?? "100+"}
             </div>
             {delta != null && delta !== 0 && (
               <span className="absolute -right-1 -top-1 flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow"
@@ -1266,7 +1286,7 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
           </div>
         );
       })}
-      <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OpenStreetMap contributors</span>
+      {!useGoogle && <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OpenStreetMap contributors</span>}
     </div>
   );
 }
@@ -1445,7 +1465,7 @@ export function SharedReportView({ shareId }) {
   if (!data) return <div className="flex min-h-screen items-center justify-center bg-[#F5F6F8] text-[13px] text-gray-400">Loading shared report…</div>;
   const pts = data.snapshot.grids[kw];
   const m = pts ? gridMetrics(pts) : null;
-  const center = isFinite(data.biz?.lat) ? { lat: data.biz.lat, lng: data.biz.lng } : null;
+  const center = gridCenterOf(pts) || (isFinite(data.biz?.lat) ? { lat: data.biz.lat, lng: data.biz.lng } : null);
   return (
     <div className="min-h-screen bg-[#F5F6F8] p-6">
       <div className="mx-auto max-w-5xl space-y-4">

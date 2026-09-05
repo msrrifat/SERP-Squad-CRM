@@ -19,7 +19,7 @@ import { LABELS, MONTH_DATES } from "../../lib/months.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { TASK_COLORS, recordState, taskState } from "../pm/board.jsx";
 import { OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { Distribution, ReportGridMap, gridMetrics, distFor } from "../performance/geogrid.jsx";
+import { Distribution, ReportGridMap, gridCenterOf, gridMetrics, distFor } from "../performance/geogrid.jsx";
 import { useLiveSiteData } from "../performance/googlelive.jsx";
 import { AD_PLATFORMS, PfBadge, campaignDaily, sumMetrics } from "../ads/dashboard.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
@@ -1051,13 +1051,11 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     /* live scans (and demo scans with a located business) store lat/lng per grid
        point — derive the map center from the middle point when the business
        record itself lacks coordinates, so the map background still renders */
-    const centerFor = (points) => {
-      if (center) return center;
-      const half = (report.size - 1) / 2;
-      const mid = points?.find((pt) => pt.row === half && pt.col === half && isFinite(pt.lat) && pt.lat != null)
-        || points?.find((pt) => isFinite(pt.lat) && pt.lat != null);
-      return mid ? { lat: +mid.lat, lng: +mid.lng } : null;
-    };
+    /* the scan's own coordinates come FIRST: geo.business is a single
+       project-level record that a second report (another location / GBP)
+       overwrites, which used to centre every earlier report's map on the
+       wrong place and render it blank */
+    const centerFor = (points) => gridCenterOf(points) || center;
     const kws = (b.keywords && b.keywords.length ? b.keywords : report.keywords).filter((k) => cur.grids[k]);
     const dateStr = (sn) => new Date(sn.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" });
     const compare = b.mode === "compare" && base;
