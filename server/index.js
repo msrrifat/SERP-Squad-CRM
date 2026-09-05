@@ -33,6 +33,7 @@ import { parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, PROJECT_KEYED, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
 import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
+import { compactPerformanceEntry } from "../src/lib/geosnap.js";
 
 const PORT = process.env.PORT || 8787;
 const DFS_BASE = process.env.DFS_BASE || "https://api.dataforseo.com/v3"; // override for offline tests
@@ -376,13 +377,79 @@ const readJson = (u, fallback = null) => { try { return JSON.parse(readFileSync(
    never mutate what comes back, because the same object serves the next
    request. */
 const docCache = {};
-const docKey = (d) => { try { const st = statSync(domFile(d)); return `${st.mtimeMs}:${st.size}`; } catch { return null; } };
+/* ---- PER-PROJECT FILES ----------------------------------------------------
+   Project-keyed documents (pm, performance, optimization, ads) live as one
+   file per project: data/state/<domain>/<projectId>.json. A save that
+   touches one project rewrites ~1 MB instead of the 17 MB the whole
+   performance document had grown to. The single-file layout is still read
+   until the directory exists; the first write builds the directory whole
+   and swaps it in, then retires the old file as <domain>.json.migrated. */
+const domDir = (d) => new URL(`${d}/`, STATE_DIR);
+const isSplit = (d) => PROJECT_KEYED.includes(d);
+const safeId = (id) => encodeURIComponent(String(id));
+const projFile = (d, id) => new URL(`${d}/${safeId(id)}.json`, STATE_DIR);
+function projFiles(d) {
+  try {
+    return readdirSync(domDir(d)).filter((f) => f.endsWith(".json"))
+      .map((f) => ({ id: decodeURIComponent(f.slice(0, -5)), url: new URL(`${d}/${f}`, STATE_DIR) }));
+  } catch { return null; }
+}
+function readDoc(d, fallback = null) {
+  if (isSplit(d)) {
+    const files = projFiles(d);
+    if (files) {
+      const out = {};
+      for (const { id, url } of files) { const v = readJson(url, undefined); if (v !== undefined) out[id] = v; }
+      return out;
+    }
+  }
+  return readJson(domFile(d), fallback);
+}
+/* what is on disk for a document, as a string that changes with any write */
+function docKey(d) {
+  try {
+    if (isSplit(d)) {
+      const files = projFiles(d);
+      if (files) return files.map(({ id, url }) => { const st = statSync(url); return `${id}:${st.mtimeMs}:${st.size}`; }).sort().join("|") || "empty";
+    }
+    const st = statSync(domFile(d));
+    return `${st.mtimeMs}:${st.size}`;
+  } catch { return null; }
+}
+/* the geo-grid snapshots inside a performance document are stored compact
+   (see lib/geosnap.js) — every write path goes through here */
+const compactPerformanceDoc = (doc) => {
+  if (!doc || typeof doc !== "object") return doc;
+  let changed = false; const out = {};
+  for (const [id, entry] of Object.entries(doc)) { const c = compactPerformanceEntry(entry); if (c !== entry) changed = true; out[id] = c; }
+  return changed ? out : doc;
+};
+/* `touch` = { set: [ids], del: [ids] } limits a split write to those projects */
+function writeDoc(d, doc, touch) {
+  const value = doc ?? {};
+  if (!isSplit(d)) { writeJsonAtomic(domFile(d), value); return; }
+  const dir = domDir(d);
+  if (!existsSync(dir)) {
+    const building = new URL(`${d}.building/`, STATE_DIR);
+    rmSync(building, { recursive: true, force: true });
+    mkdirSync(building, { recursive: true });
+    for (const [id, v] of Object.entries(value)) writeFileSync(new URL(`${safeId(id)}.json`, building), JSON.stringify(v));
+    renameSync(building, dir);
+    if (existsSync(domFile(d))) renameSync(domFile(d), new URL(`${d}.json.migrated`, STATE_DIR));
+    console.log(`[state] ${d}: now one file per project (${Object.keys(value).length})`);
+    return;
+  }
+  const ids = touch ? (touch.set || []).filter((id) => id in value) : Object.keys(value);
+  for (const id of ids) writeJsonAtomic(projFile(d, id), value[id]);
+  const dels = touch ? (touch.del || []) : (projFiles(d) || []).map((f) => f.id).filter((id) => !(id in value));
+  for (const id of dels) rmSync(projFile(d, id), { force: true });
+}
 function readDocCached(d, fallback = {}) {
   const key = docKey(d);
   if (!key) return fallback;
   const hit = docCache[d];
   if (hit && hit.key === key) return hit.doc;
-  const doc = readJson(domFile(d), fallback);
+  const doc = readDoc(d, fallback);
   docCache[d] = { key, doc };
   return doc;
 }
@@ -400,7 +467,7 @@ function writeJsonAtomic(url, value) {
 function loadDomains() {
   if (existsSync(domFile("core"))) {
     const docs = {};
-    for (const d of DOMAINS) docs[d] = readJson(domFile(d), d === "core" ? null : {}) ?? (d === "core" ? null : {});
+    for (const d of DOMAINS) docs[d] = readDoc(d, d === "core" ? null : {}) ?? (d === "core" ? null : {});
     if (docs.core) return docs;
   }
   const legacy = readJson(STATE_FILE, null);
@@ -408,7 +475,7 @@ function loadDomains() {
   const docs = splitWorkspace(legacy);
   try {                                        // migrate once; legacy file untouched
     mkdirSync(STATE_DIR, { recursive: true });
-    for (const d of DOMAINS) writeJsonAtomic(domFile(d), docs[d] ?? {});
+    for (const d of DOMAINS) writeDoc(d, d === "performance" ? compactPerformanceDoc(docs[d]) : docs[d]);
     const rev = loadRev();
     saveRevs(Object.fromEntries(DOMAINS.map((d) => [d, rev])));
     console.log(`[state] migrated app-state.json into ${DOMAINS.length} per-tool documents`);
@@ -440,13 +507,16 @@ function refreshCombined() {
 }
 
 /* write ONLY these documents. Returns the new per-document revisions. */
-function saveDomainDocs(partial) {
+function saveDomainDocs(partial, touch = {}) {
   mkdirSync(STATE_DIR, { recursive: true });
   const revs = loadRevs();
   const next = loadRev() + 1;
+  const written = {};
   for (const [d, doc] of Object.entries(partial)) {
     if (!DOMAINS.includes(d)) continue;
-    writeJsonAtomic(domFile(d), doc ?? {});
+    const value = d === "performance" ? compactPerformanceDoc(doc ?? {}) : (doc ?? {});
+    writeDoc(d, value, touch[d]);
+    written[d] = value;
     revs[d] = next;
   }
   saveRevs(revs);
@@ -458,7 +528,7 @@ function saveDomainDocs(partial) {
     try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ }
     warmStateCache();                                   // the next reload finds it ready
   }, 50);
-  return { revs, rev: next };
+  return { revs, rev: next, written };
 }
 /* the workspace revision: bumped on every accepted write. A browser sends the
    revision it loaded, so a tab holding an older copy can be REFUSED instead of
@@ -912,7 +982,7 @@ function handleStateGet(req) {
 const stateGz = { slim: null, full: null, building: {} };
 const stateCacheKey = () => {
   try {
-    return DOMAINS.map((d) => { try { const st = statSync(domFile(d)); return `${st.mtimeMs}:${st.size}`; } catch { return "-"; } }).join("|") + "|" + loadRev();
+    return DOMAINS.map((d) => docKey(d) ?? "-").join("|") + "|" + loadRev();
   } catch { return null; }
 };
 const gzipAsync = (buf, level = 5) => new Promise((res, rej) => gzip(buf, { level }, (e, out) => (e ? rej(e) : res(out))));
@@ -1014,20 +1084,27 @@ function handleStateDomains(req, body) {
      stripped project would never move the whole-document ratio. */
   const partial = body.partial && typeof body.partial === "object" ? body.partial : {};
   took.checks = Date.now() - t0;
+  /* the hollowing guard compares like with like: a project's geo-grid
+     snapshots are compared in their compact form on both sides */
+  const guardEntry = (d, v) => (d === "performance" ? compactPerformanceEntry(v) : v);
+  const guardDoc = (d, doc) => (d === "performance" ? compactPerformanceDoc(doc) : doc);
+  const touch = {};
   for (const d of names) {
     if (partial[d] && PROJECT_KEYED.includes(d)) {
       const stored = readDocCached(d, {}) || {};
       const sent = docs[d] && typeof docs[d] === "object" ? docs[d] : {};
       for (const k of Object.keys(sent)) {
-        const why = stored[k] ? hollowed(d, { [k]: stored[k] }, { [k]: sent[k] }) : null;
+        const why = stored[k] ? hollowed(d, { [k]: guardEntry(d, stored[k]) }, { [k]: guardEntry(d, sent[k]) }) : null;
         if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
       }
       const merged = { ...stored, ...sent };
-      for (const k of (Array.isArray(partial[d].del) ? partial[d].del : [])) delete merged[k];
+      const del = Array.isArray(partial[d].del) ? partial[d].del : [];
+      for (const k of del) delete merged[k];
       docs[d] = merged;
+      touch[d] = { set: Object.keys(sent), del };
       continue;
     }
-    const why = hollowed(d, readDocCached(d, {}), docs[d]);
+    const why = hollowed(d, guardDoc(d, readDocCached(d, {})), guardDoc(d, docs[d]));
     if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
   }
   try {
@@ -1039,8 +1116,8 @@ function handleStateDomains(req, body) {
       ? mergeChatDocs(docs, { core: readDocCached("core", null), pm: readDocCached("pm", {}) })
       : docs;
     took.chat = Date.now() - t0;
-    const out = saveDomainDocs(merged);
-    for (const d of names) rememberDoc(d, merged[d] ?? {});
+    const out = saveDomainDocs(merged, touch);
+    for (const d of names) rememberDoc(d, out.written[d] ?? {});
     took.write = Date.now() - t0;
     /* phase timings (ms since the request was parsed) — visible in the
        browser's network tab, so a slow save can be diagnosed without SSH */
@@ -1188,7 +1265,7 @@ function handleStateSave(req, body) {
     try {
       const prevDocs = loadDomains();
       if (prevDocs) for (const [d, doc] of Object.entries(splitWorkspace(body.state))) {
-        const why = hollowed(d, prevDocs[d], doc);
+        const why = d === "performance" ? hollowed(d, compactPerformanceDoc(prevDocs[d]), compactPerformanceDoc(doc)) : hollowed(d, prevDocs[d], doc);
         if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
       }
     } catch { /* guard must never block a legitimate save */ }
@@ -1462,7 +1539,7 @@ function resolveChatThread(state, who, t) {
 function writeChatDomain(domain, state) {
   mkdirSync(STATE_DIR, { recursive: true });
   const docs = splitWorkspace(state);
-  writeJsonAtomic(domFile(domain), docs[domain] ?? {});
+  writeDoc(domain, docs[domain] ?? {});
   try { refreshCombined(); } catch { /* best-effort */ }
 }
 
@@ -5104,6 +5181,34 @@ async function handleGenerate(body) {
 }
 
 /* ---- tiny http layer ---- */
+/* ---- ONE-TIME STORAGE MIGRATIONS, before the first request ------------
+   1. project-keyed documents move from one file to one file per project;
+   2. geo-grid snapshots already on disk are compacted in place.
+   Both are lossless and idempotent; a failure leaves the old layout serving. */
+function migrateStorage() {
+  for (const d of PROJECT_KEYED) {
+    try {
+      const hasDir = existsSync(domDir(d)), hasFile = existsSync(domFile(d));
+      if (!hasDir && hasFile) {
+        const doc = readJson(domFile(d), {}) || {};
+        const before = d === "performance" ? JSON.stringify(doc).length : 0;
+        const value = d === "performance" ? compactPerformanceDoc(doc) : doc;
+        writeDoc(d, value);
+        if (d === "performance") console.log(`[state] performance: ${(before / 1048576).toFixed(1)} MB → ${(JSON.stringify(value).length / 1048576).toFixed(1)} MB after compacting geo-grid snapshots`);
+      } else if (hasDir && d === "performance") {
+        let n = 0, saved = 0;
+        for (const { id, url } of projFiles(d) || []) {
+          const v = readJson(url, undefined); if (v === undefined) continue;
+          const c = compactPerformanceEntry(v);
+          if (c !== v) { const b = JSON.stringify(v).length, a = JSON.stringify(c).length; writeJsonAtomic(projFile(d, id), c); n += 1; saved += b - a; }
+        }
+        if (n) console.log(`[state] performance: compacted geo-grid snapshots in ${n} project(s), ${(saved / 1048576).toFixed(1)} MB smaller`);
+      }
+    } catch (e) { console.warn(`[state] migration of ${d} skipped:`, e?.message); }
+  }
+}
+migrateStorage();
+
 http.createServer(async (req, res) => {
   const CORS = { ...corsFor(req), ...SEC_HEADERS };
   /* gzip JSON responses when the client accepts it — the workspace state runs

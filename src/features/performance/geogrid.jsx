@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Card, Labeled, Modal, Seg, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
+import { compactSnapshot, expandGrid, pointResults } from "../../lib/geosnap.js";
 import { fmt, fmtTs2 } from "../../lib/format.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { realDfs } from "../optimization/indexcheck.jsx";
@@ -765,7 +766,8 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
       }
       /* the scan's own report card travels WITH the snapshot: a grid with
          failed points must never be presentable as a complete one */
-      const snap = { id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape, ...(scanMeta || {}) };
+      /* stored compact: each business once per snapshot, points keep indices */
+      const snap = compactSnapshot({ id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape, ...(scanMeta || {}) });
       patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
       return { keywords: rp.keywords.length, live };
     });
@@ -892,7 +894,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
   const [overlay, setOverlay] = useState(null); // null | "compare" | "snapshot" 
   const snaps = rp.snapshots;
   const snap = snaps.find((s2) => s2.id === snapId) || snaps[0] || null;
-  const rawPoints = snap?.grids[kw] || null;
+  const rawPoints = snap?.grids[kw] ? expandGrid(snap, kw) : null;
   const normB = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   /* derive ANY business's grid from the stored per-point top-20 — the whole
      competitor view reuses the original scan: zero additional SERP requests */
@@ -901,8 +903,8 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
     rank: p.skipped ? null : ((p.results || []).find((r2) => normB(r2.title) === normB(title))?.rank ?? null),
   }));
   const points = rawPoints ? (viewBiz ? gridForBiz(rawPoints, viewBiz) : rawPoints) : null;
-  const prevRaw = snap ? snaps.find((s2) => s2.at < snap.at && s2.grids[kw])?.grids[kw] : null;
   const prevSnap = snap ? snaps.find((s2) => s2.at < snap.at && s2.grids[kw]) : null;
+  const prevRaw = prevSnap ? expandGrid(prevSnap, kw) : null;
   const prevPoints = prevRaw ? (viewBiz ? gridForBiz(prevRaw, viewBiz) : prevRaw) : null;
   const m = points ? gridMetrics(points) : null;
   const pm = prevPoints ? gridMetrics(prevPoints) : null;
@@ -1338,7 +1340,7 @@ const PrintStyle = () => (
 );
 
 function CandidatePanel({ label, snap, bizName, kw, center, size, spacingKm, mapH = 430 }) {
-  const raw = snap?.grids[kw];
+  const raw = snap?.grids[kw] ? expandGrid(snap, kw) : null;
   if (!raw) return <Card className="p-6 text-center text-[12px] text-gray-400">No data for "{kw}" in this snapshot.</Card>;
   const pts = bizGrid(raw, bizName);
   const own = raw.some((p) => (p.results || []).length === 0); // legacy snapshots
@@ -1371,7 +1373,7 @@ export function CompareOverlay({ rp, biz, center, accent, initialA, initialB, on
   const bizOptions = (snap) => {
     if (!snap) return [biz.name];
     const set2 = new Set([biz.name]);
-    Object.values(snap.grids).forEach((pts) => pts.forEach((p) => (p.results || []).forEach((r2) => set2.add(r2.title))));
+    Object.values(snap.grids).forEach((pts) => pts.forEach((p) => pointResults(snap, p).forEach((r2) => set2.add(r2.title))));
     return [...set2];
   };
   return (
@@ -1477,7 +1479,7 @@ export function SharedReportView({ shareId }) {
   }, [shareId]);
   if (err) return <div className="flex min-h-screen items-center justify-center bg-[#F5F6F8] text-[13px] text-gray-500">Shared report unavailable ({err}) — the link may have expired or the API server is offline.</div>;
   if (!data) return <div className="flex min-h-screen items-center justify-center bg-[#F5F6F8] text-[13px] text-gray-400">Loading shared report…</div>;
-  const pts = data.snapshot.grids[kw];
+  const pts = expandGrid(data.snapshot, kw);
   const m = pts ? gridMetrics(pts) : null;
   const center = gridCenterOf(pts) || (isFinite(data.biz?.lat) ? { lat: data.biz.lat, lng: data.biz.lng } : null);
   return (
