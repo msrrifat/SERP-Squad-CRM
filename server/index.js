@@ -31,6 +31,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
+import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
 
 const PORT = process.env.PORT || 8787;
@@ -921,6 +922,10 @@ function handleStateDomains(req, body) {
      documents being written are checked; the rest are irrelevant to it. */
   const revs = loadRevs();
   const base = body.baseRevs || {};
+  /* a write that names no revision cannot be checked against anything — it
+     is exactly the stale-tab overwrite this guard exists for */
+  const unpinned = names.filter((d) => !Number.isFinite(+base[d]));
+  if (unpinned.length) return [409, { error: "stale_domain", stale: unpinned, revs, detail: `No base revision for ${unpinned.join(", ")} — reload to continue from the latest workspace.` }];
   const stale = names.filter((d) => Number.isFinite(+base[d]) && +base[d] !== +(revs[d] ?? 0));
   if (stale.length) {
     return [409, { error: "stale_domain", stale, revs,
@@ -937,6 +942,10 @@ function handleStateDomains(req, body) {
         detail: `Refused: this save would drop ${prevN - nextN} of ${prevN} client(s). Nothing was changed — reload the app.` }];
     }
   }
+  for (const d of names) {
+    const why = hollowed(d, readJson(domFile(d), {}), docs[d]);
+    if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
+  }
   try {
     /* chat is multi-writer: fold in whatever the store already holds so a
        document built before someone's message arrived cannot erase it */
@@ -944,6 +953,32 @@ function handleStateDomains(req, body) {
     const out = saveDomainDocs(merged);
     return [200, { ok: true, written: names, revs: out.revs, rev: out.rev, at: Date.now() }];
   } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+}
+
+/* ---- HOLLOWING GUARD -----------------------------------------------------
+   A copy of a tool's document that still lists the same items — the same
+   saved reports, the same map snapshots, the same tracked keywords — but is
+   a fraction of the size is not an edit, it is a browser holding stripped or
+   half-loaded data writing it back over the real thing (the saved-report
+   archive went from 27 MB to 1 MB this way, ten reports both times). Item
+   counts falling is a deletion and is allowed; the same count with the bytes
+   gone is refused. The client answers a 409 by merging onto the stored copy,
+   so nothing is stranded either. */
+const countItems = (d, doc) => {
+  const o = doc || {};
+  if (d === "reports") return (o.savedReports || []).length + (o.reportTemplates || []).length;
+  if (d === "performance") return Object.values(o).reduce((n, p) => n + (p?.tracking || []).length
+    + (p?.geoGrid?.reports || []).reduce((m, r) => m + (r.snapshots || []).length, 0), 0);
+  if (d === "pm") return Object.values(o).reduce((n, p) => n + (p?.records || []).length, 0);
+  if (d === "optimization") return Object.values(o).reduce((n, p) => n + Object.keys(p || {}).length, 0);
+  return null;
+};
+function hollowed(d, prevDoc, nextDoc) {
+  const prevRaw = JSON.stringify(prevDoc ?? {}), nextRaw = JSON.stringify(nextDoc ?? {});
+  if (prevRaw.length < 200_000 || nextRaw.length >= prevRaw.length * 0.4) return null;
+  const pc = countItems(d, prevDoc), nc = countItems(d, nextDoc);
+  if (pc == null || nc == null || nc < pc) return null;          // fewer items = a deletion, allowed
+  return `${d}: same ${nc} item(s) but ${Math.round((1 - nextRaw.length / prevRaw.length) * 100)}% of the data gone`;
 }
 
 /* one lazy slice, on demand. `rev` comes back with it so the caller can tell
@@ -1052,6 +1087,19 @@ function handleStateSave(req, body) {
      changes and writing it would erase them — the exact way manually added
      records and tasks disappeared. The client is told to reload instead. */
   const cur = loadRev();
+  if (!body.force && cur > 0 && !Number.isFinite(+body.baseRev)) {
+    return [409, { error: "stale_state", rev: cur, baseRev: null,
+      detail: "This save carries no base revision, so it cannot be checked against the stored workspace — reload to continue from the latest copy." }];
+  }
+  if (!body.force) {
+    try {
+      const prevDocs = loadDomains();
+      if (prevDocs) for (const [d, doc] of Object.entries(splitWorkspace(body.state))) {
+        const why = hollowed(d, prevDocs[d], doc);
+        if (why) return [409, { error: "refused_overwrite", detail: `Refused: this save would hollow out stored data (${why}). Nothing was changed — reload the app.` }];
+      }
+    } catch { /* guard must never block a legitimate save */ }
+  }
   if (!body.force && Number.isFinite(+body.baseRev) && +body.baseRev !== cur) {
     return [409, { error: "stale_state", rev: cur, baseRev: +body.baseRev,
       detail: "Another session (or another browser tab) has saved changes since this page loaded. Saving now would erase them, so nothing was written — reload to continue from the latest workspace." }];
@@ -1531,6 +1579,7 @@ function handleStateBackups(req) {
   try {
     readdirSync(bdir).filter((f) => /^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse()
       .forEach((f) => out.push({ file: f, kind: "daily", at: f.slice(10, 20), day: f.slice(10, 20), ...read(bdir, f) }));
+    if (existsSync(new URL("app-state-before-restore.json", bdir))) out.push({ file: "app-state-before-restore.json", kind: "pre-restore", at: "before the last restore", ...read(bdir, "app-state-before-restore.json") });
   } catch { /* no daily backups yet */ }
   return [200, { live: true, backups: out }];
 }
@@ -1543,7 +1592,7 @@ function handleStateBackupExtract(req, body) {
   if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
   const file = String(body?.file || "");
   const hourly = /^app-state-\d{4}-\d{2}-\d{2}-\d{2}\.json\.gz$/.test(file);
-  if (!hourly && !/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
+  if (!hourly && !/^app-state-(\d{4}-\d{2}-\d{2}|before-restore)\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
   const src = new URL((hourly ? "./data/snapshots/" : "./data/backups/") + file, import.meta.url);
   if (!existsSync(src)) return [404, { error: "not_found", detail: file + " does not exist." }];
   try {
@@ -1611,16 +1660,22 @@ function handleStateRestore(req, body) {
   if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
   const file = String(body?.file || "");
   const hourly = /^app-state-\d{4}-\d{2}-\d{2}-\d{2}\.json\.gz$/.test(file);
-  if (!hourly && !/^app-state-\d{4}-\d{2}-\d{2}\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
+  if (!hourly && !/^app-state-(\d{4}-\d{2}-\d{2}|before-restore)\.json$/.test(file)) return [400, { error: "bad_request", detail: "A backup filename is required." }];
   const src = new URL((hourly ? "./data/snapshots/" : "./data/backups/") + file, import.meta.url);
   if (!existsSync(src)) return [404, { error: "not_found", detail: file + " does not exist." }];
   try {
     const buf = readFileSync(src);
     const restored = JSON.parse(hourly ? gunzipSync(buf).toString("utf8") : buf.toString("utf8"));
-    /* keep the pre-restore state recoverable too */
-    if (existsSync(STATE_FILE)) copyFileSync(STATE_FILE, new URL("./data/backups/app-state-before-restore.json", import.meta.url));
-    saveState(restored);
-    return [200, { ok: true, restoredFrom: file, clients: (restored.clients || []).length }];
+    /* keep the pre-restore state recoverable too — from the live documents,
+       not the hourly combined file, which can be up to an hour behind */
+    const current = loadState();
+    if (current) writeFileSync(new URL("./data/backups/app-state-before-restore.json", import.meta.url), JSON.stringify(current));
+    /* a restore MERGES the backup into today's workspace: everything the
+       backup has that is missing now comes back, and nothing saved since is
+       lost. Replacing outright is only done when asked for in so many words. */
+    const next = body?.replace === true || !current ? restored : mergeWorkspace(current, restored);
+    saveState(next);
+    return [200, { ok: true, restoredFrom: file, merged: !(body?.replace === true || !current), clients: (next.clients || []).length }];
   } catch (e) { return [500, { error: "restore_failed", detail: String(e?.message || e).slice(0, 140) }]; }
 }
 function handleAppLogout(req) {

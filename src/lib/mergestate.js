@@ -76,17 +76,51 @@ const mergeNotesMap = (a, b) => {
   return out;
 };
 
+/* a tracked keyword keeps every scan either side recorded: scans are keyed by
+   their timestamp, and the positions history never gets shorter than the
+   longer side — a re-check run in one tab survives a save landing from another */
+const mergeTracking = (a, b) => {
+  const base = (b.scans || []).length > (a.scans || []).length ? { ...a, ...b } : { ...b, ...a };
+  const seen = new Set();
+  const scans = [...(a.scans || []), ...(b.scans || [])]
+    .filter((sc) => sc && (seen.has(sc.t) ? false : (seen.add(sc.t), true)))
+    .sort((x, y) => x.t - y.t);
+  const ea = a.extraPositions || [], eb = b.extraPositions || [];
+  return { ...base, scans, extraPositions: eb.length > ea.length ? eb : ea };
+};
+
+/* a geo-grid report keeps the union of its snapshots (each scan is one
+   snapshot, keyed by id); the report's own settings follow the later edit */
+const mergeGeoReport = (a, b) => ({
+  ...(ts(b) > ts(a) ? { ...a, ...b } : { ...b, ...a }),
+  snapshots: unionById(a.snapshots, b.snapshots).sort((x, y) => (y.at || 0) - (x.at || 0)),
+});
+/* geoGrid: { business, reports[] } — reports are unioned by id, so a scan
+   run in one session is never dropped by a save from another. This used to
+   be a plain last-write-wins on the whole object, which is how map scans
+   went missing. */
+const mergeGeoGrid = (a, b) => {
+  if (!a && !b) return undefined;
+  const ga = a || {}, gb = b || {};
+  const base = ts(gb) > ts(ga) ? { ...ga, ...gb } : { ...gb, ...ga };
+  return { ...base, reports: unionById(ga.reports, gb.reports, mergeGeoReport) };
+};
+
 const mergeProject = (a, b) => {
   /* scalar/config fields follow the side edited last, so a settings change is
      not undone; the collections below are unions regardless */
   const base = ts(b) > ts(a) ? { ...a, ...b } : { ...b, ...a };
+  const geoGrid = mergeGeoGrid(a.geoGrid, b.geoGrid);
   return {
     ...base,
     records: unionById(a.records, b.records, mergeRecord),
     lists: unionById(a.lists, b.lists),
-    tracking: unionById(a.tracking, b.tracking),
+    tracking: unionById(a.tracking, b.tracking, mergeTracking),
     chatMsgs: unionById(a.chatMsgs, b.chatMsgs),
     meetingNotes: mergeNotesMap(a.meetingNotes, b.meetingNotes),
+    /* location groups (business-profile connections) are a collection too */
+    ...((a.locations || b.locations) ? { locations: unionById(a.locations, b.locations) } : {}),
+    ...(geoGrid ? { geoGrid } : {}),
   };
 };
 

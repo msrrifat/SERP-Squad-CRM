@@ -22,6 +22,7 @@ import { useScanJobs } from "./lib/scanjobs.js";
 import { GbpView, NAV, NoDataPanel, OverviewView, RankTrackingView, WebsitePerformanceView } from "./features/performance/views.jsx";
 import { ROLE_AUTO_SECTIONS, ROLE_PRESETS, SEED_CLIENTS, SEED_COMPANY } from "./data/seed.js";
 import { mergeSummary, mergeWorkspace } from "./lib/mergestate.js";
+import { clearPending, readPending, stashPending } from "./lib/pendingstore.js";
 import { DOMAINS, splitWorkspace, domainOfCompanyKey } from "./lib/domains.js";
 import { useAppOutdated } from "./lib/version.js";
 
@@ -251,8 +252,20 @@ export default function App() {
         if (r.status === 401) { localStorage.removeItem("ss_token"); setScreen("login"); setHydrated(true); return; }
         if (!r.ok) throw new Error("HTTP " + r.status);
         const d = await r.json();
-        if (d.state?.company) setCompany(d.state.company);
-        if (d.state?.clients) setClients(d.state.clients);
+        /* ---- UNSAVED-WORK RECOVERY ------------------------------------
+           If this browser was holding changes the server never confirmed
+           (a paused or failed save, a tab closed mid-save), they are in
+           IndexedDB. Merge them onto the server copy — additions survive,
+           nothing newer is dropped — and let the autosave persist them. */
+        const idn0 = JSON.parse(localStorage.getItem("ss_identity") || "null");
+        const pend = idn0?.kind === "team" ? await readPending("team:" + idn0.id) : null;
+        let loaded = d.state || null;
+        if (pend?.state && loaded && (Number.isFinite(+loaded.clients?.length) || loaded.company)) {
+          loaded = mergeWorkspace(loaded, pend.state);
+          recoveredPending.current = pend;
+        }
+        if (loaded?.company) setCompany(loaded.company);
+        if (loaded?.clients) setClients(loaded.clients);
         /* DATA-SAFETY GATE: only allow the autosave to run once we KNOW what
            the server holds. "loaded" = real state came back; "empty" = the
            server confirmed there is none yet (genuine first run, seeding is
@@ -268,7 +281,10 @@ export default function App() {
         const idn = JSON.parse(localStorage.getItem("ss_identity") || "null");
         /* landing view comes from the URL (deep-link effect) — setting
            "assignments" here would stomp a /project/… or /chat reload */
-        if (idn?.kind === "team") setTeamSession({ memberId: idn.id });
+        if (idn?.kind === "team") {
+          setTeamSession({ memberId: idn.id });
+          if (recoveredPending.current) setRecoveredNote(`Recovered unsaved changes this browser was holding from ${new Date(recoveredPending.current.at).toLocaleString()} — they have been merged into the workspace and saved.`);
+        }
         else if (idn?.kind === "client") setSession({ clientId: idn.id });
         else { localStorage.removeItem("ss_token"); setScreen("login"); }
       } catch { /* server unreachable — never save over the stored workspace */ setStateSync("failed"); setScreen("login"); }
@@ -318,6 +334,11 @@ export default function App() {
      bug that deploy fixed. Detected, and surfaced, rather than left to rot. */
   const appOutdated = useAppOutdated();
   const stateRev = useRef(null);
+  /* an unconfirmed workspace recovered from this browser on load (see
+     lib/pendingstore.js) — announced once, then written by the autosave */
+  const recoveredPending = useRef(null);
+  const [recoveredNote, setRecoveredNote] = useState(null); // stays until dismissed — a confirmed save must not hide it
+  const pendingKey = () => (teamSession ? "team:" + teamSession.memberId : null);
   /* fingerprint of every KEEPABLE slice as the server currently holds it */
   const serverSlices = useRef({});
   /* slices the server deliberately did NOT send on load (see LAZY_SLICES). They
@@ -400,6 +421,7 @@ export default function App() {
     /* never write until the server's workspace is accounted for */
     if (stateSync !== "loaded" && stateSync !== "empty") {
       setSaveWarn("Your workspace couldn't be loaded from the server, so saving is paused to protect it — reload the page. Nothing has been overwritten.");
+      if (pendingKey()) stashPending(pendingKey(), { company: companyRef.current, clients: clientsRef.current }, stateRev.current);
       return;
     }
     const token = localStorage.getItem("ss_token");
@@ -414,6 +436,9 @@ export default function App() {
        which is long enough to close the tab and lose the work without ever
        being told — so it is now both visible and guarded. */
     if (!quiet) setSaveState("pending");
+    /* the durable copy: written the moment work is unconfirmed, dropped the
+       moment the server confirms it (every `saved` below) */
+    if (!quiet && pendingKey()) stashPending(pendingKey(), { company: companyRef.current, clients: clientsRef.current }, stateRev.current);
     saveTimer.current = setTimeout(async () => {
       if (!quiet) setSaveState("saving");
       try {
@@ -452,7 +477,7 @@ export default function App() {
               fp[d] = JSON.stringify(bare[d] ?? {});
               return fp[d] !== serverDocs.current[d];
             });
-            if (!changed.length) { setSaveWarn(null); setSaveState("saved"); return; }
+            if (!changed.length) { setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey()); return; }
             const rd = await fetch("/api/state/domains", {
               method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": token },
               body: JSON.stringify({
@@ -465,7 +490,7 @@ export default function App() {
               changed.forEach((d) => { serverDocs.current[d] = fp[d]; });
               if (dj.revs) serverRevs.current = dj.revs;
               if (Number.isFinite(+dj.rev)) stateRev.current = +dj.rev;
-              setSaveWarn(null); setSaveState("saved");
+              setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());
               return;
             }
             /* 409 (someone else saved that tool) and anything else fall
@@ -511,7 +536,7 @@ export default function App() {
               /* fingerprint what was actually SENT — `mine` predates the slices
                  that were just fetched and would misdescribe the server */
               serverSlices.current = sliceFingerprints(whole);
-              setSaveWarn(null); setSaveState("saved");
+              setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());
             } else { setSaveState("error"); setSaveWarn(`Changes are NOT saving to the server (HTTP ${rf.status}) — recent work would be lost on reload.`); }
             return;
           }
@@ -556,7 +581,7 @@ export default function App() {
               ok = true; recovered = sum;
             }
             if (!ok) throw new Error("still contended");
-            setSaveState("saved");
+            setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());
             setSaveWarn(recovered && (recovered.tasks || recovered.records)
               ? "Another session had also saved changes. Both versions were merged — nothing was lost."
               : null);
@@ -576,7 +601,7 @@ export default function App() {
           /* the server now holds exactly what we compared against */
           serverSlices.current = mine;
           noteServerDocs(full, d.revs || null);
-          setSaveWarn(null); setSaveState("saved");
+          setSaveWarn(null); setSaveState("saved"); if (pendingKey()) clearPending(pendingKey());
         }
       } catch { setSaveState("error"); setSaveWarn("Changes are NOT saving — the API server is unreachable. Recent work would be lost on reload."); }
     }, 1200);
@@ -1861,6 +1886,12 @@ export default function App() {
       {!saveWarn && (saveState === "pending" || saveState === "saving") && (
         <div className="no-print fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-[11.5px] font-semibold text-amber-800 shadow">
           <RefreshCw size={11} className="mr-1.5 inline animate-spin" /> Saving changes… don't close this tab yet
+        </div>
+      )}
+      {recoveredNote && !saveWarn && (
+        <div className="no-print fixed bottom-4 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[12px] font-semibold text-emerald-800 shadow-lg">
+          <span>{recoveredNote}</span>
+          <button onClick={() => setRecoveredNote(null)} className="shrink-0 rounded-md px-2 py-0.5 text-[11px] text-emerald-700 hover:bg-emerald-100">Dismiss</button>
         </div>
       )}
       {saveWarn && (

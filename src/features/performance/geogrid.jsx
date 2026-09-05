@@ -1322,7 +1322,7 @@ export function Distribution({ points, compact = false }) {
 }
 
 const PrintStyle = () => (
-  <style>{`@media print { body * { visibility: hidden !important; } .gg-print, .gg-print * { visibility: visible !important; } .gg-print { position: absolute !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; } .gg-nopdf { display: none !important; } .gg-page { page-break-inside: avoid; } }`}</style>
+  <style>{`@media print { body * { visibility: hidden !important; } .gg-print, .gg-print * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } .gg-print { position: absolute !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; } .gg-nopdf { display: none !important; } .gg-page { page-break-inside: avoid; } }`}</style>
 );
 
 function CandidatePanel({ label, snap, bizName, kw, center, size, spacingKm, mapH = 430 }) {
@@ -1341,7 +1341,9 @@ function CandidatePanel({ label, snap, bizName, kw, center, size, spacingKm, map
         <span className="rounded-lg bg-gray-900 px-2 py-1 text-[10px] font-bold text-white">{new Date(snap.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })}{snap.live ? "" : " · demo"}</span>
       </div>
       <div className="border-t border-gray-50 px-3.5 py-2"><Distribution points={pts} /></div>
-      {center && <MapCanvas center={center} points={pts} size={size} spacingKm={spacingKm} height={mapH} />}
+      {/* print-safe map: a static image + positioned bubbles — the interactive
+          Google canvas is WebGL and comes out blank on paper */}
+      {center && <div className="p-2"><ReportGridMap center={center} points={pts} size={size} spacingKm={spacingKm} px={mapH} /></div>}
     </Card>
   );
 }
@@ -1440,7 +1442,7 @@ export function SnapshotReportOverlay({ rp, biz, center, accent, snap, onClose }
                 <span>Coverage <b className="ll-mono">{m.coverage.toFixed(0)}%</b></span>
               </div>
               <div className="mb-2"><Distribution points={pts} /></div>
-              {center && <MapCanvas center={center} points={pts} size={snap.size} spacingKm={snap.spacingKm} prevPoints={base?.grids[kw]} height={430} />}
+              {center && <ReportGridMap center={center} points={pts} size={snap.size} spacingKm={snap.spacingKm} prevPoints={base?.grids[kw]} px={430} />}
             </div>
           );
         })}
