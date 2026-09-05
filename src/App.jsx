@@ -11,7 +11,7 @@ import {
   Trash2, ChevronDown, ChevronRight, Folder, FolderOpen, Zap, KeyRound,
   LogIn, LogOut, ChevronUp, Copy, Settings2, Type, AlignLeft, Table2,
   PieChart as PieIcon, Activity, FileText as FileTextIcon, ArrowLeft, ClipboardPaste,
-  Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, MessageSquare, User, ClipboardList, Megaphone, Wrench,
+  Calendar, Sun, Moon, Shield, History, UserPlus, Wallet, Receipt, ListTodo, ListChecks, MessageSquare, User, ClipboardList, Megaphone, Wrench,
   Rocket, Share2, Lock, Send, ImagePlus, List, ListOrdered, Quote, Facebook, Instagram, Linkedin, Twitter, Youtube, Music2, Pin,
   PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
@@ -91,6 +91,7 @@ const AdsView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsView");
 const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), "AdsPerformanceView");
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const MeetingsOverview = lazyOf(() => import("./features/pm/meetings.jsx"), "MeetingsOverview");
+const PersonalTasksView = lazyOf(() => import("./features/account/personaltasks.jsx"), "PersonalTasksView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
 /* DataForSEO rank-tracking views fetch their OWN data — they render without the
    demo/aggregated `data` and never gate on it (live Google now shows inside
@@ -188,6 +189,7 @@ export default function App() {
     if (accountView === "chat") return "/chat";
     if (accountView === "team") return "/team";
     if (accountView === "meetings") return "/meetings";
+    if (accountView === "tasks") return "/tasks";
     if (accountView === "settings") return "/account";
     if (activeProjectId) return `/project/${activeProjectId}/${section}${section === "performance" ? `/${view}` : ""}`;
     return "/dashboard";
@@ -207,7 +209,7 @@ export default function App() {
       return;
     }
     if (seg[0] === "portal") return; // client session already renders the portal
-    setAccountView({ dashboard: "assignments", chat: "chat", team: "team", meetings: "meetings", account: "settings" }[seg[0]] || "assignments");
+    setAccountView({ dashboard: "assignments", tasks: "tasks", chat: "chat", team: "team", meetings: "meetings", account: "settings" }[seg[0]] || "assignments");
   };
   useEffect(() => {
     const onPop = () => { popNav.current = true; applyPathRef.current(window.location.pathname); };
@@ -1038,6 +1040,10 @@ export default function App() {
   const channelUnreadTotal = chatChannels.reduce((n, ch) =>
     n + (ch.project.chatMsgs || []).filter((m) => m.author !== meName && m.ts > ((ch.project.chatReads || {})[meName] || 0)).length, 0);
   // groups are defined below; the badge total is assembled after them
+  /* the signed-in person's private to-do list (Personal dashboard → Personal tasks) */
+  const meId = currentUser?.id || "owner";
+  const personalTasks = (company.personalTasks || {})[meId] || [];
+  const latePersonal = personalTasks.filter((t) => !t.completedAt && t.dueDate && t.dueDate < todayISO()).length;
   const lateAssigned = visibleClients.reduce((n, c) => n + c.projects.reduce((n2, p) => n2 + (p.records || []).reduce((n3, r) =>
     n3 + (r.checklists || []).flatMap((cl) => cl.tasks).filter((t) => (t.assignees || []).includes(meName) && !t.completedAt && t.dueDate && t.dueDate < todayISO()).length, 0), 0), 0);
 
@@ -1551,6 +1557,7 @@ export default function App() {
           <div className="space-y-0.5 px-2.5 pb-3">
             {[
               ["assignments", "Assignments", ClipboardList, lateAssigned > 0 ? { n: lateAssigned, bg: "#FEE2E2", fg: "#991B1B" } : null],
+              ["tasks", "Personal tasks", ListChecks, latePersonal > 0 ? { n: latePersonal, bg: "#FEE2E2", fg: "#991B1B" } : null],
               ["chat", "Chat", MessageSquare, chatTotalUnread > 0 ? { n: chatTotalUnread, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
               ...(isAdmin ? [["team", "Team", Users, null]] : []),
               ["meetings", "Meetings & Notes", Calendar, null],
@@ -1709,7 +1716,7 @@ export default function App() {
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ settings: "Account settings", assignments: "My assignments", chat: "Chat", team: "Team", meetings: "Meetings & notes" }[accountView]}
+                {{ settings: "Account settings", assignments: "My assignments", tasks: "Personal tasks", chat: "Chat", team: "Team", meetings: "Meetings & notes" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -1724,6 +1731,10 @@ export default function App() {
               )}
               {accountView === "assignments" && (
                 <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} showClient={isAdmin} />
+              )}
+              {accountView === "tasks" && (
+                <PersonalTasksView tasks={personalTasks} accent={accent} userName={meName}
+                  onChange={(list) => setCompany((c) => ({ ...c, personalTasks: { ...(c.personalTasks || {}), [meId]: list } }))} />
               )}
               {accountView === "meetings" && (
                 <MeetingsOverview clients={visibleClients} company={company} accent={accent}
