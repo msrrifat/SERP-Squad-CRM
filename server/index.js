@@ -434,7 +434,10 @@ function saveDomainDocs(partial) {
   /* hourly-gated, and run AFTER the response goes out: rebuilding and
      gzipping the 30 MB combined file takes seconds, and once an hour some
      save used to sit behind it */
-  setTimeout(() => { try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ } }, 50);
+  setTimeout(() => {
+    try { refreshCombined(); } catch { /* backups are best-effort — never block a save */ }
+    warmStateCache();                                   // the next reload finds it ready
+  }, 50);
   return { revs, rev: next };
 }
 /* the workspace revision: bumped on every accepted write. A browser sends the
@@ -877,11 +880,49 @@ const LAZY_SLICES = ["company.savedReports"];
 
 function handleStateGet(req) {
   if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  return stateGetPayload(/[?&]slim=1(&|$)/.test(req.url));
+}
+/* ---- WORKSPACE LOAD CACHE ---------------------------------------------
+   Every page load used to parse the 30 MB workspace, stringify it and gzip
+   it from scratch — seconds of CPU per reload, and a queue of them when two
+   people reloaded at once. The gzipped response is built once per stored
+   revision (keyed on the document files themselves, so any write path
+   invalidates it) and re-warmed in the background right after each save, so
+   a reload normally just streams a ready buffer. */
+const stateGz = { slim: null, full: null, building: {} };
+const stateCacheKey = () => {
+  try {
+    return DOMAINS.map((d) => { try { const st = statSync(domFile(d)); return `${st.mtimeMs}:${st.size}`; } catch { return "-"; } }).join("|") + "|" + loadRev();
+  } catch { return null; }
+};
+const gzipAsync = (buf, level = 5) => new Promise((res, rej) => gzip(buf, { level }, (e, out) => (e ? rej(e) : res(out))));
+async function cachedStateGz(slim) {
+  const which = slim ? "slim" : "full";
+  const key = stateCacheKey();
+  if (!key) return null;
+  const hit = stateGz[which];
+  if (hit && hit.key === key) return hit.buf;
+  if (stateGz.building[which]) return stateGz.building[which];   // one build serves every waiter
+  stateGz.building[which] = (async () => {
+    try {
+      const [code, payload] = stateGetPayload(slim);
+      if (code !== 200) return null;
+      const buf = await gzipAsync(Buffer.from(JSON.stringify(payload)));
+      /* only keep it if nothing was written while it was being built */
+      if (stateCacheKey() === key) stateGz[which] = { key, buf };
+      return buf;
+    } catch { return null; }
+    finally { delete stateGz.building[which]; }
+  })();
+  return stateGz.building[which];
+}
+const warmStateCache = () => { cachedStateGz(true).catch(() => {}); };
+function stateGetPayload(wantSlim) {
   const st = loadState();
   const rev = loadRev();
   /* ?slim=1 leaves the lazy slices out and reports their size instead, so the
      browser can render immediately and fetch them when they are first needed */
-  if (st && /[?&]slim=1(&|$)/.test(req.url)) {
+  if (st && wantSlim) {
     const omitted = {};
     const slim = { ...st, company: { ...(st.company || {}) } };
     for (const path of LAZY_SLICES) {
@@ -5107,8 +5148,17 @@ http.createServer(async (req, res) => {
       } catch (e) { return send(502, { error: String(e?.message || e).slice(0, 100) }); }
     }
     if (req.method === "GET" && req.url.startsWith("/api/share/")) { const [c2, p2] = handleShareGet(req.url.slice(11)); return send(c2, p2); }
-    if (req.method === "GET" && req.url.startsWith("/api/state?")) { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
-    if (req.method === "GET" && req.url === "/api/state") { const [c2, p2] = handleStateGet(req); return send(c2, p2); }
+    if (req.method === "GET" && (req.url === "/api/state" || req.url.startsWith("/api/state?"))) {
+      if (!sessionFromReq(req)) return send(401, { error: "unauthorized", detail: "Session required." });
+      if (/\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+        const buf = await cachedStateGz(/[?&]slim=1(&|$)/.test(req.url));
+        if (buf) {
+          res.writeHead(200, { "Content-Type": "application/json", ...CORS, "Content-Encoding": "gzip", "Content-Length": buf.length, Vary: "Accept-Encoding", "Cache-Control": "no-store" });
+          return res.end(buf);
+        }
+      }
+      const [c2, p2] = handleStateGet(req); return send(c2, p2);
+    }
     if (req.method === "GET" && req.url.startsWith("/api/state/slice?")) { const [c2, p2] = handleStateSlice(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/chat/since")) { const [c2, p2] = handleChatSince(req); return send(c2, p2); }
