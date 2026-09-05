@@ -753,6 +753,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         /* no room for a meaningful chunk here — start the next page */
         if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
         fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
+        /* never leave a one- or two-row tail on the next page: hold a few rows
+           back so the last part is at least MIN_ROWS tall */
+        const tail = rowCount - (from + fit);
+        if (tail > 0 && tail < MIN_ROWS && fit - (MIN_ROWS - tail) >= MIN_ROWS) fit -= MIN_ROWS - tail;
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
         const est = oh + rowSum(from, to) + m.rowH;
