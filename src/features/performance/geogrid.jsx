@@ -1292,6 +1292,18 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
 }
 
 /* ================= report suite: distribution, compare, print, share ================= */
+/* Print with the report as the document title. Browsers put the page title
+   and URL in the sheet margins by default; @page margin 0 removes those, and
+   swapping the title covers viewers whose print settings re-enable them — a
+   white-label client must never see the agency's app name or URL. */
+const printAs = (title) => {
+  const prev = document.title;
+  document.title = title;
+  const restore = () => { document.title = prev; window.removeEventListener("afterprint", restore); };
+  window.addEventListener("afterprint", restore);
+  window.print();
+  setTimeout(restore, 60000);
+};
 const DIST_META = [["p3", "Position 1–3", "#16A34A"], ["p10", "Position 4–10", "#F59E0B"], ["p20", "Position 11–50", "#EF4444"], ["none", "No ranking", "#5B6472"]];
 export function Distribution({ points, compact = false }) {
   const d = distFor(points);
@@ -1322,7 +1334,7 @@ export function Distribution({ points, compact = false }) {
 }
 
 const PrintStyle = () => (
-  <style>{`@media print { body * { visibility: hidden !important; } .gg-print, .gg-print * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } .gg-print { position: absolute !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; } .gg-nopdf { display: none !important; } .gg-page { page-break-inside: avoid; } }`}</style>
+  <style>{`@media print { @page { size: A4; margin: 0; } body * { visibility: hidden !important; } .gg-print, .gg-print * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } .gg-print { position: absolute !important; left: 0; top: 0; width: 100%; height: auto !important; overflow: visible !important; padding: 12mm !important; box-sizing: border-box; } .gg-nopdf { display: none !important; } .gg-page { page-break-inside: avoid; } }`}</style>
 );
 
 function CandidatePanel({ label, snap, bizName, kw, center, size, spacingKm, mapH = 430 }) {
@@ -1383,7 +1395,7 @@ export function CompareOverlay({ rp, biz, center, accent, initialA, initialB, on
               <select value={bBiz} onChange={(e) => setBBiz(e.target.value)} className={inputCls}>{bizOptions(B).map((x) => <option key={x}>{x}</option>)}</select>
             </Labeled>
           </div>
-          <button onClick={() => window.print()} className="rounded-lg px-4 py-2 text-[12.5px] font-bold text-white" style={{ background: accent }}>⭳ Save PDF (all keywords)</button>
+          <button onClick={() => printAs(`${rp.name} — GBP ranking report`)} className="rounded-lg px-4 py-2 text-[12.5px] font-bold text-white" style={{ background: accent }}>⭳ Save PDF (all keywords)</button>
         </div>
 
         <div>
@@ -1422,7 +1434,7 @@ export function SnapshotReportOverlay({ rp, biz, center, accent, snap, onClose }
               {snaps.filter((x) => x.id !== snap.id).map((s2) => <option key={s2.id} value={s2.id}>{new Date(s2.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })}</option>)}
             </select>
           </Labeled>
-          <button onClick={() => window.print()} className="ml-auto rounded-lg px-4 py-2 text-[12.5px] font-bold text-white" style={{ background: accent }}>⭳ Save PDF (all keywords)</button>
+          <button onClick={() => printAs(`${rp.name} — GBP ranking report`)} className="ml-auto rounded-lg px-4 py-2 text-[12.5px] font-bold text-white" style={{ background: accent }}>⭳ Save PDF (all keywords)</button>
         </div>
         <div>
           <div className="ll-display text-[20px] font-bold">GBP ranking report — {rp.name}</div>

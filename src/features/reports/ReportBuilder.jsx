@@ -595,7 +595,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const marked = el.querySelectorAll("[data-rbrow]");
       const rows = [...(marked.length ? marked : el.querySelectorAll("tbody tr"))];
       if (!rows.length) return;
-      const rowsH = rows.reduce((n, r) => n + r.offsetHeight, 0);
+      /* every row's real height, in order. An average from a sample under-
+         predicts the rows that wrap (long keywords, long URLs), and on a
+         100-row table those errors add up to a page that overflows by a row
+         and spills a near-blank sheet — over and over. Exact heights let the
+         split land each page exactly. */
+      const rowHs = rows.map((r) => r.offsetHeight);
+      const rowsH = rowHs.reduce((n, h) => n + h, 0);
       const rowH = rowsH / rows.length;
       let overheadFirst = Math.max(0, el.offsetHeight - rowsH);
       if (elFirst) {
@@ -603,9 +609,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           ? elFirst.querySelectorAll("[data-rbrow]") : elFirst.querySelectorAll("tbody tr"))];
         if (fr.length) overheadFirst = Math.max(0, elFirst.offsetHeight - fr.reduce((n, r) => n + r.offsetHeight, 0));
       }
-      const next = { rowH, overhead: Math.max(0, el.offsetHeight - rowsH), overheadFirst };
+      const next = { rowH, rowHs, overhead: Math.max(0, el.offsetHeight - rowsH), overheadFirst };
       const prev = metricsRef.current[b.id];
-      if (!prev || Math.abs(prev.rowH - next.rowH) > 0.5 || Math.abs(prev.overhead - next.overhead) > 1
+      const sig = (m2) => (m2?.rowHs || []).join(",");
+      if (!prev || sig(prev) !== sig(next) || Math.abs(prev.overhead - next.overhead) > 1
           || Math.abs((prev.overheadFirst ?? 0) - next.overheadFirst) > 1) {
         metricsRef.current[b.id] = next; changed = true;
       }
@@ -632,6 +639,21 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     });
     if (changed) { passRef.current += 1; setMeasureTick((x) => x + 1); }
   });
+  /* Pages that are still taller than A4 after the correction passes (a
+     block that cannot be divided and does not fit one sheet). Every other page
+     prints as EXACTLY one sheet — fixed height, overflow clipped — so a
+     hairline of print-DPI rounding can never spill into an extra blank sheet.
+     Only these over-tall pages are allowed to flow across sheets. */
+  const [overPages, setOverPages] = useState("");
+  useLayoutEffect(() => {
+    const over = [];
+    document.querySelectorAll(".rb-a4page").forEach((pg, i) => {
+      if (pg.getBoundingClientRect().height - PAGE_H > 1) over.push(i);
+    });
+    const key = over.join(",");
+    if (key !== overPages) setOverPages(key);
+  });
+  const overSet = useMemo(() => new Set(overPages.split(",").filter(Boolean).map(Number)), [overPages]);
   /* blocks measured taller than a page's content area: they cannot be kept
      whole, so the print rules let them break instead of forcing a blank sheet */
   const tallBlocks = useMemo(() => {
@@ -652,7 +674,10 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const rowsTotal = totalRowsOf(b);
       /* a divided block no longer has one element to measure — its full height
          is reconstructed from the row geometry captured while it rendered */
-      const full = m && rowsTotal ? m.overhead + rowsTotal * m.rowH : (el?.offsetHeight || 90);
+      const rowSum = (from, to) => (m?.rowHs && m.rowHs.length >= to)
+        ? m.rowHs.slice(from, to).reduce((n, h) => n + h, 0)
+        : (to - from) * (m?.rowH || 0);
+      const full = m && rowsTotal ? m.overhead + rowSum(0, rowsTotal) : (el?.offsetHeight || 90);
       /* headroom on every estimate. An average row height under-predicts a
          real part by a couple of rows (borders, line-height rounding, a cell
          that wraps), and at the bottom of a sheet that difference is what
@@ -685,15 +710,22 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         const budget = USABLE - used - 10;
         /* the first part carries the block's summary, a continuation does not */
         const oh = part === 0 ? (m.overheadFirst ?? m.overhead) : m.overhead;
-        /* one row of headroom for rounding, plus any learned trim */
-        let fit = Math.floor((budget - oh - m.rowH) / Math.max(1, m.rowH))
-          - (rowTrimRef.current[b.id] || 0);
+        /* exact fit: walk the measured rows until the budget is spent (one
+           average row kept back for rounding), then any learned trim */
+        let fit;
+        if (m.rowHs && m.rowHs.length >= rowCount) {
+          let acc = oh + m.rowH, n = 0;
+          while (from + n < rowCount && acc + m.rowHs[from + n] <= budget) { acc += m.rowHs[from + n]; n += 1; }
+          fit = n - (rowTrimRef.current[b.id] || 0);
+        } else {
+          fit = Math.floor((budget - oh - m.rowH) / Math.max(1, m.rowH)) - (rowTrimRef.current[b.id] || 0);
+        }
         /* no room for a meaningful chunk here — start the next page */
         if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
         fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
-        const est = oh + (to - from) * m.rowH + m.rowH;
+        const est = oh + rowSum(from, to) + m.rowH;
         cur().push({ ...b, id: partId, _srcId: b.id, _rowFrom: from, _rowTo: to, _part: part, _more: to < rowCount });
         used += est + 10;
         from = to; part += 1;
@@ -1828,10 +1860,17 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           .rb-outer { display: block !important; max-width: 100% !important; padding: 0 !important; margin: 0 !important; gap: 0 !important; }
           /* the editor's A4 pages map one-to-one onto printed pages — each carries
              its own brand header + page number */
-          .rb-a4page { width: 210mm !important; min-height: 297mm !important; box-shadow: none !important; border-radius: 0 !important;
-            margin: 0 !important; page-break-after: always; break-after: page; }
+          .rb-a4page { width: 210mm !important; height: 296.5mm !important; min-height: 0 !important; max-height: 296.5mm !important;
+            overflow: hidden !important; box-shadow: none !important; border-radius: 0 !important;
+            margin: 0 !important; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }
+          .rb-a4page .rb-pbody { min-height: 0 !important; overflow: hidden !important; }
+          /* the rare page that is taller than a sheet (an undividable block):
+             let it flow across sheets instead of clipping it */
+          .rb-a4page.rb-over { height: auto !important; max-height: none !important; min-height: 296mm !important; overflow: visible !important;
+            page-break-inside: auto; break-inside: auto; }
+          .rb-a4page.rb-over .rb-pbody { overflow: visible !important; }
           .rb-a4page:last-of-type { page-break-after: auto; break-after: auto; }
-          .rb-cover { width: 210mm !important; height: 297mm !important; box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; }
+          .rb-cover { width: 210mm !important; height: 296.5mm !important; overflow: hidden !important; box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; }
           /* box-shadows rasterize as dark smudges in print — none anywhere */
           .rb-a4page *, .rb-cover * { box-shadow: none !important; text-shadow: none !important; }
           /* compact geo cards: two keyword snapshots per A4 page */
@@ -1849,7 +1888,6 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           /* the page box must never be TALLER than the sheet it prints on:
              at exactly 297mm any rounding at the printer's DPI spills a hairline
              onto the next sheet, which then reads as a blank page */
-          .rb-a4page { min-height: 296mm !important; }
           .gg-page { break-inside: avoid; page-break-inside: avoid; }
           /* charts scale to the page; map tiles (256px, absolutely positioned) must NOT be constrained */
           .recharts-wrapper, .recharts-surface { max-width: 100% !important; }
@@ -2044,14 +2082,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                         the "continues on the next page" line, so the overhead can only
                         ever be over-estimated, never under — under-estimating is what
                         pushes a page past A4 and costs an extra sheet */}
-                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: PROBE_ROWS, _part: 1, _more: true })}
+                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: totalRowsOf(b), _part: 1, _more: true })}
                   </div>
                 ))}
               </div>
             </div>
           </div>
           {pages.map((pageBlocks, pi) => (
-            <div key={pi} className="rb-a4page mx-auto mb-5 flex flex-col rounded-2xl bg-white shadow-sm"
+            <div key={pi} className={"rb-a4page mx-auto mb-5 flex flex-col rounded-2xl bg-white shadow-sm" + (overSet.has(pi) ? " rb-over" : "")}
               style={{ minHeight: PAGE_H, width: PAGE_W }}>
               {showBrand && <PageHeader />}
               <div className="rb-pbody flex-1 px-8 pt-4">
