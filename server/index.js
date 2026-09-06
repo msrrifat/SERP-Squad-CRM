@@ -2343,6 +2343,50 @@ async function googleAdsAuth(body) {
 }
 const provErr = (name, r, extra) => [502, { error: "provider_error", detail: `${name} rejected the request (HTTP ${r.status})${extra ? ": " + extra : ""}` }];
 
+/* ---- Google Ads API version -------------------------------------------
+   Versions are retired roughly a year after release (v16, which this code
+   was written against, now answers 404 for everything). The version is
+   discovered once per process by probing for the newest one that answers
+   401 (exists, wants auth) rather than 404, and re-discovered if a call
+   ever comes back 404 — so a retired version never takes the Ads
+   dashboards down again. */
+let gadsVersion = process.env.GOOGLE_ADS_API_VERSION || null;
+let gadsProbe = null;
+async function discoverGadsVersion() {
+  if (gadsProbe) return gadsProbe;
+  gadsProbe = (async () => {
+    for (let v = 40; v >= 20; v--) {
+      try {
+        const r = await fetch(`https://googleads.googleapis.com/v${v}/customers:listAccessibleCustomers`, { signal: AbortSignal.timeout(8000) });
+        if (r.status === 401) { gadsVersion = "v" + v; console.log(`[ads] Google Ads API ${gadsVersion}`); return gadsVersion; }
+      } catch { /* try the next */ }
+    }
+    gadsVersion = gadsVersion || "v22";
+    return gadsVersion;
+  })();
+  try { return await gadsProbe; } finally { gadsProbe = null; }
+}
+async function gadsFetch(path, init) {
+  const ver = gadsVersion || await discoverGadsVersion();
+  let r = await fetch(`https://googleads.googleapis.com/${ver}/${path}`, init);
+  if (r.status === 404 && /text\/html/i.test(String(r.headers.get("content-type") || ""))) {
+    gadsVersion = null;                                   // the version was retired under us
+    const next = await discoverGadsVersion();
+    if (next !== ver) r = await fetch(`https://googleads.googleapis.com/${next}/${path}`, init);
+  }
+  return r;
+}
+/* one GAQL query against one customer, rows flattened from searchStream */
+async function gadsQuery(headers, customerId, query) {
+  const r = await gadsFetch(`customers/${encodeURIComponent(customerId)}/googleAds:searchStream`, {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, signal: AbortSignal.timeout(30000),
+    body: JSON.stringify({ query }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d[0]?.error?.message || d.error?.message || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return (Array.isArray(d) ? d : [d]).flatMap((chunk) => chunk.results || []);
+}
+const fmtCustomerId = (id) => String(id || "").replace(/[^0-9]/g, "").replace(/^(\d{3})(\d{3})(\d{4})$/, "$1-$2-$3");
+
 async function handleAdsAccounts(body) {
   const pf = body?.platform;
   if (!ADS_META[pf]) return [400, { error: "bad_request", detail: "platform must be meta, google, tiktok, reddit, nextdoor or yelp" }];
@@ -2356,9 +2400,34 @@ async function handleAdsAccounts(body) {
     if (pf === "google") {
       const headers = await googleAdsAuth(body);
       if (!headers) return no503(pf);
-      const r = await fetch("https://googleads.googleapis.com/v16/customers:listAccessibleCustomers", { headers });
-      const d = await r.json(); if (!r.ok) return provErr("Google Ads", r, d.error?.message);
-      return [200, { live: true, accounts: (d.resourceNames || []).map((rn) => ({ id: rn.replace("customers/", ""), name: rn })) }];
+      const mcc = headers["login-customer-id"];
+      /* With a manager (MCC) account the client accounts it manages are the
+         ones an agency actually advertises from — listed with their names
+         and currencies. Manager accounts themselves are left out: they hold
+         no campaigns. */
+      if (mcc) {
+        try {
+          const rows = await gadsQuery(headers, mcc,
+            "SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, customer_client.manager, customer_client.status, customer_client.level FROM customer_client WHERE customer_client.level <= 1");
+          const accounts = rows.map((x) => x.customerClient || {}).filter((c) => !c.manager && (!c.status || c.status === "ENABLED"))
+            .map((c) => ({ id: String(c.id), name: `${c.descriptiveName || "Google Ads account"} · ${fmtCustomerId(c.id)}`, currency: c.currencyCode || null }));
+          if (accounts.length) return [200, { live: true, accounts }];
+        } catch (e) {
+          if (e.status && e.status !== 404) return [502, { error: "provider_error", detail: `Google Ads rejected the request (HTTP ${e.status}): ${e.message}` }];
+        }
+      }
+      /* no manager id: the accounts this Google login can reach directly */
+      const r = await gadsFetch("customers:listAccessibleCustomers", { headers, signal: AbortSignal.timeout(20000) });
+      const d = await r.json().catch(() => ({})); if (!r.ok) return provErr("Google Ads", r, d.error?.message);
+      const ids = (d.resourceNames || []).map((rn) => rn.replace("customers/", ""));
+      const accounts = await Promise.all(ids.map(async (id) => {
+        try {
+          const rows = await gadsQuery(headers, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager FROM customer");
+          const c = rows[0]?.customer || {};
+          return { id, name: `${c.descriptiveName || "Google Ads account"} · ${fmtCustomerId(id)}`, currency: c.currencyCode || null, manager: !!c.manager };
+        } catch { return { id, name: `Google Ads account · ${fmtCustomerId(id)}`, currency: null }; }
+      }));
+      return [200, { live: true, accounts: accounts.filter((a) => !a.manager).map(({ manager, ...a }) => a) }];
     }
     if (pf === "tiktok") {
       const tk = adsToken(body, "TIKTOK_ADS_TOKEN"); if (!tk) return no503(pf);
@@ -2402,10 +2471,10 @@ async function handleAdsMetrics(body) {
       const headers = await googleAdsAuth(body);
       if (!headers) return no503(pf);
       const gaql = `SELECT segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`;
-      const r = await fetch(`https://googleads.googleapis.com/v16/customers/${encodeURIComponent(acct)}/googleAds:searchStream`, {
-        method: "POST", headers: { ...headers, "content-type": "application/json" },
+      const r = await gadsFetch(`customers/${encodeURIComponent(acct)}/googleAds:searchStream`, {
+        method: "POST", headers: { ...headers, "content-type": "application/json" }, signal: AbortSignal.timeout(30000),
         body: JSON.stringify({ query: gaql }) });
-      const d = await r.json(); if (!r.ok) return provErr("Google Ads", r, d[0]?.error?.message || d.error?.message);
+      const d = await r.json().catch(() => ({})); if (!r.ok) return provErr("Google Ads", r, d[0]?.error?.message || d.error?.message);
       return [200, { live: true, rows: d }];
     }
     /* TikTok / Reddit / Nextdoor / Yelp reporting endpoints follow the same shape */
