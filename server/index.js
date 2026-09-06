@@ -1333,6 +1333,12 @@ function handleClientStateSave(req, body) {
       if (typeof p.dfs.password === "string") d.password = p.dfs.password.slice(0, 200);
       next.dfs = d;
     }
+    /* affiliate payout details: the client's own receiving account and
+       nothing else — rate, referrals and recorded payouts stay agency-only */
+    if (p.affiliate && typeof p.affiliate === "object" && p.affiliate.payout && typeof p.affiliate.payout === "object" && cur.affiliate?.enabled) {
+      const po = p.affiliate.payout;
+      next.affiliate = { ...cur.affiliate, payout: { method: "paypal", paypalEmail: str(po.paypalEmail, 200).trim(), name: str(po.name, 120).trim(), updatedAt: Date.now() } };
+    }
   }
 
   /* messages are append-only unions: a client can add THEIR OWN messages and

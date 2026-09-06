@@ -704,6 +704,8 @@ export default function App() {
               companyName: live.companyName, companyWebsite: live.companyWebsite, email: live.email,
               phone: live.phone, address: live.address, logo: live.logo ?? null,
               whiteLabel: live.whiteLabel, dfs: live.dfs || {},
+              /* affiliate payout details are the only affiliate field a client owns */
+              ...(live.affiliate?.payout ? { affiliate: { payout: live.affiliate.payout } } : {}),
             },
             /* chat (owner line, 3-way threads, channels) goes through
                /api/chat/* the moment it happens — it no longer rides here */

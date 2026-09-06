@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { HandCoins, Users, Wallet, TrendingUp, CalendarDays, Plus, Trash2, Gift, CheckCircle2, Clock, BadgeDollarSign } from "lucide-react";
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { HandCoins, Users, Wallet, TrendingUp, CalendarDays, Plus, Trash2, Gift, CheckCircle2, Clock, BadgeDollarSign, CreditCard, Pencil } from "lucide-react";
 import { Card, Labeled, Toggle, inputCls, askDelete } from "../../ui/primitives.jsx";
 import { AFFILIATE_RATE_DEFAULT, affiliateSummary, fmtMoney } from "../../lib/affiliate.js";
 import { todayISO, uid } from "../../lib/format.jsx";
@@ -72,6 +72,13 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11.5px]" style={{ background: a.payout?.paypalEmail ? "#EFF6FF" : "#FFFBEB", color: a.payout?.paypalEmail ? "#1E40AF" : "#92400E" }}>
+            <CreditCard size={13} />
+            {a.payout?.paypalEmail
+              ? <span>Pays out to <b>PayPal</b> · {a.payout.paypalEmail}{a.payout.name ? ` (${a.payout.name})` : ""}</span>
+              : <span>No payment details yet — the client adds their PayPal account on their Affiliate Earnings screen.</span>}
           </div>
 
           {/* referrals */}
@@ -146,68 +153,126 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
 }
 
 /* ---- client side --------------------------------------------------------- */
-export function AffiliateEarningsView({ summary, brand, currency = "USD", accent = "#0E7C66", contactEmail = "" }) {
+const TONES = {
+  balance: { fg: "#0F766E", bg: "#CCFBF1", ring: "#99F6E4" },
+  month:   { fg: "#1D4ED8", bg: "#DBEAFE", ring: "#BFDBFE" },
+  earned:  { fg: "#6D28D9", bg: "#EDE9FE", ring: "#DDD6FE" },
+  paid:    { fg: "#15803D", bg: "#DCFCE7", ring: "#BBF7D0" },
+};
+
+function PayoutDetailsCard({ payout, onSave, accent }) {
+  const [editing, setEditing] = useState(!payout?.paypalEmail);
+  const [draft, setDraft] = useState({ paypalEmail: payout?.paypalEmail || "", name: payout?.name || "" });
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.paypalEmail.trim());
+  const save = () => { if (!valid) return; onSave({ method: "paypal", paypalEmail: draft.paypalEmail.trim(), name: draft.name.trim() }); setEditing(false); };
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><CreditCard size={14} style={{ color: accent }} /> Payment details</div>
+        {!editing && onSave && <button onClick={() => setEditing(true)} className="flex items-center gap-1 text-[11px] font-semibold hover:underline" style={{ color: accent }}><Pencil size={11} /> Edit</button>}
+      </div>
+      {!editing ? (
+        <div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-3">
+          <span className="ll-display rounded-lg bg-[#003087] px-2 py-1 text-[11px] font-black italic text-white">Pay<span className="text-[#009CDE]">Pal</span></span>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-semibold text-gray-800">{payout.paypalEmail}</div>
+            <div className="text-[11px] text-gray-500">{payout.name ? `${payout.name} · ` : ""}Your commission is sent here.</div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          <div className="text-[11.5px] text-gray-500">Where should we send your commission? PayPal only for now.</div>
+          <Labeled label="PayPal email">
+            <input type="email" value={draft.paypalEmail} onChange={(e) => setDraft({ ...draft, paypalEmail: e.target.value })} placeholder="you@example.com" className={inputCls} />
+          </Labeled>
+          <Labeled label="Account holder name (optional)">
+            <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Name on the PayPal account" className={inputCls} />
+          </Labeled>
+          <div className="flex gap-2">
+            <button onClick={save} disabled={!valid || !onSave} className="rounded-lg px-3.5 py-2 text-[12px] font-semibold text-white disabled:opacity-40" style={{ background: accent }}>Save PayPal details</button>
+            {payout?.paypalEmail && <button onClick={() => { setEditing(false); setDraft({ paypalEmail: payout.paypalEmail, name: payout.name || "" }); }} className="rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-500">Cancel</button>}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function AffiliateEarningsView({ summary, brand, currency = "USD", accent = "#0E7C66", contactEmail = "", payout = null, onSavePayout = null }) {
   const t = summary.totals;
+  const nowKey = summary.byMonth[summary.byMonth.length - 1]?.key;
   const kpis = [
-    { icon: Wallet, label: "Balance due", value: fmtMoney(t.balance, currency), sub: "earned minus paid out", hi: t.balance > 0 },
-    { icon: TrendingUp, label: "This month", value: fmtMoney(t.thisMonth, currency), sub: `${t.active} active referral${t.active === 1 ? "" : "s"}` },
-    { icon: BadgeDollarSign, label: "Earned to date", value: fmtMoney(t.earned, currency), sub: `${summary.rate}% of each referral's package` },
-    { icon: CheckCircle2, label: "Paid out", value: fmtMoney(t.paid, currency), sub: `${summary.payouts.length} payout${summary.payouts.length === 1 ? "" : "s"}` },
+    { key: "balance", icon: Wallet, label: "Balance due", value: fmtMoney(t.balance, currency), sub: "earned minus paid out" },
+    { key: "month", icon: TrendingUp, label: "This month", value: fmtMoney(t.thisMonth, currency), sub: `${t.active} active referral${t.active === 1 ? "" : "s"}` },
+    { key: "earned", icon: BadgeDollarSign, label: "Earned to date", value: fmtMoney(t.earned, currency), sub: `${summary.rate}% of each referral's package` },
+    { key: "paid", icon: CheckCircle2, label: "Paid out", value: fmtMoney(t.paid, currency), sub: `${summary.payouts.length} payout${summary.payouts.length === 1 ? "" : "s"}` },
   ];
   return (
     <div className="ll-fade space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><HandCoins size={17} style={{ color: accent }} /> Affiliate Earnings</div>
-          <div className="text-[12px] text-gray-400">You earn <b>{summary.rate}%</b> of every client you refer to {brand?.name || "us"}, every month, for as long as they stay a client.</div>
+          <div className="text-[12px] text-gray-400">You earn <b style={{ color: accent }}>{summary.rate}%</b> of every client you refer to {brand?.name || "us"}, every month, for as long as they stay a client.</div>
         </div>
-        <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
-          <div className="flex items-center gap-1.5 font-semibold text-gray-700"><Gift size={13} style={{ color: accent }} /> Know someone who needs SEO?</div>
+        <div className="rounded-xl border px-3.5 py-2.5 text-[11.5px]" style={{ borderColor: accent + "33", background: accent + "0D", color: "#374151" }}>
+          <div className="flex items-center gap-1.5 font-semibold text-gray-800"><Gift size={13} style={{ color: accent }} /> Know someone who needs SEO or a website?</div>
           <div className="mt-0.5">Introduce them{contactEmail ? <> by email at <a href={`mailto:${contactEmail}`} className="font-semibold hover:underline" style={{ color: accent }}>{contactEmail}</a></> : " through your chat"} — once they sign up, they appear here.</div>
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {kpis.map((k) => (
-          <Card key={k.label} className="p-4">
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400"><k.icon size={13} style={{ color: accent }} /> {k.label}</div>
-            <div className="ll-mono mt-1.5 text-[24px] font-bold tracking-tight" style={k.hi ? { color: accent } : {}}>{k.value}</div>
-            <div className="text-[11px] text-gray-400">{k.sub}</div>
-          </Card>
-        ))}
+        {kpis.map((k) => { const tone = TONES[k.key]; return (
+          <div key={k.label} className="rounded-2xl border p-4" style={{ background: `linear-gradient(135deg, ${tone.bg} 0%, #ffffff 70%)`, borderColor: tone.ring }}>
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider" style={{ color: tone.fg }}>
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: tone.bg, color: tone.fg }}><k.icon size={13} /></span> {k.label}
+            </div>
+            <div className="ll-mono mt-2 text-[26px] font-bold tracking-tight" style={{ color: tone.fg }}>{k.value}</div>
+            <div className="text-[11px] text-gray-500">{k.sub}</div>
+          </div>
+        ); })}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="p-4 lg:col-span-3">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-[13px] font-semibold text-gray-800">Monthly commission — last 12 months</div>
-            <div className="text-[11px] text-gray-400">{fmtMoney(t.activeMonthly, currency)}/mo from active referrals</div>
+            <div className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: TONES.month.bg, color: TONES.month.fg }}>{fmtMoney(t.activeMonthly, currency)}/mo from active referrals</div>
           </div>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={summary.byMonth} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="affBar" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={TONES.earned.fg} /><stop offset="100%" stopColor={TONES.month.fg} /></linearGradient>
+                  <linearGradient id="affBarNow" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={TONES.balance.fg} /><stop offset="100%" stopColor="#14B8A6" /></linearGradient>
+                </defs>
                 <CartesianGrid vertical={false} stroke="#F3F4F6" />
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9CA3AF" }} axisLine={false} tickLine={false} interval={1} />
                 <YAxis tick={{ fontSize: 10, fill: "#9CA3AF" }} axisLine={false} tickLine={false} width={48} tickFormatter={(v) => fmtMoney(v, currency).replace(/\.00$/, "")} />
-                <Tooltip cursor={{ fill: accent + "10" }} formatter={(v, n, p) => [fmtMoney(v, currency), `${p.payload.referrals} referral${p.payload.referrals === 1 ? "" : "s"}`]}
+                <Tooltip cursor={{ fill: TONES.month.bg + "80" }} formatter={(v, n, p) => [fmtMoney(v, currency), `${p.payload.referrals} referral${p.payload.referrals === 1 ? "" : "s"}`]}
                   contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #E5E7EB" }} />
-                <Bar dataKey="amount" fill={accent} radius={[6, 6, 0, 0]} maxBarSize={34} />
+                <Bar dataKey="amount" radius={[6, 6, 0, 0]} maxBarSize={34}>
+                  {summary.byMonth.map((m) => <Cell key={m.key} fill={m.key === nowKey ? "url(#affBarNow)" : "url(#affBar)"} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </Card>
-        <Card className="p-4 lg:col-span-2">
-          <div className="mb-2 text-[13px] font-semibold text-gray-800">Payout history</div>
-          {summary.payouts.length === 0 && <div className="py-6 text-center text-[12px] text-gray-400">No payouts yet. Your balance is paid out by {brand?.name || "the agency"} — ask in chat if you have a question about timing.</div>}
-          <div className="divide-y divide-gray-50">
-            {summary.payouts.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 py-2 text-[12.5px]">
-                <span className="inline-flex items-center gap-1 text-gray-500"><CalendarDays size={12} /> {fmtDate(p.date)}</span>
-                <span className="ll-mono ml-auto font-semibold text-gray-800">{fmtMoney(p.amount, currency)}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
+        <div className="space-y-4 lg:col-span-2">
+          <PayoutDetailsCard payout={payout} onSave={onSavePayout} accent={accent} />
+          <Card className="p-4">
+            <div className="mb-2 text-[13px] font-semibold text-gray-800">Payout history</div>
+            {summary.payouts.length === 0 && <div className="py-4 text-center text-[12px] text-gray-400">No payouts yet. Your balance is paid out by {brand?.name || "the agency"} — ask in chat if you have a question about timing.</div>}
+            <div className="divide-y divide-gray-50">
+              {summary.payouts.map((p) => (
+                <div key={p.id} className="flex items-center gap-3 py-2 text-[12.5px]">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full" style={{ background: TONES.paid.bg, color: TONES.paid.fg }}><CheckCircle2 size={12} /></span>
+                  <span className="inline-flex items-center gap-1 text-gray-500"><CalendarDays size={12} /> {fmtDate(p.date)}</span>
+                  <span className="ll-mono ml-auto font-bold" style={{ color: TONES.paid.fg }}>+{fmtMoney(p.amount, currency)}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
       </div>
 
       <Card className="overflow-hidden">
@@ -223,14 +288,14 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
               </tr></thead>
               <tbody>
                 {summary.referrals.map((r) => (
-                  <tr key={r.id} className="border-b border-gray-50">
+                  <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50/60">
                     <td className="px-4 py-2.5 font-semibold text-gray-800">{r.name}</td>
                     <td className="px-4 py-2.5"><Pill s={r.status} /></td>
                     <td className="px-4 py-2.5 text-gray-500">{fmtDate(r.startDate)}{r.endDate ? <span className="text-gray-400"> → {fmtDate(r.endDate)}</span> : null}</td>
-                    <td className="ll-mono px-4 py-2.5">{fmtMoney(r.monthly, currency)}</td>
-                    <td className="ll-mono px-4 py-2.5" style={{ color: accent }}>{fmtMoney(r.commission, currency)}/mo</td>
+                    <td className="ll-mono px-4 py-2.5 font-semibold text-gray-700">{fmtMoney(r.monthly, currency)}</td>
+                    <td className="px-4 py-2.5"><span className="ll-mono rounded-md px-1.5 py-0.5 font-bold" style={{ background: TONES.month.bg, color: TONES.month.fg }}>{fmtMoney(r.commission, currency)}/mo</span></td>
                     <td className="px-4 py-2.5 text-gray-500"><span className="inline-flex items-center gap-1"><Clock size={11} /> {r.monthsActive}</span></td>
-                    <td className="ll-mono px-4 py-2.5 text-right font-semibold">{fmtMoney(r.earned, currency)}</td>
+                    <td className="ll-mono px-4 py-2.5 text-right font-bold" style={{ color: TONES.earned.fg }}>{fmtMoney(r.earned, currency)}</td>
                   </tr>
                 ))}
               </tbody>
