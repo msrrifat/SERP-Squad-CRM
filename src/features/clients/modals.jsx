@@ -20,6 +20,7 @@ import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
 import { ROLE_PRESETS, ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
 import { AffiliateSettings } from "./affiliate.jsx";
+import { LeadGenBillingSetup } from "../company/leadgen.jsx";
 
 export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", company = null, clients = null }) {
   /* every field here stays a local draft until Save is clicked */
@@ -490,7 +491,7 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
   return (
     <Modal title={`Project settings — ${project.name}`} sub={`${client.name} · ${locs.length} location group${locs.length === 1 ? "" : "s"}`} onClose={onClose} wide>
       <div className="mb-4 flex gap-1.5">
-        {[["sources", "Data sources", Link2], ["team", "Team", Shield], ["project", "Project & widgets", Settings]].map(([key, label, Icon]) => (
+        {[["sources", "Data sources", Link2], ["team", "Team", Shield], ["project", "Project & widgets", Settings], ["billing", "Billing", Receipt]].map(([key, label, Icon]) => (
           <button key={key} onClick={() => setTab(key)}
             className="flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-[12.5px] font-semibold"
             style={tab === key ? { background: accent + "10", borderColor: accent, color: accent } : { background: "var(--chip-bg, #fff)", borderColor: "#E5E7EB", color: "var(--chip-fg, #4B5563)" }}>
@@ -684,6 +685,12 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
         </div>
       )}
 
+      {tab === "billing" && (
+        <div className="space-y-3">
+          <div className="text-[11.5px] leading-relaxed text-gray-500">Monthly retainer is the default. Switch to <b>per lead</b> or <b>commission</b> for clients who pay only for results; leads and payments are then tracked in <b>Company dashboard → Lead gen clients</b>.</div>
+          <LeadGenBillingSetup project={project} client={client} onUpdate={onUpdate} accent={accent} currency={company?.invoice?.currency || "USD"} />
+        </div>
+      )}
       {tab === "project" && (
         <div className="ll-fade space-y-5">
           <ProjectDetailsCard project={project} accent={accent} update={(patch) => onUpdate(patch)} />

@@ -42,6 +42,18 @@ export function fmtMoney(n, currency = "USD") {
   catch { return `$${(n || 0).toFixed(2)}`; }
 }
 
+/* the next occurrence of a day-of-month (1–28): today if it is that day,
+   otherwise the next month that has it */
+export function nextPayDate(payDay, today = new Date()) {
+  const d = Math.min(28, Math.max(1, +payDay || 0));
+  if (!d) return null;
+  const y = today.getFullYear(), m = today.getMonth();
+  const cand = new Date(y, m, d);
+  const t0 = new Date(y, m, today.getDate());
+  const next = cand >= t0 ? cand : new Date(y, m + 1, d);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+}
+
 /* the referring client's full picture as of `today` */
 export function affiliateSummary(client, allClients = [], today = new Date()) {
   const a = client?.affiliate || {};
@@ -57,8 +69,10 @@ export function affiliateSummary(client, allClients = [], today = new Date()) {
     const to = endKey && endKey < now ? endKey : now;
     const months = from ? monthRange(from, to) : [];
     const status = !from ? "unscheduled" : from > now ? "upcoming" : (endKey && endKey < now) ? "ended" : "active";
+    const payDay = Number.isFinite(+r.payDay) && +r.payDay > 0 ? Math.min(28, +r.payDay) : null;
     return { ...r, name, monthly, rate, commission, months, status, earned: months.length * commission, monthsActive: months.length,
-      thisMonth: months.includes(now) ? commission : 0 };
+      thisMonth: months.includes(now) ? commission : 0, payDay,
+      nextPay: status === "active" && payDay ? nextPayDate(payDay, today) : null };
   });
   const payouts = (a.payouts || []).slice().sort((x, y) => String(y.date || "").localeCompare(String(x.date || "")));
   const earned = referrals.reduce((n, r) => n + r.earned, 0);
@@ -71,9 +85,10 @@ export function affiliateSummary(client, allClients = [], today = new Date()) {
     amount: referrals.reduce((n, r) => n + (r.months.includes(key) ? r.commission : 0), 0),
     referrals: referrals.filter((r) => r.months.includes(key)).length,
   }));
+  const nextPayout = referrals.filter((r) => r.nextPay).map((r) => r.nextPay).sort()[0] || null;
   return {
     enabled: !!a.enabled, rate, referrals, payouts,
-    totals: { earned, paid, balance: earned - paid, thisMonth, activeMonthly, active: referrals.filter((r) => r.status === "active").length },
+    totals: { earned, paid, balance: earned - paid, thisMonth, activeMonthly, active: referrals.filter((r) => r.status === "active").length, nextPayout },
     byMonth,
   };
 }

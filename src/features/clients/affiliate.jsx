@@ -47,7 +47,7 @@ function useProofUrl(proof, active) {
   }, [proof?.url, active]);
   return { url, err };
 }
-function ProofViewer({ proof, onClose }) {
+export function ProofViewer({ proof, onClose }) {
   const { url, err } = useProofUrl(proof, true);
   const isPdf = proof.type === "application/pdf";
   return (
@@ -61,7 +61,7 @@ function ProofViewer({ proof, onClose }) {
     </Modal>
   );
 }
-function ProofLink({ proof, onRemove = null, accent = "#0E7C66" }) {
+export function ProofLink({ proof, onRemove = null, accent = "#0E7C66" }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -75,7 +75,7 @@ function ProofLink({ proof, onRemove = null, accent = "#0E7C66" }) {
     </>
   );
 }
-function AttachProof({ clientId, onDone, accent = "#0E7C66", label = "Attach proof" }) {
+export function AttachProof({ clientId, onDone, accent = "#0E7C66", label = "Attach proof" }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const pick = async (e) => {
@@ -185,9 +185,20 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
                       <Labeled label="Ended on (blank = still a client)">
                         <input type="date" value={r.endDate || ""} onChange={(e) => patchRef(r.id, { endDate: e.target.value || null })} className={inputCls} />
                       </Labeled>
-                      <Labeled label="Note">
-                        <input value={r.note || ""} onChange={(e) => patchRef(r.id, { note: e.target.value })} placeholder="optional" className={inputCls} />
+                      <Labeled label="Payment day (1–28)">
+                        <input type="number" min="1" max="28" value={r.payDay ?? ""} onChange={(e) => patchRef(r.id, { payDay: e.target.value === "" ? null : Math.max(1, Math.min(28, +e.target.value)) })} placeholder="e.g. 5" className={inputCls} />
                       </Labeled>
+                    </div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                      <div className="sm:col-span-3">
+                        <Labeled label="Note">
+                          <input value={r.note || ""} onChange={(e) => patchRef(r.id, { note: e.target.value })} placeholder="optional" className={inputCls} />
+                        </Labeled>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+                        <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Next payment</div>
+                        {s?.nextPay ? <span className="font-semibold text-gray-800">{fmtDate(s.nextPay)}</span> : <span>set a payment day</span>}
+                      </div>
                     </div>
                   </div>
                 );
@@ -427,7 +438,7 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
   const t = summary.totals;
   const nowKey = summary.byMonth[summary.byMonth.length - 1]?.key;
   const kpis = [
-    { key: "balance", icon: Wallet, label: "Balance due", value: fmtMoney(t.balance, currency), sub: "earned minus paid out" },
+    { key: "balance", icon: Wallet, label: "Balance due", value: fmtMoney(t.balance, currency), sub: t.nextPayout ? `next payout ${fmtDate(t.nextPayout)}` : "earned minus paid out" },
     { key: "month", icon: TrendingUp, label: "This month", value: fmtMoney(t.thisMonth, currency), sub: `${t.active} active referral${t.active === 1 ? "" : "s"}` },
     { key: "earned", icon: BadgeDollarSign, label: "Earned to date", value: fmtMoney(t.earned, currency), sub: `${summary.rate}% of each referral's package` },
     { key: "paid", icon: CheckCircle2, label: "Paid out", value: fmtMoney(t.paid, currency), sub: `${summary.payouts.length} payout${summary.payouts.length === 1 ? "" : "s"}` },
@@ -522,7 +533,7 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
             <table className="w-full text-[12.5px]">
               <thead><tr className="border-b border-gray-100 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
                 <th className="px-4 py-2">Client</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Client since</th><th className="px-4 py-2">Monthly package</th>
-                <th className="px-4 py-2">Your commission</th><th className="px-4 py-2">Months</th><th className="px-4 py-2 text-right">Earned to date</th>
+                <th className="px-4 py-2">Your commission</th><th className="px-4 py-2">Months</th><th className="px-4 py-2">Pays on</th><th className="px-4 py-2 text-right">Earned to date</th>
               </tr></thead>
               <tbody>
                 {summary.referrals.map((r) => (
@@ -533,6 +544,7 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
                     <td className="ll-mono px-4 py-2.5 font-semibold text-gray-700">{fmtMoney(r.monthly, currency)}</td>
                     <td className="px-4 py-2.5"><span className="ll-mono rounded-md px-1.5 py-0.5 font-bold" style={{ background: TONES.month.bg, color: TONES.month.fg }}>{fmtMoney(r.commission, currency)}/mo</span></td>
                     <td className="px-4 py-2.5 text-gray-500"><span className="inline-flex items-center gap-1"><Clock size={11} /> {r.monthsActive}</span></td>
+                    <td className="px-4 py-2.5 text-gray-600">{r.payDay ? <span title={r.nextPay ? `Next: ${fmtDate(r.nextPay)}` : ""}>Day {r.payDay}{r.nextPay ? <span className="text-gray-400"> · next {fmtDate(r.nextPay)}</span> : null}</span> : <span className="text-gray-300">—</span>}</td>
                     <td className="ll-mono px-4 py-2.5 text-right font-bold" style={{ color: TONES.earned.fg }}>{fmtMoney(r.earned, currency)}</td>
                   </tr>
                 ))}
@@ -541,7 +553,7 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
           </div>
         )}
       </Card>
-      <div className="text-[11px] text-gray-400">Commission is calculated per calendar month on the referred client's monthly package. Figures update automatically as the agency records packages, end dates and payouts.</div>
+      <div className="text-[11px] text-gray-400">Commission is calculated per calendar month on the referred client's monthly package. "Pays on" is the day each referred client settles with the agency — your commission for that client is paid out on the same day. Figures update automatically as the agency records packages, end dates and payouts.</div>
       </>}
     </div>
   );

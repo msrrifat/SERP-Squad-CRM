@@ -93,6 +93,7 @@ const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), 
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const MeetingsOverview = lazyOf(() => import("./features/pm/meetings.jsx"), "MeetingsOverview");
 const PersonalTasksView = lazyOf(() => import("./features/account/personaltasks.jsx"), "PersonalTasksView");
+const CompanyDashboardView = lazyOf(() => import("./features/company/dashboard.jsx"), "CompanyDashboardView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
 /* DataForSEO rank-tracking views fetch their OWN data — they render without the
    demo/aggregated `data` and never gate on it (live Google now shows inside
@@ -191,6 +192,7 @@ export default function App() {
     if (accountView === "team") return "/team";
     if (accountView === "meetings") return "/meetings";
     if (accountView === "tasks") return "/tasks";
+    if (accountView === "companydash") return "/company-dashboard";
     if (accountView === "settings") return "/account";
     if (activeProjectId) return `/project/${activeProjectId}/${section}${section === "performance" ? `/${view}` : ""}`;
     return "/dashboard";
@@ -210,7 +212,7 @@ export default function App() {
       return;
     }
     if (seg[0] === "portal") return; // client session already renders the portal
-    setAccountView({ dashboard: "assignments", tasks: "tasks", chat: "chat", team: "team", meetings: "meetings", account: "settings" }[seg[0]] || "assignments");
+    setAccountView({ dashboard: "assignments", tasks: "tasks", chat: "chat", team: "team", meetings: "meetings", account: "settings", "company-dashboard": "companydash" }[seg[0]] || "assignments");
   };
   useEffect(() => {
     const onPop = () => { popNav.current = true; applyPathRef.current(window.location.pathname); };
@@ -1586,6 +1588,14 @@ export default function App() {
                 <Wrench size={14} className="text-gray-400" /> Tools
               </button>
             )}
+            {isAdmin && (() => { const active = accountView === "companydash"; return (
+              <button onClick={() => setAccountView((v) => (v === "companydash" ? null : "companydash"))}
+                title="Affiliate partners, referral pipeline and lead-gen clients"
+                className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (active || sbCustom ? "" : " text-gray-600")}
+                style={active ? { background: accent + (sbDark ? "40" : "12"), color: sbDark ? "#fff" : (sbText || accent) } : (sbCustom ? { color: sbVars.soft } : {})}>
+                <LayoutDashboard size={14} className={active ? "" : "text-gray-400"} /> Company dashboard
+              </button>
+            ); })()}
           </div>
           <div className="mx-4 mb-2 border-t border-gray-100" />
           <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{isAdmin ? "Client projects" : "Projects"}</div>
@@ -1721,7 +1731,7 @@ export default function App() {
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ settings: "Account settings", assignments: "My assignments", tasks: "Personal tasks", chat: "Chat", team: "Team", meetings: "Meetings & notes" }[accountView]}
+                {{ settings: "Account settings", assignments: "My assignments", tasks: "Personal tasks", chat: "Chat", team: "Team", meetings: "Meetings & notes", companydash: "Company dashboard" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -1736,6 +1746,13 @@ export default function App() {
               )}
               {accountView === "assignments" && (
                 <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} showClient={isAdmin} />
+              )}
+              {accountView === "companydash" && isAdmin && (
+                <CompanyDashboardView company={company} clients={clients} accent={accent}
+                  updateClient={(id, patch) => setClients((cs) => cs.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)))}
+                  updateProject={(cid, pid, patch) => setClients((cs) => cs.map((c) => (c.id !== cid ? c : {
+                    ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
+                  })))} />
               )}
               {accountView === "tasks" && (
                 <PersonalTasksView tasks={personalTasks} accent={accent} userName={meName}
