@@ -1335,9 +1335,24 @@ function handleClientStateSave(req, body) {
     }
     /* affiliate payout details: the client's own receiving account and
        nothing else — rate, referrals and recorded payouts stay agency-only */
-    if (p.affiliate && typeof p.affiliate === "object" && p.affiliate.payout && typeof p.affiliate.payout === "object" && cur.affiliate?.enabled) {
-      const po = p.affiliate.payout;
-      next.affiliate = { ...cur.affiliate, payout: { method: "paypal", paypalEmail: str(po.paypalEmail, 200).trim(), name: str(po.name, 120).trim(), updatedAt: Date.now() } };
+    if (p.affiliate && typeof p.affiliate === "object" && cur.affiliate?.enabled) {
+      const aff = { ...cur.affiliate };
+      if (p.affiliate.payout && typeof p.affiliate.payout === "object") {
+        const po = p.affiliate.payout;
+        aff.payout = { method: "paypal", paypalEmail: str(po.paypalEmail, 200).trim(), name: str(po.name, 120).trim(), updatedAt: Date.now() };
+      }
+      /* prospects are the client's own list: sanitised field by field, capped */
+      if (Array.isArray(p.affiliate.prospects)) {
+        const STATUSES = ["new", "contacted", "signed", "lost"];
+        aff.prospects = p.affiliate.prospects.slice(0, 500).filter((x) => x && typeof x === "object").map((x) => ({
+          id: str(x.id, 60) || ("pr" + Date.now() + Math.random().toString(36).slice(2, 7)),
+          name: str(x.name, 120), business: str(x.business, 160), website: str(x.website, 300), area: str(x.area, 160),
+          email: str(x.email, 200), phone: str(x.phone, 60), notes: str(x.notes, 4000),
+          status: STATUSES.includes(x.status) ? x.status : "new",
+          createdAt: +x.createdAt || Date.now(), updatedAt: +x.updatedAt || Date.now(),
+        }));
+      }
+      next.affiliate = aff;
     }
   }
 
@@ -5263,6 +5278,48 @@ async function handleGenerate(body) {
 }
 
 /* ---- tiny http layer ---- */
+/* ---- PAYMENT PROOFS (and other small per-client files) -----------------
+   Stored as files, not inline base64 in the workspace: a screenshot per
+   payout would otherwise ride along in every core-document save. Metadata
+   sits beside each file; a client session can only fetch files that belong
+   to it, a team session can fetch any. */
+const FILES_DIR = new URL("./data/files/", import.meta.url);
+const FILE_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "application/pdf": "pdf" };
+function handleFileUpload(req, body) {
+  const sess = sessionFromReq(req);
+  if (!sess) return [401, { error: "unauthorized", detail: "Session required." }];
+  if (sess.kind !== "team") return [403, { error: "forbidden", detail: "Only team accounts can upload files." }];
+  const m = /^data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(body?.dataUrl || ""));
+  if (!m) return [400, { error: "bad_request", detail: "dataUrl (base64 image or PDF) required." }];
+  const type = m[1].toLowerCase();
+  const ext = FILE_TYPES[type];
+  if (!ext) return [415, { error: "unsupported_type", detail: "Upload a PNG, JPEG, WebP, GIF or PDF." }];
+  const buf = Buffer.from(m[2], "base64");
+  if (!buf.length || buf.length > 6e6) return [413, { error: "too_large", detail: "Files up to 6 MB." }];
+  const id = randomBytes(12).toString("hex");
+  const meta = { id, type, ext, size: buf.length, name: String(body?.name || "").slice(0, 160) || `proof.${ext}`,
+    clientId: String(body?.clientId || "").slice(0, 80) || null, by: sess.id, at: Date.now() };
+  try {
+    mkdirSync(FILES_DIR, { recursive: true });
+    writeFileSync(new URL(`${id}.${ext}`, FILES_DIR), buf);
+    writeFileSync(new URL(`${id}.json`, FILES_DIR), JSON.stringify(meta));
+  } catch (e) { return [500, { error: "write_failed", detail: String(e?.message || e).slice(0, 120) }]; }
+  return [200, { ok: true, id, url: `/api/files/${id}`, name: meta.name, type, size: buf.length }];
+}
+function serveFile(req, res, id) {
+  const sess = sessionFromReq(req);
+  if (!sess) { res.writeHead(401, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: "unauthorized" })); }
+  if (!/^[a-f0-9]{24}$/.test(id)) { res.writeHead(404); return res.end(); }
+  const meta = readJson(new URL(`${id}.json`, FILES_DIR), null);
+  if (!meta) { res.writeHead(404, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: "not_found" })); }
+  if (sess.kind === "client" && meta.clientId !== sess.id) { res.writeHead(403, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: "forbidden" })); }
+  let buf;
+  try { buf = readFileSync(new URL(`${id}.${meta.ext}`, FILES_DIR)); } catch { res.writeHead(404); return res.end(); }
+  res.writeHead(200, { "Content-Type": meta.type, "Content-Length": buf.length, "Cache-Control": "private, max-age=3600",
+    "Content-Disposition": `inline; filename="${meta.name.replace(/[^\w.-]+/g, "_")}"`, "X-Content-Type-Options": "nosniff" });
+  res.end(buf);
+}
+
 /* ---- ONE-TIME STORAGE MIGRATIONS, before the first request ------------
    1. project-keyed documents move from one file to one file per project;
    2. geo-grid snapshots already on disk are compacted in place.
@@ -5331,6 +5388,7 @@ http.createServer(async (req, res) => {
     /* image preview proxy: client-site WAFs challenge cross-site <img> loads
        (no cookies) and previews hang — the CRM's server fetches instead.
        SSRF-guarded: only hosts that are a connected project's website. */
+    if (req.method === "GET" && req.url.startsWith("/api/files/")) return serveFile(req, res, req.url.slice("/api/files/".length).split("?")[0]);
     if (req.method === "GET" && req.url.startsWith("/api/img?")) {
       try {
         const target = new URL(new URL(req.url, "http://x").searchParams.get("u") || "");
@@ -5404,11 +5462,12 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
         : req.url === "/api/state/client" ? 8e6   // logos travel base64; chats + record ticks ride along
+        : req.url === "/api/files" ? 9e6          // a 6 MB proof is ~8 MB as base64
         : 4e6;
       const chunks = [];
       let received = 0;
@@ -5517,6 +5576,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/social/disconnect" ? handleSocialDisconnect(body)
         : req.url === "/api/social/pages" ? await handleSocialPages(body)
         : req.url === "/api/social/select" ? handleSocialSelect(body)
+        : req.url === "/api/files" ? handleFileUpload(req, body)
         : req.url === "/api/social/bluesky" ? await handleSocialBluesky(body)
         : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)

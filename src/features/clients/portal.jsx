@@ -613,7 +613,9 @@ export function ClientPortal({ client, company, affiliate = null, dark, setDark,
               {accountView === "affiliate" && affiliate?.enabled && (
                 <AffiliateEarningsView summary={affiliate} brand={brand} accent={accent} currency={company?.invoice?.currency || "USD"} contactEmail={company?.email || ""}
                   payout={client.affiliate?.payout || null}
-                  onSavePayout={(po) => onUpdateClient((c) => ({ affiliate: { ...(c.affiliate || {}), payout: po } }))} />
+                  onSavePayout={(po) => onUpdateClient((c) => ({ affiliate: { ...(c.affiliate || {}), payout: po } }))}
+                  prospects={client.affiliate?.prospects || []}
+                  onSaveProspects={(list) => onUpdateClient((c) => ({ affiliate: { ...(c.affiliate || {}), prospects: list } }))} />
               )}
               {accountView === "company" && (
                 <ClientCompanySettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />
