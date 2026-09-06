@@ -2341,7 +2341,14 @@ async function googleAdsAuth(body) {
   if (mcc) headers["login-customer-id"] = mcc;
   return headers;
 }
-const provErr = (name, r, extra) => [502, { error: "provider_error", detail: `${name} rejected the request (HTTP ${r.status})${extra ? ": " + extra : ""}` }];
+const provErr = (name, r, extra) => {
+  /* a Google token minted before the Ads scope existed: the fix is a
+     reconnect, not a credential — say so instead of a bare provider error */
+  if (name === "Google Ads" && r.status === 403 && /insufficient authentication scopes/i.test(String(extra || ""))) {
+    return [503, { error: "not_configured", detail: "This project's Google connection was made before the Google Ads permission was added, so Google refuses Ads requests for it. Reconnect Google in Project settings → Data sources (Connect Google again) and retry." }];
+  }
+  return [502, { error: "provider_error", detail: `${name} rejected the request (HTTP ${r.status})${extra ? ": " + extra : ""}` }];
+};
 
 /* ---- Google Ads API version -------------------------------------------
    Versions are retired roughly a year after release (v16, which this code
@@ -2413,7 +2420,7 @@ async function handleAdsAccounts(body) {
             .map((c) => ({ id: String(c.id), name: `${c.descriptiveName || "Google Ads account"} · ${fmtCustomerId(c.id)}`, currency: c.currencyCode || null }));
           if (accounts.length) return [200, { live: true, accounts }];
         } catch (e) {
-          if (e.status && e.status !== 404) return [502, { error: "provider_error", detail: `Google Ads rejected the request (HTTP ${e.status}): ${e.message}` }];
+          if (e.status && e.status !== 404) return provErr("Google Ads", { status: e.status }, e.message);
         }
       }
       /* no manager id: the accounts this Google login can reach directly */
