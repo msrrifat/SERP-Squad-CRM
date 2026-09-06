@@ -103,11 +103,11 @@ function LeadForm({ initial, model, currency, onSave, onClose, accent }) {
   );
 }
 
-export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", currency = "USD" }) {
+export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", currency = "USD", autoLogLead = false }) {
   const b = project.billing || {};
   const s = useMemo(() => leadgenSummary(project), [project]);
   const setB = (patch) => onUpdate({ billing: { model: "monthly", leads: [], payments: [], ...b, ...patch } });
-  const [editLead, setEditLead] = useState(null);   // null | "new" | lead
+  const [editLead, setEditLead] = useState(autoLogLead ? "new" : null);   // null | "new" | lead
   const [pay, setPay] = useState({ date: todayISO(), amount: "", method: b.paymentMethod?.type || "bank", note: "", proof: null });
   const [setup, setSetup] = useState(!s.isLeadGen);
   const saveLead = (d) => {
