@@ -67,6 +67,7 @@ async function postState(token, state, baseRev, keep = []) {
 
 import { emptySiteData, genSiteData, hydrate } from "./data/gen.js";
 import { todayISO } from "./lib/format.jsx";
+import { affiliateSummary } from "./lib/affiliate.js";
 import { capMsgs, toggleReaction } from "./features/chat/thread.jsx";
 import { stripChatDocs } from "./lib/chatmerge.js";
 import { pruneMemberFromClients, pruneMemberFromCompany } from "./lib/team.js";
@@ -1396,7 +1397,7 @@ export default function App() {
   /* client portal session takes over the whole screen */
   if (session) {
     const sc = clients.find((c) => c.id === session.clientId);
-    if (sc) return <Lazy><ClientPortal client={sc} company={company} dark={dark} setDark={setDark} saveWarn={clientSaveWarn} appOutdated={appOutdated}
+    if (sc) return <Lazy><ClientPortal client={sc} company={company} affiliate={affiliateSummary(sc, clients)} dark={dark} setDark={setDark} saveWarn={clientSaveWarn} appOutdated={appOutdated}
       onUpdateClient={(patch) => setClients((cs) => cs.map((c) => (c.id !== sc.id ? c : { ...c, ...(typeof patch === "function" ? patch(c) : patch) })))}
       onUpdateProject={(pid, patch) => setClients((cs) => cs.map((c) => c.id !== sc.id ? c : { ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)) }))}
       onLogout={signOut} /></Lazy>;
@@ -2008,7 +2009,7 @@ export default function App() {
           ...c, projects: c.projects.map((p) => (pid === null || p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
         }));
         return (
-          <ClientSettingsModal client={mc} company={company} accent={mc.projects[0]?.accent || company.accent} dfsConnected={company.dfs.connected}
+          <ClientSettingsModal client={mc} company={company} clients={clients} accent={mc.projects[0]?.accent || company.accent} dfsConnected={company.dfs.connected}
             onChange={(patch) => updateClient(mc.id, patch)}
             onUpdateProject={(pid, patch) => patchProjects(pid, patch)}
             onUpdateAllProjects={(patch) => patchProjects(null, patch)}

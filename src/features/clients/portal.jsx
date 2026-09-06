@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import {
+import { HandCoins,
   MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
   Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
   Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
@@ -21,6 +21,7 @@ import { GbpView, NAV, OverviewView, RankTrackingView, WebsitePerformanceView } 
 import { ProjectManagementView } from "../pm/board.jsx";
 import { AdsPerformanceView } from "../ads/dashboard.jsx";
 import { ROLE_CLIENT_LABEL } from "../../data/seed.js";
+import { AffiliateEarningsView } from "./affiliate.jsx";
 import { MessageThread, capMsgs, toggleReaction } from "../chat/thread.jsx";
 import { chatRead, chatReact, chatSend, newMsgId } from "../../lib/chat.js";
 
@@ -342,7 +343,7 @@ export function LoginScreen({ company, dark, onAuthed }) {
   );
 }
 
-export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null, appOutdated = false }) {
+export function ClientPortal({ client, company, affiliate = null, dark, setDark, onLogout, onUpdateProject, onUpdateClient, saveWarn = null, appOutdated = false }) {
   /* the sidebar tucks away for a full-width view — remembered per device,
      same key the team dashboard uses */
   const [sbHidden, setSbHidden] = useState(() => localStorage.getItem("ss_sb_hidden") === "1");
@@ -502,6 +503,8 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
   const chatBadge = msgUnread + trioUnread + chanUnreadTotal;
   const personal = [
     ["messages", "Chat", MessageSquare, chatBadge > 0 ? { n: chatBadge, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
+    /* only clients the agency enrolled as affiliates get this screen */
+    ...(affiliate?.enabled ? [["affiliate", "Affiliate Earnings", HandCoins, affiliate.totals.active > 0 ? { n: affiliate.totals.active, bg: "#DCFCE7", fg: "#166534" } : null]] : []),
     ["company", "Company settings", Settings, null],
   ];
   const selectProject = (id) => { setPid(id); setSection("performance"); setView("overview"); setAccountView(null); };
@@ -584,7 +587,7 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ messages: "Chat", company: "Company settings" }[accountView]}
+                {{ messages: "Chat", affiliate: "Affiliate Earnings", company: "Company settings" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -606,6 +609,9 @@ export function ClientPortal({ client, company, dark, setDark, onLogout, onUpdat
                     onSendTrio={sendTrioMsg} onReactTrio={reactTrioMsg} onReadTrio={readTrio}
                     onSendChannel={sendChanMsg} onReactChannel={reactChanMsg} onReadChannel={readChan} />
                 </AvaMaskCtx.Provider>
+              )}
+              {accountView === "affiliate" && affiliate?.enabled && (
+                <AffiliateEarningsView summary={affiliate} brand={brand} accent={accent} currency={company?.invoice?.currency || "USD"} contactEmail={company?.email || ""} />
               )}
               {accountView === "company" && (
                 <ClientCompanySettings client={client} brand={brand} accent={accent} onUpdateClient={onUpdateClient} />

@@ -19,10 +19,11 @@ import { GoogleSourcesCard, ProjectDetailsCard, WidgetsCard } from "../performan
 import { GoogleSourcesConnector } from "../performance/googlelive.jsx";
 import { ROLE_PRESETS, ROLE_AUTO_SECTIONS, mkProject } from "../../data/seed.js";
 import { API_GUIDES } from "../../data/apiGuides.js";
+import { AffiliateSettings } from "./affiliate.jsx";
 
-export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", company = null }) {
+export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", company = null, clients = null }) {
   /* every field here stays a local draft until Save is clicked */
-  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "logo", "whiteLabel", "login", "dfs", "chatMembers"]);
+  const { draft, set, dirty, reset } = useDraft(client, ["name", "contact", "email", "phone", "alias", "companyName", "companyWebsite", "address", "logo", "whiteLabel", "login", "dfs", "chatMembers", "affiliate"]);
   const c = draft;
   const wl = draft.whiteLabel;
   const setWl = (patch) => set({ whiteLabel: { ...draft.whiteLabel, ...patch } });
@@ -93,6 +94,11 @@ export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", compa
             </div>
           )}
         </div>
+
+        {/* the agency-only affiliate panel: referrals, packages, payouts */}
+        {Array.isArray(clients) && (
+          <AffiliateSettings draft={draft} set={set} client={client} clients={clients} currency={company?.invoice?.currency || "USD"} accent={accent} />
+        )}
 
         {/* ANY client can run on their own DataForSEO account — the client can
             also flip this themselves in their portal → Company settings, so the
@@ -256,7 +262,7 @@ export const CLIENT_ACCESS_TREE = [
    ads, project management, reports and the agent are explicit opt-in toggles */
 export const CLIENT_DEFAULT_ON = ["canViewGbp", "canViewWeb", "canViewRanks", "canViewGeogrid"];
 
-export function ClientSettingsModal({ client, company, onChange, onUpdateProject, onUpdateAllProjects, dfsConnected, accent, onDelete, onClose }) {
+export function ClientSettingsModal({ client, company, clients = null, onChange, onUpdateProject, onUpdateAllProjects, dfsConnected, accent, onDelete, onClose }) {
   const projects = client.projects || [];
   const keywords = projects.reduce((n, p) => n + (p.tracking || []).length, 0);
   const records = projects.reduce((n, p) => n + (p.records || []).length, 0);
@@ -289,7 +295,7 @@ export function ClientSettingsModal({ client, company, onChange, onUpdateProject
       <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
         Client details are visible to <b>admins only</b> — team members see the alias (if set) and never this window.
       </div>
-      <ClientSettingsBody client={client} onChange={onChange} company={company} />
+      <ClientSettingsBody client={client} onChange={onChange} company={company} clients={clients} accent={accent} />
       {onDelete && (
         <div className="mt-5 rounded-xl border border-red-200 bg-red-50/60 p-4">
           <div className="text-[12.5px] font-semibold text-red-700">Delete client</div>
