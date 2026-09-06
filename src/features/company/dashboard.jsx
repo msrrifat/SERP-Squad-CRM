@@ -221,6 +221,48 @@ function LeadGenTab({ clients, updateProject, currency, accent }) {
   );
 }
 
+/* Company dashboard → Affiliate partners: the partner table with the
+   referral pipeline as its second tab (the same two-tab shape clients see) */
+export function AffiliatePartnersView({ company, clients, updateClient, accent = "#0E7C66" }) {
+  const [tab, setTab] = useState("dashboard");
+  const currency = company?.invoice?.currency || "USD";
+  const prospects = clients.filter((c) => c.affiliate?.enabled).reduce((n, c) => n + (c.affiliate.prospects || []).length, 0);
+  const tabs = [["dashboard", "Affiliate dashboard", LayoutDashboard], ["pipeline", `Pipeline${prospects ? ` (${prospects})` : ""}`, Sparkles]];
+  return (
+    <div className="ll-fade space-y-4 p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><HandCoins size={17} style={{ color: accent }} /> Affiliate partners</div>
+          <div className="text-[12px] text-gray-400">Clients who refer clients: what they have earned, when they get paid, and the prospects they are working on.</div>
+        </div>
+        <div className="inline-flex rounded-xl border border-gray-200 bg-white p-1">
+          {tabs.map(([k, label, Icon]) => (
+            <button key={k} onClick={() => setTab(k)} className={"flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold " + (tab === k ? "text-white shadow-sm" : "text-gray-500 hover:text-gray-800")} style={tab === k ? { background: accent } : {}}>
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {tab === "dashboard" && <PartnersTab clients={clients} updateClient={updateClient} currency={currency} accent={accent} />}
+      {tab === "pipeline" && <PipelineTab clients={clients} updateClient={updateClient} accent={accent} />}
+    </div>
+  );
+}
+
+/* Company dashboard → Lead gen clients */
+export function LeadGenClientsView({ company, clients, updateProject, accent = "#0E7C66" }) {
+  const currency = company?.invoice?.currency || "USD";
+  return (
+    <div className="ll-fade space-y-4 p-5">
+      <div>
+        <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><Receipt size={17} style={{ color: accent }} /> Lead gen clients</div>
+        <div className="text-[12px] text-gray-400">Projects billed per lead or on commission: leads, what they bill, payments received and agreements on file.</div>
+      </div>
+      <LeadGenTab clients={clients} updateProject={updateProject} currency={currency} accent={accent} />
+    </div>
+  );
+}
+
 export function CompanyDashboardView({ company, clients, updateClient, updateProject, accent = "#0E7C66" }) {
   const [tab, setTab] = useState("partners");
   const currency = company?.invoice?.currency || "USD";

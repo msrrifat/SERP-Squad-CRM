@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import {
+import { HandCoins,
   MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
   Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
   Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
@@ -93,7 +93,8 @@ const AdsPerformanceView = lazyOf(() => import("./features/ads/dashboard.jsx"), 
 const ProjectManagementView = lazyOf(() => import("./features/pm/board.jsx"), "ProjectManagementView");
 const MeetingsOverview = lazyOf(() => import("./features/pm/meetings.jsx"), "MeetingsOverview");
 const PersonalTasksView = lazyOf(() => import("./features/account/personaltasks.jsx"), "PersonalTasksView");
-const CompanyDashboardView = lazyOf(() => import("./features/company/dashboard.jsx"), "CompanyDashboardView");
+const AffiliatePartnersView = lazyOf(() => import("./features/company/dashboard.jsx"), "AffiliatePartnersView");
+const LeadGenClientsView = lazyOf(() => import("./features/company/dashboard.jsx"), "LeadGenClientsView");
 const GeoGridView = lazyOf(() => import("./features/performance/geogrid.jsx"), "GeoGridView");
 /* DataForSEO rank-tracking views fetch their OWN data — they render without the
    demo/aggregated `data` and never gate on it (live Google now shows inside
@@ -151,6 +152,10 @@ export default function App() {
   /* the left sidebar can be tucked away for a full-width working area —
      remembered per device, same key the client portal uses */
   const [sbHidden, setSbHidden] = useState(() => localStorage.getItem("ss_sb_hidden") === "1");
+  /* which sidebar sections are shown — a per-device preference (View menu) */
+  const [sbSections, setSbSections] = useState(() => { try { return { personal: true, company: true, projects: true, ...JSON.parse(localStorage.getItem("ss_sb_sections") || "{}") }; } catch { return { personal: true, company: true, projects: true }; } });
+  const toggleSection = (k) => setSbSections((cur) => { const next = { ...cur, [k]: !cur[k] }; try { localStorage.setItem("ss_sb_sections", JSON.stringify(next)); } catch { /* private mode */ } return next; });
+  const [sbMenu, setSbMenu] = useState(false);
   const toggleSb = (v) => { setSbHidden(v); try { localStorage.setItem("ss_sb_hidden", v ? "1" : "0"); } catch { /* private mode */ } };
   const [section, setSection] = useState("performance"); // "performance" | "management"
   const [agentOpen, setAgentOpen] = useState(false);
@@ -192,7 +197,8 @@ export default function App() {
     if (accountView === "team") return "/team";
     if (accountView === "meetings") return "/meetings";
     if (accountView === "tasks") return "/tasks";
-    if (accountView === "companydash") return "/company-dashboard";
+    if (accountView === "affiliates") return "/affiliate-partners";
+    if (accountView === "leadgen") return "/lead-gen";
     if (accountView === "settings") return "/account";
     if (activeProjectId) return `/project/${activeProjectId}/${section}${section === "performance" ? `/${view}` : ""}`;
     return "/dashboard";
@@ -212,7 +218,7 @@ export default function App() {
       return;
     }
     if (seg[0] === "portal") return; // client session already renders the portal
-    setAccountView({ dashboard: "assignments", tasks: "tasks", chat: "chat", team: "team", meetings: "meetings", account: "settings", "company-dashboard": "companydash" }[seg[0]] || "assignments");
+    setAccountView({ dashboard: "assignments", tasks: "tasks", chat: "chat", team: "team", meetings: "meetings", account: "settings", "company-dashboard": "affiliates", "affiliate-partners": "affiliates", "lead-gen": "leadgen" }[seg[0]] || "assignments");
   };
   useEffect(() => {
     const onPop = () => { popNav.current = true; applyPathRef.current(window.location.pathname); };
@@ -1553,6 +1559,23 @@ export default function App() {
                   <Settings size={16} />
                 </button>
               )}
+              <div className="relative">
+                <button onClick={() => setSbMenu((v) => !v)} title="Show or hide sidebar sections"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600" style={sbMenu ? { color: accent } : {}}>
+                  <Eye size={16} />
+                </button>
+                {sbMenu && (
+                  <div className="ll-fade absolute right-0 top-8 z-40 w-48 rounded-xl border border-gray-200 bg-white p-2 shadow-lg" onMouseLeave={() => setSbMenu(false)}>
+                    <div className="px-2 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Show in sidebar</div>
+                    {[["personal", "Personal dashboard"], ...(isAdmin ? [["company", "Company dashboard"]] : []), ["projects", isAdmin ? "Client projects" : "Projects"]].map(([k, label]) => (
+                      <label key={k} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                        <input type="checkbox" checked={sbSections[k] !== false} onChange={() => toggleSection(k)} className="accent-current" style={{ accentColor: accent }} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button onClick={() => toggleSb(true)} title="Hide sidebar"
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
                 <PanelLeftClose size={16} />
@@ -1560,6 +1583,7 @@ export default function App() {
             </div>
           </div>
           {/* personal dashboard: the signed-in person's own screens */}
+          {sbSections.personal !== false && (<>
           <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</div>
           <div className="space-y-0.5 px-2.5 pb-3">
             {[
@@ -1588,15 +1612,26 @@ export default function App() {
                 <Wrench size={14} className="text-gray-400" /> Tools
               </button>
             )}
-            {isAdmin && (() => { const active = accountView === "companydash"; return (
-              <button onClick={() => setAccountView((v) => (v === "companydash" ? null : "companydash"))}
-                title="Affiliate partners, referral pipeline and lead-gen clients"
-                className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (active || sbCustom ? "" : " text-gray-600")}
-                style={active ? { background: accent + (sbDark ? "40" : "12"), color: sbDark ? "#fff" : (sbText || accent) } : (sbCustom ? { color: sbVars.soft } : {})}>
-                <LayoutDashboard size={14} className={active ? "" : "text-gray-400"} /> Company dashboard
-              </button>
-            ); })()}
           </div>
+          </>)}
+          {/* company dashboard: the agency's money screens (admins) */}
+          {isAdmin && sbSections.company !== false && (<>
+          <div className="mx-4 mb-2 border-t border-gray-100" />
+          <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Company Dashboard</div>
+          <div className="space-y-0.5 px-2.5 pb-3">
+            {[["affiliates", "Affiliate partners", HandCoins], ["leadgen", "Lead gen clients", Receipt]].map(([key, label, Icon]) => {
+              const active = accountView === key;
+              return (
+                <button key={key} onClick={() => setAccountView((v) => (v === key ? null : key))}
+                  className={"flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] font-medium" + (active || sbCustom ? "" : " text-gray-600")}
+                  style={active ? { background: accent + (sbDark ? "40" : "12"), color: sbDark ? "#fff" : (sbText || accent) } : (sbCustom ? { color: sbVars.soft } : {})}>
+                  <Icon size={14} className={active ? "" : "text-gray-400"} /> {label}
+                </button>
+              );
+            })}
+          </div>
+          </>)}
+          {sbSections.projects !== false ? (<>
           <div className="mx-4 mb-2 border-t border-gray-100" />
           <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{isAdmin ? "Client projects" : "Projects"}</div>
           <div className="flex-1 overflow-y-auto px-2.5">
@@ -1691,6 +1726,7 @@ export default function App() {
             )}
 
           </div>
+          </>) : <div className="flex-1" />}
           {canClients && (
             <div className="grid grid-cols-2 gap-2 p-3">
               <button onClick={() => setModal({ type: "addClient" })}
@@ -1731,7 +1767,7 @@ export default function App() {
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ settings: "Account settings", assignments: "My assignments", tasks: "Personal tasks", chat: "Chat", team: "Team", meetings: "Meetings & notes", companydash: "Company dashboard" }[accountView]}
+                {{ settings: "Account settings", assignments: "My assignments", tasks: "Personal tasks", chat: "Chat", team: "Team", meetings: "Meetings & notes", affiliates: "Affiliate partners", leadgen: "Lead gen clients" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />
@@ -1747,9 +1783,12 @@ export default function App() {
               {accountView === "assignments" && (
                 <AssignmentsView clients={visibleClients} userName={meName} accent={accent} onOpenTask={openAssignedTask} showClient={isAdmin} />
               )}
-              {accountView === "companydash" && isAdmin && (
-                <CompanyDashboardView company={company} clients={clients} accent={accent}
-                  updateClient={(id, patch) => setClients((cs) => cs.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)))}
+              {accountView === "affiliates" && isAdmin && (
+                <AffiliatePartnersView company={company} clients={clients} accent={accent}
+                  updateClient={(id, patch) => setClients((cs) => cs.map((c) => (c.id === id ? { ...c, ...(typeof patch === "function" ? patch(c) : patch) } : c)))} />
+              )}
+              {accountView === "leadgen" && isAdmin && (
+                <LeadGenClientsView company={company} clients={clients} accent={accent}
                   updateProject={(cid, pid, patch) => setClients((cs) => cs.map((c) => (c.id !== cid ? c : {
                     ...c, projects: c.projects.map((p) => (p.id === pid ? { ...p, ...(typeof patch === "function" ? patch(p) : patch) } : p)),
                   })))} />
