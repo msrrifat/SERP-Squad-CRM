@@ -150,7 +150,7 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
         <div className="mb-2 flex items-center gap-2"><HandCoins size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Affiliate program</span></div>
         <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })}
           label="This client is an affiliate"
-          desc={`They earn ${a.rate ?? AFFILIATE_RATE_DEFAULT}% of every client they refer, for as long as that client stays with you. Turning this on adds an "Affiliate Earnings" screen to their portal.`} />
+          desc={`They earn ${a.rate ?? AFFILIATE_RATE_DEFAULT}% of every client they refer, for as long as that client stays with you. Turning this on adds an "Affiliate program" screen to their portal.`} />
       </>)}
       {(a.enabled || !all) && (
         <div className={all ? "ll-fade mt-3 space-y-4 rounded-xl border border-gray-200 p-4" : "space-y-4"}>
@@ -169,13 +169,13 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
               <CreditCard size={13} />
               {a.payout?.paypalEmail
                 ? <span>Pays out to <b>PayPal</b> · {a.payout.paypalEmail}{a.payout.name ? ` (${a.payout.name})` : ""}</span>
-                : <span>No payment details yet — the client adds their PayPal account on their Affiliate Earnings screen.</span>}
+                : <span>No payment details yet — the client adds their PayPal account on their Affiliate program screen.</span>}
             </div>
           )}
           {section === "settings" && (
             <div className="rounded-lg border border-gray-100 p-3">
               <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })} label="Affiliate program active"
-                desc="Turning this off hides the Affiliate Earnings screen from the client's portal. Referrals and payouts are kept." />
+                desc="Turning this off hides the Affiliate program screen from the client's portal. Referrals and payouts are kept." />
             </div>
           )}
 
@@ -471,7 +471,7 @@ export function AffiliateEarningsView({ summary, brand, currency = "USD", accent
     <div className="ll-fade space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><HandCoins size={17} style={{ color: accent }} /> Affiliate Earnings</div>
+          <div className="ll-display flex items-center gap-2 text-[18px] font-bold"><HandCoins size={17} style={{ color: accent }} /> Affiliate program</div>
           <div className="text-[12px] text-gray-400">You earn <b style={{ color: accent }}>{summary.rate}%</b> of every client you refer to {brand?.name || "us"}, every month, for as long as they stay a client.</div>
           <div className="mt-3 inline-flex rounded-xl border border-gray-200 bg-white p-1">
             {tabs.map(([k, label, Icon]) => (

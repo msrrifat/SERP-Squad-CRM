@@ -504,7 +504,7 @@ export function ClientPortal({ client, company, affiliate = null, dark, setDark,
   const personal = [
     ["messages", "Chat", MessageSquare, chatBadge > 0 ? { n: chatBadge, bg: "#DBEAFE", fg: "#1D4ED8" } : null],
     /* only clients the agency enrolled as affiliates get this screen */
-    ...(affiliate?.enabled ? [["affiliate", "Affiliate Earnings", HandCoins, affiliate.totals.active > 0 ? { n: affiliate.totals.active, bg: "#DCFCE7", fg: "#166534" } : null]] : []),
+    ...(affiliate?.enabled ? [["affiliate", "Affiliate program", HandCoins, affiliate.totals.active > 0 ? { n: affiliate.totals.active, bg: "#DCFCE7", fg: "#166534" } : null]] : []),
     ["company", "Company settings", Settings, null],
   ];
   const selectProject = (id) => { setPid(id); setSection("performance"); setView("overview"); setAccountView(null); };
@@ -587,7 +587,7 @@ export function ClientPortal({ client, company, affiliate = null, dark, setDark,
           <>
             <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b border-gray-200 bg-white/90 px-5 py-2.5 backdrop-blur">
               <div className="ll-display text-[14px] font-semibold text-gray-700">
-                {{ messages: "Chat", affiliate: "Affiliate Earnings", company: "Company settings" }[accountView]}
+                {{ messages: "Chat", affiliate: "Affiliate program", company: "Company settings" }[accountView]}
               </div>
               <div className="flex items-center gap-2">
                 <DarkToggle dark={dark} setDark={setDark} />

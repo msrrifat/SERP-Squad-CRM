@@ -150,7 +150,7 @@ function PartnersTab({ clients, updateClient, currency, accent }) {
   const list = (
     <ListCard title="Partners" count={partners.length} action={<PrimaryBtn onClick={() => setPicking(true)} accent={accent}><UserPlus size={13} /> Enrol</PrimaryBtn>}
       empty={partners.length === 0 && (
-        <div className="p-8 text-center text-[12px] text-gray-400">No affiliate partners yet. Enrol a client — they get an "Affiliate Earnings" screen in their portal.</div>
+        <div className="p-8 text-center text-[12px] text-gray-400">No affiliate partners yet. Enrol a client — they get an "Affiliate program" screen in their portal.</div>
       )}>
       {partners.map(({ client: c, s }) => (
         <ListRow key={c.id} active={c.id === selId} onClick={() => { setSelId(c.id); setSub("overview"); }} accent={accent} color={c.projects?.[0]?.accent}
@@ -241,7 +241,7 @@ function PipelineTab({ clients, updateClient, accent }) {
               style={filter === k ? { borderColor: accent, background: accent + "14", color: accent } : {}}>{label}{k !== "all" ? ` ${counts[k]}` : ""}</button>
           ))}
         </div>
-        {list.length === 0 ? <div className="p-10 text-center text-[12.5px] text-gray-400">Nothing here yet — partners add prospects from their Affiliate Earnings → Prospects tab.</div> : (
+        {list.length === 0 ? <div className="p-10 text-center text-[12.5px] text-gray-400">Nothing here yet — partners add prospects from their Affiliate program → Prospects tab.</div> : (
           <div className="overflow-x-auto">
             <table className="w-full text-[12.5px]">
               <thead><tr className="border-b border-gray-100 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
