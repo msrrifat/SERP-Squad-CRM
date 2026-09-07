@@ -947,7 +947,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                  "All 32 scans failed" and quoted the first error as if it were
                  every keyword's. */
               if (fresh.length) {
-                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown })));
+                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0 })));
                 ok += fresh.length;
               }
               setProgress({ done: applied + st.done, total: entries.length,
@@ -1029,7 +1029,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                 if (stt.busy) continue;                   // another pass is collecting
                 const fresh = (stt.updated || []).filter((u) => !seen2.has(u.id));
                 fresh.forEach((u) => seen2.add(u.id));
-                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown }))); ok += fresh.length; }
+                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0 }))); ok += fresh.length; }
                 setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
                 if (!stt.pending) { billed += stt.billedTasks || 0; liveBilled += stt.liveTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
               }
@@ -1342,7 +1342,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     </td>}
                     {colOn("ai") && <td className="px-3 py-3">
                       {(() => { const ai = aiOf(t); const pv = featPrev(t, "ai", ai); return (
-                        <span className="inline-flex items-center gap-1" title={ai ? `Cited by Google's AI Overview — source #${ai}${pv === null ? " — newly cited" : pv != null && pv !== ai ? ` (was #${pv} last scan)` : ""}` : t.aiShown ? "Google shows an AI Overview for this search — this site isn't cited in it" : "No AI Overview captured for this search yet"}>
+                        <span className="inline-flex items-center gap-1" title={ai ? `Cited by Google's AI Overview — source #${ai}${pv === null ? " — newly cited" : pv != null && pv !== ai ? ` (was #${pv} last scan)` : ""}` : t.aiShown ? (t.aiRefs ? `Google shows an AI Overview for this search citing ${t.aiRefs} source${t.aiRefs === 1 ? "" : "s"} — this site isn't among them` : "Google shows an AI Overview for this search, but its sources weren't captured — rerun the scan to load them") : "No AI Overview captured for this search yet"}>
                           <Sparkles size={11} className={ai ? "shrink-0 text-violet-600" : "shrink-0 text-gray-300"} />
                           {ai
                             ? <span className="relative inline-flex"><span className="ll-mono inline-flex min-w-8 items-center justify-center rounded-md bg-violet-100 px-1.5 py-0.5 text-[12.5px] font-semibold text-violet-700">#{ai}</span><FeatBadge cur={ai} prev={pv} /></span>

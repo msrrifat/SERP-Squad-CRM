@@ -4285,6 +4285,11 @@ async function handleRerun(body) {
        Newmarkets */
     ...(resolved ? { location_code: resolved.code } : { location_name: variantsOf(e)[0] }),
     ...(engine === "google" && SE_DOMAIN[e.city?.country] ? { se_domain: SE_DOMAIN[e.city.country] } : {}),
+    /* Google renders most AI Overviews asynchronously, so the plain SERP
+       fetch almost never contains one — the AI Overview column stayed empty
+       on every scan. This flag makes DataForSEO wait for it ($0.0006 extra
+       per task, refunded when no overview exists). */
+    ...(engine === "google" ? { load_async_ai_overview: true } : {}),
   });
   /* resolve every target ONCE up front — the list is cached, so this is a map
      lookup after the first call for a country */
@@ -4309,9 +4314,9 @@ async function handleRerun(body) {
         const { i, vi } = work[j];
         const e = list[i];
         if (r?.task) {
-          const { position, url, mapPos, packShown, aiPos, aiShown } = parseSerpRank(r.task, e.domain);
+          const { position, url, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(r.task, e.domain);
           const loc = locOf(e);
-          updated[i] = { id: e.id, position, url, mapPos, packShown, aiPos, aiShown,
+          updated[i] = { id: e.id, position, url, mapPos, packShown, aiPos, aiShown, aiRefs,
             location: loc?.name || variantsOf(e)[vi],
             /* "city" means this really is the local ranking; anything coarser
                is a wider result set and is labelled as such rather than being
@@ -4396,6 +4401,9 @@ async function handleRankStart(body) {
       ...(loc(e) ? { location_code: loc(e).code }
                  : { location_name: [e.city?.city, e.city?.region, e.city?.country].filter(Boolean).join(",") }),
       ...(engine === "google" && SE_DOMAINS[e.city?.country] ? { se_domain: SE_DOMAINS[e.city.country] } : {}),
+      /* see buildTask above: without this the AI Overview is almost never in
+         the response ($0.0006 extra per task, refunded when none exists) */
+      ...(engine === "google" ? { load_async_ai_overview: true } : {}),
     }));
     let posted;
     try { posted = await dfsPost(creds, engine + "/organic", tasks); }
@@ -4452,8 +4460,8 @@ async function handleRankStatus(body) {
          Persisting per item makes a restart cost nothing. */
       let dirty = 0;
       const land = (item, task) => {
-        const { position, absPos, url, mapPos, packShown, aiPos, aiShown } = parseSerpRank(task, item.domain);
-        item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown };
+        const { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(task, item.domain);
+        item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs };
         if (++dirty >= 5) { dirty = 0; saveJob(job); }
       };
       /* a keyword the queue cannot answer has to be run live. Re-POSTING it is

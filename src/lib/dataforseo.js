@@ -73,11 +73,14 @@ export function parseSerpRank(taskResult, domain) {
   /* Google AI Overview — SAME response again, zero extra cost: whether the
      query shows an AI overview, and the domain's 1-based position among the
      overview's cited references (the order Google lists its sources).
-     Cached (synchronous) overviews are embedded in the HTML DataForSEO
-     already fetched; async-generated ones are NOT chased, because
-     load_async_ai_overview doubles the task price whenever one exists. */
+     Rank-tracking tasks are posted with load_async_ai_overview, so
+     asynchronously rendered overviews (nearly all of them) come back too.
+     References are collected in document order from every level of the
+     overview — the item itself, each ai_overview_element, and the expanded
+     elements / tables / chunks nested inside them — because DataForSEO
+     places citations wherever the corresponding text block sits. */
   const aio = items.find((it) => it.type === "ai_overview");
-  let aiPos = null;
+  let aiPos = null, aiRefsCount = 0;
   if (aio) {
     const seen = new Set();
     const refs = [];
@@ -88,10 +91,15 @@ export function parseSerpRank(taskResult, domain) {
       seen.add(key);
       refs.push(r);
     };
-    (aio.references || []).forEach(collect);
-    (aio.items || []).forEach((el) => (el?.references || []).forEach(collect));
+    const walk = (node, depth = 0) => {
+      if (!node || typeof node !== "object" || depth > 6) return;
+      (Array.isArray(node.references) ? node.references : []).forEach(collect);
+      (Array.isArray(node.items) ? node.items : []).forEach((child) => walk(child, depth + 1));
+    };
+    walk(aio);
     const idx = refs.findIndex(matches);
     aiPos = idx >= 0 ? idx + 1 : null;
+    aiRefsCount = refs.length;
   }
   return {
     position: hit ? (hit.rank_group ?? hit.rank_absolute) : null,  // organic position; null = not in top `depth`
@@ -100,7 +108,8 @@ export function parseSerpRank(taskResult, domain) {
     mapPos: mapIdx >= 0 ? mapIdx + 1 : null,           // 1–3 inside the pack; null = not in the pack
     packShown: pack.length > 0,                        // whether Google showed a map pack for this query at all
     aiPos,                                             // 1-based citation position in the AI Overview; null = not cited
-    aiShown: !!aio,                                    // whether an AI overview appeared (cached/synchronous) for this query
+    aiShown: !!aio,                                    // whether an AI overview appeared for this query
+    aiRefs: aio ? aiRefsCount : 0,                     // how many sources the overview cites (0 = placeholder / not loaded)
   };
 }
 

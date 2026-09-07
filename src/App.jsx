@@ -1385,7 +1385,7 @@ export default function App() {
         /* latest local map-pack position — undefined on demo fallbacks keeps the old value */
         ...(u.mapPos !== undefined ? { mapPos: u.mapPos, packShown: !!u.packShown } : {}),
         /* latest AI Overview citation position — same one-scan data, same rule */
-        ...(u.aiPos !== undefined ? { aiPos: u.aiPos, aiShown: !!u.aiShown } : {}),
+        ...(u.aiPos !== undefined ? { aiPos: u.aiPos, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0 } : {}),
       };
     }) }));
     logActivity(`Re-checked ${updates.length} keyword${updates.length > 1 ? "s" : ""}`, project?.name);
