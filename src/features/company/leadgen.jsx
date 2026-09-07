@@ -103,13 +103,15 @@ function LeadForm({ initial, model, currency, onSave, onClose, accent }) {
   );
 }
 
-export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", currency = "USD", autoLogLead = false }) {
+export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", currency = "USD", autoLogLead = false, section = "all" }) {
   const b = project.billing || {};
   const s = useMemo(() => leadgenSummary(project), [project]);
   const setB = (patch) => onUpdate({ billing: { model: "monthly", leads: [], payments: [], ...b, ...patch } });
   const [editLead, setEditLead] = useState(autoLogLead ? "new" : null);   // null | "new" | lead
   const [pay, setPay] = useState({ date: todayISO(), amount: "", method: b.paymentMethod?.type || "bank", note: "", proof: null });
   const [setup, setSetup] = useState(!s.isLeadGen);
+  const all = section === "all";
+  const show = (k) => all || section === k;
   const saveLead = (d) => {
     const now = Date.now();
     if (editLead === "new") setB({ leads: [{ ...d, id: uid(), createdAt: now }, ...(b.leads || [])] });
@@ -131,21 +133,32 @@ export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", cu
     { icon: Receipt, label: "Billed to date", value: fmtMoney(s.owed, currency), tone: { fg: "#6D28D9", bg: "#EDE9FE" }, sub: s.model === "commission" ? `${s.won} won · ${fmtMoney(s.salesValue, currency)} in sales` : `${s.billable} billable lead${s.billable === 1 ? "" : "s"}` },
     { icon: CreditCard, label: "Received", value: fmtMoney(s.paid, currency), tone: { fg: "#15803D", bg: "#DCFCE7" }, sub: `${s.payments.length} payment${s.payments.length === 1 ? "" : "s"}` },
   ];
+  const summaryLine = s.isLeadGen && (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-gray-600">
+      <ModelPill model={s.model} />
+      <span className="ll-mono font-semibold text-gray-800">{s.model === "perLead" ? `${fmtMoney(s.rate, currency)} per lead` : `${s.rate}% of won sales`}</span>
+      <span className="inline-flex items-center gap-1"><CreditCard size={12} className="text-gray-400" /> {s.paymentMethod?.type ? (PAY_METHODS[s.paymentMethod.type] || s.paymentMethod.type) : "no payment method"}</span>
+      <span className="inline-flex items-center gap-1"><CalendarDays size={12} className="text-gray-400" /> {s.nextPay ? `client pays ${fmtDate(s.nextPay)}` : "no payment day"}</span>
+      <span className="inline-flex items-center gap-1"><FileText size={12} className="text-gray-400" /> {s.agreement ? <ProofLink proof={s.agreement} accent={accent} /> : <span className="text-amber-700">no agreement uploaded</span>}</span>
+    </div>
+  );
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <ModelPill model={s.model} />
-        {s.isLeadGen && <span className="text-[12px] text-gray-500">{s.model === "perLead" ? `${fmtMoney(s.rate, currency)} per lead` : `${s.rate}% of won sales`}{s.paymentMethod?.type ? ` · ${PAY_METHODS[s.paymentMethod.type] || s.paymentMethod.type}` : ""}{s.agreement ? " · agreement on file" : " · no agreement uploaded"}</span>}
-        <button onClick={() => setSetup((v) => !v)} className="ml-auto flex items-center gap-1 text-[11.5px] font-semibold hover:underline" style={{ color: accent }}><Pencil size={11} /> {setup ? "Hide billing setup" : "Edit billing setup"}</button>
-      </div>
-      {setup && <div className="rounded-xl border border-gray-200 p-4"><LeadGenBillingSetup project={project} client={client} onUpdate={onUpdate} accent={accent} currency={currency} /></div>}
-      {s.isLeadGen && (
+      {all && (
+        <div className="flex flex-wrap items-center gap-2">
+          {summaryLine}
+          <button onClick={() => setSetup((v) => !v)} className="ml-auto flex items-center gap-1 text-[11.5px] font-semibold hover:underline" style={{ color: accent }}><Pencil size={11} /> {setup ? "Hide billing setup" : "Edit billing setup"}</button>
+        </div>
+      )}
+      {(all ? setup : show("setup")) && <div className={all ? "rounded-xl border border-gray-200 p-4" : ""}><LeadGenBillingSetup project={project} client={client} onUpdate={onUpdate} accent={accent} currency={currency} /></div>}
+      {s.isLeadGen && show("overview") && (
         <>
+          {!all && summaryLine}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {kpis.map((k) => (
-              <div key={k.label} className="rounded-2xl border p-3.5" style={{ background: `linear-gradient(135deg, ${k.tone.bg} 0%, #fff 70%)`, borderColor: k.tone.bg }}>
-                <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: k.tone.fg }}><k.icon size={12} /> {k.label}</div>
-                <div className="ll-mono mt-1.5 text-[22px] font-bold" style={{ color: k.tone.fg }}>{k.value}</div>
+              <div key={k.label} className="rounded-xl border border-gray-200 bg-white p-3.5" style={{ borderLeft: `3px solid ${k.tone.fg}` }}>
+                <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-gray-500"><k.icon size={12} style={{ color: k.tone.fg }} /> {k.label}</div>
+                <div className="ll-mono mt-1 text-[22px] font-bold" style={{ color: k.tone.fg }}>{k.value}</div>
                 <div className="text-[11px] text-gray-500">{k.sub}</div>
               </div>
             ))}
@@ -164,7 +177,10 @@ export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", cu
               </ResponsiveContainer>
             </div>
           </Card>
-
+        </>
+      )}
+      {s.isLeadGen && show("leads") && (
+        <>
           {/* leads */}
           <Card className="overflow-hidden">
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
@@ -203,7 +219,10 @@ export function LeadGenPanel({ client, project, onUpdate, accent = "#0E7C66", cu
               </div>
             )}
           </Card>
-
+        </>
+      )}
+      {s.isLeadGen && show("payments") && (
+        <>
           {/* payments */}
           <Card className="p-4">
             <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-gray-800"><CreditCard size={14} style={{ color: accent }} /> Payments received</div>

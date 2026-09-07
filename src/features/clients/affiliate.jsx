@@ -99,7 +99,7 @@ export function AttachProof({ clientId, onDone, accent = "#0E7C66", label = "Att
 const Pill = ({ s }) => { const st = STATUS[s] || STATUS.unscheduled; return <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: st.bg, color: st.fg }}>{st.label}</span>; };
 
 /* ---- agency side ------------------------------------------------------- */
-export function AffiliateSettings({ draft, set, client, clients = [], currency = "USD", accent = "#0E7C66" }) {
+export function AffiliateSettings({ draft, set, client, clients = [], currency = "USD", accent = "#0E7C66", section = "all" }) {
   const a = draft.affiliate || { enabled: false, rate: AFFILIATE_RATE_DEFAULT, referrals: [], payouts: [] };
   const setA = (patch) => set({ affiliate: { enabled: false, rate: AFFILIATE_RATE_DEFAULT, referrals: [], payouts: [], ...a, ...patch } });
   const summary = useMemo(() => affiliateSummary({ ...client, affiliate: a }, clients), [a, client, clients]);
@@ -129,38 +129,58 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
   const removePayout = (p) => setA({ payouts: (a.payouts || []).filter((x) => x.id !== p.id) });
   const patchPayout = (id, patch) => setA({ payouts: (a.payouts || []).map((x) => (x.id === id ? { ...x, ...patch } : x)) });
   const byId = (id) => summary.referrals.find((r) => r.id === id);
+  /* `section` lets the Company dashboard show one part at a time (its own
+     tabs); "all" is the full panel inside Client settings */
+  const all = section === "all";
+  const show = (k) => all || section === k;
+  const totals = (
+    <div className={"grid grid-cols-3 gap-2" + (all ? " sm:col-span-2" : "")}>
+      {[["Earned to date", summary.totals.earned], ["Paid out", summary.totals.paid], ["Balance due", summary.totals.balance]].map(([l, v]) => (
+        <div key={l} className="rounded-lg bg-gray-50 px-3 py-2">
+          <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{l}</div>
+          <div className="ll-mono text-[14px] font-bold" style={l === "Balance due" && v > 0 ? { color: accent } : {}}>{fmtMoney(v, currency)}</div>
+        </div>
+      ))}
+    </div>
+  );
 
   return (
-    <div className="border-t border-gray-100 pt-4">
-      <div className="mb-2 flex items-center gap-2"><HandCoins size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Affiliate program</span></div>
-      <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })}
-        label="This client is an affiliate"
-        desc={`They earn ${a.rate ?? AFFILIATE_RATE_DEFAULT}% of every client they refer, for as long as that client stays with you. Turning this on adds an "Affiliate Earnings" screen to their portal.`} />
-      {a.enabled && (
-        <div className="ll-fade mt-3 space-y-4 rounded-xl border border-gray-200 p-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Labeled label="Commission rate (%)">
-              <input type="number" min="0" max="100" step="0.5" value={a.rate ?? AFFILIATE_RATE_DEFAULT}
-                onChange={(e) => setA({ rate: e.target.value === "" ? AFFILIATE_RATE_DEFAULT : Math.max(0, Math.min(100, +e.target.value)) })} className={inputCls} />
-            </Labeled>
-            <div className="sm:col-span-2 grid grid-cols-3 gap-2">
-              {[["Earned to date", summary.totals.earned], ["Paid out", summary.totals.paid], ["Balance due", summary.totals.balance]].map(([l, v]) => (
-                <div key={l} className="rounded-lg bg-gray-50 px-3 py-2">
-                  <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{l}</div>
-                  <div className="ll-mono text-[14px] font-bold" style={l === "Balance due" && v > 0 ? { color: accent } : {}}>{fmtMoney(v, currency)}</div>
-                </div>
-              ))}
+    <div className={all ? "border-t border-gray-100 pt-4" : ""}>
+      {all && (<>
+        <div className="mb-2 flex items-center gap-2"><HandCoins size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Affiliate program</span></div>
+        <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })}
+          label="This client is an affiliate"
+          desc={`They earn ${a.rate ?? AFFILIATE_RATE_DEFAULT}% of every client they refer, for as long as that client stays with you. Turning this on adds an "Affiliate Earnings" screen to their portal.`} />
+      </>)}
+      {(a.enabled || !all) && (
+        <div className={all ? "ll-fade mt-3 space-y-4 rounded-xl border border-gray-200 p-4" : "space-y-4"}>
+          {show("settings") && (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Labeled label="Commission rate (%)">
+                <input type="number" min="0" max="100" step="0.5" value={a.rate ?? AFFILIATE_RATE_DEFAULT}
+                  onChange={(e) => setA({ rate: e.target.value === "" ? AFFILIATE_RATE_DEFAULT : Math.max(0, Math.min(100, +e.target.value)) })} className={inputCls} />
+              </Labeled>
+              {all && totals}
             </div>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11.5px]" style={{ background: a.payout?.paypalEmail ? "#EFF6FF" : "#FFFBEB", color: a.payout?.paypalEmail ? "#1E40AF" : "#92400E" }}>
-            <CreditCard size={13} />
-            {a.payout?.paypalEmail
-              ? <span>Pays out to <b>PayPal</b> · {a.payout.paypalEmail}{a.payout.name ? ` (${a.payout.name})` : ""}</span>
-              : <span>No payment details yet — the client adds their PayPal account on their Affiliate Earnings screen.</span>}
-          </div>
+          )}
+          {show("overview") && !all && totals}
+          {show("overview") && (
+            <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-[11.5px]" style={{ background: a.payout?.paypalEmail ? "#EFF6FF" : "#FFFBEB", color: a.payout?.paypalEmail ? "#1E40AF" : "#92400E" }}>
+              <CreditCard size={13} />
+              {a.payout?.paypalEmail
+                ? <span>Pays out to <b>PayPal</b> · {a.payout.paypalEmail}{a.payout.name ? ` (${a.payout.name})` : ""}</span>
+                : <span>No payment details yet — the client adds their PayPal account on their Affiliate Earnings screen.</span>}
+            </div>
+          )}
+          {section === "settings" && (
+            <div className="rounded-lg border border-gray-100 p-3">
+              <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })} label="Affiliate program active"
+                desc="Turning this off hides the Affiliate Earnings screen from the client's portal. Referrals and payouts are kept." />
+            </div>
+          )}
 
           {/* referrals */}
+          {show("referrals") && (
           <div>
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Clients they referred</div>
             {(a.referrals || []).length === 0 && <div className="rounded-lg border border-dashed border-gray-200 p-3 text-center text-[11.5px] text-gray-400">No referrals yet — pick a client below.</div>}
@@ -213,8 +233,10 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
             </div>
             <p className="mt-1.5 text-[10.5px] text-gray-400">Commission accrues for every calendar month between "client since" and "ended on" (or today), at the rate above on the monthly package.</p>
           </div>
+          )}
 
           {/* payouts */}
+          {show("payouts") && (
           <div>
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Payouts recorded</div>
             {summary.payouts.length > 0 && (
@@ -244,12 +266,13 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
                 : <><AttachProof clientId={client.id} accent={accent} label="Attach payment proof (screenshot or PDF)" onDone={(proof) => setPay({ ...pay, proof })} /><span>optional — the client sees it in their payout history.</span></>}
             </div>
           </div>
+          )}
 
           {/* what the client plans to bring in — theirs to edit, yours to read */}
-          {(a.prospects || []).length > 0 && (
+          {show("prospects") && (!all || (a.prospects || []).length > 0) && (
             <div>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Prospects they listed ({(a.prospects || []).length})</div>
-              <ProspectsView prospects={a.prospects || []} accent={accent} readOnly />
+              {all && <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Prospects they listed ({(a.prospects || []).length})</div>}
+              <ProspectsView prospects={a.prospects || []} accent={accent} readOnly={all} onChange={(list) => setA({ prospects: list })} />
               <p className="mt-1.5 text-[10.5px] text-gray-400">When one of them signs, add them as a referred client above so commission starts.</p>
             </div>
           )}
