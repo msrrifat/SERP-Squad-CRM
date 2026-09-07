@@ -1912,11 +1912,19 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     { label: "Image (upload)", icon: ImageIcon, make: () => ({ type: "image", src: "", caption: "", alt: "", width: "full", align: "center" }) },
     { label: "Divider", icon: Minus, make: () => ({ type: "divider" }) },
   ];
+  /* each performance section lists what it can show for THIS project, so a
+     specific KPI, trend, breakdown or table is one click away instead of
+     "add the default, then hunt for it in the gear" */
+  const [libOpen, setLibOpen] = useState({});
   const LIB_PERF = [
-    { label: "KPI cards", icon: LayoutDashboard, make: () => ({ type: "kpis", metrics: Object.keys(KPIS).filter((k) => KPIS[k].show).slice(0, 4) }) },
-    { label: "Trend chart", icon: Activity, make: () => ({ type: "chart", mode: "trend", source: Object.keys(TREND).find((k) => TREND[k].show), chartType: "area", months: 13 }) },
-    { label: "Pie / breakdown", icon: PieIcon, make: () => ({ type: "chart", mode: "breakdown", source: Object.keys(BREAKDOWN).find((k) => BREAKDOWN[k].show), chartType: "pie" }) },
-    { label: "Data table", icon: Table2, make: () => ({ type: "table", kind: Object.keys(TABLE_KINDS).find((k) => TABLE_KINDS[k].show) }) },
+    { label: "KPI cards", icon: LayoutDashboard, make: () => ({ type: "kpis", metrics: Object.keys(KPIS).filter((k) => KPIS[k].show).slice(0, 4) }),
+      items: Object.entries(KPIS).filter(([, d]) => d.show).map(([k, d]) => ({ key: k, label: d.label, tag: d.src, make: () => ({ type: "kpis", metrics: [k] }) })) },
+    { label: "Trend chart", icon: Activity, make: () => ({ type: "chart", mode: "trend", source: Object.keys(TREND).find((k) => TREND[k].show), chartType: "area", months: 13 }),
+      items: Object.entries(TREND).filter(([, d]) => d.show).map(([k, d]) => ({ key: k, label: d.label, make: () => ({ type: "chart", mode: "trend", source: k, chartType: "area", months: 13 }) })) },
+    { label: "Pie / breakdown", icon: PieIcon, make: () => ({ type: "chart", mode: "breakdown", source: Object.keys(BREAKDOWN).find((k) => BREAKDOWN[k].show), chartType: "pie" }),
+      items: Object.entries(BREAKDOWN).filter(([, d]) => d.show).map(([k, d]) => ({ key: k, label: d.label, make: () => ({ type: "chart", mode: "breakdown", source: k, chartType: "pie" }) })) },
+    { label: "Data table", icon: Table2, make: () => ({ type: "table", kind: Object.keys(TABLE_KINDS).find((k) => TABLE_KINDS[k].show) }),
+      items: Object.entries(TABLE_KINDS).filter(([, d]) => d.show).map(([k, d]) => ({ key: k, label: d.label, make: () => ({ type: "table", kind: k, ...(k === "rank" ? { limit: "10" } : {}) }) })) },
   ];
   const LIB_WORK = [
     { label: "Work record (tasks)", icon: ListTodo, make: () => ({ type: "work", recordId: records[0]?.id || "", excludedChecklists: [], excludedTasks: [] }) },
@@ -2357,9 +2365,39 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
                   <div className="border-t border-gray-100" />
                   <Group title="Performance report (this project)">
-                    {LIB_PERF.map((l) => (
-                      <SectionBtn key={l.label} icon={l.icon} label={l.label} onClick={() => add(l.make())} />
-                    ))}
+                    {LIB_PERF.map((l) => {
+                      const open = !!libOpen[l.label];
+                      const Icon = l.icon;
+                      return (
+                        <div key={l.label} className="rounded-lg border" style={{ borderColor: open ? accent + "66" : "#E5E7EB" }}>
+                          <div className="flex items-center">
+                            <button onClick={() => add(l.make())} title={`Add ${l.label.toLowerCase()} (default)`}
+                              className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-[11.5px] font-semibold text-gray-700 hover:bg-gray-50">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><Icon size={13} /></span>
+                              <span className="flex-1 truncate">{l.label}</span>
+                              <span className="ll-mono text-[10px] text-gray-400">{l.items.length}</span>
+                            </button>
+                            <button onClick={() => setLibOpen((o) => ({ ...o, [l.label]: !open }))} title={open ? "Hide options" : "Show what this section can include"}
+                              className="shrink-0 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700" style={open ? { color: accent } : {}}>
+                              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                          </div>
+                          {open && (
+                            <div className="ll-fade border-t border-gray-100 px-1.5 py-1.5">
+                              {l.items.length === 0 && <div className="px-2 py-1.5 text-[10.5px] text-gray-400">Nothing available for this project yet — connect a data source first.</div>}
+                              {l.items.map((it) => (
+                                <button key={it.key} onClick={() => add(it.make())} title={`Add "${it.label}"`}
+                                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-gray-600 hover:bg-gray-50 hover:text-gray-900">
+                                  <Plus size={11} className="shrink-0 text-gray-300" />
+                                  <span className="flex-1 truncate">{it.label}</span>
+                                  {it.tag && <span className="ll-mono rounded bg-gray-100 px-1 text-[9px] font-bold uppercase text-gray-500">{it.tag}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </Group>
                   <div className="border-t border-gray-100" />
                   <div>
