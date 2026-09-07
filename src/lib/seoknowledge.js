@@ -10,8 +10,8 @@
        architecture and planning prompt.
      • SEO_TOPICS — deeper per-discipline blocks a tool opts into with
        seoGuideBlock("writing", "titles", …).
-   The FULL corpus (413 KB, 60 chapters) lives server-side in
-   server/data/seo-guide.json and is queried per-question through
+   The FULL corpus (427 KB, 60 chapters) lives server-side in
+   server/knowledge/seo-guide.json and is queried per-question through
    POST /api/seo-guide — the AI agent cites it verbatim.
    ===================================================================== */
 
@@ -26,6 +26,7 @@ export const SEO_CORE = `GOOGLE SEO DOCTRINE (from Google Search Central — fol
 - Images: high-quality, placed near relevant text, with descriptive alt text. Videos: standalone page, descriptive title/description text.
 - Page experience is rewarded: good Core Web Vitals (LCP ≤ 2.5 s, INP < 200 ms, CLS < 0.1), HTTPS, mobile-friendly, main content distinguishable, no intrusive interstitials, ads that don't interfere.
 - Generative-AI search (AI Overviews / AI Mode) needs NO special optimization: no llms.txt, no "chunking", no AEO/GEO hacks, no special schema. It's grounded in normal Search ranking (RAG + query fan-out). What wins there: unique, non-commodity content with a first-hand point of view (not "7 generic tips" anyone could write), crawlable/indexable pages eligible for snippets, and up-to-date Business Profile / Merchant data.
+- Site diversity: Google generally shows at most TWO listings from one site per query (subdomains count as the same site), so never promise a client several ranking positions for one keyword — win the query with one strong page. The exact-match-domain system also discounts keyword-stuffed domains, and deduplication means a page promoted to a featured snippet isn't repeated in the page-1 list.
 - Explicit NON-factors: meta keywords, word-count targets (no minimum/maximum), heading order/count, subdomain vs subdirectory, TLD choice (outside geo-targeting), duplicate-content "penalty" (doesn't exist), E-E-A-T as a literal ranking factor.
 - Spam to never do: keyword stuffing, scaled content abuse (mass-generated pages incl. AI), link schemes, cloaking, misleading structured data.
 - Structured data (JSON-LD recommended) makes pages eligible for rich results (never guaranteed); it must describe VISIBLE page content, never invented or hidden data. Local businesses: LocalBusiness markup, claimed Business Profile, Organization logo, Breadcrumb.
@@ -62,7 +63,7 @@ export const SEO_TOPICS = {
 - Freshness matters only where the query deserves it (news, seasonal, "best X 2026"); evergreen guides win by completeness and updates, not re-dating.
 - Structure each post: descriptive H1 (the one dominant title), scannable H2 sections, FAQs where people ask them, internal links with descriptive anchors to the service pages the post supports, plus cited external sources.
 - Reviews content (any "best/top/vs" post) is evaluated by the reviews system: it must show in-depth research, first-hand testing evidence, and expert analysis — thin summaries of products are demoted.
-- Discover traffic favors compelling titles that capture the essence WITHOUT clickbait (no withheld information, no sensationalism), plus large (1200px+) high-quality images.`,
+- Discover traffic favors compelling titles that capture the essence WITHOUT clickbait (no withheld information, no sensationalism), plus large high-quality images. Large Discover images require BOTH the image spec (≥1200 px wide, >300,000 total pixels, 16:9, declared via og:image or schema.org image — never a logo, never text-heavy) AND the max-image-preview:large robots rule; without that rule Google shows only a small thumbnail.`,
 
   titles: `TITLE & SNIPPET RULES (Google Search Central):
 - <title>: unique per page, descriptive and concise, no vague labels ("Home", "Profile"), no keyword stuffing, no boilerplate that varies by one word across pages. Brand as "Page topic — Site Name" (site name at start or end, delimited). Match the page's language/script. Google rebuilds bad titles from H1s, prominent text and anchors — a rewritten title is a symptom to fix.
@@ -95,6 +96,8 @@ export const SEO_TOPICS = {
 - Don't block marked-up pages from Googlebot; keep markup identical on mobile and desktop; match structured data to on-page text.
 - Validate with the Rich Results Test before deploy, monitor in Search Console after.
 - High-value types for business sites: LocalBusiness, Organization (logo), Breadcrumb, Product, Review/AggregateRating (only reviews of OTHER entities), FAQ where genuinely present, Video, ProfilePage for author pages (supports E-E-A-T).
+- Enriched results (Job Posting, Recipe, Event) are only available on LEAF pages that describe one item — never on listing/category pages that link out to items.
+- Self-serving reviews: if the reviewed entity controls the reviews about itself, its LocalBusiness/Organization pages are INELIGIBLE for the star review feature (this includes embedded Google/Facebook review widgets). Ratings must come from users, never from editors; never aggregate ratings from other sites; never mark up incentivised reviews without prominent disclosure.
 - Structured data is NOT required for AI features and doesn't boost ranking — it enables rich results and helps Google understand entities.`,
 
   technical: `TECHNICAL SEO RULES (Google Search Central):
@@ -107,6 +110,10 @@ export const SEO_TOPICS = {
 - Mobile-first: Google indexes the mobile version; content parity is mandatory.
 - JavaScript: rendered by an evergreen Chromium — but use meaningful HTTP codes, History API (no #fragments), proper canonical injection, lazy-loaded content visible in viewport testing, unique metadata per route.
 - Interstitials that obscure content hurt both users and indexing — use small banners; age gates should let verified Googlebot through or overlay (not redirect).
+- Sitemap mechanics: namespace http://www.sitemaps.org/schemas/sitemap/0.9; max 50,000 URLs or 50 MB uncompressed per file, then split and use a sitemap index (referenced sitemaps must sit in the same directory or lower); absolute URLs only; UTF-8; list canonicals only. Google IGNORES <priority> and <changefreq>, and uses <lastmod> only when it is consistently and verifiably accurate and reflects a significant content change (not a copyright-year bump) — a wrong lastmod is worse than none.
+- robots.txt mechanics: top-level directory only, per host+protocol+port, 500 KiB cap, only user-agent/allow/disallow/sitemap are supported (crawl-delay is not). 4xx (except 429) = no restrictions; 5xx = Google pauses ~12 h then falls back to the last good copy for 30 days. Most specific rule by path length wins; on a tie the least restrictive wins. Wildcards: * and $.
+- Crawl efficiency: Google fetches only the first 15 MB of a file; prefer ETag over Last-Modified for conditional requests, and fingerprint JS/CSS filenames because the renderer may ignore cache headers.
+- Canonicalization is a HINT, not a rule — Google may pick differently. After fixing near-duplicates, pages can stay clustered for up to two weeks; they split faster the more clearly the content differs.
 - Indexable file types include HTML, PDF, images, video — but text in HTML is always the safest carrier of meaning; text in images/video is invisible.`,
 
   audit: `AUDIT METHOD (derived strictly from Google Search Central priorities — score each area and cite the guideline it comes from):
