@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import {
+import { Pencil,
   MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
   Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
   Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
@@ -91,6 +91,24 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
       ...c, tasks: [...c.tasks, { id: "t" + Date.now(), title, createdAt: Date.now(), dueDate: null, completedAt: null, assignees: [] }],
     }), `added task "${title}"`);
     setNewTask({ ...newTask, [clId]: "" });
+  };
+  /* checklists are editable too — rename, reorder, delete (tasks were the
+     only editable thing before, so a mistyped checklist name was permanent) */
+  const renameChecklist = async (cl) => {
+    const nm = await askInput({ title: "Rename checklist", message: "Checklist name:", value: cl.name, confirmLabel: "Rename" });
+    if (!nm?.trim() || nm.trim() === cl.name) return;
+    setChecklists(record.checklists.map((c) => (c.id === cl.id ? { ...c, name: nm.trim() } : c)), `renamed checklist "${cl.name}" → "${nm.trim()}"`);
+  };
+  const moveChecklist = (cl, dir) => {
+    const i = record.checklists.findIndex((c) => c.id === cl.id), j = i + dir;
+    if (i < 0 || j < 0 || j >= record.checklists.length) return;
+    const next = record.checklists.slice(); [next[i], next[j]] = [next[j], next[i]];
+    setChecklists(next, `moved checklist "${cl.name}"`);
+  };
+  const delChecklist = async (cl) => {
+    const n = cl.tasks.length;
+    if (!await askDelete(`the checklist "${cl.name}"${n ? ` and its ${n} task${n === 1 ? "" : "s"}` : ""}`)) return;
+    setChecklists(record.checklists.filter((c) => c.id !== cl.id), `deleted checklist "${cl.name}"`);
   };
   const mutTask = (clId, tId, fn, actText) =>
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.map((t) => (t.id === tId ? fn(t) : t)) }), actText);
@@ -218,9 +236,21 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
               const clDone = cl.tasks.filter((t) => t.completedAt).length;
               return (
                 <div key={cl.id}>
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <div className="ll-display text-[14px] font-semibold text-gray-800">{cl.name}</div>
-                    <span className="ll-mono text-[10.5px] text-gray-400">{clDone}/{cl.tasks.length}</span>
+                  <div className="group/cl mb-1.5 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1">
+                      {perms.manage
+                        ? <button onClick={() => renameChecklist(cl)} title="Rename checklist" className="ll-display truncate rounded px-1 text-left text-[14px] font-semibold text-gray-800 hover:bg-gray-100">{cl.name}</button>
+                        : <div className="ll-display truncate text-[14px] font-semibold text-gray-800">{cl.name}</div>}
+                      {perms.manage && (
+                        <span className="flex items-center opacity-0 transition-opacity group-hover/cl:opacity-100">
+                          <button onClick={() => renameChecklist(cl)} title="Rename checklist" className="rounded p-0.5 text-gray-300 hover:bg-gray-100 hover:text-gray-600"><Pencil size={12} /></button>
+                          <button onClick={() => moveChecklist(cl, -1)} title="Move up" className="rounded p-0.5 text-gray-300 hover:bg-gray-100 hover:text-gray-600"><ChevronUp size={13} /></button>
+                          <button onClick={() => moveChecklist(cl, 1)} title="Move down" className="rounded p-0.5 text-gray-300 hover:bg-gray-100 hover:text-gray-600"><ChevronDown size={13} /></button>
+                          <button onClick={() => delChecklist(cl)} title="Delete checklist" className="rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={12} /></button>
+                        </span>
+                      )}
+                    </div>
+                    <span className="ll-mono shrink-0 text-[10.5px] text-gray-400">{clDone}/{cl.tasks.length}</span>
                   </div>
                   <div className="space-y-0.5">
                     {cl.tasks.map((t) => {
