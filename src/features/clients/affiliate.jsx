@@ -144,6 +144,24 @@ export function AffiliateSettings({ draft, set, client, clients = [], currency =
     </div>
   );
 
+  /* Client settings only needs the switch: the rate, referrals, payouts and
+     prospects are managed in Company dashboard → Affiliate partners */
+  if (section === "toggle") {
+    return (
+      <div className="border-t border-gray-100 pt-4">
+        <div className="mb-2 flex items-center gap-2"><HandCoins size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Affiliate program</span></div>
+        <Toggle on={!!a.enabled} onChange={(v) => setA({ enabled: v })}
+          label="This client is an affiliate partner"
+          desc={`They earn ${a.rate ?? AFFILIATE_RATE_DEFAULT}% of every client they refer, for as long as that client stays with you. Turning this on adds an "Affiliate program" screen to their portal.`} />
+        {a.enabled && (
+          <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] text-gray-500">
+            Commission rate, referred clients, payment days and payouts are managed in <b>Company dashboard → Affiliate partners</b>.
+            {(a.referrals || []).length > 0 && <> Currently {(a.referrals || []).length} referral{(a.referrals || []).length === 1 ? "" : "s"}.</>}
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className={all ? "border-t border-gray-100 pt-4" : ""}>
       {all && (<>

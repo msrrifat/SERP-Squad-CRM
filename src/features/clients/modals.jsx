@@ -98,7 +98,7 @@ export function ClientSettingsBody({ client, onChange, accent = "#0E7C66", compa
 
         {/* the agency-only affiliate panel: referrals, packages, payouts */}
         {Array.isArray(clients) && (
-          <AffiliateSettings draft={draft} set={set} client={client} clients={clients} currency={company?.invoice?.currency || "USD"} accent={accent} />
+          <AffiliateSettings section="toggle" draft={draft} set={set} client={client} clients={clients} currency={company?.invoice?.currency || "USD"} accent={accent} />
         )}
 
         {/* ANY client can run on their own DataForSEO account — the client can
