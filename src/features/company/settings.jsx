@@ -983,8 +983,37 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
   const th = "px-3 py-2 text-left text-[9.5px] font-semibold uppercase tracking-wider text-gray-400";
   const Line = ({ children }) => (children ? <div className="text-[12px] leading-snug text-gray-500">{children}</div> : null);
 
+  /* print: ONLY the sheet, on a real A4 page with its own margins. The
+     browser's date/title/URL header and footer are gone (@page margin 0),
+     the app chrome is hidden (visibility), and every editable field prints
+     as plain text — a form control on an invoice reads as a draft. */
+  const fmtDay = (iso) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" }) : "—");
+  const printInvoice = () => {
+    const prev = document.title;
+    document.title = `${d.no || "Invoice"} — ${brandName || "Invoice"}`;
+    const restore = () => { document.title = prev; window.removeEventListener("afterprint", restore); };
+    window.addEventListener("afterprint", restore);
+    setTimeout(restore, 60000);
+    window.print();
+  };
+  const PrintText = ({ children, className = "" }) => <span className={"hidden print:inline " + className}>{children}</span>;
+  const printCss = `@media print {
+    @page { size: A4; margin: 0; }
+    html, body { background: #fff !important; }
+    body * { visibility: hidden !important; }
+    .inv-sheet, .inv-sheet * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .inv-sheet { position: absolute !important; left: 0 !important; top: 0 !important; width: 210mm !important; min-height: 297mm !important; max-width: none !important;
+      margin: 0 !important; padding: 18mm 16mm 16mm !important; box-shadow: none !important; border-radius: 0 !important; background: #fff !important; box-sizing: border-box; display: flex; flex-direction: column; }
+    .inv-sheet .inv-foot { margin-top: auto !important; }
+    .inv-sheet * { box-shadow: none !important; text-shadow: none !important; }
+    .inv-sheet .print\\:hidden { display: none !important; }
+    .inv-sheet .print\\:inline { display: inline !important; }
+    .inv-sheet .print\\:block { display: block !important; }
+  }`;
+
   return (
     <div className="ll-fade space-y-4">
+      <style>{printCss}</style>
       <div className="no-print flex flex-wrap items-center gap-2">
         <button onClick={onCancel} className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
           <ArrowLeft size={14} /> All invoices
@@ -999,12 +1028,12 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
         <button onClick={() => onSave(d)} className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>
           Save invoice
         </button>
-        <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
+        <button onClick={printInvoice} className="ml-auto flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300">
           <Printer size={14} /> Print / PDF
         </button>
       </div>
 
-      <div className="mx-auto max-w-3xl rounded-2xl bg-white p-9 shadow-sm">
+      <div className="inv-sheet mx-auto max-w-3xl rounded-2xl bg-white p-9 shadow-sm">
         <div className="mb-7 flex items-start justify-between gap-6 border-b pb-6" style={{ borderColor: accent + "33" }}>
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-3">
@@ -1021,11 +1050,14 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
             <div className="ll-display text-[28px] font-bold tracking-tight" style={{ color: accent }}>INVOICE</div>
             <div className="mt-2 space-y-1 text-[12px]">
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">No.</span>
-                <input value={d.no} onChange={(e) => set({ no: e.target.value })} className="ll-mono w-40 rounded border border-gray-200 px-2 py-1 text-right text-[12px]" /></div>
+                <input value={d.no} onChange={(e) => set({ no: e.target.value })} className="ll-mono w-40 rounded border border-gray-200 px-2 py-1 text-right text-[12px] print:hidden" />
+                <PrintText className="ll-mono font-semibold text-gray-800">{d.no}</PrintText></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Issued</span>
-                <input type="date" value={d.issueDate} onChange={(e) => set({ issueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
+                <input type="date" value={d.issueDate} onChange={(e) => set({ issueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px] print:hidden" />
+                <PrintText className="font-semibold text-gray-800">{fmtDay(d.issueDate)}</PrintText></div>
               <div className="flex items-center justify-end gap-2"><span className="text-gray-400">Due</span>
-                <input type="date" value={d.dueDate} onChange={(e) => set({ dueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px]" /></div>
+                <input type="date" value={d.dueDate} onChange={(e) => set({ dueDate: e.target.value })} className="ll-mono rounded border border-gray-200 px-2 py-1 text-[12px] print:hidden" />
+                <PrintText className="font-semibold text-gray-800">{fmtDay(d.dueDate)}</PrintText></div>
             </div>
           </div>
         </div>
@@ -1060,10 +1092,11 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
               <tr key={x.id} className="border-b border-gray-50 align-top">
                 <td className="px-3 py-2">
                   <textarea value={x.desc} onChange={(e) => setItem(x.id, { desc: e.target.value })} rows={Math.max(1, Math.ceil((x.desc || "").length / 55))}
-                    placeholder="Describe the work…" className="w-full resize-none border-0 bg-transparent outline-none" />
+                    placeholder="Describe the work…" className="w-full resize-none border-0 bg-transparent outline-none print:hidden" />
+                  <span className="hidden whitespace-pre-wrap text-gray-800 print:block">{x.desc}</span>
                 </td>
-                <td className="px-3 py-2"><input value={x.qty} onChange={(e) => setItem(x.id, { qty: e.target.value.replace(/[^0-9.]/g, "") })} className="ll-mono w-12 rounded border border-gray-100 px-1.5 py-0.5 text-center" /></td>
-                <td className="px-3 py-2"><input value={x.rate} onChange={(e) => setItem(x.id, { rate: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" className="ll-mono w-24 rounded border border-gray-100 px-1.5 py-0.5 text-right" /></td>
+                <td className="px-3 py-2"><input value={x.qty} onChange={(e) => setItem(x.id, { qty: e.target.value.replace(/[^0-9.]/g, "") })} className="ll-mono w-12 rounded border border-gray-100 px-1.5 py-0.5 text-center print:hidden" /><PrintText className="ll-mono">{x.qty}</PrintText></td>
+                <td className="px-3 py-2"><input value={x.rate} onChange={(e) => setItem(x.id, { rate: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" className="ll-mono w-24 rounded border border-gray-100 px-1.5 py-0.5 text-right print:hidden" /><PrintText className="ll-mono">{fmt(Math.round((+x.rate || 0) * 100))}</PrintText></td>
                 <td className="ll-mono px-3 py-2 text-right font-semibold">{fmt(lineCents(x))}</td>
                 <td className="no-print px-1 py-2">
                   <button onClick={() => setD((y) => (y.items.length > 1 ? { ...y, items: y.items.filter((i) => i.id !== x.id) } : y))}
@@ -1083,10 +1116,11 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
           <div className="w-72 space-y-1.5 text-[13px]">
             <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="ll-mono">{fmt(t.subtotal)}</span></div>
             <div className="flex items-center justify-between text-gray-500">
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 print:hidden">
                 <input value={d.taxLabel} onChange={(e) => set({ taxLabel: e.target.value })} className="w-16 rounded border border-transparent bg-transparent px-1 text-[13px] hover:border-gray-200" />
                 <input value={d.taxPct} onChange={(e) => set({ taxPct: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0" className="ll-mono w-12 rounded border border-gray-200 px-1 py-0.5 text-center text-[11px]" />%
               </span>
+              <PrintText>{d.taxLabel || "Tax"} ({d.taxPct || 0}%)</PrintText>
               <span className="ll-mono">{fmt(t.tax)}</span>
             </div>
             <div className="flex justify-between border-t pt-2 text-[18px] font-bold" style={{ borderColor: accent + "33", color: accent }}>
@@ -1108,9 +1142,10 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
 
         <div className="mt-7 grid gap-6 border-t border-gray-100 pt-4 sm:grid-cols-2">
           <div>
-            <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Notes &amp; payment terms</div>
+            <div className={"mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400" + (d.notes?.trim() ? "" : " print:hidden")}>Notes &amp; payment terms</div>
             <textarea value={d.notes} onChange={(e) => set({ notes: e.target.value })} rows={3} placeholder="Add terms for this invoice…"
-              className="w-full resize-none border-0 bg-transparent text-[12.5px] leading-relaxed text-gray-600 outline-none" />
+              className="w-full resize-none border-0 bg-transparent text-[12.5px] leading-relaxed text-gray-600 outline-none print:hidden" />
+            <div className="hidden whitespace-pre-line text-[12.5px] leading-relaxed text-gray-600 print:block">{d.notes}</div>
           </div>
           {inv.paymentDetails && (
             <div>
@@ -1120,7 +1155,7 @@ function InvoiceEditor({ company, clients, initial, onSave, onCancel }) {
           )}
         </div>
 
-        <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
+        <div className="inv-foot mt-6 flex items-center justify-between border-t border-gray-100 pt-3 text-[10.5px] text-gray-400">
           <span>{inv.footer || ""}</span>
           <span className="ll-mono">{d.no}</span>
         </div>
