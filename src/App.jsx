@@ -155,7 +155,6 @@ export default function App() {
   /* which sidebar sections are shown — a per-device preference (View menu) */
   const [sbSections, setSbSections] = useState(() => { try { return { personal: true, company: true, projects: true, ...JSON.parse(localStorage.getItem("ss_sb_sections") || "{}") }; } catch { return { personal: true, company: true, projects: true }; } });
   const toggleSection = (k) => setSbSections((cur) => { const next = { ...cur, [k]: !cur[k] }; try { localStorage.setItem("ss_sb_sections", JSON.stringify(next)); } catch { /* private mode */ } return next; });
-  const [sbMenu, setSbMenu] = useState(false);
   const toggleSb = (v) => { setSbHidden(v); try { localStorage.setItem("ss_sb_hidden", v ? "1" : "0"); } catch { /* private mode */ } };
   const [section, setSection] = useState("performance"); // "performance" | "management"
   const [agentOpen, setAgentOpen] = useState(false);
@@ -1559,32 +1558,19 @@ export default function App() {
                   <Settings size={16} />
                 </button>
               )}
-              <div className="relative">
-                <button onClick={() => setSbMenu((v) => !v)} title="Show or hide sidebar sections"
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600" style={sbMenu ? { color: accent } : {}}>
-                  <Eye size={16} />
-                </button>
-                {sbMenu && (
-                  <div className="ll-fade absolute right-0 top-8 z-40 w-48 rounded-xl border border-gray-200 bg-white p-2 shadow-lg" onMouseLeave={() => setSbMenu(false)}>
-                    <div className="px-2 pb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Show in sidebar</div>
-                    {[["personal", "Personal dashboard"], ...(isAdmin ? [["company", "Company dashboard"]] : []), ["projects", isAdmin ? "Client projects" : "Projects"]].map(([k, label]) => (
-                      <label key={k} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
-                        <input type="checkbox" checked={sbSections[k] !== false} onChange={() => toggleSection(k)} className="accent-current" style={{ accentColor: accent }} />
-                        {label}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
               <button onClick={() => toggleSb(true)} title="Hide sidebar"
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
                 <PanelLeftClose size={16} />
               </button>
             </div>
           </div>
+          {/* section headers collapse like "Archived projects" — the choice is remembered per device */}
           {/* personal dashboard: the signed-in person's own screens */}
+          <button onClick={() => toggleSection("personal")} className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-xl px-1.5 py-1 text-left hover:bg-gray-50" title={sbSections.personal !== false ? "Collapse" : "Expand"}>
+            {sbSections.personal !== false ? <ChevronDown size={13} className="shrink-0 text-gray-400" /> : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+            <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</span>
+          </button>
           {sbSections.personal !== false && (<>
-          <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Personal Dashboard</div>
           <div className="space-y-0.5 px-2.5 pb-3">
             {[
               ["assignments", "Assignments", ClipboardList, lateAssigned > 0 ? { n: lateAssigned, bg: "#FEE2E2", fg: "#991B1B" } : null],
@@ -1615,9 +1601,14 @@ export default function App() {
           </div>
           </>)}
           {/* company dashboard: the agency's money screens (admins) */}
-          {isAdmin && sbSections.company !== false && (<>
+          {isAdmin && (<>
           <div className="mx-4 mb-2 border-t border-gray-100" />
-          <div className="px-4 pb-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Company Dashboard</div>
+          <button onClick={() => toggleSection("company")} className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-xl px-1.5 py-1 text-left hover:bg-gray-50" title={sbSections.company !== false ? "Collapse" : "Expand"}>
+            {sbSections.company !== false ? <ChevronDown size={13} className="shrink-0 text-gray-400" /> : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+            <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Company Dashboard</span>
+          </button>
+          </>)}
+          {isAdmin && sbSections.company !== false && (<>
           <div className="space-y-0.5 px-2.5 pb-3">
             {[["affiliates", "Affiliate partners", HandCoins], ["leadgen", "Lead gen clients", Receipt]].map(([key, label, Icon]) => {
               const active = accountView === key;
@@ -1631,9 +1622,13 @@ export default function App() {
             })}
           </div>
           </>)}
-          {sbSections.projects !== false ? (<>
           <div className="mx-4 mb-2 border-t border-gray-100" />
-          <div className="px-4 pb-2 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{isAdmin ? "Client projects" : "Projects"}</div>
+          <button onClick={() => toggleSection("projects")} className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-xl px-1.5 py-1 text-left hover:bg-gray-50" title={sbSections.projects !== false ? "Collapse" : "Expand"}>
+            {sbSections.projects !== false ? <ChevronDown size={13} className="shrink-0 text-gray-400" /> : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+            <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{isAdmin ? "Client projects" : "Projects"}</span>
+            <span className="ll-mono ml-auto rounded-full bg-gray-100 px-1.5 py-0.5 text-[9.5px] font-bold text-gray-400">{visibleClients.reduce((n, c) => n + c.projects.length, 0)}</span>
+          </button>
+          {sbSections.projects !== false ? (<>
           <div className="flex-1 overflow-y-auto px-2.5">
             {/* non-admins get a FLAT project list: no client rows, no client
                 names, no client settings — they work on projects, and who the
