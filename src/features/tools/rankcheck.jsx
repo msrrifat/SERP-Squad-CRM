@@ -8,7 +8,7 @@
      wrapped around a throwaway in-memory project, so any business can
      be scanned without saving anything to a client.
    Live via DataForSEO (cost-chipped) or labeled demo. ---- */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useSyncExternalStore } from "react";
 import { ChevronDown, Download, MapPin, RefreshCw, Search, TrendingUp } from "lucide-react";
 import { Card, Labeled, Seg, inputCls } from "../../ui/primitives.jsx";
 import { ALL_CITIES, regionShort } from "../../lib/geo.js";
@@ -16,6 +16,7 @@ import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { DfsCostChip } from "../../lib/dfsCost.jsx";
 import { csvDownload } from "../research/tools.jsx";
 import { GeoGridView } from "../performance/geogrid.jsx";
+import { realDfs } from "../optimization/indexcheck.jsx";
 
 /* cities-only combobox (rank scans are city-targeted, like project tracking) */
 function CityPick({ value, onChange }) {
@@ -158,18 +159,50 @@ export function WebsiteRankCheck({ company, accent }) {
   );
 }
 
-/* the FULL geo-grid tracker (maps + ARP/SoLV) on a throwaway in-memory
-   project — scan any business's map rankings once, save nothing */
+/* ---- the tool's throwaway workspace lives OUTSIDE the component ---------
+   It used to be component state. A geo-grid scan runs as a background job
+   for one to five minutes, and the Tools page unmounts this component the
+   moment you open another tool — so the job finished, applied its result to
+   a component that no longer existed, and the report (setup, snapshot, all
+   of it) was simply gone. The workspace is now module state, like the scan
+   jobs themselves, mirrored to sessionStorage so a reload of the tab keeps
+   it too. It is still never written to a client project or the server. */
+const TOOL_PROJ_KEY = "ss_tool_mapcheck";
+const freshToolProject = () => ({ id: "tool-rank", name: "One-time map check", website: "", tracking: [], geoGrid: {} });
+let toolProj = (() => { try { const v = JSON.parse(sessionStorage.getItem(TOOL_PROJ_KEY) || "null"); return v && v.id === "tool-rank" ? v : freshToolProject(); } catch { return freshToolProject(); } })();
+const toolSubs = new Set();
+const setToolProj = (patch) => {
+  toolProj = { ...toolProj, ...(typeof patch === "function" ? patch(toolProj) : patch) };
+  try { sessionStorage.setItem(TOOL_PROJ_KEY, JSON.stringify(toolProj)); } catch { /* quota / private mode — memory copy still works */ }
+  toolSubs.forEach((fn) => fn());
+};
+const subscribeToolProj = (fn) => { toolSubs.add(fn); return () => toolSubs.delete(fn); };
+
+/* the FULL geo-grid tracker (maps + ARP/SoLV) on a throwaway project —
+   scan any business's map rankings once without touching a client */
 export function MapRankCheck({ accent, dfs, placesKey }) {
-  const [proj, setProj] = useState({ id: "tool-rank", name: "One-time map check", website: "", tracking: [], geoGrid: {} });
+  const stored = useSyncExternalStore(subscribeToolProj, () => toolProj);
+  /* With DataForSEO connected this is a REAL workspace: a failed scan says
+     why instead of quietly drawing a demo grid (the tracker only fabricates
+     for demo projects). Without credentials it stays a labelled demo. */
+  const live = !!realDfs(dfs);
+  const proj = useMemo(() => ({ ...stored, demoMode: !live }), [stored, live]);
+  const reports = (stored.geoGrid?.reports || []).length;
   return (
     <div className="space-y-3">
-      <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
-        The exact geo-grid tracker from Performance Studio (coordinate-targeted Maps scans, ARP & SoLV) on a <b>throwaway workspace</b> —
-        set up any business below and run a snapshot. Nothing is saved to a client project; results live until you leave this screen.
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11.5px] text-gray-500">
+        <span className="min-w-0 flex-1">
+          The exact geo-grid tracker from Performance Studio (coordinate-targeted Maps scans, ARP & SoLV) on a <b>scratch workspace</b> —
+          set up any business below and run a snapshot. Nothing is saved to a client project; it stays in this browser tab until you clear it.
+          {" "}{live ? <span className="rounded bg-emerald-100 px-1.5 py-px text-[9px] font-bold uppercase text-emerald-700">live scans</span>
+                     : <span className="rounded bg-amber-100 px-1.5 py-px text-[9px] font-bold uppercase text-amber-700">demo — connect DataForSEO in Company settings for live scans</span>}
+        </span>
+        {reports > 0 && (
+          <button onClick={() => { if (window.confirm(`Clear the scratch workspace (${reports} report${reports === 1 ? "" : "s"} and their snapshots)?`)) setToolProj(freshToolProject()); }}
+            className="shrink-0 rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-500 hover:border-gray-300 hover:text-gray-700">Clear workspace</button>
+        )}
       </div>
-      <GeoGridView project={proj} accent={accent} dfs={dfs} placesKey={placesKey} trackedKeywords={[]}
-        onUpdate={(patch) => setProj((p) => ({ ...p, ...(typeof patch === "function" ? patch(p) : patch) }))} />
+      <GeoGridView project={proj} accent={accent} dfs={dfs} placesKey={placesKey} trackedKeywords={[]} onUpdate={setToolProj} />
     </div>
   );
 }
