@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -838,6 +839,44 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
   const colOn = (k) => cols[k] !== false;
   const toggleCol = (k) => setCols((c) => { const n = { ...c, [k]: !(c[k] !== false) }; try { localStorage.setItem("ss_rank_cols", JSON.stringify(n)); } catch { /* private mode */ } return n; });
   const [colsOpen, setColsOpen] = useState(false);
+  /* The column menu is positioned against the VIEWPORT, not the button.
+     It used to hang off the button's right edge (`absolute right-0`): when
+     the toolbar wraps and the View button sits at the left of the card, the
+     menu ran past the card's edge and the card's overflow clipped it. Fixed
+     positioning escapes that clip, and the coordinates are clamped so the
+     menu is always fully on screen, opening upward when there is no room
+     below. It closes on outside click, scroll, resize and Escape. */
+  const colsBtnRef = useRef(null);
+  const colsMenuRef = useRef(null);
+  const [colsPos, setColsPos] = useState(null);
+  const COLS_MENU_W = 208;
+  const toggleColsMenu = () => {
+    if (colsOpen) { setColsOpen(false); return; }
+    const r = colsBtnRef.current?.getBoundingClientRect();
+    if (r) {
+      const h = 40 + 9 * 32;                                   // header + one row per column
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - COLS_MENU_W - 8));
+      const below = r.bottom + 4;
+      /* below the button when it fits; otherwise above it, anchored by the
+         menu's bottom edge so it sits flush whatever its real height is */
+      setColsPos(below + h <= window.innerHeight - 8 || r.top < h + 12
+        ? { left, top: Math.min(below, Math.max(8, window.innerHeight - h - 8)) }
+        : { left, bottom: window.innerHeight - r.top + 4 });
+    }
+    setColsOpen(true);
+  };
+  useEffect(() => {
+    if (!colsOpen) return undefined;
+    const close = () => setColsOpen(false);
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    /* the page scrolling moves the button out from under the menu, so close;
+       scrolling INSIDE the menu (a short screen) must not */
+    const onScroll = (e) => { if (!(e.target instanceof Node && colsMenuRef.current?.contains(e.target))) close(); };
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", onScroll, true); window.removeEventListener("keydown", onKey); };
+  }, [colsOpen]);
   const visColCount = 3 + ["volume", "strend", "start", "current", "map", "ai", "life", "url"].filter(colOn).length + (colOn("changes") ? DELTA_DAYS.length : 0);
 
   /* column sorting — defaults to best current positions on top */
@@ -1176,12 +1215,17 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             <div className="flex flex-wrap items-center gap-2 no-print">
               {/* View → toggle columns (persisted) */}
               <div className="relative">
-                <button onClick={() => setColsOpen((v) => !v)}
+                <button ref={colsBtnRef} onClick={toggleColsMenu}
                   className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-gray-600 hover:border-gray-300">
                   <Columns3 size={13} /> View
                 </button>
-                {colsOpen && (
-                  <div className="absolute right-0 z-30 mt-1 w-52 rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
+                {/* portalled to the app root: an ancestor with a transform (the
+                    page's fade-in) would otherwise become the frame `fixed`
+                    is measured from, and the menu would land beside the button */}
+                {colsOpen && createPortal(<>
+                  <div className="no-print fixed inset-0 z-40" onClick={() => setColsOpen(false)} />
+                  <div ref={colsMenuRef} className="no-print fixed z-50 overflow-y-auto rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl"
+                    style={{ left: colsPos?.left ?? 8, ...(colsPos?.bottom != null ? { bottom: colsPos.bottom } : { top: colsPos?.top ?? 8 }), width: COLS_MENU_W, maxHeight: "calc(100vh - 16px)" }}>
                     <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">Toggle columns</div>
                     {COLS.map(([k, l]) => (
                       <label key={k} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-gray-700 hover:bg-gray-50">
@@ -1190,7 +1234,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       </label>
                     ))}
                   </div>
-                )}
+                </>, document.querySelector(".ll-root") || document.body)}
               </div>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter keywords…"
                 className="w-36 rounded-lg border border-gray-200 px-3 py-1.5 text-[13px]" />
