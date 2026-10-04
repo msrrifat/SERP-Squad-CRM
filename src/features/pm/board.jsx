@@ -135,6 +135,25 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
     if (!await askDelete(`the checklist "${cl.name}"${n ? ` and its ${n} task${n === 1 ? "" : "s"}` : ""}`)) return;
     setChecklists(record.checklists.filter((c) => c.id !== cl.id), `deleted checklist "${cl.name}"`);
   };
+  /* MARK ALL TASKS DONE — every open task in one checklist, in one save.
+     Tasks already done keep their own completion time. A manager completes
+     the whole checklist; someone who may only complete their own tasks gets
+     the same button for the open tasks assigned to them. Confirmed first
+     when it touches more than one task, because it cannot be undone in one
+     click. */
+  const openTasksFor = (cl) => cl.tasks.filter((t) => !t.completedAt && (perms.manage || (perms.complete && t.assignees.includes(currentUser))));
+  const markAllDone = async (cl) => {
+    const open = openTasksFor(cl);
+    if (!open.length) return;
+    if (open.length > 1 && !await askConfirm({
+      title: "Mark all tasks done?",
+      message: `Mark ${open.length} open tasks in "${cl.name}" as done?`,
+      confirmLabel: "Mark all done",
+    })) return;
+    const ids = new Set(open.map((t) => t.id)), now = Date.now();
+    setChecklists(record.checklists.map((c) => c.id !== cl.id ? c : { ...c, tasks: c.tasks.map((t) => (ids.has(t.id) ? { ...t, completedAt: now } : t)) }),
+      open.length === 1 ? `completed task "${open[0].title}"` : `completed all ${open.length} open tasks in "${cl.name}"`);
+  };
   const mutTask = (clId, tId, fn, actText) =>
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : { ...c, tasks: c.tasks.map((t) => (t.id === tId ? fn(t) : t)) }), actText);
   const delTask = async (clId, tId, title) => {
@@ -275,7 +294,17 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                         </span>
                       )}
                     </div>
-                    <span className="ll-mono shrink-0 text-[10.5px] text-gray-400">{clDone}/{cl.tasks.length}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {openTasksFor(cl).length > 0 && (
+                        <button onClick={() => markAllDone(cl)}
+                          title={perms.manage ? `Mark all ${openTasksFor(cl).length} open tasks in this checklist as done` : `Mark your ${openTasksFor(cl).length} open tasks in this checklist as done`}
+                          className="flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10.5px] font-semibold hover:bg-gray-50"
+                          style={{ borderColor: POS + "66", color: POS }}>
+                          <CheckCircle2 size={11} /> Mark all tasks done
+                        </button>
+                      )}
+                      <span className="ll-mono text-[10.5px] text-gray-400">{clDone}/{cl.tasks.length}</span>
+                    </span>
                   </div>
                   <div className="space-y-0.5">
                     {cl.tasks.map((t) => {
