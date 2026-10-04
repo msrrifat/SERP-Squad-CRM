@@ -85,12 +85,37 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
     setChecklists([...record.checklists, { id: "cl" + Date.now(), name: nm, tasks: [] }], `added checklist "${nm}"`);
     setNewChecklist("");
   };
-  const addTask = (clId) => {
-    const title = (newTask[clId] || "").trim(); if (!title) return;
+  /* one task per title. Ids carry the index because a hundred tasks made in
+     the same millisecond must not share one. */
+  const addTasks = (clId, titles) => {
+    const list = titles.map((t) => t.trim()).filter(Boolean);
+    if (!list.length) return;
+    const now = Date.now();
     setChecklists(record.checklists.map((c) => c.id !== clId ? c : {
-      ...c, tasks: [...c.tasks, { id: "t" + Date.now(), title, createdAt: Date.now(), dueDate: null, completedAt: null, assignees: [] }],
-    }), `added task "${title}"`);
+      ...c, tasks: [...c.tasks, ...list.map((title, i) => ({ id: `t${now}_${i}`, title, createdAt: now, dueDate: null, completedAt: null, assignees: [] }))],
+    }), list.length === 1 ? `added task "${list[0]}"` : `added ${list.length} tasks`);
     setNewTask({ ...newTask, [clId]: "" });
+  };
+  const addTask = (clId) => addTasks(clId, [newTask[clId] || ""]);
+  /* PASTE A LIST → ONE TASK PER LINE. A single-line input flattens pasted
+     line breaks into spaces, so a copied list of 100 items became one very
+     long task. Any paste that contains a line break is split instead: each
+     non-empty line becomes its own task, with list markers (bullets, "- ",
+     "[ ]" checkboxes) removed. Text already typed in the box is kept as the
+     start of the first line. A paste without a line break behaves as before. */
+  const pasteTasks = (clId, e) => {
+    const text = e.clipboardData?.getData("text") || "";
+    if (!/[\r\n]/.test(text)) return;
+    const el = e.target;
+    const typed = newTask[clId] || "";
+    const before = typed.slice(0, el.selectionStart ?? typed.length), after = typed.slice(el.selectionEnd ?? typed.length);
+    const lines = text.split(/\r\n|\r|\n/).map((l) => l.replace(/^\s*(?:[-*•·▪◦‣–—]|\[[ xX]?\]|☐|☑|✓|✔)\s+/, "").trim());
+    const nonEmpty = lines.filter(Boolean);
+    if (!nonEmpty.length) return;
+    e.preventDefault();
+    nonEmpty[0] = (before + nonEmpty[0]).trim();
+    nonEmpty[nonEmpty.length - 1] = (nonEmpty[nonEmpty.length - 1] + after).trim();
+    addTasks(clId, nonEmpty);
   };
   /* checklists are editable too — rename, reorder, delete (tasks were the
      only editable thing before, so a mistyped checklist name was permanent) */
@@ -326,7 +351,8 @@ export function RecordWindow({ record, people, perms, currentUser, accent, onPat
                     <div className="mt-1 flex items-center gap-1.5 pl-2">
                       <input value={newTask[cl.id] || ""} onChange={(e) => setNewTask({ ...newTask, [cl.id]: e.target.value })}
                         onKeyDown={(e) => e.key === "Enter" && addTask(cl.id)}
-                        placeholder="Add task…" className="flex-1 rounded-lg border border-dashed border-gray-200 px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gray-300" />
+                        onPaste={(e) => pasteTasks(cl.id, e)}
+                        placeholder="Add task… (paste a list to add one task per line)" className="flex-1 rounded-lg border border-dashed border-gray-200 px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gray-300" />
                       <button onClick={() => addTask(cl.id)} className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold text-white" style={{ background: accent }}>
                         <Plus size={13} />
                       </button>
