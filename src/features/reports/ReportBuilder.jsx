@@ -19,7 +19,7 @@ import { LABELS, MONTH_DATES } from "../../lib/months.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { TASK_COLORS, recordState, taskState } from "../pm/board.jsx";
 import { OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { ReportGridMap, gridCenterOf, gridMetrics, setMapsKey } from "../performance/geogrid.jsx";
+import { ReportGridMap, gridCenterOf, gridMetrics, setMapsKey, siteSnapshots } from "../performance/geogrid.jsx";
 import { useLiveSiteData } from "../performance/googlelive.jsx";
 import { AD_PLATFORMS, PfBadge, campaignDaily, sumMetrics } from "../ads/dashboard.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
@@ -583,11 +583,15 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const geo = cp.project.geoGrid || {};
     const report = (geo.reports || []).find((r) => r.id === b.reportId) || (geo.reports || [])[0];
     if (!report || !report.snapshots?.length) return { cp, geo, report: null, kws: [] };
-    const snaps = report.snapshots;
+    /* scans that were run around another location never reach a client
+       report (unless the report has nothing else) */
+    const site = siteSnapshots(report, cp.project);
+    const snaps = site.on.length ? site.on : report.snapshots;
+    const strays = site.on.length ? site.off : [];
     const cur = snaps.find((s2) => s2.id === b.snapId) || snaps[0];
     const base = b.baseId ? snaps.find((s2) => s2.id === b.baseId) : (b.mode === "change" ? snaps.find((s2) => s2.at < cur.at) : null);
     const kws = (b.keywords && b.keywords.length ? b.keywords : report.keywords).filter((k) => cur.grids[k]);
-    return { cp, geo, report, snaps, cur, base, kws };
+    return { cp, geo, report, snaps, cur, base, kws, biz: site.biz, strays };
   };
   /* GEO-GRID CARD GEOMETRY. The map spans the page's content width; its
      height is chosen so TWO keyword cards fill one A4 page (with the section
@@ -1163,11 +1167,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
   /* geo-grid section: a report's snapshot (or before/after) for chosen keywords */
   const renderGeoReport = (b) => {
-    const { cp, geo, report, cur, base, kws } = geoPartsOf(b);
+    const { cp, report, cur, base, kws, biz: ownBiz } = geoPartsOf(b);
     const color = b.color || accent;
     if (!report) return <div className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">No geo-grid snapshots for this project yet — run a scan in GBP Rank Tracking.</div>;
-    const bizName = geo.business?.name || cp.project.name;
-    const bizLoc = isFinite(geo.business?.lat) && isFinite(geo.business?.lng) ? geo.business : cp.project.opt?.gbp;
+    /* the REPORT's own business: a project can track several locations */
+    const bizName = ownBiz?.name || cp.project.name;
+    const bizLoc = ownBiz;
     const center = isFinite(bizLoc?.lat) && isFinite(bizLoc?.lng) ? { lat: +bizLoc.lat, lng: +bizLoc.lng } : null;
     /* the scan's own coordinates come FIRST: geo.business is a single
        project-level record that a second report (another location / GBP)
@@ -1632,7 +1637,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const cp = projOf(b.projectId);
       const reports = cp.project.geoGrid?.reports || [];
       const report = reports.find((r) => r.id === b.reportId) || reports[0];
-      const snaps = report?.snapshots || [];
+      const site = report ? siteSnapshots(report, cp.project) : { on: [], off: [], biz: null };
+      const snaps = site.on.length ? site.on : (report?.snapshots || []);
+      const strays = site.on.length ? site.off : [];
       const kwList = report?.keywords || [];
       const selKw = b.keywords && b.keywords.length ? b.keywords : kwList;
       return (
@@ -1641,7 +1648,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <select value={b.reportId || report?.id || ""} onChange={(e) => patch(b.id, { reportId: e.target.value, snapId: undefined, baseId: undefined, keywords: undefined })} className={inputCls}>
               {reports.map((r) => <option key={r.id} value={r.id}>{r.name} ({r.snapshots.length} snapshots)</option>)}
             </select>
+            {report && site.biz?.name && <div className="mt-1 text-[10.5px] leading-snug text-gray-400">Location: {site.biz.name}</div>}
           </Labeled>
+          {strays.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10.5px] leading-snug text-amber-800">
+              {strays.length === 1 ? "1 scan" : `${strays.length} scans`} ({strays.map((s2) => new Date(s2.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })).join(", ")}) of this report {strays.length === 1 ? "was" : "were"} run around a different location and {strays.length === 1 ? "is" : "are"} left out here. Re-run the report in GBP Rank Tracking to get a current scan for this location.
+            </div>
+          )}
           <Labeled label="What to show">
             <Seg options={["change", "snapshot", "compare"]} value={b.mode || "change"} onChange={(v) => patch(b.id, { mode: v })} accent={accent} />
           </Labeled>
@@ -2510,17 +2523,16 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 <div className="ll-display mb-1 text-[15px] font-semibold">Add GBP geo-grid section</div>
                 <div className="mb-3 text-[11.5px] text-gray-400">Adds a map-ranking section per selected project. You choose the snapshot, comparison and keywords per section from its gear afterwards.</div>
                 <div className="mb-3 rounded-lg bg-gray-50 p-2.5 text-[11px] text-gray-500">
-                  {projs.length} project{projs.length === 1 ? "" : "s"} with geo-grid data selected. Default view: latest snapshot with change vs previous, all keywords.
+                  {projs.length} project{projs.length === 1 ? "" : "s"} with geo-grid data selected — one section for each tracked location. Default view: latest snapshot with change vs previous, all keywords.
                 </div>
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setGeoModal(null)} className="rounded-lg border border-gray-200 px-4 py-2 text-[12.5px] font-medium text-gray-600">Cancel</button>
                   <button onClick={() => {
-                    addMany(projs.map((cp) => {
-                      const rep = cp.project.geoGrid.reports.find((r) => r.snapshots?.length);
-                      return { type: "geoReport", projectId: cp.project.id, reportId: rep?.id, mode: "change" };
-                    }));
+                    /* one section per tracked location (geo-grid report) */
+                    addMany(projs.flatMap((cp) => cp.project.geoGrid.reports.filter((r) => r.snapshots?.length)
+                      .map((rep) => ({ type: "geoReport", projectId: cp.project.id, reportId: rep.id, mode: "change" }))));
                     setGeoModal(null);
-                  }} className="rounded-lg px-5 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>Add {projs.length} section{projs.length === 1 ? "" : "s"}</button>
+                  }} className="rounded-lg px-5 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}>Add {(() => { const n = projs.reduce((m, cp) => m + cp.project.geoGrid.reports.filter((r) => r.snapshots?.length).length, 0); return `${n} section${n === 1 ? "" : "s"}`; })()}</button>
                 </div>
               </div>
             </div>

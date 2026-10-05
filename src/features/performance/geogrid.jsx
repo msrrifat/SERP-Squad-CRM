@@ -90,6 +90,73 @@ export const gridCenterOf = (points) => {
   return { lat: c.reduce((n, p) => n + +p.lat, 0) / c.length, lng: c.reduce((n, p) => n + +p.lng, 0) / c.length };
 };
 
+/* ---------- one business location PER REPORT ----------
+   A project can track several GBP locations, one report each. The location
+   used to live only in `geo.business` (project-level), so setting up the
+   second report silently re-pointed the first: its next scan ran around the
+   other city and ranked the other listing. Each report now keeps its own
+   `rp.business`; these helpers also recover the right one for reports saved
+   before that, and spot the scans that were run in the wrong place. */
+const kmBetween = (a, b) => {
+  const dLat = (a.lat - b.lat) * 111.32;
+  const dLng = (a.lng - b.lng) * 111.32 * Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+};
+const hasLL = (b) => !!b && b.lat != null && b.lng != null && b.lat !== "" && b.lng !== "" && isFinite(+b.lat) && isFinite(+b.lng);
+const snapCenterOf = (snap) => {
+  for (const pts of Object.values(snap?.grids || {})) { const c = gridCenterOf(pts); if (c) return c; }
+  return null;
+};
+/* how far a scan may sit from the report's business and still be "this
+   location" (covers a pin nudged a few streets, not another town) */
+const siteTolKm = (rp) => Math.max(1.5, (((+rp?.size || 7) - 1) / 2) * (+effSpacing(rp) || 1) * 0.5);
+/* the listing a scan ranked as "ours": the result sitting at the point's own rank */
+const ownTitleOf = (snap) => {
+  const tally = {};
+  for (const pts of Object.values(snap?.grids || {})) for (const p of pts || []) {
+    if (!p || p.skipped || p.rank == null) continue;
+    const t = pointResults(snap, p).find((r2) => r2.rank === p.rank)?.title;
+    if (t) tally[t] = (tally[t] || 0) + 1;
+  }
+  return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+};
+export function projectBusiness(project) {
+  const gbpLoc = project?.opt?.gbp || {};
+  const base = project?.geoGrid?.business || { name: gbpLoc.bizName || project?.name || "", address: gbpLoc.address || "" };
+  return hasLL(base) ? base : { ...base, lat: gbpLoc.lat, lng: gbpLoc.lng };
+}
+export function reportBusiness(rp, project) {
+  if (hasLL(rp?.business)) return rp.business;
+  const shared = projectBusiness(project);
+  /* saved before reports had their own location: its FIRST scan shows where
+     it was set up; the project record is trusted only if it is still there */
+  const snaps = (rp?.snapshots || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
+  const first = snaps.find((sn) => snapCenterOf(sn));
+  if (!first) return shared;
+  const home = snapCenterOf(first);
+  if (hasLL(shared) && kmBetween(home, { lat: +shared.lat, lng: +shared.lng }) <= siteTolKm(rp)) return shared;
+  /* the name comes from the listing those scans ranked — never from the
+     other location's record, which would rank the wrong listing again */
+  const tol = siteTolKm(rp);
+  const name = snaps.filter((sn) => { const c = snapCenterOf(sn); return c && kmBetween(home, c) <= tol; }).map(ownTitleOf).find(Boolean) || "";
+  return { name, address: "", lat: +home.lat.toFixed(6), lng: +home.lng.toFixed(6), source: "recovered" };
+}
+/* km between a scan and the report's business when it was run somewhere else, else 0 */
+export function snapOffSiteKm(rp, snap, biz) {
+  const c = snapCenterOf(snap);
+  if (!c || !hasLL(biz)) return 0;
+  const d = kmBetween(c, { lat: +biz.lat, lng: +biz.lng });
+  return d > siteTolKm(rp) ? d : 0;
+}
+/* a report's scans split into the ones at its own location and the strays */
+export function siteSnapshots(rp, project) {
+  const biz = reportBusiness(rp, project);
+  const all = rp?.snapshots || [];
+  const off = all.filter((sn) => snapOffSiteKm(rp, sn, biz) > 0);
+  const on = all.filter((sn) => !off.includes(sn));
+  return { biz, on, off };
+}
+
 const fillCoords = (points, center, size, spacingKm) => {
   if (!center || !points) return points;
   const half = (size - 1) / 2;
@@ -452,7 +519,7 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
   });
   const [searchWith, setSearchWith] = useState("places"); // "places" | "url"
   const [mapsUrl, setMapsUrl] = useState("");
-  const [biz, setBiz] = useState({ name: business.name || "", address: business.address || "", lat: business.lat ?? "", lng: business.lng ?? "" });
+  const [biz, setBiz] = useState({ name: business.name || "", address: business.address || "", lat: business.lat ?? "", lng: business.lng ?? "", placeId: business.placeId, source: business.source });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [touched, setTouched] = useState(false);
@@ -474,8 +541,7 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
       if (searchWith === "url") {
         const c = parseMapsUrl(mapsUrl);
         if (!c) { setErr("Couldn't find coordinates in that URL — paste a full Google Maps link (it contains @lat,lng)."); return; }
-        setBiz((b) => ({ ...b, lat: c.lat, lng: c.lng }));
-        onSaveBusiness({ ...biz, lat: c.lat, lng: c.lng, source: "maps-url" });
+        setBiz((b) => ({ ...b, lat: c.lat, lng: c.lng, placeId: undefined, source: "maps-url" }));
         return;
       }
       const res = await fetch("/api/places-locate", {
@@ -486,16 +552,18 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
       if (res.status === 503) { setErr(data.hint || "Google Places API key not configured — use a Maps URL or enter coordinates manually."); return; }
       if (!res.ok) { setErr("Places lookup failed: " + (data.detail || data.error)); return; }
       if (!data.found) { setErr("Google Places couldn't find that business — refine the name/address."); return; }
-      setBiz({ name: data.name, address: data.address, lat: data.lat, lng: data.lng });
-      onSaveBusiness({ name: data.name, address: data.address, lat: data.lat, lng: data.lng, placeId: data.placeId, source: "places" });
+      setBiz({ name: data.name, address: data.address, lat: data.lat, lng: data.lng, placeId: data.placeId, source: "places" });
     } catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
   };
   const save = () => {
     setTouched(true);
     if (!r.name.trim() || !kws.length) { setTab("report"); return; }
+    /* the location belongs to THIS report — other reports of the project
+       (other GBP locations) keep theirs */
     const lat = parseFloat(biz.lat), lng = parseFloat(biz.lng);
-    if (isFinite(lat) && isFinite(lng)) onSaveBusiness({ name: biz.name, address: biz.address, lat, lng, source: business.source || "manual", placeId: business.placeId });
-    onSave({ ...r, keywords: kws });
+    const own = isFinite(lat) && isFinite(lng) ? { name: biz.name, address: biz.address, lat, lng, source: biz.source || "manual", placeId: biz.placeId } : null;
+    if (own) onSaveBusiness(own);
+    onSave({ ...r, keywords: kws, ...(own ? { business: own } : {}) });
   };
   const errCls = "text-[11px] font-semibold text-red-500";
 
@@ -681,9 +749,10 @@ function ReportSetup({ initial, business, onSaveBusiness, placesKey, accent, onS
 export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, trackedKeywords = [], readOnly = false, clientView = false, onSetWidget = null }) {
   setMapsKey(placesKey); // maps on this screen use the Google basemap when the key allows it
   const geo = project.geoGrid || {};
-  const gbpLoc = project.opt?.gbp || {};
-  const bizBase = geo.business || { name: gbpLoc.bizName || project.name, address: gbpLoc.address || "" };
-  const biz = isFinite(bizBase.lat) && isFinite(bizBase.lng) ? bizBase : { ...bizBase, lat: gbpLoc.lat, lng: gbpLoc.lng };
+  /* project-level record: only the default a NEW report starts from — every
+     report scans and draws around its own (bizOf) */
+  const biz = projectBusiness(project);
+  const bizOf = (rp) => reportBusiness(rp, project);
   /* per-report client visibility: rp.clientVisible !== false shows the report
      on the client dashboard; the agency list shows every report with an eye
      toggle on its row (hidden ones dimmed) */
@@ -702,10 +771,21 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
   const patchGeo = (p) => onUpdate((proj) => ({ geoGrid: { ...(proj.geoGrid || {}), ...(typeof p === "function" ? p(proj.geoGrid || {}) : p) } }));
   const patchReport = (id, fn) => patchGeo((cur) => ({ reports: (cur.reports || []).map((rp) => (rp.id === id ? { ...rp, ...(typeof fn === "function" ? fn(rp) : fn) } : rp)) }));
 
+  /* the project record follows a report's location only while the project has
+     a single location; before saving it, every other report still relying on
+     it is given its own copy so nothing gets re-pointed */
+  const saveDefaultBiz = (b) => patchGeo((cur) => {
+    const rs = cur.reports || [];
+    const editingId = setup && setup !== "new" ? setup.id : null;
+    const others = rs.filter((x) => x.id !== editingId);
+    const pinned = rs.map((x) => (x.id === editingId || hasLL(x.business) ? x : (() => { const own = reportBusiness(x, { ...project, geoGrid: cur }); return hasLL(own) ? { ...x, business: own } : x; })()));
+    return { reports: pinned, ...(others.length && hasLL(cur.business) ? {} : { business: b }) };
+  });
   const locale = (rp) => LOCALES[rp.locale || 0];
   const runSnapshot = (rp) => {
     const spacingKm = effSpacing(rp);
-    const center = isFinite(biz.lat) && isFinite(biz.lng) ? { lat: +biz.lat, lng: +biz.lng } : null;
+    const biz = bizOf(rp);
+    const center = hasLL(biz) ? { lat: +biz.lat, lng: +biz.lng } : null;
     startScanJob(`geogrid:${project.id}:${rp.id}`, `Geo-grid · ${project.name} — ${rp.name || rp.keywords[0]}`, async (setProgress) => {
       let grids = null;
       let live = false;
@@ -717,6 +797,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
          had no branch at all. The result was a fabricated map labelled only by
          a caption, on an account that is properly connected. */
       const isReal = project.demoMode === false;
+      if (isReal && center && !String(biz.name || "").trim()) {
+        throw new Error("This report has no business name yet — open Edit → Map tab, pick the business for this location, then scan.");
+      }
       if (!center && isReal) {
         throw new Error("This project has no business coordinates yet — set the location in the Geo-grid setup before scanning.");
       }
@@ -771,7 +854,8 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
          failed points must never be presentable as a complete one */
       /* stored compact: each business once per snapshot, points keep indices */
       const snap = compactSnapshot({ id: "sn" + Date.now(), at: Date.now(), live, grids, size: rp.size, spacingKm, shape: rp.shape, ...(scanMeta || {}) });
-      patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now() }));
+      /* a report from before per-report locations keeps the one it just scanned */
+      patchReport(rp.id, (cur) => ({ snapshots: [snap, ...cur.snapshots].slice(0, 24), lastRun: Date.now(), ...(hasLL(cur.business) || !center ? {} : { business: biz }) }));
       return { keywords: rp.keywords.length, live };
     });
   };
@@ -788,13 +872,13 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
 
   const open = reports.find((rp) => rp.id === openReportId);
   if (open) return (
-    <ReportView report={open} biz={biz} accent={accent} readOnly={readOnly} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
+    <ReportView report={open} biz={bizOf(open)} accent={accent} readOnly={readOnly} scanState={jobScanState(open.id)} err={jobFor(open.id)?.status === "error" ? jobFor(open.id).error : null}
       onBack={() => setOpenReportId(null)} onRun={() => runSnapshot(open)} onEdit={() => setSetup(open)}
       onDeleteSnapshot={(sid) => patchReport(open.id, (cur) => ({ snapshots: cur.snapshots.filter((x) => x.id !== sid) }))}
       setupModal={setup && (
-        <ReportSetup initial={setup === "new" ? null : setup} business={biz} accent={accent} placesKey={placesKey}
-          onSaveBusiness={(b) => patchGeo({ business: b })}
-          onSave={(rp) => { patchReport(rp.id, rp); setSetup(null); }}
+        <ReportSetup initial={setup === "new" ? null : setup} business={setup === "new" ? biz : bizOf(setup)} accent={accent} placesKey={placesKey}
+          onSaveBusiness={saveDefaultBiz}
+          onSave={(rp) => { patchReport(rp.id, (cur) => ({ ...rp, snapshots: cur.snapshots, lastRun: cur.lastRun })); setSetup(null); }}
           onClose={() => setSetup(null)} />
       )} />
   );
@@ -807,7 +891,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
           <div className="ll-display flex items-center gap-2 text-[16px] font-semibold"><Target size={16} style={{ color: accent }} /> GBP Rank Tracker</div>
           <div className="mt-0.5 text-[11.5px] text-gray-400">
             Geo-grid Maps rank reports — every point is a coordinate-targeted search.
-            {isFinite(biz.lat) ? <span className="ll-mono ml-1 text-emerald-600">{biz.name} · {(+biz.lat).toFixed(4)}, {(+biz.lng).toFixed(4)}</span> : " Set the business location in a report's Map tab."}
+            {reports.length > 1 ? " Each report tracks its own business location."
+              : hasLL(reports[0] ? bizOf(reports[0]) : biz) ? (() => { const b0 = reports[0] ? bizOf(reports[0]) : biz; return <span className="ll-mono ml-1 text-emerald-600">{b0.name} · {(+b0.lat).toFixed(4)}, {(+b0.lng).toFixed(4)}</span>; })()
+              : " Set the business location in a report's Map tab."}
           </div>
         </div>
         {!readOnly && (
@@ -818,7 +904,9 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
       </Card>
 
       {reports.map((rp) => {
-        const last = rp.snapshots[0];
+        /* the row summarises the latest scan of the report's OWN location */
+        const site = siteSnapshots(rp, project);
+        const last = site.on[0] || rp.snapshots[0];
         const avg = last ? snapshotAvg(last) : null;
         const rpScan = jobScanState(rp.id);
         const running = !!rpScan;
@@ -827,6 +915,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
             <button onClick={() => setOpenReportId(rp.id)} className="min-w-0 flex-1 text-left">
               <div className="flex items-center gap-2">
                 <span className="ll-display truncate text-[14px] font-semibold text-gray-800">{rp.name}</span>
+                {!clientView && site.on.length > 0 && site.off.length > 0 && <span className="rounded-full bg-amber-100 px-1.5 py-px text-[8.5px] font-bold uppercase text-amber-800" title="A scan of this report was run around a different location — open the report to remove it">{site.off.length} misplaced scan{site.off.length === 1 ? "" : "s"}</span>}
                 {last && <span className="rounded-full px-1.5 py-px text-[8.5px] font-bold uppercase" style={last.live ? { background: "#DCFCE7", color: "#166534" } : { background: "#FEF3C7", color: "#92400E" }}>{last.live ? "Live" : "Demo"}</span>}
               </div>
               <div className="ll-mono mt-1 flex flex-wrap gap-2 text-[10px] text-gray-400">
@@ -835,6 +924,7 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
                 <span>{activePointCount(rp)} points</span>
                 <span>{rp.keywords.length} keywords</span>
                 <span><Calendar size={9} className="inline" /> {FREQS.find(([k]) => k === rp.schedule.freq)?.[1]}</span>
+                {reports.length > 1 && site.biz?.name && <span className="text-gray-500">◎ {site.biz.name}</span>}
                 {last && <span>last run {fmtTs2(last.at)}{avg != null ? ` · Avg rank ${avg.toFixed(1)}` : ""}</span>}
               </div>
             </button>
@@ -866,12 +956,12 @@ export function GeoGridView({ project, accent, onUpdate, dfs, placesKey, tracked
         : null; })()}
 
       {setup && (
-        <ReportSetup initial={setup === "new" ? null : setup} business={biz} accent={accent} placesKey={placesKey}
-          onSaveBusiness={(b) => patchGeo({ business: b })}
+        <ReportSetup initial={setup === "new" ? null : setup} business={setup === "new" ? biz : bizOf(setup)} accent={accent} placesKey={placesKey}
+          onSaveBusiness={saveDefaultBiz}
           onSave={(rp) => {
             patchGeo((cur) => {
               const rs = cur.reports || [];
-              return { reports: rs.some((x) => x.id === rp.id) ? rs.map((x) => (x.id === rp.id ? { ...x, ...rp } : x)) : [rp, ...rs] };
+              return { reports: rs.some((x) => x.id === rp.id) ? rs.map((x) => (x.id === rp.id ? { ...x, ...rp, snapshots: x.snapshots, lastRun: x.lastRun } : x)) : [rp, ...rs] };
             });
             setSetup(null);
           }}
@@ -896,7 +986,10 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
   const [share, setShare] = useState(null);     // { busy } | { link } | { err }
   const [overlay, setOverlay] = useState(null); // null | "compare" | "snapshot" 
   const snaps = rp.snapshots;
-  const snap = snaps.find((s2) => s2.id === snapId) || snaps[0] || null;
+  /* scans run around another location (the project-level business bug) are
+     never the default view and never the baseline of a change badge */
+  const strays = snaps.filter((s2) => snapOffSiteKm(rp, s2, biz) > 0);
+  const snap = snaps.find((s2) => s2.id === snapId) || snaps.find((s2) => !strays.includes(s2)) || snaps[0] || null;
   const rawPoints = snap?.grids[kw] ? expandGrid(snap, kw) : null;
   const normB = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   /* derive ANY business's grid from the stored per-point top-20 — the whole
@@ -906,7 +999,7 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
     rank: p.skipped ? null : ((p.results || []).find((r2) => normB(r2.title) === normB(title))?.rank ?? null),
   }));
   const points = rawPoints ? (viewBiz ? gridForBiz(rawPoints, viewBiz) : rawPoints) : null;
-  const prevSnap = snap ? snaps.find((s2) => s2.at < snap.at && s2.grids[kw]) : null;
+  const prevSnap = snap ? snaps.find((s2) => s2.at < snap.at && s2.grids[kw] && strays.includes(s2) === strays.includes(snap)) : null;
   const prevRaw = prevSnap ? expandGrid(prevSnap, kw) : null;
   const prevPoints = prevRaw ? (viewBiz ? gridForBiz(prevRaw, viewBiz) : prevRaw) : null;
   const m = points ? gridMetrics(points) : null;
@@ -1014,6 +1107,17 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
           </span>
         </span>
       </div>
+      {!readOnly && strays.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
+          <div className="min-w-0 flex-1">
+            <b>{strays.length === 1 ? "1 scan of this report was" : `${strays.length} scans of this report were`} run around a different location</b>
+            {" "}({strays.map((s2) => `${new Date(s2.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })} · ${Math.round(snapOffSiteKm(rp, s2, biz))} km away`).join(", ")}).
+            {" "}Its ranks belong to another listing, so it is left out of this report's default view, change badges and client reports. Delete it and run the report again — new scans use this report's own location.
+          </div>
+          <button onClick={async () => { if (await askDelete(strays.length === 1 ? "the misplaced scan" : `${strays.length} misplaced scans`)) { strays.forEach((s2) => onDeleteSnapshot(s2.id)); setSnapId(null); } }}
+            className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11.5px] font-semibold text-amber-800 hover:bg-amber-100">Delete {strays.length === 1 ? "it" : "them"}</button>
+        </div>
+      )}
       <Card className="flex flex-wrap items-center gap-2 p-3.5">
         <MapPin size={14} style={{ color: accent }} />
         <span className="text-[13px] font-semibold text-gray-800">{biz.name || "Business"}{biz.address ? ` — ${biz.address}` : ""}</span>
