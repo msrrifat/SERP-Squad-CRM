@@ -1233,19 +1233,26 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
 /* ---- the map as it appears in reports and PDFs --------------------------
    Same look as the live tracker (Google basemap, the tracker's own bubbles
    and change badges) but STATIC, because an interactive WebGL map prints
-   blank. Differences that follow from being static:
+   blank. What follows from being static:
 
-   · the frame is centred on the scanned points' bounding box and the zoom
-     is the closest quarter-level at which every point (plus half a bubble)
-     fits — a report cannot be panned, so nothing may sit off the edge;
-   · `zoomDelta` moves that level in or out, in fractions of a level (the
-     report builder's control steps by half a level — a whole level doubles
-     the scale, which is too coarse to frame a grid);
-   · Google's Static Maps API serves whole zoom levels at up to 640px a
-     side, so the image is requested at the nearest level below and
-     stretched by `f`; bubbles are projected with the exact fractional zoom,
-     so they stay on their coordinates. The image is requested at twice
-     the pixel density, so it stays sharp through the stretch;
+   · the frame is centred on the scanned points' bounding box — a report
+     cannot be panned, so nothing may sit off the edge at the default zoom;
+   · the basemap is always a WHOLE Google zoom level drawn at its natural
+     size, so place names are the size they are on Google Maps and the map
+     carries that level's full detail (neighbourhoods, road numbers). An
+     earlier version requested a lower level and stretched it to get round
+     the Static Maps API's 640px-per-side limit: names came out up to twice
+     their normal size and half of them were missing;
+   · a map wider than 640px is therefore composed of TWO images side by
+     side. They overlap in the middle; the left one is clipped at the centre
+     line and laid over the right one, which leaves exactly one Google logo
+     (bottom left) and one attribution (bottom right) visible;
+   · AUTO FIT is the highest level at which every point fits, allowing the
+     image to be shrunk by up to 20% (`f` between 0.8 and 1) so that a grid a
+     few pixels too tall does not fall a whole level and sit at half size;
+   · `zoomDelta` moves in or out by whole levels (the report builder's
+     control) at the same `f`, so names keep the same size at every step —
+     the way zooming Google Maps behaves;
    · bubble size follows the real pixel spacing of the grid (capped at the
      tracker's size), so a dense grid never collapses into one blob.
 
@@ -1283,33 +1290,39 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
   const spanX0 = Math.max(minSpan0, live.length ? Math.max(...xs) - Math.min(...xs) : 0);
   const spanY0 = Math.max(minSpan0, live.length ? Math.max(...ys) - Math.min(...ys) : 0);
   const useGoogle = !!gKey && !gFailed;
-  /* smallest stretch the provider allows: Google caps a side at 640px */
-  const zOff = useGoogle ? Math.log2(W / Math.min(640, W)) : 0;
   /* the tracker's bubble sizes, held back to the grid's own pixel spacing */
   const base = size >= 11 ? 34 : size >= 9 ? 40 : 46;
+  const spacing0 = (spacingKm * 1000) / mPerWorldPx;       // grid spacing in world units at zoom 0
   /* bubbles just touch their neighbours (0.98 × the grid's pixel spacing):
-     overlapping ones hide each other's change badges on paper */
-  const bubbleAt = (zz, dz) => Math.max(16, Math.min(Math.min(60, base + Math.max(0, dz) * 6), ((spacingKm * 1000) / mPerWorldPx) * 2 ** zz * 0.98));
-  /* AUTO FIT in quarter-levels: the closest zoom at which the whole grid plus
-     half a bubble of margin is inside the frame. Whole levels were too coarse
-     — a grid a few pixels too tall dropped a full level and sat at half size
-     in the middle of the map. */
-  let zeFit = 3;
-  for (let q = 18.5 * 4; q >= 3 * 4; q--) {
-    const zz = q / 4, bub = bubbleAt(zz, 0);
-    if (spanX0 * 2 ** zz + bub + 16 <= W && spanY0 * 2 ** zz + bub + 16 <= H) { zeFit = zz; break; }
+     overlapping ones hide each other's change badges on paper. `kk` is the
+     number of screen pixels per world unit. */
+  const bubbleAt = (kk, dz) => Math.max(16, Math.min(Math.min(60, base + Math.max(0, dz) * 6), spacing0 * kk * 0.98));
+  const fits = (kk) => { const bub = bubbleAt(kk, 0); return spanX0 * kk + bub + 16 <= W && spanY0 * kk + bub + 16 <= H; };
+  /* AUTO FIT: highest whole level that fits, shrinking by at most 20% */
+  const F_MIN = 0.8;
+  let zFit = 3, fFit = 1;
+  search: for (let zz = 18; zz >= 3; zz--) {
+    for (let ff = 100; ff >= F_MIN * 100; ff--) {
+      if (fits(2 ** zz * (ff / 100))) { zFit = zz; fFit = ff / 100; break search; }
+    }
   }
-  /* target zoom (fractional), then the whole level to request and the stretch */
-  const delta = Math.round((+zoomDelta || 0) * 4) / 4;
-  const ze = Math.max(3, Math.min(19.5, Math.max(zeFit, 3 + zOff) + delta));
-  const z = Math.max(3, Math.min(useGoogle ? 20 : 19, Math.floor(ze - zOff + 1e-9)));
-  const f = 2 ** (ze - z), k = 2 ** ze;
-  const reqW = Math.max(1, Math.min(640, Math.round(W / f))), reqH = Math.max(1, Math.min(640, Math.round(H / f)));
-  const bubble = bubbleAt(ze, delta);
+  const steps = Math.round(+zoomDelta || 0);
+  const z = Math.max(3, Math.min(useGoogle ? 20 : 19, zFit + steps));
+  /* two 640px images cover at most 1280px across and 640px down */
+  const f = Math.max(fFit, W / 1280, H / 640);
+  const k = 2 ** z * f;                                     // screen pixels per world unit
+  const bubble = bubbleAt(k, z - zFit);
   const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
-  /* OSM fallback tiles (integer zoom, no stretch) */
+  /* Google: what the frame covers at level z, in that level's own pixels */
+  const coverW = W / f, imgH = Math.max(1, Math.min(640, Math.round(H / f)));
+  const single = coverW <= 640;
+  const imgW = single ? Math.max(1, Math.round(coverW)) : 640;
+  /* each half's centre, as a world-unit offset from the frame's centre */
+  const halfOff0 = single ? 0 : (coverW / 2 - 320) / 2 ** z;
+  const gUrl = (off0) => `https://maps.googleapis.com/maps/api/staticmap?center=${midLat.toFixed(6)},${xToLon(cx0 + off0, 0).toFixed(6)}&zoom=${z}&size=${imgW}x${imgH}&scale=2&maptype=roadmap&key=${encodeURIComponent(gKey)}`;
+  /* OSM fallback tiles: the same whole level and the same shrink */
   const tiles = [];
-  const T = 256 * f;                                   // on-screen size of one tile
+  const T = 256 * f;                                        // on-screen size of one tile
   if (!useGoogle) {
     const x0 = cx0 * k - W / 2, y0 = cy0 * k - H / 2;
     for (let ty = Math.floor(y0 / T); ty * T < y0 + H; ty++) for (let tx = Math.floor(x0 / T); tx * T < x0 + W; tx++) {
@@ -1319,12 +1332,24 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
   const zoomBtn = "flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-[15px] font-bold leading-none text-gray-600 shadow hover:bg-gray-50 disabled:opacity-40";
   return (
     <div className={frame} style={{ width: W, height: H, maxWidth: "100%" }}>
-      {useGoogle
-        ? <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute inset-0 select-none" style={{ width: W, height: H }}
-            src={`https://maps.googleapis.com/maps/api/staticmap?center=${midLat.toFixed(6)},${midLng.toFixed(6)}&zoom=${z}&size=${reqW}x${reqH}&scale=2&maptype=roadmap&key=${encodeURIComponent(gKey)}`} />
-        : tiles.map((t, i) => (
+      {/* DOM order is the paint order here (no z-index, so the bubbles that
+          follow stay on top): right half first, then the left half clipped
+          at the centre line over it. `maxWidth: none` because the base
+          stylesheet caps images at their container's width. */}
+      {useGoogle && single && (
+        <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute left-0 top-0 select-none" style={{ width: W, height: H, maxWidth: "none" }} src={gUrl(0)} />
+      )}
+      {useGoogle && !single && (<>
+        <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute top-0 select-none"
+          style={{ left: W - 640 * f, width: 640 * f, height: H, maxWidth: "none" }} src={gUrl(halfOff0)} />
+        <div className="absolute left-0 top-0 overflow-hidden" style={{ width: W / 2, height: H }}>
+          <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute left-0 top-0 select-none"
+            style={{ width: 640 * f, height: H, maxWidth: "none" }} src={gUrl(-halfOff0)} />
+        </div>
+      </>)}
+      {!useGoogle && tiles.map((t, i) => (
           <img key={i} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
-            className="absolute select-none" style={{ left: t.left, top: t.top, width: T + 0.5, height: T + 0.5, filter: "saturate(0.82)" }} draggable={false} />
+            className="absolute select-none" style={{ left: t.left, top: t.top, width: T + 0.5, height: T + 0.5, maxWidth: "none", filter: "saturate(0.82)" }} draggable={false} />
         ))}
       {live.map((p) => {
         const left = (lonToX(+p.lng, 0) - cx0) * k + W / 2, top = (latToY(+p.lat, 0) - cy0) * k + H / 2;
@@ -1341,8 +1366,8 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
       {/* editor-only zoom, same place and feel as the tracker's; never printed */}
       {onZoom && (
         <div className="no-print absolute right-2 top-2 flex flex-col gap-1">
-          <button className={zoomBtn} title="Zoom in" disabled={ze >= 19.5} onClick={() => onZoom(0.5)}>+</button>
-          <button className={zoomBtn} title="Zoom out" disabled={ze <= 3} onClick={() => onZoom(-0.5)}>−</button>
+          <button className={zoomBtn} title="Zoom in" disabled={z >= (useGoogle ? 20 : 19)} onClick={() => onZoom(1)}>+</button>
+          <button className={zoomBtn} title="Zoom out" disabled={z <= 3} onClick={() => onZoom(-1)}>−</button>
         </div>
       )}
       {!useGoogle && <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OpenStreetMap contributors</span>}

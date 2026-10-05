@@ -1178,11 +1178,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     const compare = b.mode === "compare" && base;
     /* one keyword card = one "row" for the paginator, which puts two on a page */
     const rows = sliceRows(b, kws);
-    const zoomDelta = b.mapZoom || 0;
+    /* whole map levels (an earlier build stored half-levels: round them) */
+    const zoomDelta = Math.round(b.mapZoom || 0);
     /* the hidden measuring copy draws empty boxes: same size, no map requests */
     const probe = !!b._probe;
     const src = b._srcId || b.id;
-    const onZoom = probe ? null : (d) => patch(src, { mapZoom: Math.max(-3, Math.min(4, zoomDelta + d)) || undefined });
+    const onZoom = probe ? null : (d) => patch(src, { mapZoom: Math.max(-4, Math.min(5, zoomDelta + d)) || undefined });
     return (
       <div>
         {/* the section header belongs to the first part only */}
@@ -1677,20 +1678,22 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             </div>
           </Labeled>
           <Labeled label="Map zoom">
-            {/* half-level steps: a whole map zoom level doubles the scale, too
-                coarse to frame a grid. Shown as a percentage of the auto fit. */}
-            <div className="flex items-center gap-2">
-              <button onClick={() => patch(b.id, { mapZoom: Math.max(-3, (b.mapZoom || 0) - 0.5) || undefined })} disabled={(b.mapZoom || 0) <= -3} title="Zoom out"
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">−</button>
-              <span className="ll-mono min-w-[96px] rounded-lg bg-gray-50 px-2 py-1.5 text-center text-[11.5px] font-semibold text-gray-700">
-                {!b.mapZoom ? "Auto fit" : `${Math.round(2 ** b.mapZoom * 100)}%`}
-              </span>
-              <button onClick={() => patch(b.id, { mapZoom: Math.min(4, (b.mapZoom || 0) + 0.5) || undefined })} disabled={(b.mapZoom || 0) >= 4} title="Zoom in"
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">+</button>
-              {!!b.mapZoom && <button onClick={() => patch(b.id, { mapZoom: undefined })} className="text-[11px] font-semibold hover:underline" style={{ color: accent }}>Reset to auto fit</button>}
-            </div>
+            {/* whole Google zoom levels, like the map's own + / −: place names
+                stay their normal size and each level in adds more of them */}
+            {(() => { const mz = Math.round(b.mapZoom || 0); return (
+              <div className="flex items-center gap-2">
+                <button onClick={() => patch(b.id, { mapZoom: Math.max(-4, mz - 1) || undefined })} disabled={mz <= -4} title="Zoom out"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">−</button>
+                <span className="ll-mono min-w-[96px] rounded-lg bg-gray-50 px-2 py-1.5 text-center text-[11.5px] font-semibold text-gray-700">
+                  {!mz ? "Auto fit" : `${mz > 0 ? "+" : "−"}${Math.abs(mz)} level${Math.abs(mz) === 1 ? "" : "s"}`}
+                </span>
+                <button onClick={() => patch(b.id, { mapZoom: Math.min(5, mz + 1) || undefined })} disabled={mz >= 5} title="Zoom in"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">+</button>
+                {!!mz && <button onClick={() => patch(b.id, { mapZoom: undefined })} className="text-[11px] font-semibold hover:underline" style={{ color: accent }}>Reset to auto fit</button>}
+              </div>
+            ); })()}
             <div className="mt-1 text-[10.5px] leading-snug text-gray-400">
-              Applies to every map in this section. Auto fit shows the whole grid; zoom in for street detail (points near the edge may be cropped) or out for more of the surrounding area. The + / − buttons on a map do the same.
+              Applies to every map in this section. Auto fit shows the whole grid. Each step in doubles the scale and adds street and neighbourhood names (points near the edge may be cropped); each step out shows more of the surrounding area. The + / − buttons on a map do the same.
             </div>
           </Labeled>
         </div>
