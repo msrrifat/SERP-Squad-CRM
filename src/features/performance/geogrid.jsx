@@ -154,17 +154,20 @@ const zoomFor = (extentKm, lat, px) => {
 };
 
 /* one scan-point bubble + change badge — shared by the OSM and Google canvases */
-function RankBubble({ p, half, bubble, prev, preview, left, top }) {
+function RankBubble({ p, half, bubble, prev, preview, left, top, flat = false }) {
   const isCenter = isCenterPt(p, half);
   const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
   const top3 = (p.results || []).slice(0, 3);
   return (
     <div className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}
       title={preview ? `Scan point · ${p.lat}, ${p.lng}` : `${p.lat}, ${p.lng}\n${p.error ? "Scan failed at this point — rerun the report" : p.noResults ? "Google returned no local results at this point" : `Rank: ${p.rank ?? "not ranked in the scanned results"}`}${top3.length ? "\nTop here: " + top3.map((c, i2) => `${i2 + 1}. ${c.title}${c.rating ? ` (${c.rating}★)` : ""}`).join("  ") : ""}`}>
-      <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
+      {/* `flat` (reports): the centre marker is an outline, because the print
+          stylesheet strips box-shadows — which is what the ring utility is */}
+      <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter && !flat ? "ring-[2.5px] ring-gray-900 ring-offset-2" : "")}
         style={preview
           ? { width: Math.min(30, bubble * 0.62), height: Math.min(30, bubble * 0.62), fontSize: 15, background: "#111827E8", boxShadow: "0 2px 5px rgba(0,0,0,.3)" }
-          : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
+          : { width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)",
+              ...(isCenter && flat ? { outline: "2.5px solid #111827", outlineOffset: 2 } : {}) }}>
         {preview ? "+" : p.error ? "!" : p.rank ?? "100+"}
       </div>
       {delta != null && delta !== 0 && (
@@ -1227,12 +1230,37 @@ function ReportView({ report: rp, biz, accent, onBack, onRun, onEdit, onDeleteSn
   );
 }
 
-export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoints, px = 420 }) {
-  const points = fillCoords(rawPts, center, size, spacingKm);
+/* ---- the map as it appears in reports and PDFs --------------------------
+   Same look as the live tracker (Google basemap, the tracker's own bubbles
+   and change badges) but STATIC, because an interactive WebGL map prints
+   blank. Differences that follow from being static:
+
+   · the frame is centred on the scanned points' bounding box and the zoom
+     is the closest quarter-level at which every point (plus half a bubble)
+     fits — a report cannot be panned, so nothing may sit off the edge;
+   · `zoomDelta` moves that level in or out, in fractions of a level (the
+     report builder's control steps by half a level — a whole level doubles
+     the scale, which is too coarse to frame a grid);
+   · Google's Static Maps API serves whole zoom levels at up to 640px a
+     side, so the image is requested at the nearest level below and
+     stretched by `f`; bubbles are projected with the exact fractional zoom,
+     so they stay on their coordinates. The image is requested at twice
+     the pixel density, so it stays sharp through the stretch;
+   · bubble size follows the real pixel spacing of the grid (capped at the
+     tracker's size), so a dense grid never collapses into one blob.
+
+   `px` keeps the old square form; `width`/`height` give the wide one. */
+export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoints, px = 420, width = null, height = null, zoomDelta = 0, skeleton = false, legend = false, onZoom = null }) {
+  const W = Math.round(width || px), H = Math.round(height || px);
   /* Google basemap when the agency's key is registered (the live view uses
      the same key); a failed image falls back to OSM tiles for this render */
   const [gFailed, setGFailed] = useState(false);
   const gKey = getMapsKey();
+  const frame = "relative mx-auto overflow-hidden rounded-2xl border border-gray-200 bg-[#e8eaed]";
+  /* the report builder measures page layout on a hidden copy — same box, no
+     map request (each one is a billable Static Maps call) */
+  if (skeleton) return <div className={frame} style={{ width: W, height: H, maxWidth: "100%" }} />;
+  const points = fillCoords(rawPts, center, size, spacingKm);
   if (!center) return (
     <div>
       <AbstractGrid points={points} size={size} spacingKm={spacingKm} prevPoints={prevPoints} />
@@ -1243,51 +1271,80 @@ export function ReportGridMap({ center, points: rawPts, size, spacingKm, prevPoi
     </div>
   );
   const half = (size - 1) / 2;
-  /* a report can't be panned, so the WHOLE grid has to fit: the zoom is the
-     largest level at which the grid (plus a bubble-sized margin) fits inside
-     px — floored, never rounded up */
-  const extentKm = Math.max(0.5, half * 2 * spacingKm * 1.18);
-  const z = Math.max(3, Math.min(18, Math.floor(Math.log2((156543.03392 * Math.cos((center.lat * Math.PI) / 180) * px) / (extentKm * 1000)))));
-  const cx = lonToX(center.lng, z), cy = latToY(center.lat, z);
-  const x0 = cx - px / 2, y0 = cy - px / 2;
-  const t0x = Math.floor(x0 / 256), t0y = Math.floor(y0 / 256);
-  const tiles = [];
-  for (let ty = t0y; ty * 256 < y0 + px; ty++) for (let tx = t0x; tx * 256 < x0 + px; tx++) {
-    if (ty >= 0 && ty < 2 ** z) tiles.push({ tx: ((tx % 2 ** z) + 2 ** z) % 2 ** z, ty, left: tx * 256 - x0, top: ty * 256 - y0 });
-  }
-  const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
-  const bubble = Math.max(20, Math.min(34, (px / size) * 0.62));
+  const live = (points || []).filter((p) => !p.skipped && p.lat != null && p.lng != null && isFinite(p.lat) && isFinite(p.lng));
+  /* world coordinates at zoom 0; everything else is a multiplication by 2^zoom */
+  const xs = live.map((p) => lonToX(+p.lng, 0)), ys = live.map((p) => latToY(+p.lat, 0));
+  const cx0 = live.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : lonToX(center.lng, 0);
+  const cy0 = live.length ? (Math.min(...ys) + Math.max(...ys)) / 2 : latToY(center.lat, 0);
+  const midLat = yToLat(cy0, 0), midLng = xToLon(cx0, 0);
+  const mPerWorldPx = 156543.03392 * Math.cos((midLat * Math.PI) / 180);       // metres per world unit at zoom 0
+  /* a one-point "grid" still needs a neighbourhood around it (the tracker's 0.5 km floor) */
+  const minSpan0 = 675 / mPerWorldPx;
+  const spanX0 = Math.max(minSpan0, live.length ? Math.max(...xs) - Math.min(...xs) : 0);
+  const spanY0 = Math.max(minSpan0, live.length ? Math.max(...ys) - Math.min(...ys) : 0);
   const useGoogle = !!gKey && !gFailed;
+  /* smallest stretch the provider allows: Google caps a side at 640px */
+  const zOff = useGoogle ? Math.log2(W / Math.min(640, W)) : 0;
+  /* the tracker's bubble sizes, held back to the grid's own pixel spacing */
+  const base = size >= 11 ? 34 : size >= 9 ? 40 : 46;
+  /* bubbles just touch their neighbours (0.98 × the grid's pixel spacing):
+     overlapping ones hide each other's change badges on paper */
+  const bubbleAt = (zz, dz) => Math.max(16, Math.min(Math.min(60, base + Math.max(0, dz) * 6), ((spacingKm * 1000) / mPerWorldPx) * 2 ** zz * 0.98));
+  /* AUTO FIT in quarter-levels: the closest zoom at which the whole grid plus
+     half a bubble of margin is inside the frame. Whole levels were too coarse
+     — a grid a few pixels too tall dropped a full level and sat at half size
+     in the middle of the map. */
+  let zeFit = 3;
+  for (let q = 18.5 * 4; q >= 3 * 4; q--) {
+    const zz = q / 4, bub = bubbleAt(zz, 0);
+    if (spanX0 * 2 ** zz + bub + 16 <= W && spanY0 * 2 ** zz + bub + 16 <= H) { zeFit = zz; break; }
+  }
+  /* target zoom (fractional), then the whole level to request and the stretch */
+  const delta = Math.round((+zoomDelta || 0) * 4) / 4;
+  const ze = Math.max(3, Math.min(19.5, Math.max(zeFit, 3 + zOff) + delta));
+  const z = Math.max(3, Math.min(useGoogle ? 20 : 19, Math.floor(ze - zOff + 1e-9)));
+  const f = 2 ** (ze - z), k = 2 ** ze;
+  const reqW = Math.max(1, Math.min(640, Math.round(W / f))), reqH = Math.max(1, Math.min(640, Math.round(H / f)));
+  const bubble = bubbleAt(ze, delta);
+  const prevAt = (p) => prevPoints?.find((x) => x.row === p.row && x.col === p.col);
+  /* OSM fallback tiles (integer zoom, no stretch) */
+  const tiles = [];
+  const T = 256 * f;                                   // on-screen size of one tile
+  if (!useGoogle) {
+    const x0 = cx0 * k - W / 2, y0 = cy0 * k - H / 2;
+    for (let ty = Math.floor(y0 / T); ty * T < y0 + H; ty++) for (let tx = Math.floor(x0 / T); tx * T < x0 + W; tx++) {
+      if (ty >= 0 && ty < 2 ** z) tiles.push({ tx: ((tx % 2 ** z) + 2 ** z) % 2 ** z, ty, left: tx * T - x0, top: ty * T - y0 });
+    }
+  }
+  const zoomBtn = "flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-[15px] font-bold leading-none text-gray-600 shadow hover:bg-gray-50 disabled:opacity-40";
   return (
-    <div className="relative mx-auto overflow-hidden rounded-xl border border-gray-200 bg-[#e8eaed]" style={{ width: px, height: px, maxWidth: "100%" }}>
+    <div className={frame} style={{ width: W, height: H, maxWidth: "100%" }}>
       {useGoogle
-        ? <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute inset-0 select-none" style={{ width: px, height: px }}
-            src={`https://maps.googleapis.com/maps/api/staticmap?center=${center.lat},${center.lng}&zoom=${z}&size=${px}x${px}&scale=2&maptype=roadmap&key=${encodeURIComponent(gKey)}`} />
+        ? <img alt="" onError={() => setGFailed(true)} draggable={false} className="absolute inset-0 select-none" style={{ width: W, height: H }}
+            src={`https://maps.googleapis.com/maps/api/staticmap?center=${midLat.toFixed(6)},${midLng.toFixed(6)}&zoom=${z}&size=${reqW}x${reqH}&scale=2&maptype=roadmap&key=${encodeURIComponent(gKey)}`} />
         : tiles.map((t, i) => (
           <img key={i} alt="" src={`https://tile.openstreetmap.org/${z}/${t.tx}/${t.ty}.png`}
-            className="absolute select-none" style={{ left: t.left, top: t.top, width: 256, height: 256, filter: "saturate(0.82)" }} draggable={false} />
+            className="absolute select-none" style={{ left: t.left, top: t.top, width: T + 0.5, height: T + 0.5, filter: "saturate(0.82)" }} draggable={false} />
         ))}
-      {points.filter((p) => !p.skipped && p.lat != null).map((p) => {
-        const left = lonToX(p.lng, z) - x0, top = latToY(p.lat, z) - y0;
-        if (left < -40 || left > px + 40 || top < -40 || top > px + 40) return null;
-        const isCenter = isCenterPt(p, half);
-        const prev = prevAt(p);
-        const delta = prev && prev.rank != null && p.rank != null ? prev.rank - p.rank : null;
-        return (
-          <div key={`${p.row}-${p.col}`} className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left, top }}>
-            <div className={"flex items-center justify-center rounded-full font-bold text-white " + (isCenter ? "ring-2 ring-gray-900 ring-offset-1" : "")}
-              style={{ width: bubble, height: bubble, fontSize: bubble * 0.4, background: p.error ? "#94A3B8" : rankColor(p.rank), boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>
-              {p.error ? "!" : p.rank ?? "100+"}
-            </div>
-            {delta != null && delta !== 0 && (
-              <span className="absolute -right-1 -top-1 flex items-center justify-center rounded-full border border-gray-200 bg-white font-bold shadow"
-                style={{ height: bubble * 0.42, minWidth: bubble * 0.42, fontSize: bubble * 0.26, padding: "0 2px", color: delta > 0 ? "#16A34A" : "#DC2626" }}>
-                {delta > 0 ? `+${delta}` : delta}
-              </span>
-            )}
-          </div>
-        );
+      {live.map((p) => {
+        const left = (lonToX(+p.lng, 0) - cx0) * k + W / 2, top = (latToY(+p.lat, 0) - cy0) * k + H / 2;
+        if (left < -60 || left > W + 60 || top < -60 || top > H + 60) return null;
+        return <RankBubble key={`${p.row}-${p.col}`} p={p} half={half} bubble={bubble} prev={prevAt(p)} preview={false} left={left} top={top} flat />;
       })}
+      {legend && (
+        <div className="absolute left-2 top-2 flex items-center gap-2 rounded-lg border border-gray-200 bg-white/95 px-2 py-1 text-[9.5px] font-medium text-gray-600">
+          {[["1–3", "#16A34A"], ["4–10", "#F59E0B"], ["11–100", "#EF4444"], ["100+", "#5B6472"]].map(([l, c]) => (
+            <span key={l} className="flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: c }} /> {l}</span>
+          ))}
+        </div>
+      )}
+      {/* editor-only zoom, same place and feel as the tracker's; never printed */}
+      {onZoom && (
+        <div className="no-print absolute right-2 top-2 flex flex-col gap-1">
+          <button className={zoomBtn} title="Zoom in" disabled={ze >= 19.5} onClick={() => onZoom(0.5)}>+</button>
+          <button className={zoomBtn} title="Zoom out" disabled={ze <= 3} onClick={() => onZoom(-0.5)}>−</button>
+        </div>
+      )}
       {!useGoogle && <span className="absolute bottom-0 left-0 rounded-tr bg-white/85 px-1 py-px text-[8px] text-gray-500">© OpenStreetMap contributors</span>}
     </div>
   );

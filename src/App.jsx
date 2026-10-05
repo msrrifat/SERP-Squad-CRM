@@ -1485,7 +1485,7 @@ export default function App() {
     return (
       <>
         <DialogHost accent={accent} />
-        <Lazy><ReportBuilder key={"rb" + (reportAi?.run || 0) + (showReport.savedId || showReport.key || "new")} project={project} data={reportData} tracking={tracking} clientProjects={clientProjects} records={project.records || []} template={showReport.template || "performance"} initialBlocks={showReport.initialBlocks || null} initialTitle={showReport.initialTitle || null} initialRange={showReport.initialRange || null} agencyBrand={agencyBrand} wlBrand={wlBrand} clientInfo={clientInfo} defaultCmp={cmp} dark={dark} setDark={setDark} aiSummary={reportAi?.summary || null} onSave={saveReport} onSaveTemplate={saveTemplate} onClose={() => { setShowReport(null); setReportAi(null); }} /></Lazy>
+        <Lazy><ReportBuilder key={"rb" + (reportAi?.run || 0) + (showReport.savedId || showReport.key || "new")} project={project} data={reportData} tracking={tracking} clientProjects={clientProjects} records={project.records || []} template={showReport.template || "performance"} initialBlocks={showReport.initialBlocks || null} initialTitle={showReport.initialTitle || null} initialRange={showReport.initialRange || null} agencyBrand={agencyBrand} wlBrand={wlBrand} clientInfo={clientInfo} defaultCmp={cmp} dark={dark} setDark={setDark} placesKey={company.apis?.googlePlaces?.values?.apiKey} aiSummary={reportAi?.summary || null} onSave={saveReport} onSaveTemplate={saveTemplate} onClose={() => { setShowReport(null); setReportAi(null); }} /></Lazy>
         {agentEnabled && (
           <React.Suspense fallback={null}>
             {!agentOpen && <AgentLauncher accent={accent} onClick={() => setAgentOpen(true)} />}

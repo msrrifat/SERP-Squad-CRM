@@ -19,7 +19,7 @@ import { LABELS, MONTH_DATES } from "../../lib/months.jsx";
 import { hashStr, mulberry32 } from "../../lib/rng.js";
 import { TASK_COLORS, recordState, taskState } from "../pm/board.jsx";
 import { OPP_STYLE, genPageQueries } from "../../lib/seo.js";
-import { Distribution, ReportGridMap, gridCenterOf, gridMetrics, distFor } from "../performance/geogrid.jsx";
+import { ReportGridMap, gridCenterOf, gridMetrics, setMapsKey } from "../performance/geogrid.jsx";
 import { useLiveSiteData } from "../performance/googlelive.jsx";
 import { AD_PLATFORMS, PfBadge, campaignDaily, sumMetrics } from "../ads/dashboard.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
@@ -77,7 +77,12 @@ class BlockBoundary extends React.Component {
   }
 }
 
-function ReportBuilderInner({ project, data, tracking, clientProjects = [], records = [], template = "performance", agencyBrand, wlBrand, clientInfo, defaultCmp, initialRange = null, dark, setDark, onClose, aiSummary = null, initialBlocks = null, initialTitle = null, onSave = null, onSaveTemplate = null }) {
+function ReportBuilderInner({ project, data, tracking, clientProjects = [], records = [], template = "performance", agencyBrand, wlBrand, clientInfo, defaultCmp, initialRange = null, dark, setDark, onClose, aiSummary = null, initialBlocks = null, initialTitle = null, onSave = null, onSaveTemplate = null, placesKey = null }) {
+  /* Geo-grid maps in a report use the Google basemap, like the tracker. The
+     key used to be registered only by the tracker screen itself, so a report
+     opened without visiting GBP Rank Tracking first drew OpenStreetMap tiles
+     and looked like a different product. */
+  if (placesKey) setMapsKey(placesKey);
   const today = new Date().toLocaleDateString("en", { month: "long", day: "numeric", year: "numeric" });
   const [title, setTitle] = useState(initialTitle || (template === "work" ? `${project.name} — Work Report` : `${project.name} — SEO Performance Report`));
   const [accent, setAccent] = useState(project.accent);
@@ -571,7 +576,28 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      copy and every printed part wrap identically. */
   const RANK_COLS = ["30%", "16%", "10%", "10%", "7%", "9%", "18%"];
   const RankCols = () => <colgroup>{RANK_COLS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>;
-  const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1 };
+  /* everything a geo-grid section draws, resolved once — shared by the
+     renderer and the paginator, which divides the section by keyword card */
+  const geoPartsOf = (b) => {
+    const cp = projOf(b.projectId);
+    const geo = cp.project.geoGrid || {};
+    const report = (geo.reports || []).find((r) => r.id === b.reportId) || (geo.reports || [])[0];
+    if (!report || !report.snapshots?.length) return { cp, geo, report: null, kws: [] };
+    const snaps = report.snapshots;
+    const cur = snaps.find((s2) => s2.id === b.snapId) || snaps[0];
+    const base = b.baseId ? snaps.find((s2) => s2.id === b.baseId) : (b.mode === "change" ? snaps.find((s2) => s2.at < cur.at) : null);
+    const kws = (b.keywords && b.keywords.length ? b.keywords : report.keywords).filter((k) => cur.grids[k]);
+    return { cp, geo, report, snaps, cur, base, kws };
+  };
+  /* GEO-GRID CARD GEOMETRY. The map spans the page's content width; its
+     height is chosen so TWO keyword cards fill one A4 page (with the section
+     header on the first). Compare mode puts before/after side by side. */
+  const GEO_MAP_W = 688, GEO_MAP_H = 372, GEO_CMP_W = 338, GEO_CMP_H = 300;
+  const SPLITTABLE = { customTable: 1, table: 1, rankReport: 1, work: 1, geoReport: 1 };
+  /* fewest rows a divided part may hold; a geo card is half a page, so one is fine */
+  const minRowsOf = (b) => (b.type === "geoReport" ? 1 : MIN_ROWS);
+  /* blocks with more rows than this get measured and may be divided */
+  const probeFloorOf = (b) => (b.type === "geoReport" ? 1 : PROBE_ROWS);
   /* the row count a block will render, so pagination can divide it without
      first rendering the whole thing */
   const totalRowsOf = (b) => {
@@ -589,6 +615,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       return b.show === "summary" ? 0 : rankRowsFor(projOf(b.projectId)?.tracking, b).rows.length;
     }
     if (b.type === "work") return workRowsOf(b).length;
+    if (b.type === "geoReport") return geoPartsOf(b).kws.length;
     return 0;
   };
   /* a rendered slice of a splittable block */
@@ -620,7 +647,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
   const probeRef = useRef(null);
   const [probeTick, setProbeTick] = useState(0);
   const probeBlocks = useMemo(
-    () => blocks.filter((b) => SPLITTABLE[b.type] !== undefined && totalRowsOf(b) > PROBE_ROWS),
+    () => blocks.filter((b) => SPLITTABLE[b.type] !== undefined && totalRowsOf(b) > probeFloorOf(b)),
     [blocks]); // eslint-disable-line
   useLayoutEffect(() => {
     const root = probeRef.current;
@@ -732,14 +759,18 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const rowSum = (from, to) => (m?.rowHs && m.rowHs.length >= to)
         ? m.rowHs.slice(from, to).reduce((n, h) => n + h, 0)
         : (to - from) * (m?.rowH || 0);
-      const full = m && rowsTotal ? m.overhead + rowSum(0, rowsTotal) : (el?.offsetHeight || 90);
+      /* a geo section's cards have one fixed height and its header is only on
+         the first part, so its whole height is exact — header included */
+      const isGeo = b.type === "geoReport";
+      const full = m && rowsTotal ? (isGeo ? (m.overheadFirst ?? m.overhead) : m.overhead) + rowSum(0, rowsTotal) : (el?.offsetHeight || 90);
       /* headroom on every estimate. An average row height under-predicts a
          real part by a couple of rows (borders, line-height rounding, a cell
          that wraps), and at the bottom of a sheet that difference is what
          spills onto an extra, near-empty page. Three rows costs a little
          whitespace and is worth it — measured overflow without it was ~2 rows. */
-      const HEADROOM = 3;
+      const HEADROOM = isGeo ? 0 : 3;
       const pad = m ? m.rowH * HEADROOM : 0;
+      const minRows = minRowsOf(b);
       const h = full + 10 + pad;
       if (b.pageBreak && cur().length > 0) newPage();
 
@@ -756,7 +787,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
       /* ---- split this block's rows across as many pages as it needs ---- */
       const rowCount = rowsTotal;
-      if (!m || !rowCount || rowCount < MIN_ROWS * 2) {   // not worth (or not able to) splitting
+      if (!m || !rowCount || rowCount < minRows * 2) {   // not worth (or not able to) splitting
         if (cur().length > 0) newPage();
         cur().push(b); used += h; return;
       }
@@ -785,12 +816,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
           fit = Math.floor((budget - oh - m.rowH) / Math.max(1, m.rowH)) - (rowTrimRef.current[b.id] || 0);
         }
         /* no room for a meaningful chunk here — start the next page */
-        if (fit < MIN_ROWS && cur().length > 0) { newPage(); continue; }
-        fit = Math.max(MIN_ROWS, Math.min(fit, rowCount - from));
+        if (fit < minRows && cur().length > 0) { newPage(); continue; }
+        fit = Math.max(minRows, Math.min(fit, rowCount - from));
         /* never leave a one- or two-row tail on the next page: hold a few rows
-           back so the last part is at least MIN_ROWS tall */
+           back so the last part is at least minRows tall */
         const tail = rowCount - (from + fit);
-        if (tail > 0 && tail < MIN_ROWS && fit - (MIN_ROWS - tail) >= MIN_ROWS) fit -= MIN_ROWS - tail;
+        if (tail > 0 && tail < minRows && fit - (minRows - tail) >= minRows) fit -= minRows - tail;
         const to = Math.min(rowCount, from + fit);
         const partId = `${b.id}#${part}`;
         const est = oh + rowSum(from, to) + slack;
@@ -1132,41 +1163,43 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
   /* geo-grid section: a report's snapshot (or before/after) for chosen keywords */
   const renderGeoReport = (b) => {
-    const cp = projOf(b.projectId);
+    const { cp, geo, report, cur, base, kws } = geoPartsOf(b);
     const color = b.color || accent;
-    const geo = cp.project.geoGrid || {};
-    const report = (geo.reports || []).find((r) => r.id === b.reportId) || (geo.reports || [])[0];
-    if (!report || !report.snapshots?.length) return <div className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">No geo-grid snapshots for this project yet — run a scan in GBP Rank Tracking.</div>;
-    const snaps = report.snapshots;
-    const cur = snaps.find((s2) => s2.id === b.snapId) || snaps[0];
-    const base = b.baseId ? snaps.find((s2) => s2.id === b.baseId) : (b.mode === "change" ? snaps.find((s2) => s2.at < cur.at) : null);
+    if (!report) return <div className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">No geo-grid snapshots for this project yet — run a scan in GBP Rank Tracking.</div>;
     const bizName = geo.business?.name || cp.project.name;
     const bizLoc = isFinite(geo.business?.lat) && isFinite(geo.business?.lng) ? geo.business : cp.project.opt?.gbp;
     const center = isFinite(bizLoc?.lat) && isFinite(bizLoc?.lng) ? { lat: +bizLoc.lat, lng: +bizLoc.lng } : null;
-    /* live scans (and demo scans with a located business) store lat/lng per grid
-       point — derive the map center from the middle point when the business
-       record itself lacks coordinates, so the map background still renders */
     /* the scan's own coordinates come FIRST: geo.business is a single
        project-level record that a second report (another location / GBP)
        overwrites, which used to centre every earlier report's map on the
        wrong place and render it blank */
     const centerFor = (points) => gridCenterOf(points) || center;
-    const kws = (b.keywords && b.keywords.length ? b.keywords : report.keywords).filter((k) => cur.grids[k]);
     const dateStr = (sn) => new Date(sn.at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" });
     const compare = b.mode === "compare" && base;
+    /* one keyword card = one "row" for the paginator, which puts two on a page */
+    const rows = sliceRows(b, kws);
+    const zoomDelta = b.mapZoom || 0;
+    /* the hidden measuring copy draws empty boxes: same size, no map requests */
+    const probe = !!b._probe;
+    const src = b._srcId || b.id;
+    const onZoom = probe ? null : (d) => patch(src, { mapZoom: Math.max(-3, Math.min(4, zoomDelta + d)) || undefined });
     return (
       <div>
-        <div className="mb-3 flex items-center justify-between border-b pb-2" style={{ borderColor: color + "33" }}>
-          <div className="flex min-w-0 flex-1 items-center gap-2"><ProjectMark project={cp.project} />
-            <div className="min-w-0 flex-1">
-              <input value={b.title ?? report.name} onChange={(e) => patch(b.id, { title: e.target.value })}
-                className="ll-display w-full border-0 bg-transparent text-[15px] font-semibold leading-tight outline-none focus:bg-gray-50" />
-              <div className="text-[10.5px] text-gray-400">{bizName} · {report.size}×{report.size} grid · {compare ? `${dateStr(base)} → ${dateStr(cur)}` : dateStr(cur)}{cur.live ? "" : " · demo"}</div></div>
+        {/* the section header belongs to the first part only */}
+        {!b._part && (
+          <div className="mb-3 flex items-center justify-between border-b pb-2" style={{ borderColor: color + "33" }}>
+            <div className="flex min-w-0 flex-1 items-center gap-2"><ProjectMark project={cp.project} />
+              <div className="min-w-0 flex-1">
+                <input value={b.title ?? report.name} onChange={(e) => patch(src, { title: e.target.value })}
+                  className="ll-display w-full border-0 bg-transparent text-[15px] font-semibold leading-tight outline-none focus:bg-gray-50" />
+                <div className="text-[10.5px] text-gray-400">{bizName} · {report.size}×{report.size} grid · {compare ? `${dateStr(base)} → ${dateStr(cur)}` : dateStr(cur)}{cur.live ? "" : " · demo"}</div></div>
+            </div>
+            <SourceTag label="GBP Geo-Grid" />
           </div>
-          <SourceTag label="GBP Geo-Grid" />
-        </div>
-        <div className="space-y-4">
-          {kws.map((kw) => {
+        )}
+        {kws.length === 0 && <div className="rounded-lg bg-gray-50 px-3 py-2 text-[12px] text-gray-400">No keywords selected for this snapshot.</div>}
+        <div>
+          {rows.map((kw) => {
             const pts = cur.grids[kw];
             const m = gridMetrics(pts);
             const basePts = base?.grids[kw];
@@ -1178,34 +1211,34 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
               return <span className="ll-mono ml-1 text-[10px] font-bold" style={{ color: good ? "#16A34A" : "#DC2626" }}>{d > 0 ? "▲" : "▼"}{Math.abs(d).toFixed(1)}</span>;
             };
             return (
-              <div key={kw} className="gg-page rounded-xl border border-gray-100 p-3">
-                <div className="mb-1.5 flex flex-wrap items-center gap-4">
-                  <span className="text-[13.5px] font-semibold text-gray-800">"{kw}"</span>
-                  <span className="text-[11.5px] text-gray-500">ARP <b className="ll-mono">{m.arp != null ? "#" + m.arp.toFixed(1) : "—"}</b>{dChip(m.arp, bm?.arp, false)}</span>
-                  <span className="text-[11.5px] text-gray-500">SoLV <b className="ll-mono">{m.solv.toFixed(0)}%</b>{dChip(m.solv, bm?.solv, true) && <span className="ll-mono ml-1 text-[10px] font-bold" style={{ color: (m.solv - bm.solv) >= 0 ? "#16A34A" : "#DC2626" }}>{(m.solv - bm.solv) >= 0 ? "▲" : "▼"}{Math.abs(m.solv - bm.solv).toFixed(0)}</span>}</span>
-                  <span className="text-[11.5px] text-gray-500">Coverage <b className="ll-mono">{m.coverage.toFixed(0)}%</b></span>
+              /* spacing is PADDING on the measured row, so the paginator's
+                 sum of row heights is the real height of a page part */
+              <div key={kw} data-rbrow className="pb-4">
+                <div className="gg-page rounded-xl border border-gray-100 p-3">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5">
+                    <span className="text-[13.5px] font-semibold text-gray-800">"{kw}"</span>
+                    <span className="text-[11.5px] text-gray-500">ARP <b className="ll-mono">{m.arp != null ? "#" + m.arp.toFixed(1) : "—"}</b>{dChip(m.arp, bm?.arp, false)}</span>
+                    <span className="text-[11.5px] text-gray-500">SoLV <b className="ll-mono">{m.solv.toFixed(0)}%</b>{dChip(m.solv, bm?.solv, true) && <span className="ll-mono ml-1 text-[10px] font-bold" style={{ color: (m.solv - bm.solv) >= 0 ? "#16A34A" : "#DC2626" }}>{(m.solv - bm.solv) >= 0 ? "▲" : "▼"}{Math.abs(m.solv - bm.solv).toFixed(0)}</span>}</span>
+                    <span className="text-[11.5px] text-gray-500">Coverage <b className="ll-mono">{m.coverage.toFixed(0)}%</b></span>
+                    {base && !compare && <span className="ml-auto text-[10px] text-gray-400">change badges vs {dateStr(base)}</span>}
+                  </div>
+                  {compare ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Before — {dateStr(base)}</div>
+                        <ReportGridMap center={centerFor(basePts)} points={basePts} size={base.size} spacingKm={base.spacingKm} width={GEO_CMP_W} height={GEO_CMP_H} zoomDelta={zoomDelta} skeleton={probe} legend />
+                      </div>
+                      <div>
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">After — {dateStr(cur)}</div>
+                        <ReportGridMap center={centerFor(pts)} points={pts} size={cur.size} spacingKm={cur.spacingKm} prevPoints={basePts} width={GEO_CMP_W} height={GEO_CMP_H} zoomDelta={zoomDelta} skeleton={probe} onZoom={onZoom} />
+                      </div>
+                    </div>
+                  ) : (
+                    /* full width, like the tracker's map — no side panel */
+                    <ReportGridMap center={centerFor(pts)} points={pts} size={cur.size} spacingKm={cur.spacingKm} prevPoints={base?.grids[kw]}
+                      width={GEO_MAP_W} height={GEO_MAP_H} zoomDelta={zoomDelta} skeleton={probe} legend onZoom={onZoom} />
+                  )}
                 </div>
-                {compare ? (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Before — {dateStr(base)}</div>
-                      <ReportGridMap center={centerFor(basePts)} points={basePts} size={base.size} spacingKm={base.spacingKm} px={300} />
-                      <div className="mt-2"><Distribution points={basePts} compact /></div>
-                    </div>
-                    <div>
-                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">After — {dateStr(cur)}</div>
-                      <ReportGridMap center={centerFor(pts)} points={pts} size={cur.size} spacingKm={cur.spacingKm} prevPoints={basePts} px={300} />
-                      <div className="mt-2"><Distribution points={pts} compact /></div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-start gap-4">
-                    <ReportGridMap center={centerFor(pts)} points={pts} size={cur.size} spacingKm={cur.spacingKm} prevPoints={base?.grids[kw]} px={340} />
-                    <div className="pt-2"><Distribution points={pts} />
-                      {base && <div className="mt-2 text-[10px] text-gray-400">change badges vs {dateStr(base)}</div>}
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -1641,6 +1674,23 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                     style={on ? { borderColor: accent, color: accent, background: accent + "0D" } : { borderColor: "#E5E7EB", color: "#6B7280" }}>{k}</button>
                 );
               })}
+            </div>
+          </Labeled>
+          <Labeled label="Map zoom">
+            {/* half-level steps: a whole map zoom level doubles the scale, too
+                coarse to frame a grid. Shown as a percentage of the auto fit. */}
+            <div className="flex items-center gap-2">
+              <button onClick={() => patch(b.id, { mapZoom: Math.max(-3, (b.mapZoom || 0) - 0.5) || undefined })} disabled={(b.mapZoom || 0) <= -3} title="Zoom out"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">−</button>
+              <span className="ll-mono min-w-[96px] rounded-lg bg-gray-50 px-2 py-1.5 text-center text-[11.5px] font-semibold text-gray-700">
+                {!b.mapZoom ? "Auto fit" : `${Math.round(2 ** b.mapZoom * 100)}%`}
+              </span>
+              <button onClick={() => patch(b.id, { mapZoom: Math.min(4, (b.mapZoom || 0) + 0.5) || undefined })} disabled={(b.mapZoom || 0) >= 4} title="Zoom in"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[16px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40">+</button>
+              {!!b.mapZoom && <button onClick={() => patch(b.id, { mapZoom: undefined })} className="text-[11px] font-semibold hover:underline" style={{ color: accent }}>Reset to auto fit</button>}
+            </div>
+            <div className="mt-1 text-[10.5px] leading-snug text-gray-400">
+              Applies to every map in this section. Auto fit shows the whole grid; zoom in for street detail (points near the edge may be cropped) or out for more of the surrounding area. The + / − buttons on a map do the same.
             </div>
           </Labeled>
         </div>
@@ -2166,7 +2216,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                     {/* a FIRST part also carries the block's own summary — the
                         rank section's chips, for instance — so its overhead is
                         larger than a continuation's and must be measured too */}
-                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: PROBE_ROWS, _part: 0, _more: true })}
+                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: PROBE_ROWS, _part: 0, _more: true, _probe: true })}
                   </div>
                 ))}
                 {probeBlocks.map((b) => (
@@ -2175,7 +2225,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                         the "continues on the next page" line, so the overhead can only
                         ever be over-estimated, never under — under-estimating is what
                         pushes a page past A4 and costs an extra sheet */}
-                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: totalRowsOf(b), _part: 1, _more: true })}
+                    {renderBlock({ ...b, _rowFrom: 0, _rowTo: totalRowsOf(b), _part: 1, _more: true, _probe: true })}
                   </div>
                 ))}
               </div>
