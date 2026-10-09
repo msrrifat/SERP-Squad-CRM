@@ -709,17 +709,33 @@ function handleGoogleAccounts(body, req) {
   const admin = !!sess.boot || (me ? !!me.isOwner || me.role === "Admin" : sess.id === "u1");
   const t = loadGTokens();
   const mine = (c) => admin || (!!c.addedBy && c.addedBy === sess.id);
+  const scopesOf = (c) => String(c.scope || "").split(/\s+/).filter(Boolean).map((x) => x.replace("https://www.googleapis.com/auth/", ""));
+  const emailKey = (c) => String(c?.email || "").trim().toLowerCase();
+  /* before the registry, every project connection minted its own grant, so
+     one Gmail can sit here a dozen times. The same email is ONE account:
+     remove drops all of its grants, the list shows the grant with the most
+     permissions (newest on a tie) — projects on an older grant keep working */
   if (body?.action === "remove") {
     const id = String(body.connectionId || "");
     if (!t[id]) return [404, { error: "not_found" }];
     if (!mine(t[id])) return [403, { error: "forbidden", detail: "Only the member who added this account (or an admin) can remove it." }];
-    delete t[id]; saveGTokens(t);
+    const em = emailKey(t[id]);
+    for (const k of Object.keys(t)) if (k === id || (em && emailKey(t[k]) === em)) delete t[k];
+    saveGTokens(t);
   }
   const names = Object.fromEntries((state?.company?.team || []).filter(Boolean).map((m) => [m.id, m.name]));
-  const scopesOf = (c) => String(c.scope || "").split(/\s+/).filter(Boolean).map((x) => x.replace("https://www.googleapis.com/auth/", ""));
-  const accounts = Object.entries(t).filter(([, c]) => c && mine(c)).map(([connectionId, c]) => ({
+  const best = new Map(); // email → [connectionId, token]
+  for (const [id, c] of Object.entries(t)) {
+    if (!c || !mine(c)) continue;
+    const key = emailKey(c) || id;
+    const cur = best.get(key);
+    const better = !cur || scopesOf(c).length > scopesOf(cur[1]).length
+      || (scopesOf(c).length === scopesOf(cur[1]).length && (c.at || 0) > (cur[1].at || 0));
+    if (better) best.set(key, [id, c]);
+  }
+  const accounts = [...best.values()].map(([connectionId, c]) => ({
     connectionId, email: c.email || "", at: c.addedAt || c.at || null, addedBy: c.addedBy || null, addedByName: names[c.addedBy] || (c.addedBy ? "" : "Owner"),
-    scopes: scopesOf(c),
+    scopes: scopesOf(c), grants: Object.values(t).filter((x) => x && emailKey(x) === emailKey(c)).length,
   })).sort((a, b) => (b.at || 0) - (a.at || 0));
   return [200, { accounts, admin }];
 }
