@@ -6,10 +6,11 @@
    property; everything shown here is real (or an honest error). ---- */
 import React, { useEffect, useState } from "react";
 import { LineChart, Line, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Activity, BarChart3, CheckCircle2, Eye, EyeOff, Link2, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
+import { Activity, BarChart3, CheckCircle2, Eye, EyeOff, MousePointerClick, RefreshCw, Search, Target, Users } from "lucide-react";
 import { Card, Delta, Labeled, RankChip, SectionHeader, Spark, StatCard, askDisconnect, inputCls, tooltipStyle } from "../../ui/primitives.jsx";
 import { fmt, pctDelta } from "../../lib/format.jsx";
 import { emptySiteData } from "../../data/gen.js";
+import { GoogleAccountPicker, connectGoogleAccount, useGoogleAccounts } from "./googleaccounts.jsx";
 import { MONTH_DATES } from "../../lib/months.jsx";
 
 const pct1 = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
@@ -181,6 +182,11 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
   });
   const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState(null);
+  /* the agency's already-connected accounts: a project picks one without a
+     new Google sign-in; "switch" shows the same list while connected */
+  const { accounts, reload: reloadAccounts } = useGoogleAccounts(oauthReady);
+  const [switching, setSwitching] = useState(false);
+  const useAccount = (a) => { setConn({ connectionId: a.connectionId, email: a.email || "", gscSite: "", ga4Property: "" }); setSites(null); setProps(null); setSwitching(false); setErr(null); };
   const [sites, setSites] = useState(null);
   const [props, setProps] = useState(null);
   /* manual property entry per social slot — Google's sites.list API does NOT
@@ -207,23 +213,11 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
   const connect = async () => {
     setConnecting(true); setErr(null);
     try {
-      const r = await fetch("/api/oauth/google/start", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: oauth.clientId, clientSecret: oauth.clientSecret, redirectUri: oauth.redirectUri }) });
-      const d = await r.json();
-      if (!r.ok) { setErr(d.detail || d.error); setConnecting(false); return; }
-      const popup = window.open(d.authUrl, "ss_google_oauth", "width=520,height=640");
-      const onMsg = (e) => {
-        if (!e.data || !e.data.googleOAuth) return;
-        window.removeEventListener("message", onMsg);
-        setConnecting(false);
-        if (e.data.googleOAuth === "ok" && e.data.connectionId) {
-          setConn({ connectionId: e.data.connectionId, email: e.data.email || "", gscSite: "", ga4Property: "" });
-          setSites(null); setProps(null);
-        } else setErr("Google connection was cancelled or failed.");
-      };
-      window.addEventListener("message", onMsg);
-      const iv = setInterval(() => { if (popup?.closed) { clearInterval(iv); setConnecting(false); window.removeEventListener("message", onMsg); } }, 800);
-    } catch (e) { setErr("API server unreachable — the OAuth flow runs there. " + (e?.message || "")); setConnecting(false); }
+      const got = await connectGoogleAccount(oauth);
+      if (got) { useAccount(got); reloadAccounts(); }
+      else setErr("Google connection was cancelled or failed.");
+    } catch (e) { setErr("Google connection failed — " + (e?.message || "")); }
+    finally { setConnecting(false); }
   };
   const disconnect = async () => {
     if (!await askDisconnect(`Google (Search Console & GA4${conn.email ? `, ${conn.email}` : ""}) from this project`)) return;
@@ -261,14 +255,17 @@ export function GoogleSourcesConnector({ project, company, accent, onUpdate, com
           ? <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"><CheckCircle2 size={12} /> {conn.email || "Connected"}</span>
           : <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-500">Not connected</span>}
         <span className="ml-auto flex gap-2">
-          {conn.connectionId
-            ? <button onClick={disconnect} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:text-red-500">Disconnect</button>
-            : <button onClick={connect} disabled={connecting} className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50" style={{ background: accent }}>
-                {connecting ? <><RefreshCw size={13} className="animate-spin" /> Waiting for Google…</> : <><Link2 size={13} /> Connect Google</>}
-              </button>}
+          {conn.connectionId && Array.isArray(accounts) && accounts.some((a) => a.connectionId !== conn.connectionId) && !switching && (
+            <button onClick={() => setSwitching(true)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-600 hover:border-gray-300">Switch account</button>
+          )}
+          {conn.connectionId && <button onClick={disconnect} className="rounded-lg border border-gray-200 px-3 py-1.5 text-[11.5px] font-semibold text-gray-500 hover:text-red-500">Disconnect</button>}
         </span>
       </div>
       {err && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">{err}</div>}
+      {(!conn.connectionId || switching) && (
+        <GoogleAccountPicker accounts={accounts} current={conn.connectionId || null} accent={accent} busy={connecting}
+          onPick={useAccount} onAdd={connect} onCancel={switching ? () => setSwitching(false) : null} />
+      )}
       {conn.connectionId && (
         <div className="grid gap-3 sm:grid-cols-2">
           <Labeled label="Search Console — Website">

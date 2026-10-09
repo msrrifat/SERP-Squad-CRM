@@ -586,7 +586,7 @@ export function ProjectSettingsModal({ client, project, company, onUpdate, dfsCo
           </div>
           <div className="border-t border-gray-100 pt-4">
             <div className="mb-1 flex items-center gap-2"><Globe size={15} className="text-gray-400" /><span className="ll-display text-[14px] font-semibold">Website sources — whole project</span></div>
-            <p className="mb-2 text-[11.5px] text-gray-400">One website serves every location, so Google Analytics 4 and Search Console connect once per project via a real Google sign-in. <span className="ll-mono text-gray-400">{project.website}</span></p>
+            <p className="mb-2 text-[11.5px] text-gray-400">One website serves every location, so Google Analytics 4 and Search Console connect once per project: pick a Google account the agency already connected, or add a new one with a Google sign-in. <span className="ll-mono text-gray-400">{project.website}</span></p>
             <GoogleSourcesConnector project={project} company={company} accent={accent} onUpdate={onUpdate} compact />
           </div>
         </div>

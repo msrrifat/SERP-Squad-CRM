@@ -623,7 +623,7 @@ const saveSessions = () => { mkdirSync(AUTH_DIR, { recursive: true }); writeFile
 const GTOKENS_FILE = new URL("./data/auth/google-tokens.json", import.meta.url);
 const loadGTokens = () => { try { return JSON.parse(readFileSync(GTOKENS_FILE, "utf8")); } catch { return {}; } };
 const saveGTokens = (d) => { mkdirSync(AUTH_DIR, { recursive: true }); writeFileSync(GTOKENS_FILE, JSON.stringify(d)); };
-const pendingOAuth = new Map(); // state → { clientId, clientSecret, redirectUri, exp }
+const pendingOAuth = new Map(); // state → { clientId, clientSecret, redirectUri, addedBy, exp }
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/analytics.readonly",
   "https://www.googleapis.com/auth/webmasters.readonly",
@@ -640,13 +640,16 @@ const GOOGLE_SCOPES = [
   "openid", "email",
 ];
 const GBP_SCOPE = "https://www.googleapis.com/auth/business.manage";
-function handleOAuthStart(body) {
+function handleOAuthStart(body, req) {
   const clientId = String(body?.clientId || "").trim();
   const clientSecret = String(body?.clientSecret || "").trim();
   const redirectUri = String(body?.redirectUri || "").trim();
   if (!clientId || !clientSecret || !redirectUri) return [503, { error: "not_configured", detail: "Add your Google OAuth Client ID, Client Secret and redirect URI in Company Settings → API settings first." }];
   const state = randomBytes(16).toString("hex");
-  pendingOAuth.set(state, { clientId, clientSecret, redirectUri, exp: Date.now() + 10 * 60e3 });
+  /* who is adding the account: the registry shows team members only the
+     accounts they added themselves (admins see every one) */
+  const sess = sessionFromReq(req);
+  pendingOAuth.set(state, { clientId, clientSecret, redirectUri, addedBy: sess?.kind === "team" ? sess.id : null, exp: Date.now() + 10 * 60e3 });
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id: clientId, redirect_uri: redirectUri, response_type: "code",
     scope: GOOGLE_SCOPES.join(" "), access_type: "offline", prompt: "consent", state,
@@ -678,12 +681,47 @@ async function handleOAuthCallback(reqUrl) {
     let email = "";
     try { if (tok.id_token) email = JSON.parse(Buffer.from(tok.id_token.split(".")[1], "base64").toString("utf8")).email || ""; } catch { /* no id_token email */ }
     if (!tok.refresh_token) return page("Almost there", "Google didn't return a refresh token. Revoke this app at myaccount.google.com/permissions, then reconnect.", null);
-    const connectionId = randomBytes(12).toString("hex");
     const t = loadGTokens();
-    t[connectionId] = { refreshToken: tok.refresh_token, clientId: pend.clientId, clientSecret: pend.clientSecret, email, scope: tok.scope || "", at: Date.now() };
+    /* the same Google account connected again REPLACES its earlier token
+       under the same id, so every project already using it picks up the
+       fresh grant (new scopes included) instead of a duplicate account */
+    const prior = email ? Object.keys(t).find((k) => t[k]?.email && t[k].email.toLowerCase() === email.toLowerCase()) : null;
+    const connectionId = prior || randomBytes(12).toString("hex");
+    t[connectionId] = { refreshToken: tok.refresh_token, clientId: pend.clientId, clientSecret: pend.clientSecret, email, scope: tok.scope || "", at: Date.now(),
+      addedBy: pend.addedBy || t[prior]?.addedBy || null, addedAt: t[prior]?.addedAt || Date.now() };
     saveGTokens(t);
     return page("Google connected", `Signed in as <b>${email || "your Google account"}</b>. You can close this window.`, connectionId, email);
   } catch (e) { return page("Connection failed", String(e?.message || e).slice(0, 180) + " — you can close this window.", null); }
+}
+/* ---- the registry of connected Google accounts (team sessions only) ----
+   An account connected once serves every project: a project picks it from
+   this list instead of going through Google's consent screen again. Admins
+   and the owner see every account; other team members only the accounts
+   they added themselves. `remove` deletes the stored token — projects that
+   used it show "not connected" until another account is picked. */
+function handleGoogleAccounts(body, req) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden", detail: "Team sessions only." }];
+  const state = loadState();
+  const me = (state?.company?.team || []).find((m) => m && m.id === sess.id);
+  /* accounts connected before the registry existed have no adder: they
+     belong to the owner, so admins see them and other members do not */
+  const admin = !!sess.boot || (me ? !!me.isOwner || me.role === "Admin" : sess.id === "u1");
+  const t = loadGTokens();
+  const mine = (c) => admin || (!!c.addedBy && c.addedBy === sess.id);
+  if (body?.action === "remove") {
+    const id = String(body.connectionId || "");
+    if (!t[id]) return [404, { error: "not_found" }];
+    if (!mine(t[id])) return [403, { error: "forbidden", detail: "Only the member who added this account (or an admin) can remove it." }];
+    delete t[id]; saveGTokens(t);
+  }
+  const names = Object.fromEntries((state?.company?.team || []).filter(Boolean).map((m) => [m.id, m.name]));
+  const scopesOf = (c) => String(c.scope || "").split(/\s+/).filter(Boolean).map((x) => x.replace("https://www.googleapis.com/auth/", ""));
+  const accounts = Object.entries(t).filter(([, c]) => c && mine(c)).map(([connectionId, c]) => ({
+    connectionId, email: c.email || "", at: c.addedAt || c.at || null, addedBy: c.addedBy || null, addedByName: names[c.addedBy] || (c.addedBy ? "" : "Owner"),
+    scopes: scopesOf(c),
+  })).sort((a, b) => (b.at || 0) - (a.at || 0));
+  return [200, { accounts, admin }];
 }
 async function googleAccess(connectionId) {
   const c = loadGTokens()[connectionId];
@@ -5470,7 +5508,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5586,7 +5624,8 @@ http.createServer(async (req, res) => {
         : req.url === "/api/social/select" ? handleSocialSelect(body)
         : req.url === "/api/files" ? handleFileUpload(req, body)
         : req.url === "/api/social/bluesky" ? await handleSocialBluesky(body)
-        : req.url === "/api/oauth/google/start" ? handleOAuthStart(body)
+        : req.url === "/api/oauth/google/start" ? handleOAuthStart(body, req)
+        : req.url === "/api/google/accounts" ? handleGoogleAccounts(body, req)
         : req.url === "/api/google/gsc/sites" ? await handleGscSites(body)
         : req.url === "/api/google/gsc/query" ? await handleGscQuery(body)
         : req.url === "/api/google/ga4/properties" ? await handleGa4Properties(body)

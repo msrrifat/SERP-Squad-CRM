@@ -20,6 +20,7 @@ import { assignedIds } from "../../lib/team.js";
 import { isoDate } from "../../lib/months.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { AccountingSection } from "./accounting.jsx";
+import { GoogleAccountsAdmin } from "../performance/googleaccounts.jsx";
 
 export const API_REGISTRY = [
   {
@@ -53,7 +54,10 @@ export const API_REGISTRY = [
         id: "googleOauth", name: "Google Cloud OAuth app",
         desc: "One OAuth client powers the live Google connections: Analytics 4 (users, sessions, conversions) and Search Console (clicks, impressions, queries), connected per project. Add the redirect URI below to the OAuth client's Authorized redirect URIs in Google Cloud Console.",
         docs: "console.cloud.google.com → APIs & Services → Credentials → Create OAuth client ID (Web application)",
-        scopes: ["analytics.readonly", "webmasters.readonly"],
+        /* every scope the consent screen requests — the Cloud project's OAuth
+           consent screen must list (and be verified for) ALL of them, or
+           Google shows "hasn't verified this app" on every sign-in */
+        scopes: ["analytics.readonly", "webmasters.readonly", "business.manage", "adwords"],
         fields: [
           { key: "clientId", label: "OAuth Client ID", placeholder: "xxxxx.apps.googleusercontent.com" },
           { key: "clientSecret", label: "OAuth Client Secret", secret: true, placeholder: "GOCSPX-…" },
@@ -425,6 +429,7 @@ export function ApiCard({ api, company, onChange }) {
         </span>
       </div>
       <p className="mb-3 text-[11.5px] leading-relaxed text-gray-400">{api.desc}</p>
+      {api.id === "googleOauth" && connected && <GoogleAccountsAdmin company={company} accent={company.accent} />}
       {api.useDfs && connected && (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2">
           <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Account balance</span>
