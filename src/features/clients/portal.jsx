@@ -256,10 +256,11 @@ export function LoginScreen({ company, dark, onAuthed }) {
     try {
       const r = await fetch("/api/app/login", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(25000),
-        body: JSON.stringify({ login: email.trim(), password, deviceToken: localStorage.getItem("ss_dev_token") || "", smtp: company.apis?.smtp?.values }),
+        body: JSON.stringify({ login: email.trim(), password, deviceToken: localStorage.getItem("ss_dev_token") || "" }),
       });
       const d = await r.json().catch(() => ({}));
       if (r.status === 401) { setError(d.detail || "Email/username or password doesn't match an active account."); return; }
+      if (r.status === 503 || r.status === 502) { setError(d.detail || "Email verification isn't available right now."); return; }
       if (d.token) { onAuthed(d.token, d.identity); return; }         // trusted device — straight in
       if (r.ok && d.needs2fa) {
         setPendEmail(d.email); setStep("code"); setCode("");

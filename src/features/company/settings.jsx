@@ -380,6 +380,19 @@ export function ApiCard({ api, company, onChange }) {
          stale read of company.dfs before the save has propagated */
       if (filled) fetchBalance({ login: draft.login.trim(), password: draft.password.trim() });
     } else onChange({ apis: { ...(company.apis || {}), [api.id]: { values: draft, connected: filled } } });
+    if (api.id === "smtp" && filled) testSmtp(false);
+  };
+  /* the mail card proves itself: a real SMTP login on save, and a real
+     message on request — "Connected" alone only meant the fields were filled */
+  const [smtpTest, setSmtpTest] = useState(null); // { busy } | { ok, detail?, sentTo? }
+  const testSmtp = async (send) => {
+    setSmtpTest({ busy: true });
+    try {
+      const r = await fetch("/api/mail/test", { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(45000),
+        body: JSON.stringify({ smtp: draft, sendTo: send ? String(draft.user || "").trim() : "" }) });
+      const d = await r.json().catch(() => ({}));
+      setSmtpTest(d.smtp || { ok: false, detail: d.detail || `HTTP ${r.status}` });
+    } catch { setSmtpTest({ ok: false, detail: "API server unreachable — the mail check runs server-side." }); }
   };
   const disconnect = async () => {
     if (!await askDisconnect(`the ${api.name} connection`)) return;
@@ -430,6 +443,20 @@ export function ApiCard({ api, company, onChange }) {
       </div>
       <p className="mb-3 text-[11.5px] leading-relaxed text-gray-400">{api.desc}</p>
       {api.id === "googleOauth" && connected && <GoogleAccountsAdmin company={company} accent={company.accent} />}
+      {api.id === "smtp" && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2">
+          <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Mail check</span>
+          {smtpTest?.busy && <span className="ll-mono text-[11px] text-gray-400">talking to the mail server…</span>}
+          {smtpTest && !smtpTest.busy && (smtpTest.ok
+            ? <span className="text-[10.5px] font-semibold text-emerald-700">✓ SMTP login OK{smtpTest.sentTo ? ` · test email sent to ${smtpTest.sentTo}` : ""}</span>
+            : <span className="min-w-0 flex-1 text-[10.5px] leading-snug text-amber-700">✗ {smtpTest.detail}</span>)}
+          {!smtpTest && <span className="text-[10.5px] text-gray-400">{connected ? "Saved. Send a test to be sure codes arrive." : "Fill the fields, then Save & validate."}</span>}
+          <button onClick={() => testSmtp(true)} disabled={!filled || smtpTest?.busy} title={`Sends a test message to ${draft.user || "the username address"}`}
+            className="ml-auto rounded-lg border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-500 hover:border-gray-300 disabled:opacity-50">
+            ✉ Send test email
+          </button>
+        </div>
+      )}
       {api.useDfs && connected && (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2">
           <span className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Account balance</span>

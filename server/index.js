@@ -995,7 +995,7 @@ const sessionFromReq = (req) => {
   return s;
 };
 
-async function handleAppLogin(body) {
+async function handleAppLogin(body, req) {
   const acct = matchAccount(body?.login, body?.password);
   if (!acct) return [401, { error: "bad_credentials", detail: "Email/username or password doesn't match an active account." }];
   /* trusted device → straight in; new device → email a code first */
@@ -1003,7 +1003,7 @@ async function handleAppLogin(body) {
   const trusted = dtok && (loadDevices()[acct.email] || []).some((d) => d.th === sha(dtok) && Date.now() - d.at < 90 * 864e5);
   if (trusted) return [200, { ok: true, token: mintSession(acct), identity: acct }];
   pendingLogin.set(acct.email, { kind: acct.kind, id: acct.id, exp: Date.now() + 10 * 60e3 });
-  const [code, payload] = await handle2faStart({ email: acct.email, smtp: body?.smtp });
+  const [code, payload] = await handle2faStart({ email: acct.email }, req);
   return [code, { ...payload, needs2fa: true, email: acct.email }];
 }
 function handleAppTwofa(body) {
@@ -2128,8 +2128,16 @@ async function handleMailTest(body) {
   const out = { smtp: null, imap: null };
   const smtp = body?.smtp;
   if (smtp?.host && smtp?.user) {
-    try { await sendMail(smtp, "", "", "", { verifyOnly: true }); out.smtp = { ok: true }; }
-    catch (e) { out.smtp = { ok: false, detail: String(e?.message || e).slice(0, 140) }; }
+    try {
+      await sendMail(smtp, "", "", "", { verifyOnly: true }); out.smtp = { ok: true };
+      /* a real message too, so the sender/From rules of the provider are
+         exercised, not only the login */
+      const to = String(body?.sendTo || "").trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        try { await sendMail(smtp, to, "SMTP test — sign-in codes will arrive like this", `This is a test message from your CRM's email settings.\n\nIf you can read it, verification codes for sign-ins from new devices will reach the inbox the same way.`); out.smtp.sentTo = to; }
+        catch (e) { out.smtp = { ok: false, detail: "Login worked but sending failed: " + String(e?.message || e).slice(0, 140) }; }
+      }
+    } catch (e) { out.smtp = { ok: false, detail: String(e?.message || e).slice(0, 140) }; }
   } else out.smtp = { ok: false, detail: "SMTP host/username missing." };
   const imap = body?.imap;
   if (imap?.host && imap?.user) {
@@ -2268,14 +2276,28 @@ function handleTrackStats(body) {
   return [200, { live: true, stats: out }];
 }
 
-async function handle2faStart(body) {
+/* the SMTP account that sends verification codes: Company Settings → API
+   settings → Email SMTP, read from the STORED workspace (env SMTP_* as a
+   fallback). The sign-in request itself never chooses the mail server —
+   that let anyone holding a password route the code through their own
+   relay and read it. */
+function storedSmtp() {
+  try {
+    const v = loadState()?.company?.apis?.smtp?.values;
+    if (v?.host && v?.user) return v;
+  } catch { /* unreadable workspace → env / nothing */ }
+  return process.env.SMTP_HOST ? { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER, pass: process.env.SMTP_PASS, from: process.env.SMTP_FROM } : null;
+}
+const isLocalReq = (req) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(String(req?.headers?.host || ""));
+async function handle2faStart(body, req) {
   const email = String(body?.email || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return [400, { error: "bad_request", detail: "A valid email is required." }];
+  const smtp = storedSmtp();
+  /* no mail service: a code shown on screen is fine on a developer's
+     machine and never on the deployed app */
+  if (!smtp && !isLocalReq(req)) return [503, { error: "not_configured", detail: "Email verification isn't set up — an admin must add the SMTP account in Company Settings → API settings → Email SMTP." }];
   const code = String((randomBytes(4).readUInt32BE(0) % 900000) + 100000);
   pending2fa.set(email, { codeHash: sha(email + "|" + code), exp: Date.now() + 10 * 60e3, tries: 0 });
-  const smtp = body?.smtp?.host ? body.smtp
-    : process.env.SMTP_HOST ? { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER, pass: process.env.SMTP_PASS, from: process.env.SMTP_FROM }
-    : null;
   if (smtp?.host && smtp.user) {
     try {
       await sendMail(smtp, email, "Your sign-in verification code",
@@ -5570,7 +5592,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/ads/accounts" ? await handleAdsAccounts(body)
         : req.url === "/api/ads/metrics" ? await handleAdsMetrics(body)
         : req.url === "/api/ads/publish" ? await handleAdsPublish(body)
-        : req.url === "/api/auth/2fa/start" ? await handle2faStart(body)
+        : req.url === "/api/auth/2fa/start" ? await handle2faStart(body, req)
         : req.url === "/api/auth/2fa/verify" ? handle2faVerify(body)
         : req.url === "/api/auth/device-check" ? handleDeviceCheck(body)
         : req.url === "/api/custom/test" ? await handleCustomTest(body)
@@ -5620,7 +5642,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/kw/domain" ? await handleKwDomain(body)
         : req.url === "/api/kw/locations" ? await handleKwLocations(body)
         : req.url === "/api/insight/audit" ? await handleInsightAudit(body)
-        : req.url === "/api/app/login" ? await handleAppLogin(body)
+        : req.url === "/api/app/login" ? await handleAppLogin(body, req)
         : req.url === "/api/app/2fa" ? handleAppTwofa(body)
         : req.url === "/api/app/logout" ? handleAppLogout(req)
         : req.url === "/api/state" ? handleStateSave(req, body)
