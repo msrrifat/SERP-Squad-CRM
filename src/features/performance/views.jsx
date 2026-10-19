@@ -725,6 +725,8 @@ const FeatBadge = ({ cur, prev }) => {
 
 export function RankTrackingView({ project, tracking, dfsConnected, accent, onAdd, onDelete, onDeleteMany = null, onRerun, onSetVolumes = null, onSetPaused = null, readOnly = false, dfs, clientView = false, onSetWidget = null }) {
   const Vis = makeVis(project.widgets, clientView ? null : onSetWidget);
+  /* client rows carry only the keyword and its numbers, so they can be tight */
+  const rowPy = clientView ? "py-1.5" : "py-3";
   const [cityFilter, setCityFilter] = useState("All cities");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -1197,6 +1199,24 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   ? "Positions exactly as they were scanned on the selected date — every rerun is kept."
                   : tab === "cities"
                   ? "Tracked keywords grouped per city — open a city to see its keywords, or remove a whole city's tracking in one click."
+                  : clientView
+                  ? (() => {
+                      /* the client sees the shared facts ONCE up here instead of
+                         repeated under every keyword — the rows stay narrow */
+                      const uniq = (f) => [...new Set(rows.map(f).filter(Boolean))];
+                      const cities = uniq((t) => cityLabel(t.city)), devices = uniq((t) => t.device), engines = uniq((t) => t.engine);
+                      const scheds = uniq((t) => (t.reportingType === "Recurring" ? `every ${t.rerunDays} days` : "one time"));
+                      const chip = (Icon, text) => <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10.5px] font-medium text-gray-600"><Icon size={10} />{text}</span>;
+                      return (
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {cities.length > 0 && chip(MapPin, cities.length === 1 ? cities[0] : `${cities.length} locations`)}
+                          {devices.length > 0 && chip(devices.length === 1 && devices[0] === "Mobile" ? Smartphone : Monitor, devices.join(" & "))}
+                          {engines.length > 0 && chip(Search, engines.join(" & "))}
+                          {scheds.length > 0 && chip(RefreshCw, scheds.length === 1 ? `checked ${scheds[0]}` : "mixed schedules")}
+                          {scanDays[0] && chip(Clock, `last scan ${scanDays[0]}`)}
+                        </span>
+                      );
+                    })()
                   : <>City-level positions · {dfsConnected ? "scraped via your company DataForSEO API" : "company DataForSEO API not connected — add it in Company Settings → API settings"}
                       {pausedCount > 0 && <> · <b className="text-gray-500">{pausedCount} paused</b> (skipped by automatic recurring scans)</>}</>}
               </div>
@@ -1327,14 +1347,14 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   </td></tr>
                 )}
                 {rows.map((t) => (
-                  <tr key={t.id} className={`border-b border-gray-50 align-top hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""} ${t.paused ? "bg-gray-50/60" : ""} group`}>
-                    <td className="px-4 py-3 no-print">
+                  <tr key={t.id} className={`border-b border-gray-50 ${clientView ? "align-middle" : "align-top"} hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""} ${t.paused ? "bg-gray-50/60" : ""} group`}>
+                    <td className={`px-4 ${rowPy} no-print`}>
                       <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
                         className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
                     </td>
-                    <td className="px-5 py-3">
+                    <td className={`px-5 ${rowPy}`}>
                       <div className="flex items-center gap-1.5">
-                        <span className={"font-medium " + (t.paused ? "text-gray-500" : "text-gray-800")}>{t.keyword}</span>
+                        <span className={"font-medium " + (t.paused ? "text-gray-500" : "text-gray-800") + (clientView ? " whitespace-nowrap" : "")}>{t.keyword}</span>
                         {t.paused && (
                           <span className="rounded-full bg-gray-200 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-gray-600">paused</span>
                         )}
@@ -1347,7 +1367,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                           </button>
                         )}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-gray-400">
+                      {!clientView && <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-gray-400">
                         <span className="inline-flex items-center gap-1"><MapPin size={11} />{cityLabel(t.city)}</span>
                         <span className="inline-flex items-center gap-1">{t.device === "Mobile" ? <Smartphone size={11} /> : <Monitor size={11} />}{t.device}</span>
                         <span className="inline-flex items-center gap-1"><Search size={11} />{t.engine}</span>
@@ -1356,25 +1376,25 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                             ? <><Pause size={11} />paused</>
                             : t.reportingType === "Recurring" ? <><RefreshCw size={11} />every {t.rerunDays}d</> : <><Clock size={11} />one time</>}
                         </span>
-                      </div>
+                      </div>}
                     </td>
-                    {colOn("volume") && <td className="ll-mono px-3 py-3 font-semibold text-gray-700">
+                    {colOn("volume") && <td className={`ll-mono px-3 ${rowPy} font-semibold text-gray-700`}>
                       {(() => { const s = svOf(t); return s?.v != null ? <span title={`~${s.v.toLocaleString()} searches/mo in ${cityLabel(t.city)}${s.demo ? " (demo)" : ""}`}>{s.v >= 1000 ? (s.v / 1000).toFixed(s.v >= 10000 ? 0 : 1) + "k" : s.v}</span> : <span className="text-gray-300">—</span>; })()}
                     </td>}
-                    {colOn("strend") && <td className="px-3 py-3">
+                    {colOn("strend") && <td className={`px-3 ${rowPy}`}>
                       {(() => { const s = svOf(t); const mo = s?.monthly || []; if (!mo.length) return <span className="text-[11px] text-gray-300">—</span>;
                         const max = Math.max(1, ...mo.map((m) => m.v));
                         return <span className="flex h-5 items-end gap-px" title={mo.map((m) => `${m.m}/${m.y || ""}: ${m.v.toLocaleString()}`).join("\n")}>
                           {mo.map((m, i) => <span key={i} className="w-[4px] rounded-sm" style={{ height: `${Math.max(12, (m.v / max) * 100)}%`, background: accent + "99" }} />)}
                         </span>; })()}
                     </td>}
-                    {colOn("start") && <td className="px-3 py-3"><RankChip pos={t.stats.start} muted /></td>}
-                    {colOn("current") && <td className="px-3 py-3">
+                    {colOn("start") && <td className={`px-3 ${rowPy}`}><RankChip pos={t.stats.start} muted /></td>}
+                    {colOn("current") && <td className={`px-3 ${rowPy}`}>
                       <span className="inline-flex items-center gap-1" title="Website (organic) position">
                         <Globe size={11} className="shrink-0 text-gray-400" /><RankChip pos={t.stats.cur} />
                       </span>
                     </td>}
-                    {colOn("map") && <td className="px-3 py-3">
+                    {colOn("map") && <td className={`px-3 ${rowPy}`}>
                       {(() => { const mp = mapOf(t); const pv = featPrev(t, "mp", mp); return (
                         <span className="inline-flex items-center gap-1" title={mp ? `In Google's local map pack at position ${mp}${pv === null ? " — newly entered" : pv != null && pv !== mp ? ` (was #${pv} last scan)` : ""}` : t.packShown ? "Google shows a map pack for this search — the business isn't in it" : "No map-pack data yet — appears on the next scan"}>
                           <MapPin size={11} className={mp ? "shrink-0 text-emerald-600" : "shrink-0 text-gray-300"} />
@@ -1384,7 +1404,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         </span>
                       ); })()}
                     </td>}
-                    {colOn("ai") && <td className="px-3 py-3">
+                    {colOn("ai") && <td className={`px-3 ${rowPy}`}>
                       {(() => { const ai = aiOf(t); const pv = featPrev(t, "ai", ai); return (
                         <span className="inline-flex items-center gap-1" title={ai ? `Cited by Google's AI Overview — source #${ai}${pv === null ? " — newly cited" : pv != null && pv !== ai ? ` (was #${pv} last scan)` : ""}` : t.aiShown ? (t.aiRefs ? `Google shows an AI Overview for this search citing ${t.aiRefs} source${t.aiRefs === 1 ? "" : "s"} — this site isn't among them` : "Google shows an AI Overview for this search, but its sources weren't captured — rerun the scan to load them") : "No AI Overview captured for this search yet"}>
                           <Sparkles size={11} className={ai ? "shrink-0 text-violet-600" : "shrink-0 text-gray-300"} />
@@ -1394,14 +1414,14 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         </span>
                       ); })()}
                     </td>}
-                    {colOn("changes") && DELTA_DAYS.map((d) => <td key={d} className="px-3 py-3"><PosChange value={deltaFor(t, d)} /></td>)}
-                    {colOn("life") && <td className="px-3 py-3"><PosChange value={t.stats.life} /></td>}
-                    {colOn("url") && <td className="max-w-44 truncate px-3 py-3 text-[12px]" title={t.url || ""}>
+                    {colOn("changes") && DELTA_DAYS.map((d) => <td key={d} className={`px-3 ${rowPy}`}><PosChange value={deltaFor(t, d)} /></td>)}
+                    {colOn("life") && <td className={`px-3 ${rowPy}`}><PosChange value={t.stats.life} /></td>}
+                    {colOn("url") && <td className={`max-w-44 truncate px-3 ${rowPy} text-[12px]`} title={t.url || ""}>
                       {t.url
                         ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
                         : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
                     </td>}
-                    <td className="px-3 py-3 no-print">
+                    <td className={`px-3 ${rowPy} no-print`}>
                       {!readOnly && <button onClick={() => askDelete(`the keyword "${t.keyword}"`).then((ok) => { if (ok) onDelete(t.id); })} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>}
                     </td>
                   </tr>
