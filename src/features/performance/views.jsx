@@ -1347,7 +1347,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                   </td></tr>
                 )}
                 {rows.map((t) => (
-                  <tr key={t.id} className={`border-b border-gray-50 ${clientView ? "align-middle" : "align-top"} hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""} ${t.paused ? "bg-gray-50/60" : ""} group`}>
+                  <tr key={t.id} className={`border-b ${clientView ? "border-gray-200/80 align-middle" : "border-gray-50 align-top"} hover:bg-gray-50/60 ${selected.has(t.id) ? "bg-blue-50/40" : ""} ${t.paused ? "bg-gray-50/60" : ""} group`}>
                     <td className={`px-4 ${rowPy} no-print`}>
                       <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)}
                         className="h-4 w-4 cursor-pointer rounded" style={{ accentColor: accent }} />
