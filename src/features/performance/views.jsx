@@ -601,14 +601,24 @@ export function CitySelect({ value, onChange, accent = "#0E7C66", dfs = null }) 
   );
 }
 
-export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent, dfs = null }) {
+export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent, dfs = null, initial = null }) {
   const [domain, setDomain] = useState(project.website);
   const [keywords, setKeywords] = useState("");
-  const [engine, setEngine] = useState("Google");
-  const [city, setCity] = useState(null);
-  const [device, setDevice] = useState("Mobile");
-  const [reportingType, setReportingType] = useState("Recurring");
-  const [rerunDays, setRerunDays] = useState(1);
+  const [engine, setEngine] = useState(initial?.engine || "Google");
+  const [city, setCity] = useState(initial?.city || null);
+  const [device, setDevice] = useState(initial?.device || "Mobile");
+  const [reportingType, setReportingType] = useState(initial?.reportingType || "Recurring");
+  const [rerunDays, setRerunDays] = useState(initial?.rerunDays || 1);
+  /* the cities this project already tracks, each ONCE, with the exact city
+     record its keywords carry — picking one keeps new keywords in that
+     group (a fresh search can return the same place as a different record,
+     which used to open a second "city") */
+  const tracked = useMemo(() => {
+    const seen = new Map();
+    for (const t of project.tracking || []) if (t.city && typeof t.city === "object" && !seen.has(cityKey(t.city))) seen.set(cityKey(t.city), { city: t.city, n: 0 });
+    for (const t of project.tracking || []) if (t.city && typeof t.city === "object") seen.get(cityKey(t.city)).n++;
+    return [...seen.values()];
+  }, [project.tracking]);
   const [scrape, setScrape] = useState(dfsConnected ? "DataForSEO SERP API" : "My Own IP");
   const valid = domain.trim() && keywords.trim() && city;
   const kwCount = keywords.split(/\n|,/).filter((k) => k.trim()).length;
@@ -641,7 +651,23 @@ export function AddKeywordModal({ project, dfsConnected, onClose, onAdd, accent,
             </Labeled>
           </div>
           <Labeled label="Targeted city">
+            {tracked.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="text-[10.5px] text-gray-400">Already tracked:</span>
+                {tracked.map(({ city: c, n }) => {
+                  const on = city && cityKey(city) === cityKey(c);
+                  return (
+                    <button key={cityKey(c)} onClick={() => setCity(c)} title={`Add to the ${cityLabel(c)} group (${n} keyword${n === 1 ? "" : "s"})`}
+                      className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-medium"
+                      style={on ? { borderColor: accent, color: accent, background: accent + "0D" } : { borderColor: "#E5E7EB", color: "#4B5563" }}>
+                      <MapPin size={11} />{cityLabel(c)}<span className="ll-mono text-[10px] text-gray-400">{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <CitySelect value={city} onChange={setCity} accent={accent} dfs={dfs} />
+            {tracked.length > 0 && <div className="mt-1 text-[10.5px] text-gray-400">Pick a tracked city above to keep the new keywords in its group; search only for a new location.</div>}
           </Labeled>
           <Labeled label="Reporting type">
             <Seg options={["One time", "Recurring"]} value={reportingType} onChange={setReportingType} accent={accent} />
@@ -1496,6 +1522,13 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                         <span className="ml-auto text-[11px] font-semibold" style={{ color: accent }}>{open ? "Hide keywords ▲" : "View keywords ▼"}</span>
                       </button>
                       {!readOnly && (
+                        <button onClick={() => { const t0 = arr[0]; setShowModal({ city: t0.city, device: t0.device, engine: t0.engine, reportingType: t0.reportingType, rerunDays: t0.rerunDays || 1 }); }}
+                          title={`Add keywords to the ${cl} group — same city, device, engine and schedule as its keywords`}
+                          className="inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11.5px] font-semibold" style={{ borderColor: accent + "55", color: accent }}>
+                          <Plus size={12} /> Add keywords
+                        </button>
+                      )}
+                      {!readOnly && (
                         <button onClick={async () => {
                           if (!await askConfirm({ title: "Delete tracked keywords?", message: `Delete ALL ${arr.length} tracked keyword${arr.length > 1 ? "s" : ""} for ${cl}?`, note: "Their scan history is removed too. This can't be undone.", confirmLabel: "Yes, delete", danger: true })) return;
                           const ids = arr.map((t) => t.id);
@@ -1545,6 +1578,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
 
       {showModal && (
         <AddKeywordModal project={project} dfsConnected={dfsConnected} accent={accent} dfs={dfs} onClose={() => setShowModal(false)}
+          initial={showModal && typeof showModal === "object" ? showModal : null}
           onAdd={(entries) => {
             onAdd(entries); setShowModal(false);
             /* real projects: run the initial scan right away so positions appear
