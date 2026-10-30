@@ -747,7 +747,12 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
                             <IconBtn title="Move group down" disabled={gi === part.groups.length - 1} onClick={() => patchPart(part.id, (c) => ({ groups: move(c.groups, gi, 1) }))}><ArrowDown size={12} /></IconBtn>
                             <IconBtn danger title="Delete group" onClick={() => patchPart(part.id, (c) => ({ groups: c.groups.filter((y) => y.id !== g.id) }))}><Trash2 size={12} /></IconBtn>
                           </div>
-                          <div className="mt-1.5 space-y-1">
+                          {allPk.length > 1 && allPk.length <= 2 && (
+                            <div className="mt-1.5 flex items-center justify-end gap-1 pr-[82px] text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">
+                              {allPk.map((p) => <span key={p.id} className="w-[82px] text-center">{p.name || "Package"}</span>)}
+                            </div>
+                          )}
+                          <div className="mt-1 space-y-1">
                             {g.tasks.map((t, ti) => (
                               <TaskRow key={t.id} t={t} first={ti === 0} last={ti === g.tasks.length - 1} accent={accent} packages={allPk}
                                 onChange={(p) => patchTask(part.id, g.id, t.id, p)}
@@ -842,8 +847,9 @@ function PackageEditor({ p, index, count, accent, onChange, onMove, onDuplicate,
   );
 }
 
-/* a checklist row: text, the general quantity, and (when the service has
-   packages) which packages include it and any package-specific quantity */
+/* a checklist row. With packages, every package gets its own cell right on
+   the row: an on/off (is this row in that package?) and that package's
+   quantity (empty = a check mark). Without packages, one quantity box. */
 function TaskRow({ t, first, last, accent, packages = [], onChange, onMove, onDelete }) {
   const [more, setMore] = useState(false);
   const included = (id) => !(Array.isArray(t.only) && t.only.length) || t.only.includes(id);
@@ -853,41 +859,36 @@ function TaskRow({ t, first, last, accent, packages = [], onChange, onMove, onDe
     const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
     onChange({ only: next.length === all.length ? undefined : next });
   };
-  const excluded = packages.filter((p) => !included(p.id));
-  const hasBy = t.qtyBy && Object.values(t.qtyBy).some(Boolean);
+  const multi = packages.length > 1;
+  const cells = packages.map((p) => (
+    <span key={p.id} className="flex shrink-0 items-center gap-0.5" title={`${p.name || "Package"}: ${included(p.id) ? "included" : "not included"}`}>
+      <button onClick={() => toggle(p.id)} className="flex h-6 w-6 items-center justify-center rounded-md border text-[10px] font-bold"
+        style={included(p.id) ? { borderColor: accent, color: "#fff", background: accent } : { borderColor: "#E5E7EB", color: "#9CA3AF", background: "#fff" }}>
+        {included(p.id) ? <Check size={11} strokeWidth={3} /> : (p.name || "P")[0]}
+      </button>
+      <input value={(t.qtyBy || {})[p.id] ?? ""} placeholder={included(p.id) ? (t.qty || "✓") : "—"} disabled={!included(p.id)} title={`${p.name || "Package"} quantity (empty = ${t.qty ? `the general "${t.qty}"` : "a check mark"})`}
+        onChange={(e) => onChange({ qtyBy: { ...(t.qtyBy || {}), [p.id]: e.target.value } })}
+        className="ll-mono w-[54px] rounded-md border border-gray-200 px-1 py-1 text-right text-[10.5px] disabled:bg-gray-50 disabled:opacity-50" />
+    </span>
+  ));
   return (
     <div className="rounded-md border border-gray-200 bg-white px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input value={t.text} placeholder="What gets done" onChange={(e) => onChange({ text: e.target.value })} className="min-w-0 flex-1 rounded-md border border-transparent px-1.5 py-1 text-[12px] hover:border-gray-200 focus:border-gray-300 focus:outline-none" />
-        {excluded.length > 0 && <span className="ll-mono shrink-0 rounded bg-amber-50 px-1 text-[9px] font-bold text-amber-700" title={`Not in ${excluded.map((p) => p.name).join(", ")}`}>{packages.filter((p) => included(p.id)).map((p) => (p.name || "P")[0]).join("")} only</span>}
-        <input value={t.qty} placeholder="qty" title={hasBy ? "General quantity (some packages have their own, see details)" : "Quantity — empty prints a check mark"} onChange={(e) => onChange({ qty: e.target.value })}
-          className="ll-mono w-[64px] shrink-0 rounded-md border border-gray-200 px-1.5 py-1 text-right text-[11px]" style={t.qty || hasBy ? { borderColor: accent + "80", color: "#111827" } : {}} />
-        <IconBtn title={more ? "Hide details" : "Details, packages and per-package quantity"} onClick={() => setMore(!more)}><ChevronDown size={12} style={{ transform: more ? "rotate(180deg)" : "", color: (t.details || []).filter(Boolean).length || excluded.length || hasBy ? accent : undefined }} /></IconBtn>
+        {multi && packages.length <= 2 && cells}
+        {!multi && (
+          <input value={t.qty} placeholder="qty" title="Quantity — empty prints a check mark" onChange={(e) => onChange({ qty: e.target.value })}
+            className="ll-mono w-[64px] shrink-0 rounded-md border border-gray-200 px-1.5 py-1 text-right text-[11px]" style={t.qty ? { borderColor: accent + "80", color: "#111827" } : {}} />
+        )}
+        <IconBtn title={more ? "Hide details" : "Sub-points under this row"} onClick={() => setMore(!more)}><ChevronDown size={12} style={{ transform: more ? "rotate(180deg)" : "", color: (t.details || []).filter(Boolean).length ? accent : undefined }} /></IconBtn>
         <IconBtn title="Move row up" disabled={first} onClick={() => onMove(-1)}><ArrowUp size={12} /></IconBtn>
         <IconBtn title="Move row down" disabled={last} onClick={() => onMove(1)}><ArrowDown size={12} /></IconBtn>
         <IconBtn danger title="Remove row" onClick={onDelete}><Trash2 size={12} /></IconBtn>
       </div>
+      {multi && packages.length > 2 && <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1">{packages.map((p, i) => <span key={p.id} className="flex items-center gap-1"><span className="text-[10px] text-gray-400">{p.name}</span>{cells[i]}</span>)}</div>}
       {more && (
         <div className="space-y-1.5 px-1 pb-1 pt-1">
-          {packages.length > 1 && (
-            <div className="rounded-md border border-gray-100 bg-gray-50/70 p-1.5">
-              <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Packages</div>
-              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.min(3, packages.length)}, minmax(0, 1fr))` }}>
-                {packages.map((p) => (
-                  <div key={p.id} className="flex items-center gap-1">
-                    <button onClick={() => toggle(p.id)} title={included(p.id) ? `Included in ${p.name}` : `Not in ${p.name}`}
-                      className="flex min-w-0 flex-1 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-semibold"
-                      style={included(p.id) ? { borderColor: accent, color: accent, background: accent + "0D" } : { borderColor: "#E5E7EB", color: "#9CA3AF", textDecoration: "line-through" }}>
-                      <span className="truncate">{p.name || "Package"}</span>
-                    </button>
-                    <input value={(t.qtyBy || {})[p.id] || ""} placeholder={t.qty || "qty"} disabled={!included(p.id)} title={`${p.name} quantity (empty = the general one)`}
-                      onChange={(e) => onChange({ qtyBy: { ...(t.qtyBy || {}), [p.id]: e.target.value } })}
-                      className="ll-mono w-[58px] shrink-0 rounded-md border border-gray-200 px-1 py-1 text-right text-[10.5px] disabled:opacity-40" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {multi && <Labeled label="General quantity (used by a package whose box is empty)"><input value={t.qty} placeholder="qty" onChange={(e) => onChange({ qty: e.target.value })} className="ll-mono w-24 rounded-md border border-gray-200 px-1.5 py-1 text-right text-[11px]" /></Labeled>}
           <Lines value={t.details || []} onChange={(v) => onChange({ details: v })} rows={3} placeholder={"Sub-points, one per line\ne.g. 150–200 words per post"} />
         </div>
       )}
