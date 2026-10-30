@@ -16,11 +16,18 @@
        agency has saved its own version; otherwise the built-ins below.
 
    A service can offer several PACKAGES (Basic $500 · Growth $900 …): each
-   package has its own price, points and checklist parts, and the document
-   compares them side by side. `packagesOf(service)` returns them, falling
-   back to the service's own price/points as a single package for proposals
-   saved before packages existed. A checklist part names its package with
-   `packageId` (empty = every package of that service).
+   package has its own price and points, and the document compares them
+   side by side. `packagesOf(service)` returns them, falling back to the
+   service's own price/points as a single package for proposals saved
+   before packages existed. The checklist is ONE general set of months;
+   a row says which packages include it (`only: [packageId]`, empty = all)
+   and may carry a per-package quantity (`qtyBy: { packageId: "8" }`); a
+   part chooses the packages it compares (`compare: [packageId]`, empty =
+   all of the service's packages).
+
+   The document is an ordered list of sections (`layout`): cover, services,
+   pricing, extras (reporting & access), one entry per checklist part, and
+   closing. Sections can be hidden, moved and brought back.
 
    Every text may use {business} and {niche}: the document fills them from
    the sidebar, so renaming the brand or the niche updates every line.
@@ -136,19 +143,23 @@ const REPORTING = () => group("Monthly reporting", [
   task("Google Search Console report"),
 ]);
 
-/* the three SEO months for one package: Basic (5 articles, no social
-   media) or Growth (8 articles, guest posts, social media on 9 platforms) */
+/* the three SEO months, one general set: rows that only the Growth
+   package includes say so, and quantities that differ per package carry
+   an override */
+const G = "seo-growth";
+const growthOnly = (t) => ({ ...t, only: [G] });
 const GUEST = () => group("Guest posting", [
-  task("Guest posts on {niche}-related websites", "4", ["15+ domain authority", "500+ organic visits a month", "Same or related niche", "800+ words, keyword-targeted", "Do-follow link to the website"]),
+  growthOnly(task("Guest posts on {niche}-related websites", "4", ["15+ domain authority", "500+ organic visits a month", "Same or related niche", "800+ words, keyword-targeted", "Do-follow link to the website"])),
 ]);
 const SOCIAL = () => group("Social media management", [
-  task("Posts on Facebook, YouTube, Instagram, LinkedIn, X, Pinterest, Threads, TikTok and Bluesky", "3 / week each", ["Keyword-optimized captions", "Images and graphics for every post", "NAP, links and hashtags", "Scheduled and published for you"]),
-  task("Profile optimization on every platform", "9 platforms"),
-  task("Comment and message monitoring"),
+  growthOnly(task("Posts on Facebook, YouTube, Instagram, LinkedIn, X, Pinterest, Threads, TikTok and Bluesky", "3 / week each", ["Keyword-optimized captions", "Images and graphics for every post", "NAP, links and hashtags", "Scheduled and published for you"])),
+  growthOnly(task("Profile optimization on every platform", "9 platforms")),
+  growthOnly(task("Comment and message monitoring")),
 ]);
-const seoMonths = (packageId, growth) => [
+const PAGES2 = () => ({ ...PAGES("5"), qtyBy: { [G]: "8" } });
+export const DEFAULT_CHECKLISTS = () => [
   {
-    id: uid("p"), packageId, title: "Month 01", subtitle: "Setup, research and foundation for {business}", serviceKey: "seo",
+    id: uid("p"), title: "Month 01", subtitle: "Setup, research and foundation for {business}", serviceKey: "seo", compare: [],
     groups: [
       group("Initial research & planning", [
         task("Google Search Console setup"), task("Google Analytics setup"),
@@ -169,16 +180,16 @@ const seoMonths = (packageId, growth) => [
         task("Website SEO audit"), task("Location optimization"), task("GBP map embedding into the website"),
         task("Header menu optimization"), task("Footer menu optimization"), task("Structured data on the homepage"),
         task("About page optimization"), task("Contact page optimization"),
-        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
+        PAGES2(), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
-      ...(growth ? [GUEST(), SOCIAL()] : []),
+      GUEST(), SOCIAL(),
       group("Off-page SEO", [task("Social profile backlinks", "10"), task("Social signals"), task("Backlinks indexing")]),
       REPORTING(),
     ],
   },
   {
-    id: uid("p"), packageId, title: "Month 02", subtitle: "Re-optimization and growth", serviceKey: "seo",
+    id: uid("p"), title: "Month 02", subtitle: "Re-optimization and growth", serviceKey: "seo", compare: [],
     groups: [
       group("Research", [
         task("Search Console keywords: re-optimize the website and GBP"),
@@ -193,10 +204,10 @@ const seoMonths = (packageId, growth) => [
         task("Meta titles and descriptions", "All pages"), task("Location optimization"),
         task("GBP map embedding into service pages"), task("Image optimization", "All images"),
         task("Structured data on service pages", "10"), task("Page title (H1) optimization", "All pages"),
-        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
+        PAGES2(), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
-      ...(growth ? [GUEST(), SOCIAL()] : []),
+      GUEST(), SOCIAL(),
       group("Off-page SEO", [
         task("Social profile backlinks", "10"), task("Video backlinks (YouTube, Vimeo, Dailymotion)", "3"),
         task("Google entity stack backlinks", "10"), task("Adding links to schema for indexing"), task("Backlinks indexing"),
@@ -205,7 +216,7 @@ const seoMonths = (packageId, growth) => [
     ],
   },
   {
-    id: uid("p"), packageId, title: "Month 03", subtitle: "Authority and expansion", serviceKey: "seo",
+    id: uid("p"), title: "Month 03", subtitle: "Authority and expansion", serviceKey: "seo", compare: [],
     groups: [
       group("Research", [
         task("Search Console keywords: re-optimize the website and GBP"),
@@ -219,10 +230,10 @@ const seoMonths = (packageId, growth) => [
         task("Re-optimize website content with new Search Console keywords"),
         task("H2, H3 and H4 heading optimization", "All pages"), task("Internal linking and anchor text planning"),
         task("Structured data on service / location pages", "10+"),
-        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
+        PAGES2(), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
-      ...(growth ? [GUEST(), SOCIAL()] : []),
+      GUEST(), SOCIAL(),
       group("Off-page SEO", [
         task("Social profile backlinks", "20"), task("Web 2.0 backlinks with the map embedded", "5"),
         task("Article submissions", "2"), task("Other backlinks: forums, social bookmarking", "20"),
@@ -232,7 +243,37 @@ const seoMonths = (packageId, growth) => [
     ],
   },
 ];
-export const DEFAULT_CHECKLISTS = () => [...seoMonths("seo-basic", false), ...seoMonths("seo-growth", true)];
+
+/* what one package gets from a row: null = not included, "" = check mark, or a quantity */
+export const cellOf = (t, packageId) => {
+  if (Array.isArray(t?.only) && t.only.length && !t.only.includes(packageId)) return null;
+  const by = t?.qtyBy && t.qtyBy[packageId];
+  return by != null && by !== "" ? String(by) : String(t?.qty || "");
+};
+
+/* the ordered sections of the document; parts not in the layout yet are
+   appended before the closing page, parts that no longer exist are dropped */
+export const FIXED_SECTIONS = { cover: "Cover page", services: "Services at a glance", pricing: "Pricing", extras: "Reporting & access", closing: "Next steps & signatures" };
+export function layoutOf(d) {
+  const parts = (d?.checklists || []).map((p) => `part:${p.id}`);
+  const base = Array.isArray(d?.layout) && d.layout.length ? d.layout : ["cover", "services", "pricing", "extras", ...parts, "closing"];
+  const known = new Set([...Object.keys(FIXED_SECTIONS), ...parts]);
+  const out = base.filter((k) => known.has(k));
+  const missing = parts.filter((k) => !out.includes(k));
+  if (missing.length) { const i = out.indexOf("closing"); out.splice(i < 0 ? out.length : i, 0, ...missing); }
+  return out;
+}
+export const DEFAULT_STEPS = () => [
+  { id: uid("st"), title: "Approve this proposal", text: "Reply with a yes, or sign below." },
+  { id: uid("st"), title: "Share access", text: "The items on the access list; we guide you through each one." },
+  { id: uid("st"), title: "Kick-off call", text: "We confirm goals, keywords and service areas for {business}, then work begins." },
+];
+export const DEFAULT_TEXTS = () => ({
+  coverTag: "Transparent SEO & digital marketing",
+  servicesIntro: "Everything below is tailored to {business} and the {niche} market. Each service stands on its own, and they work best together.",
+  pricingNote: "Clear monthly pricing, no long-term lock-in. Ad spend is paid directly to the ad platforms.",
+  closingTitle: "Let's get started",
+});
 
 export const DEFAULT_REPORTING = () => [
   "Monthly phone call to discuss performance, insights and strategy adjustments",
@@ -283,13 +324,17 @@ export function blankProposal(company, tpl = null) {
     reporting: t?.reporting ? clone(t.reporting) : DEFAULT_REPORTING(),
     access: t?.access ? clone(t.access) : DEFAULT_ACCESS(),
     closing: t?.closing ?? DEFAULT_CLOSING,
+    ...DEFAULT_TEXTS(), ...(t?.texts || {}),
+    steps: t?.steps ? clone(t.steps) : DEFAULT_STEPS(),
+    layout: t?.layout ? clone(t.layout) : null,
     showSignature: true,
     createdAt: Date.now(),
   };
 }
 
 /* the reusable parts of a proposal, saved as the agency's template */
-export const templateOf = (d) => clone({ intro: d.intro, services: d.services, checklists: d.checklists, reporting: d.reporting, access: d.access, closing: d.closing });
+export const templateOf = (d) => clone({ intro: d.intro, services: d.services, checklists: d.checklists, reporting: d.reporting, access: d.access, closing: d.closing,
+  steps: d.steps, layout: d.layout, texts: { coverTag: d.coverTag, servicesIntro: d.servicesIntro, pricingNote: d.pricingNote, closingTitle: d.closingTitle } });
 
 export const fmtLongDate = (iso) => {
   if (!iso) return "";
@@ -300,7 +345,7 @@ export const fmtLongDate = (iso) => {
 
 /* ---- AI editing: the editable part of a proposal, and a careful merge of
    what the model sends back (ids kept, shapes checked, nothing else touched) */
-export const EDITABLE_KEYS = ["title", "intro", "services", "checklists", "reporting", "access", "closing"];
+export const EDITABLE_KEYS = ["title", "intro", "coverTag", "servicesIntro", "pricingNote", "closingTitle", "steps", "services", "checklists", "reporting", "access", "closing"];
 export const editableOf = (d) => Object.fromEntries(EDITABLE_KEYS.map((k) => [k, d[k]]));
 
 const str = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
@@ -311,6 +356,8 @@ export function mergeAiEdit(d, patch) {
   if (typeof patch.title === "string") out.title = patch.title;
   if (typeof patch.intro === "string") out.intro = patch.intro;
   if (typeof patch.closing === "string") out.closing = patch.closing;
+  for (const k of ["coverTag", "servicesIntro", "pricingNote", "closingTitle"]) if (typeof patch[k] === "string") out[k] = patch[k];
+  if (Array.isArray(patch.steps)) out.steps = patch.steps.filter((x) => x && typeof x === "object").map((x) => ({ id: str(x.id) || uid("st"), title: str(x.title), text: str(x.text) }));
   if (strList(patch.reporting)) out.reporting = strList(patch.reporting);
   if (strList(patch.access)) out.access = strList(patch.access);
   const bulletsOf = (v) => (Array.isArray(v) ? v : []).filter((b) => b && typeof b === "object").map((b) => ({ id: str(b.id) || uid("b"), title: str(b.title), text: str(b.text) }));
@@ -324,10 +371,14 @@ export function mergeAiEdit(d, patch) {
   }
   if (Array.isArray(patch.checklists)) {
     out.checklists = patch.checklists.filter((p) => p && typeof p === "object").map((p) => ({
-      id: str(p.id) || uid("p"), title: str(p.title), subtitle: str(p.subtitle), serviceKey: str(p.serviceKey) || "seo", packageId: str(p.packageId),
+      id: str(p.id) || uid("p"), title: str(p.title), subtitle: str(p.subtitle), serviceKey: str(p.serviceKey) || "seo", compare: strList(p.compare) || [],
       groups: (Array.isArray(p.groups) ? p.groups : []).filter((g) => g && typeof g === "object").map((g) => ({
         id: str(g.id) || uid("g"), title: str(g.title),
-        tasks: (Array.isArray(g.tasks) ? g.tasks : []).filter((t) => t && typeof t === "object").map((t) => ({ id: str(t.id) || uid("t"), text: str(t.text), qty: str(t.qty), details: strList(t.details) || [] })),
+        tasks: (Array.isArray(g.tasks) ? g.tasks : []).filter((t) => t && typeof t === "object").map((t) => ({
+          id: str(t.id) || uid("t"), text: str(t.text), qty: str(t.qty), details: strList(t.details) || [],
+          ...(strList(t.only) ? { only: strList(t.only) } : {}),
+          ...(t.qtyBy && typeof t.qtyBy === "object" ? { qtyBy: Object.fromEntries(Object.entries(t.qtyBy).map(([k, v]) => [k, str(v)])) } : {}),
+        })),
       })),
     }));
   }
