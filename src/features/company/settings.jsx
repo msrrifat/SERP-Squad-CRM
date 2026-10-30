@@ -1382,7 +1382,8 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark,
           {tab === "team" && <TeamSection company={company} onChange={onChange} clients={clients} onPrune={onTeamPrune} />}
           {tab === "accounting" && <AccountingSection company={company} onChange={onChange} clients={clients} />}
           {tab === "invoice" && <InvoiceSection company={company} onChange={onChange} clients={clients} />}
-          {tab === "proposal" && <ProposalSection company={company} onChange={onChange} clients={clients} />}
+          {tab === "proposal" && <ProposalSection company={company} onChange={onChange}
+            ai={(() => { const id = effectiveAiId(company); const a = id && company.apis?.[id]; return a?.values?.apiKey ? { provider: id, key: a.values.apiKey, model: a.values.model || undefined } : null; })()} />}
           {tab === "activity" && <ActivitySection company={company} />}
         </div>
       </main>
