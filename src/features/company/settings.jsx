@@ -20,6 +20,7 @@ import { assignedIds } from "../../lib/team.js";
 import { isoDate } from "../../lib/months.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { AccountingSection } from "./accounting.jsx";
+import { ProposalSection } from "./proposal.jsx";
 import { GoogleAccountsAdmin } from "../performance/googleaccounts.jsx";
 
 export const API_REGISTRY = [
@@ -1333,6 +1334,7 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark,
     { key: "team", label: "Team & permissions", icon: Shield, sub: "Members, logins, roles, project access" },
     { key: "accounting", label: "Accounting", icon: Wallet, sub: "Earnings & spendings per client" },
     { key: "invoice", label: "Invoices", icon: Receipt, sub: "Branded invoices per client" },
+    { key: "proposal", label: "Proposal template", icon: FileTextIcon, sub: "Client proposals: services, pricing, work checklist" },
     { key: "activity", label: "Activity log", icon: History, sub: "Who's doing what, where" },
   ];
   const active = TABS.find((t) => t.key === tab);
@@ -1380,6 +1382,7 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark,
           {tab === "team" && <TeamSection company={company} onChange={onChange} clients={clients} onPrune={onTeamPrune} />}
           {tab === "accounting" && <AccountingSection company={company} onChange={onChange} clients={clients} />}
           {tab === "invoice" && <InvoiceSection company={company} onChange={onChange} clients={clients} />}
+          {tab === "proposal" && <ProposalSection company={company} onChange={onChange} clients={clients} />}
           {tab === "activity" && <ActivitySection company={company} />}
         </div>
       </main>

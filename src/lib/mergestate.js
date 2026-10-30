@@ -143,6 +143,7 @@ const mergeCompany = (a, b) => {
        another session's save is merged in */
     savedReports: unionById(a.savedReports, b.savedReports),
     reportTemplates: unionById(a.reportTemplates, b.reportTemplates),
+    proposals: unionById(a.proposals, b.proposals),
     recordTemplates: unionById(a.recordTemplates, b.recordTemplates),
     chatGroups: unionById(a.chatGroups, b.chatGroups),
     activity: unionById(a.activity, b.activity).slice(0, 400),
