@@ -15,6 +15,13 @@
        (services, checklists, reporting, access, intro, closing) once the
        agency has saved its own version; otherwise the built-ins below.
 
+   A service can offer several PACKAGES (Basic $500 · Growth $900 …): each
+   package has its own price, points and checklist parts, and the document
+   compares them side by side. `packagesOf(service)` returns them, falling
+   back to the service's own price/points as a single package for proposals
+   saved before packages existed. A checklist part names its package with
+   `packageId` (empty = every package of that service).
+
    Every text may use {business} and {niche}: the document fills them from
    the sidebar, so renaming the brand or the niche updates every line.
    Checklist rows: { id, text, qty, details[] } — an empty qty prints as a
@@ -32,7 +39,8 @@ export function fill(text, d) {
   if (text == null) return "";
   const business = (d?.business || "").trim() || "your business";
   const niche = (d?.niche || "").trim() || "local service";
-  return String(text).replace(/\{business\}/gi, business).replace(/\{niche\}/gi, niche);
+  const website = String(d?.website || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "") || "your website";
+  return String(text).replace(/\{business\}/gi, business).replace(/\{niche\}/gi, niche).replace(/\{website\}/gi, website);
 }
 
 const bullets = (arr) => arr.map(([title, text]) => ({ id: uid("b"), title, text }));
@@ -42,15 +50,36 @@ export const DEFAULT_SERVICES = () => [
     id: "seo", key: "seo", enabled: true,
     title: "Local SEO",
     tagline: "Put {business} in front of people searching for {niche} services nearby.",
-    price: "$500 / month", priceNote: "Month to month, cancel anytime",
-    bullets: bullets([
-      ["Google Business Profile", "Optimized and managed every month: posts, photos, Q&A, review replies and accurate details for {business}."],
-      ["Website SEO", "{niche} service and location pages, blog posts, schema markup, speed and mobile fixes."],
-      ["Listings & citations", "Consistent name, address and phone across the directories that matter for {niche} businesses."],
-      ["Backlinks", "White-hat links from relevant, authoritative sources that strengthen the site."],
-      ["Technical SEO", "Search Console and Analytics set up, indexing issues fixed, site health watched."],
-      ["Monthly reporting", "A call plus rankings, profile views, website clicks and a local heat-map."],
-    ]),
+    price: "", priceNote: "", bullets: [],
+    packages: [
+      {
+        id: "seo-basic", name: "Basic", price: "$500 / month", priceNote: "Month to month, cancel anytime",
+        bullets: bullets([
+          ["Google Business Profile", "Optimized and managed every month: posts, photos, Q&A, review replies and accurate details for {business}."],
+          ["Website SEO", "{niche} service and location pages, schema markup, speed and mobile fixes."],
+          ["Blog posts", "5 keyword-targeted articles a month, 800–1000+ words each."],
+          ["Listings & citations", "Consistent name, address and phone across the directories that matter for {niche} businesses."],
+          ["Backlinks", "White-hat links from relevant, authoritative sources that strengthen the site."],
+          ["Technical SEO", "Search Console and Analytics set up, indexing issues fixed, site health watched."],
+          ["Monthly reporting", "A call plus rankings, profile views, website clicks and a local heat-map."],
+        ]),
+      },
+      {
+        id: "seo-growth", name: "Growth", price: "$900 / month", priceNote: "Month to month, cancel anytime",
+        bullets: bullets([
+          ["Google Business Profile", "Optimized and managed every month: posts, photos, Q&A, review replies and accurate details for {business}."],
+          ["Website SEO", "{niche} service and location pages, schema markup, speed and mobile fixes."],
+          ["Blog posts", "8 keyword-targeted articles a month, 800–1000+ words each."],
+          ["Listings & citations", "Consistent name, address and phone across the directories that matter for {niche} businesses."],
+          ["Backlinks", "White-hat links from relevant, authoritative sources that strengthen the site."],
+          ["Technical SEO", "Search Console and Analytics set up, indexing issues fixed, site health watched."],
+          ["Monthly reporting", "A call plus rankings, profile views, website clicks and a local heat-map."],
+          ["Guest posting", "4 guest posts a month on {niche}-related sites with 15+ domain authority and 500+ organic visits."],
+          ["Social media management", "Facebook, YouTube, Instagram, LinkedIn, X, Pinterest, Threads, TikTok and Bluesky: 3 posts a week on each."],
+          ["Social content creation", "Keyword-optimized captions, images and graphics made for every post."],
+        ]),
+      },
+    ],
   },
   {
     id: "ads", key: "ads", enabled: true,
@@ -82,6 +111,11 @@ export const DEFAULT_SERVICES = () => [
   },
 ];
 
+/* a service's packages; a service without any is its own single package */
+export const packagesOf = (s) => (Array.isArray(s?.packages) && s.packages.length
+  ? s.packages
+  : [{ id: `${s?.id || "svc"}-std`, name: "", price: s?.price || "", priceNote: s?.priceNote || "", bullets: s?.bullets || [], single: true }]);
+
 const task = (text, qty = "", details = []) => ({ id: uid("t"), text, qty, details });
 const group = (title, tasks) => ({ id: uid("g"), title, tasks });
 
@@ -102,9 +136,19 @@ const REPORTING = () => group("Monthly reporting", [
   task("Google Search Console report"),
 ]);
 
-export const DEFAULT_CHECKLISTS = () => [
+/* the three SEO months for one package: Basic (5 articles, no social
+   media) or Growth (8 articles, guest posts, social media on 9 platforms) */
+const GUEST = () => group("Guest posting", [
+  task("Guest posts on {niche}-related websites", "4", ["15+ domain authority", "500+ organic visits a month", "Same or related niche", "800+ words, keyword-targeted", "Do-follow link to the website"]),
+]);
+const SOCIAL = () => group("Social media management", [
+  task("Posts on Facebook, YouTube, Instagram, LinkedIn, X, Pinterest, Threads, TikTok and Bluesky", "3 / week each", ["Keyword-optimized captions", "Images and graphics for every post", "NAP, links and hashtags", "Scheduled and published for you"]),
+  task("Profile optimization on every platform", "9 platforms"),
+  task("Comment and message monitoring"),
+]);
+const seoMonths = (packageId, growth) => [
   {
-    id: uid("p"), title: "Month 01", subtitle: "Setup, research and foundation for {business}", serviceKey: "seo",
+    id: uid("p"), packageId, title: "Month 01", subtitle: "Setup, research and foundation for {business}", serviceKey: "seo",
     groups: [
       group("Initial research & planning", [
         task("Google Search Console setup"), task("Google Analytics setup"),
@@ -125,15 +169,16 @@ export const DEFAULT_CHECKLISTS = () => [
         task("Website SEO audit"), task("Location optimization"), task("GBP map embedding into the website"),
         task("Header menu optimization"), task("Footer menu optimization"), task("Structured data on the homepage"),
         task("About page optimization"), task("Contact page optimization"),
-        PAGES("5+"), BLOG(), task("Technical optimization"),
+        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
+      ...(growth ? [GUEST(), SOCIAL()] : []),
       group("Off-page SEO", [task("Social profile backlinks", "10"), task("Social signals"), task("Backlinks indexing")]),
       REPORTING(),
     ],
   },
   {
-    id: uid("p"), title: "Month 02", subtitle: "Re-optimization and growth", serviceKey: "seo",
+    id: uid("p"), packageId, title: "Month 02", subtitle: "Re-optimization and growth", serviceKey: "seo",
     groups: [
       group("Research", [
         task("Search Console keywords: re-optimize the website and GBP"),
@@ -143,17 +188,15 @@ export const DEFAULT_CHECKLISTS = () => [
         task("Re-optimize the Business Profile for new keywords"), task("Q&A", "1–2"), POSTS("12"), IMAGES(),
         task("Holiday hours and availability updates"), task("Review responding"),
       ]),
-      group("Social media activity (Facebook, Instagram, YouTube)", [
-        task("Publishing posts on Facebook, Instagram and YouTube", "12", ["The GBP posts, re-optimized with NAP, links and hashtags", "Keyword targeting", "150–200 words per post", "Copyright-free images"]),
-      ]),
       group("Website on-page SEO", [
         task("Re-optimize website content with new Search Console keywords"),
         task("Meta titles and descriptions", "All pages"), task("Location optimization"),
         task("GBP map embedding into service pages"), task("Image optimization", "All images"),
         task("Structured data on service pages", "10"), task("Page title (H1) optimization", "All pages"),
-        PAGES("5"), BLOG(), task("Technical optimization"),
+        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
+      ...(growth ? [GUEST(), SOCIAL()] : []),
       group("Off-page SEO", [
         task("Social profile backlinks", "10"), task("Video backlinks (YouTube, Vimeo, Dailymotion)", "3"),
         task("Google entity stack backlinks", "10"), task("Adding links to schema for indexing"), task("Backlinks indexing"),
@@ -162,7 +205,7 @@ export const DEFAULT_CHECKLISTS = () => [
     ],
   },
   {
-    id: uid("p"), title: "Month 03", subtitle: "Authority and expansion", serviceKey: "seo",
+    id: uid("p"), packageId, title: "Month 03", subtitle: "Authority and expansion", serviceKey: "seo",
     groups: [
       group("Research", [
         task("Search Console keywords: re-optimize the website and GBP"),
@@ -172,16 +215,14 @@ export const DEFAULT_CHECKLISTS = () => [
         task("Re-optimize the Business Profile for new keywords"), task("Q&A", "1–2"), POSTS("12"), IMAGES(),
         task("Holiday hours and availability updates"), task("Review responding"),
       ]),
-      group("Social media activity (Facebook, Instagram, YouTube)", [
-        task("Publishing posts on Facebook, Instagram and YouTube", "12", ["The GBP posts, re-optimized with NAP, links and hashtags", "Keyword targeting", "150–200 words per post", "Copyright-free images"]),
-      ]),
       group("Website on-page SEO", [
         task("Re-optimize website content with new Search Console keywords"),
         task("H2, H3 and H4 heading optimization", "All pages"), task("Internal linking and anchor text planning"),
         task("Structured data on service / location pages", "10+"),
-        PAGES("5"), BLOG(), task("Technical optimization"),
+        PAGES(growth ? "8" : "5"), BLOG(), task("Technical optimization"),
       ]),
       CITATIONS(),
+      ...(growth ? [GUEST(), SOCIAL()] : []),
       group("Off-page SEO", [
         task("Social profile backlinks", "20"), task("Web 2.0 backlinks with the map embedded", "5"),
         task("Article submissions", "2"), task("Other backlinks: forums, social bookmarking", "20"),
@@ -191,6 +232,7 @@ export const DEFAULT_CHECKLISTS = () => [
     ],
   },
 ];
+export const DEFAULT_CHECKLISTS = () => [...seoMonths("seo-basic", false), ...seoMonths("seo-growth", true)];
 
 export const DEFAULT_REPORTING = () => [
   "Monthly phone call to discuss performance, insights and strategy adjustments",
@@ -229,7 +271,7 @@ export function blankProposal(company, tpl = null) {
     id: uid("pp"),
     no: `P-${today.getFullYear()}-${String(n).padStart(3, "0")}`,
     title: "Local SEO & Marketing Proposal for {business}",
-    business: "", niche: "", preparedFor: "",
+    business: "", niche: "", website: "", preparedFor: "",
     preparedBy: owner?.name || company?.name || "",
     contact: [agencySite(company), owner?.email].filter(Boolean).join(" · "),
     date: iso(today),
@@ -271,16 +313,18 @@ export function mergeAiEdit(d, patch) {
   if (typeof patch.closing === "string") out.closing = patch.closing;
   if (strList(patch.reporting)) out.reporting = strList(patch.reporting);
   if (strList(patch.access)) out.access = strList(patch.access);
+  const bulletsOf = (v) => (Array.isArray(v) ? v : []).filter((b) => b && typeof b === "object").map((b) => ({ id: str(b.id) || uid("b"), title: str(b.title), text: str(b.text) }));
   if (Array.isArray(patch.services)) {
     out.services = patch.services.filter((s) => s && typeof s === "object").map((s, i) => ({
       id: str(s.id) || d.services?.[i]?.id || uid("s"), key: str(s.key) || d.services?.[i]?.key || "seo",
       enabled: s.enabled !== false, title: str(s.title), tagline: str(s.tagline), price: str(s.price), priceNote: str(s.priceNote),
-      bullets: (Array.isArray(s.bullets) ? s.bullets : []).filter((b) => b && typeof b === "object").map((b) => ({ id: str(b.id) || uid("b"), title: str(b.title), text: str(b.text) })),
+      bullets: bulletsOf(s.bullets),
+      ...(Array.isArray(s.packages) ? { packages: s.packages.filter((p) => p && typeof p === "object").map((p) => ({ id: str(p.id) || uid("pk"), name: str(p.name), price: str(p.price), priceNote: str(p.priceNote), bullets: bulletsOf(p.bullets) })) } : {}),
     }));
   }
   if (Array.isArray(patch.checklists)) {
     out.checklists = patch.checklists.filter((p) => p && typeof p === "object").map((p) => ({
-      id: str(p.id) || uid("p"), title: str(p.title), subtitle: str(p.subtitle), serviceKey: str(p.serviceKey) || "seo",
+      id: str(p.id) || uid("p"), title: str(p.title), subtitle: str(p.subtitle), serviceKey: str(p.serviceKey) || "seo", packageId: str(p.packageId),
       groups: (Array.isArray(p.groups) ? p.groups : []).filter((g) => g && typeof g === "object").map((g) => ({
         id: str(g.id) || uid("g"), title: str(g.title),
         tasks: (Array.isArray(g.tasks) ? g.tasks : []).filter((t) => t && typeof t === "object").map((t) => ({ id: str(t.id) || uid("t"), text: str(t.text), qty: str(t.qty), details: strList(t.details) || [] })),

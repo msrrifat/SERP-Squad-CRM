@@ -20,7 +20,7 @@ import { Card, Labeled, Toggle, askConfirm, askDelete, inputCls } from "../../ui
 import { aiGenerate } from "../../lib/aiwrite.jsx";
 import {
   BRAND_BLUE, DEFAULT_ACCESS, DEFAULT_CHECKLISTS, DEFAULT_CLOSING, DEFAULT_INTRO, DEFAULT_REPORTING, DEFAULT_SERVICES,
-  blankProposal, editableOf, fill, fmtLongDate, mergeAiEdit, templateOf, uid,
+  blankProposal, editableOf, fill, fmtLongDate, mergeAiEdit, packagesOf, templateOf, uid,
 } from "../../lib/proposal.js";
 
 const ICONS = { seo: Search, ads: Megaphone, web: Layout };
@@ -96,7 +96,7 @@ function ProposalDoc({ d, company }) {
               </div>
               <div className="ll-mono" style={{ fontSize: 11, letterSpacing: 2.5, textTransform: "uppercase", opacity: 0.8, marginTop: 22 }}>Prepared for</div>
               <div className="ll-display" style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.12, marginTop: 6, textShadow: "0 2px 12px rgba(0,0,0,0.12)" }}>{business}</div>
-              {(d.preparedFor || d.niche) && <div style={{ fontSize: 13, opacity: 0.9, marginTop: 8 }}>{[d.preparedFor && `Attn. ${d.preparedFor}`, d.niche].filter(Boolean).join(" · ")}</div>}
+              {(d.preparedFor || d.niche || d.website) && <div style={{ fontSize: 13, opacity: 0.9, marginTop: 8 }}>{[d.preparedFor && `Attn. ${d.preparedFor}`, d.niche, d.website && String(d.website).replace(/^https?:\/\//, "").replace(/\/$/, "")].filter(Boolean).join(" · ")}</div>}
             </div>
           </div>
           <div style={{ padding: "48px 56px 0", flex: "1 1 auto", display: "flex", flexDirection: "column" }}>
@@ -126,6 +126,7 @@ function ProposalDoc({ d, company }) {
         <div style={{ display: "grid", gap: 16 }}>
           {services.map((s, i) => {
             const Icon = ICONS[s.key] || Search;
+            const pk = packagesOf(s);
             return (
               <div key={s.id} className="pp-keep" style={{ border: "1px solid #E5E7EB", borderRadius: 14, padding: "18px 20px", background: "#fff" }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -133,21 +134,65 @@ function ProposalDoc({ d, company }) {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                       <span className="ll-display" style={{ fontSize: 17, fontWeight: 700, color: "#111827" }}>{String(i + 1).padStart(2, "0")} · {f(s.title)}</span>
-                      {s.price && <span className="ll-mono" style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, color: accent, background: accent + "12", borderRadius: 8, padding: "3px 10px" }}>{s.price}</span>}
+                      {pk.length === 1 && pk[0].price && <span className="ll-mono" style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, color: accent, background: accent + "12", borderRadius: 8, padding: "3px 10px" }}>{pk[0].price}</span>}
+                      {pk.length > 1 && <span className="ll-mono" style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, color: accent, background: accent + "12", borderRadius: 8, padding: "3px 10px" }}>{pk.length} packages</span>}
                     </div>
                     {s.tagline && <div style={{ fontSize: 12.5, color: "#6B7280", marginTop: 3 }}>{f(s.tagline)}</div>}
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 18px", marginTop: 14 }}>
-                  {(s.bullets || []).map((b) => (
-                    <div key={b.id} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                      <span style={{ marginTop: 2, flex: "0 0 auto" }}><Tick /></span>
-                      <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "#374151" }}>
-                        {b.title && <b style={{ color: "#111827" }}>{f(b.title)}</b>}{b.title && b.text ? " — " : ""}{f(b.text)}
+                {pk.length <= 1 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 18px", marginTop: 14 }}>
+                    {(pk[0]?.bullets || []).map((b) => (
+                      <div key={b.id} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                        <span style={{ marginTop: 2, flex: "0 0 auto" }}><Tick /></span>
+                        <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "#374151" }}>
+                          {b.title && <b style={{ color: "#111827" }}>{f(b.title)}</b>}{b.title && b.text ? " — " : ""}{f(b.text)}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  /* several packages: one comparison table, a column per package */
+                  (() => {
+                    const rows = [];
+                    pk.forEach((p) => (p.bullets || []).forEach((b) => { const k = f(b.title).trim().toLowerCase(); if (k && !rows.some((r) => r.k === k)) rows.push({ k, title: f(b.title), text: f(b.text) }); }));
+                    const cell = (p, r) => (p.bullets || []).find((b) => f(b.title).trim().toLowerCase() === r.k);
+                    return (
+                      <table className="pp-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 14 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 9.5, letterSpacing: 1, textTransform: "uppercase", color: "#9CA3AF", borderBottom: "1px solid #E5E7EB" }}>What's included</th>
+                            {pk.map((p, j) => (
+                              <th key={p.id} style={{ textAlign: "center", padding: "6px 8px", width: 118, borderBottom: "1px solid #E5E7EB", background: j === pk.length - 1 ? accent + "0D" : "transparent", borderRadius: "8px 8px 0 0" }}>
+                                <div className="ll-display" style={{ fontSize: 12.5, fontWeight: 700, color: "#111827" }}>{p.name || "Package"}</div>
+                                <div className="ll-mono" style={{ fontSize: 10.5, fontWeight: 700, color: accent }}>{p.price}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={r.k} style={{ borderBottom: "1px solid #EEF0F3" }}>
+                              <td style={{ padding: "6px 8px", verticalAlign: "top" }}>
+                                <b style={{ color: "#111827" }}>{r.title}</b>
+                                {r.text && <div style={{ fontSize: 10.5, color: "#6B7280", lineHeight: 1.4 }}>{r.text}</div>}
+                              </td>
+                              {pk.map((p, j) => {
+                                const b = cell(p, r);
+                                const same = b && f(b.text).trim() === r.text.trim();
+                                return (
+                                  <td key={p.id} style={{ padding: "6px 8px", textAlign: "center", verticalAlign: "top", background: j === pk.length - 1 ? accent + "0D" : "transparent" }}>
+                                    {!b ? <span style={{ color: "#D1D5DB" }}>—</span> : same || !f(b.text).trim() ? <Tick /> : <span style={{ fontSize: 10.5, color: "#111827", fontWeight: 600, lineHeight: 1.35, display: "block", textAlign: "left" }}>{f(b.text)}</span>}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()
+                )}
               </div>
             );
           })}
@@ -166,16 +211,16 @@ function ProposalDoc({ d, company }) {
             </tr>
           </thead>
           <tbody>
-            {services.map((s) => (
-              <tr key={s.id} style={{ borderBottom: "1px solid #E5E7EB" }}>
-                <td style={{ padding: "11px 14px", fontWeight: 600, color: "#111827", verticalAlign: "top", width: 190 }}>{f(s.title)}</td>
-                <td style={{ padding: "11px 14px", color: "#4B5563", verticalAlign: "top", fontSize: 11.5 }}>{(s.bullets || []).map((b) => f(b.title)).filter(Boolean).join(" · ")}</td>
+            {services.flatMap((s) => packagesOf(s).map((p) => (
+              <tr key={s.id + p.id} style={{ borderBottom: "1px solid #E5E7EB" }}>
+                <td style={{ padding: "11px 14px", fontWeight: 600, color: "#111827", verticalAlign: "top", width: 190 }}>{f(s.title)}{p.name ? <div style={{ fontSize: 11, color: accent, fontWeight: 700 }}>{p.name}</div> : null}</td>
+                <td style={{ padding: "11px 14px", color: "#4B5563", verticalAlign: "top", fontSize: 11.5 }}>{(p.bullets || []).map((b) => f(b.title)).filter(Boolean).join(" · ")}</td>
                 <td style={{ padding: "11px 14px", textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                  <div className="ll-mono" style={{ fontWeight: 700, color: accent }}>{s.price || "—"}</div>
-                  {s.priceNote && <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 2 }}>{s.priceNote}</div>}
+                  <div className="ll-mono" style={{ fontWeight: 700, color: accent }}>{p.price || "—"}</div>
+                  {p.priceNote && <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 2 }}>{p.priceNote}</div>}
                 </td>
               </tr>
-            ))}
+            )))}
           </tbody>
         </table>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, marginTop: 40 }}>
@@ -203,9 +248,11 @@ function ProposalDoc({ d, company }) {
       {/* ---- work checklist, one part per page ---- */}
       {(d.checklists || []).map((part, pi) => {
         const svc = services.find((s) => s.key === part.serviceKey);
+        const pkg = svc && part.packageId ? packagesOf(svc).find((p) => p.id === part.packageId) : null;
+        const label = [svc && f(svc.title), pkg && pkg.name && `${pkg.name} package${pkg.price ? ` · ${pkg.price}` : ""}`].filter(Boolean).join(" · ");
         return (
           <Page key={part.id}>
-            <H kicker={`Work checklist · part ${pi + 1} of ${d.checklists.length}${svc ? ` · ${f(svc.title)}` : ""}`} title={f(part.title)} sub={f(part.subtitle)} />
+            <H kicker={`Work checklist · part ${pi + 1} of ${d.checklists.length}${label ? ` · ${label}` : ""}`} title={pkg?.name ? `${pkg.name} · ${f(part.title)}` : f(part.title)} sub={f(part.subtitle)} />
             <table className="pp-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
               <thead>
                 <tr style={{ background: "#F3F4F6" }}>
@@ -299,8 +346,9 @@ const move = (arr, i, dir) => { const j = i + dir; if (j < 0 || j >= arr.length)
 const AI_SYSTEM = `You edit a marketing agency's client proposal. You receive the proposal as JSON and an instruction from the agency.
 Return ONLY a JSON object (no prose, no code fences) containing the keys you changed, chosen from: title, intro, services, checklists, reporting, access, closing. Return a key with its COMPLETE new value (whole arrays), never a fragment.
 Keep every existing "id" and "key" value; give new items an id of your own. Keep the shapes exactly:
-services[] = { id, key ("seo"|"ads"|"web"), enabled, title, tagline, price, priceNote, bullets: [{ id, title, text }] }
-checklists[] = { id, title, subtitle, serviceKey, groups: [{ id, title, tasks: [{ id, text, qty, details: [string] }] }] }
+services[] = { id, key ("seo"|"ads"|"web"), enabled, title, tagline, price, priceNote, bullets: [{ id, title, text }], packages: [{ id, name, price, priceNote, bullets: [{ id, title, text }] }] }
+  (a service with packages keeps price/bullets empty at the service level; packages are compared side by side, so give them the same point titles and differ in the text, e.g. "5 articles" vs "8 articles")
+checklists[] = { id, title, subtitle, serviceKey, packageId (the package these months belong to, "" for all), groups: [{ id, title, tasks: [{ id, text, qty, details: [string] }] }] }
 reporting and access are arrays of strings. qty is a short string ("8–15", "20", "All pages") or "" for a plain check mark.
 Writing rules: short and concrete, plain words a business owner understands, no hype, no em dashes, at most one line per service point. You may use the placeholders {business} and {niche}: they are replaced with the prospect's brand name and niche.`;
 const QUICK = [
@@ -394,6 +442,25 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
   const patchPart = (id, p) => set((x) => ({ checklists: x.checklists.map((c) => (c.id === id ? { ...c, ...(typeof p === "function" ? p(c) : p) } : c)) }));
   const patchGroup = (pid, gid, p) => patchPart(pid, (c) => ({ groups: c.groups.map((g) => (g.id === gid ? { ...g, ...(typeof p === "function" ? p(g) : p) } : g)) }));
   const patchTask = (pid, gid, tid, p) => patchGroup(pid, gid, (g) => ({ tasks: g.tasks.map((t) => (t.id === tid ? { ...t, ...p } : t)) }));
+  /* packages: a service's price tiers; duplicating one copies its checklist
+     parts too, so a second tier starts from the first and is then adjusted */
+  const patchPkg = (sid, pid, patch) => patchSvc(sid, (x) => ({ price: "", priceNote: "", bullets: [], packages: packagesOf(x).map((q) => (q.id === pid ? { ...q, ...patch, single: undefined } : { ...q, single: undefined })) }));
+  const duplicatePkg = (s, p) => set((x) => {
+    const svc = x.services.find((y) => y.id === s.id);
+    const list = packagesOf(svc).map((q) => ({ ...q, single: undefined }));
+    const i = list.findIndex((q) => q.id === p.id);
+    const np = { ...clone(p), id: uid("pk"), name: `${p.name || "Package"} (copy)`, single: undefined, bullets: (p.bullets || []).map((b) => ({ ...b, id: uid("b") })) };
+    list.splice(i + 1, 0, np);
+    const copied = x.checklists.filter((c) => c.serviceKey === s.key && c.packageId === p.id).map((c) => ({ ...reId(clone(c)), packageId: np.id }));
+    const last = Math.max(-1, ...x.checklists.map((c, k) => (c.serviceKey === s.key && c.packageId === p.id ? k : -1)));
+    const cl = x.checklists.slice(); cl.splice(last + 1, 0, ...copied);
+    return { services: x.services.map((y) => (y.id === s.id ? { ...y, price: "", priceNote: "", bullets: [], packages: list } : y)), checklists: cl };
+  });
+  const deletePkg = async (s, p) => {
+    const n = d.checklists.filter((c) => c.serviceKey === s.key && c.packageId === p.id).length;
+    if (!await askDelete(`the "${p.name || "Package"}" package${n ? ` and its ${n} checklist part${n === 1 ? "" : "s"}` : ""}`)) return;
+    set((x) => ({ services: x.services.map((y) => (y.id === s.id ? { ...y, packages: packagesOf(y).filter((q) => q.id !== p.id).map((q) => ({ ...q, single: undefined })) } : y)), checklists: x.checklists.filter((c) => !(c.serviceKey === s.key && c.packageId === p.id)) }));
+  };
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const reId = (part) => ({ ...part, id: uid("p"), groups: part.groups.map((g) => ({ ...g, id: uid("g"), tasks: g.tasks.map((t) => ({ ...t, id: uid("t") })) })) });
 
@@ -451,7 +518,8 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
               <Labeled label="Brand / business name"><input value={d.business} onChange={(e) => set({ business: e.target.value })} className={inputCls} placeholder="Appliance Repair Solutions Plus" /></Labeled>
               <Labeled label="Business niche"><input value={d.niche || ""} onChange={(e) => set({ niche: e.target.value })} className={inputCls} placeholder="appliance repair" /></Labeled>
             </div>
-            <div className="text-[10.5px] text-gray-400">Every line in the document that says <span className="ll-mono">{"{business}"}</span> or <span className="ll-mono">{"{niche}"}</span> updates from these two fields: change the name and the whole proposal follows.</div>
+            <Labeled label="Website"><input value={d.website || ""} onChange={(e) => set({ website: e.target.value })} className={inputCls} placeholder="www.example.com" /></Labeled>
+            <div className="text-[10.5px] text-gray-400">Every line in the document that says <span className="ll-mono">{"{business}"}</span>, <span className="ll-mono">{"{niche}"}</span> or <span className="ll-mono">{"{website}"}</span> updates from these fields: change the name and the whole proposal follows.</div>
             <Labeled label="Proposal title"><input value={d.title} onChange={(e) => set({ title: e.target.value })} className={inputCls} /></Labeled>
             <div className="grid grid-cols-2 gap-2">
               <Labeled label="Contact person"><input value={d.preparedFor} onChange={(e) => set({ preparedFor: e.target.value })} className={inputCls} /></Labeled>
@@ -486,23 +554,19 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
                   <div className="space-y-2 border-t border-gray-100 px-3 py-2.5">
                     <Labeled label="Title"><input value={s.title} onChange={(e) => patchSvc(s.id, { title: e.target.value })} className={inputCls} /></Labeled>
                     <Labeled label="One-line promise"><input value={s.tagline} onChange={(e) => patchSvc(s.id, { tagline: e.target.value })} className={inputCls} /></Labeled>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Labeled label="Price"><input value={s.price} onChange={(e) => patchSvc(s.id, { price: e.target.value })} className={inputCls} placeholder="$500 / month" /></Labeled>
-                      <Labeled label="Price note"><input value={s.priceNote} onChange={(e) => patchSvc(s.id, { priceNote: e.target.value })} className={inputCls} placeholder="Cancel anytime" /></Labeled>
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-400">Packages</span>
+                      <span className="text-[10.5px] text-gray-400">one price each; two or more print as a side-by-side comparison</span>
                     </div>
-                    <div className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-400">What's included</div>
-                    {(s.bullets || []).map((b, bi) => (
-                      <div key={b.id} className="rounded-lg border border-gray-100 bg-gray-50/60 p-2">
-                        <div className="flex items-center gap-1">
-                          <input value={b.title} placeholder="Point" onChange={(e) => patchSvc(s.id, (x) => ({ bullets: x.bullets.map((y) => (y.id === b.id ? { ...y, title: e.target.value } : y)) }))} className={inputCls + " font-semibold"} />
-                          <IconBtn title="Move up" disabled={bi === 0} onClick={() => patchSvc(s.id, (x) => ({ bullets: move(x.bullets, bi, -1) }))}><ArrowUp size={12} /></IconBtn>
-                          <IconBtn title="Move down" disabled={bi === s.bullets.length - 1} onClick={() => patchSvc(s.id, (x) => ({ bullets: move(x.bullets, bi, 1) }))}><ArrowDown size={12} /></IconBtn>
-                          <IconBtn danger title="Remove" onClick={() => patchSvc(s.id, (x) => ({ bullets: x.bullets.filter((y) => y.id !== b.id) }))}><Trash2 size={12} /></IconBtn>
-                        </div>
-                        <input value={b.text} placeholder="One short line about it" onChange={(e) => patchSvc(s.id, (x) => ({ bullets: x.bullets.map((y) => (y.id === b.id ? { ...y, text: e.target.value } : y)) }))} className={inputCls + " mt-1 text-[12px]"} />
-                      </div>
+                    {packagesOf(s).map((p, pi2) => (
+                      <PackageEditor key={p.id} s={s} p={p} index={pi2} count={packagesOf(s).length} accent={accent}
+                        parts={d.checklists.filter((c) => c.serviceKey === s.key && c.packageId === p.id).length}
+                        onChange={(patch) => patchPkg(s.id, p.id, patch)}
+                        onMove={(dir) => patchSvc(s.id, (x) => ({ packages: move(packagesOf(x).map((q) => ({ ...q, single: undefined })), pi2, dir) }))}
+                        onDuplicate={() => duplicatePkg(s, p)}
+                        onDelete={() => deletePkg(s, p)} />
                     ))}
-                    <button onClick={() => patchSvc(s.id, (x) => ({ bullets: [...(x.bullets || []), { id: uid("b"), title: "", text: "" }] }))} className="flex items-center gap-1 text-[11.5px] font-semibold" style={{ color: accent }}><Plus size={12} /> Add point</button>
+                    <button onClick={() => patchSvc(s.id, (x) => ({ packages: [...packagesOf(x).map((q) => ({ ...q, single: undefined })), { id: uid("pk"), name: "New package", price: "", priceNote: "", bullets: [] }] }))} className="flex items-center gap-1 text-[11.5px] font-semibold" style={{ color: accent }}><Plus size={12} /> Add package</button>
                   </div>
                 )}
               </div>
@@ -517,7 +581,7 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
                 <div className="flex items-center gap-1 px-2.5 py-2">
                   <button onClick={() => setPartOpen(partOpen === part.id ? null : part.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
                     {partOpen === part.id ? <ChevronDown size={13} className="text-gray-400" /> : <ChevronRight size={13} className="text-gray-400" />}
-                    <span className="truncate text-[12.5px] font-semibold text-gray-800">{part.title || `Part ${pi + 1}`}</span>
+                    <span className="truncate text-[12.5px] font-semibold text-gray-800">{(() => { const svc = d.services.find((s) => s.key === part.serviceKey); const pkg = svc && part.packageId ? packagesOf(svc).find((p) => p.id === part.packageId) : null; return pkg?.name ? `${pkg.name} · ` : ""; })()}{part.title || `Part ${pi + 1}`}</span>
                     <span className="ll-mono text-[10px] text-gray-400">{part.groups.reduce((n, g) => n + g.tasks.length, 0)} rows</span>
                   </button>
                   <IconBtn title="Move part up" disabled={pi === 0} onClick={() => set((x) => ({ checklists: move(x.checklists, pi, -1) }))}><ArrowUp size={12} /></IconBtn>
@@ -531,12 +595,22 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
                       <Labeled label="Part title"><input value={part.title} onChange={(e) => patchPart(part.id, { title: e.target.value })} className={inputCls} placeholder="Month 01" /></Labeled>
                       <Labeled label="Subtitle"><input value={part.subtitle || ""} onChange={(e) => patchPart(part.id, { subtitle: e.target.value })} className={inputCls} placeholder="Setup and research" /></Labeled>
                     </div>
-                    <Labeled label="Belongs to service">
-                      <select value={part.serviceKey || ""} onChange={(e) => patchPart(part.id, { serviceKey: e.target.value })} className={inputCls + " bg-white"}>
-                        <option value="">— general —</option>
-                        {d.services.map((s) => <option key={s.id} value={s.key}>{s.title}</option>)}
-                      </select>
-                    </Labeled>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Labeled label="Belongs to service">
+                        <select value={part.serviceKey || ""} onChange={(e) => patchPart(part.id, { serviceKey: e.target.value, packageId: "" })} className={inputCls + " bg-white"}>
+                          <option value="">— general —</option>
+                          {d.services.map((s) => <option key={s.id} value={s.key}>{s.title}</option>)}
+                        </select>
+                      </Labeled>
+                      <Labeled label="Package">
+                        {(() => { const svc = d.services.find((s) => s.key === part.serviceKey); const pk = svc ? packagesOf(svc) : []; return (
+                          <select value={part.packageId || ""} onChange={(e) => patchPart(part.id, { packageId: e.target.value })} className={inputCls + " bg-white"} disabled={pk.length <= 1}>
+                            <option value="">{pk.length <= 1 ? "— the only package —" : "— all packages —"}</option>
+                            {pk.length > 1 && pk.map((p) => <option key={p.id} value={p.id}>{p.name || "Package"}{p.price ? ` · ${p.price}` : ""}</option>)}
+                          </select>
+                        ); })()}
+                      </Labeled>
+                    </div>
                     {part.groups.map((g, gi) => (
                       <div key={g.id} className="rounded-lg border border-gray-100 bg-gray-50/70 p-2">
                         <div className="flex items-center gap-1">
@@ -577,6 +651,50 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
 
       {/* print copy, paginated by the browser */}
       {createPortal(<div className="pp-print ll-root"><ProposalDoc d={d} company={company} /></div>, document.body)}
+    </div>
+  );
+}
+
+function PackageEditor({ s, p, index, count, accent, parts, onChange, onMove, onDuplicate, onDelete }) {
+  const [open, setOpen] = useState(index === 0);
+  const setB = (fn) => onChange({ bullets: fn(p.bullets || []) });
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white">
+      <div className="flex items-center gap-1 px-2.5 py-2">
+        <button onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          {open ? <ChevronDown size={13} className="text-gray-400" /> : <ChevronRight size={13} className="text-gray-400" />}
+          <span className="truncate text-[12.5px] font-semibold text-gray-800">{p.name || (p.single ? "Standard" : "Package")}</span>
+          {p.price && <span className="ll-mono text-[10.5px] font-semibold" style={{ color: accent }}>{p.price}</span>}
+          <span className="ll-mono text-[10px] text-gray-400">{(p.bullets || []).length} points · {parts} month{parts === 1 ? "" : "s"}</span>
+        </button>
+        <IconBtn title="Move package up" disabled={index === 0} onClick={() => onMove(-1)}><ArrowUp size={12} /></IconBtn>
+        <IconBtn title="Move package down" disabled={index === count - 1} onClick={() => onMove(1)}><ArrowDown size={12} /></IconBtn>
+        <IconBtn title="Duplicate this package with its monthly checklist — then change the price and the points that differ" onClick={onDuplicate}><Copy size={12} /></IconBtn>
+        <IconBtn danger title="Delete package" disabled={count <= 1} onClick={onDelete}><Trash2 size={12} /></IconBtn>
+      </div>
+      {open && (
+        <div className="space-y-2 border-t border-gray-100 px-2.5 py-2.5">
+          <div className="grid grid-cols-3 gap-2">
+            <Labeled label="Package name"><input value={p.name || ""} onChange={(e) => onChange({ name: e.target.value })} className={inputCls} placeholder="Basic" /></Labeled>
+            <Labeled label="Price"><input value={p.price || ""} onChange={(e) => onChange({ price: e.target.value })} className={inputCls} placeholder="$500 / month" /></Labeled>
+            <Labeled label="Price note"><input value={p.priceNote || ""} onChange={(e) => onChange({ priceNote: e.target.value })} className={inputCls} placeholder="Cancel anytime" /></Labeled>
+          </div>
+          <div className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-400">What's included</div>
+          {(p.bullets || []).map((b, bi) => (
+            <div key={b.id} className="rounded-lg border border-gray-100 bg-gray-50/60 p-2">
+              <div className="flex items-center gap-1">
+                <input value={b.title} placeholder="Point" onChange={(e) => setB((x) => x.map((y) => (y.id === b.id ? { ...y, title: e.target.value } : y)))} className={inputCls + " font-semibold"} />
+                <IconBtn title="Move up" disabled={bi === 0} onClick={() => setB((x) => move(x, bi, -1))}><ArrowUp size={12} /></IconBtn>
+                <IconBtn title="Move down" disabled={bi === (p.bullets || []).length - 1} onClick={() => setB((x) => move(x, bi, 1))}><ArrowDown size={12} /></IconBtn>
+                <IconBtn danger title="Remove" onClick={() => setB((x) => x.filter((y) => y.id !== b.id))}><Trash2 size={12} /></IconBtn>
+              </div>
+              <input value={b.text} placeholder="One short line about it" onChange={(e) => setB((x) => x.map((y) => (y.id === b.id ? { ...y, text: e.target.value } : y)))} className={inputCls + " mt-1 text-[12px]"} />
+            </div>
+          ))}
+          <button onClick={() => setB((x) => [...x, { id: uid("b"), title: "", text: "" }])} className="flex items-center gap-1 text-[11.5px] font-semibold" style={{ color: accent }}><Plus size={12} /> Add point</button>
+          <div className="text-[10.5px] text-gray-400">Points with the same title line up as one row in the comparison; a different text shows in that package's column.</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -644,7 +762,7 @@ export function ProposalSection({ company, onChange, ai = null }) {
               <div className="truncate text-[11.5px] text-gray-500">{fill(p.title, p)}</div>
               <div className="ll-mono mt-1 flex flex-wrap gap-x-2 text-[10px] text-gray-400">
                 <span>{p.no}</span><span>{fmtLongDate(p.date)}</span>
-                <span>{(p.services || []).filter((s) => s.enabled !== false).map((s) => s.title).join(" · ")}</span>
+                <span>{(p.services || []).filter((s) => s.enabled !== false).map((s) => { const pk = packagesOf(s); return pk.length > 1 ? `${s.title} (${pk.map((q) => q.name || "package").join(" / ")})` : s.title; }).join(" · ")}</span>
                 <span>{(p.checklists || []).length} checklist parts</span>
               </div>
             </div>
