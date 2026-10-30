@@ -118,7 +118,7 @@ function ProposalDoc({ d, company }) {
               </div>
             )}
             <div className="ll-mono" style={{ fontSize: 11, letterSpacing: 2.5, textTransform: "uppercase", opacity: 0.8, marginTop: 22 }}>Prepared for</div>
-            <div className="ll-display" style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.12, marginTop: 6, textShadow: "0 2px 12px rgba(0,0,0,0.12)" }}>{business}</div>
+            <div className="ll-display" style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.12, marginTop: 6 }}>{business}</div>
             {(d.preparedFor || d.niche || d.website) && <div style={{ fontSize: 13, opacity: 0.9, marginTop: 8 }}>{[d.preparedFor && `Attn. ${d.preparedFor}`, d.niche, d.website && String(d.website).replace(/^https?:\/\//, "").replace(/\/$/, "")].filter(Boolean).join(" · ")}</div>}
           </div>
         </div>
@@ -307,7 +307,7 @@ function ProposalDoc({ d, company }) {
               const tasks = (g.tasks || []).filter(vis);
               return tasks.map((t, ti) => (
                 <tr key={t.id} style={{ borderBottom: "1px solid #EEF0F3", borderTop: ti === 0 ? "2px solid #E5E7EB" : undefined }}>
-                  {ti === 0 && <td rowSpan={tasks.length} style={{ padding: "9px 10px", verticalAlign: "top", fontWeight: 700, color: accent, fontSize: 11.5, background: accent + "08" }}>{f(g.title)}</td>}
+                  <td style={{ padding: ti === 0 ? "9px 10px" : "0 10px", verticalAlign: "top", fontWeight: 700, color: accent, fontSize: 11.5, background: accent + "08" }}>{ti === 0 ? f(g.title) : ""}</td>
                   <td style={{ padding: "6px 10px", color: "#1F2937", verticalAlign: "top" }}>{f(t.text)}<Details t={t} /></td>
                   {multi ? cols.map((c, j) => (
                     <td key={c.id} className="ll-mono" style={{ padding: "6px 8px", textAlign: "center", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 600, fontSize: 10.5, background: j === last ? accent + "08" : undefined }}>
@@ -503,6 +503,16 @@ function SectionsPanel({ d, set, onEdit }) {
 /* ---------------- the editor ---------------- */
 function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate }) {
   const [d, setD] = useState(initial);
+  /* what is stored: the Save button stays off until something differs */
+  const [savedJson, setSavedJson] = useState(() => JSON.stringify(initial));
+  const dirty = JSON.stringify(d) !== savedJson;
+  const [justSaved, setJustSaved] = useState(false);
+  const save = () => { onSave(d); setSavedJson(JSON.stringify(d)); setJustSaved(true); setTimeout(() => setJustSaved(false), 1800); };
+  useEffect(() => {
+    const onKey = (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (dirty) save(); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   const [undo, setUndo] = useState(null); // the proposal before the last AI edit
   const set = (p) => setD((x) => ({ ...x, ...(typeof p === "function" ? p(x) : p) }));
   const [open, setOpen] = useState({ cover: true, services: false, checklist: false, extras: false });
@@ -582,14 +592,18 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
   const printCss = `
     .pp-print { display: none; }
     @media print {
-      @page { size: A4; margin: 0; }
+      /* every sheet gets a top and bottom margin from the printer (so a
+         month that runs onto a second sheet does not start at the very
+         edge); the cover is its own named page with none */
+      @page { size: A4; margin: 13mm 0 11mm; }
+      @page cover { margin: 0; }
       html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
       #root { display: none !important; }
       .pp-print { display: block !important; }
       * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       .pp-doc { width: 210mm !important; }
-      .pp-page { width: 210mm !important; min-height: 296.5mm !important; box-sizing: border-box; page-break-after: always; break-after: page; box-shadow: none !important; }
-      .pp-page.pp-cover { height: 296.5mm !important; overflow: hidden; }
+      .pp-page { width: 210mm !important; min-height: 272.5mm !important; padding-top: 30px !important; padding-bottom: 44px !important; box-sizing: border-box; page-break-after: always; break-after: page; box-shadow: none !important; }
+      .pp-page.pp-cover { page: cover; height: 296.5mm !important; min-height: 0 !important; padding: 0 !important; overflow: hidden; }
       .pp-page:last-child { page-break-after: auto; break-after: auto; }
       .pp-keep, .pp-table tr { break-inside: avoid; page-break-inside: avoid; }
       .pp-table thead { display: table-header-group; }
@@ -602,15 +616,19 @@ function ProposalEditor({ company, ai, initial, onSave, onClose, onSaveTemplate 
       <style>{printCss}</style>
       {/* top bar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-2.5">
-        <button onClick={onClose} className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300"><ArrowLeft size={14} /> All proposals</button>
+        <button onClick={async () => { if (!dirty || await askConfirm({ title: "Leave without saving?", message: "This proposal has unsaved changes.", confirmLabel: "Leave" })) onClose(); }} className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2 text-[12.5px] font-medium text-gray-600 hover:border-gray-300"><ArrowLeft size={14} /> All proposals</button>
         <span className="ll-display ml-1 truncate text-[14px] font-semibold text-gray-800">{fill(d.title, d) || "Proposal"}</span>
+        {dirty && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">unsaved</span>}
         <span className="ll-mono text-[11px] text-gray-400">{d.no}</span>
         <span className="ml-auto flex items-center gap-2">
           {undo && <button onClick={() => { setD(undo); setUndo(null); }} className="flex items-center gap-1 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800" title="Put the proposal back as it was before the last AI edit"><Undo2 size={13} /> Undo AI edit</button>}
           <button onClick={async () => { if (await askConfirm({ title: "Save as the default template?", message: "New proposals will start from this proposal's services, checklist, texts, page order, reporting and access lists.", confirmLabel: "Save template" })) onSaveTemplate(templateOf(d)); }}
             className="rounded-xl border border-gray-200 px-3 py-2 text-[12px] font-semibold text-gray-600 hover:border-gray-300" title="New proposals start from these services and checklists">Save as default template</button>
           <button onClick={print} className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2 text-[12.5px] font-semibold text-gray-700 hover:border-gray-300"><Printer size={14} /> Download PDF</button>
-          <button onClick={() => onSave(d)} className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white" style={{ background: accent }}><Save size={14} /> Save</button>
+          <button onClick={save} disabled={!dirty} title={dirty ? "Save this proposal (⌘S)" : "Everything is saved"}
+            className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50" style={{ background: justSaved ? "#16A34A" : accent }}>
+            {justSaved ? <><Check size={14} /> Saved</> : <><Save size={14} /> {dirty ? "Save" : "Saved"}</>}
+          </button>
         </span>
       </div>
 
