@@ -245,46 +245,119 @@ function ProposalDoc({ d, company }) {
         </div>
       </Page>
 
-      {/* ---- work checklist, one part per page ---- */}
-      {(d.checklists || []).map((part, pi) => {
-        const svc = services.find((s) => s.key === part.serviceKey);
-        const pkg = svc && part.packageId ? packagesOf(svc).find((p) => p.id === part.packageId) : null;
-        const label = [svc && f(svc.title), pkg && pkg.name && `${pkg.name} package${pkg.price ? ` · ${pkg.price}` : ""}`].filter(Boolean).join(" · ");
-        return (
-          <Page key={part.id}>
-            <H kicker={`Work checklist · part ${pi + 1} of ${d.checklists.length}${label ? ` · ${label}` : ""}`} title={pkg?.name ? `${pkg.name} · ${f(part.title)}` : f(part.title)} sub={f(part.subtitle)} />
-            <table className="pp-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-              <thead>
-                <tr style={{ background: "#F3F4F6" }}>
-                  <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#6B7280", width: 190 }}>Task</th>
-                  <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#6B7280" }}>What gets done</th>
-                  <th style={{ textAlign: "right", padding: "8px 12px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#6B7280", width: 96 }}>Quantity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(part.groups || []).map((g) => (g.tasks || []).map((t, ti) => (
-                  <tr key={t.id} style={{ borderBottom: "1px solid #EEF0F3", borderTop: ti === 0 ? "2px solid #E5E7EB" : undefined }}>
-                    {ti === 0 && (
-                      <td rowSpan={g.tasks.length} style={{ padding: "9px 12px", verticalAlign: "top", fontWeight: 700, color: accent, fontSize: 12, background: accent + "08" }}>{f(g.title)}</td>
-                    )}
-                    <td style={{ padding: "7px 12px", color: "#1F2937", verticalAlign: "top" }}>
-                      {f(t.text)}
-                      {(t.details || []).filter(Boolean).length > 0 && (
-                        <div style={{ marginTop: 3, display: "grid", gap: 2 }}>
-                          {t.details.filter(Boolean).map((x, i) => <div key={i} style={{ fontSize: 10.5, color: "#6B7280", display: "flex", gap: 6 }}><span style={{ color: accent }}>✓</span>{f(x)}</div>)}
-                        </div>
-                      )}
-                    </td>
-                    <td className="ll-mono" style={{ padding: "7px 12px", textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 600, color: t.qty ? "#111827" : accent }}>
-                      {t.qty ? t.qty : <Check size={13} strokeWidth={3} style={{ display: "inline" }} />}
-                    </td>
+      {/* ---- work checklist: one page per month; a service with several
+           packages gets the packages as columns (✓ / quantity / —), the
+           same comparison as the summary ---- */}
+      {(() => {
+        const parts = d.checklists || [];
+        const key = (t) => String(t || "").trim().toLowerCase();
+        const sections = [];
+        const used = new Set();
+        parts.forEach((part) => {
+          if (used.has(part.id)) return;
+          const svc = services.find((x) => x.key === part.serviceKey);
+          const pk = svc ? packagesOf(svc) : [];
+          if (!svc || pk.length <= 1 || !part.packageId) { used.add(part.id); sections.push({ kind: "single", part, svc }); return; }
+          /* every package's part with this title becomes a column */
+          const cols = pk.map((pkg) => ({ pkg, part: parts.find((q) => !used.has(q.id) && q.serviceKey === svc.key && q.packageId === pkg.id && key(q.title) === key(part.title)) })).filter((c) => c.part);
+          cols.forEach((c) => used.add(c.part.id));
+          /* rows: the union of groups and tasks, in first-seen order */
+          const groups = [];
+          cols.forEach((c) => (c.part.groups || []).forEach((g) => {
+            let G = groups.find((x) => x.k === key(g.title));
+            if (!G) { G = { k: key(g.title), title: g.title, tasks: [] }; groups.push(G); }
+            (g.tasks || []).forEach((t) => {
+              let T = G.tasks.find((x) => x.k === key(t.text));
+              if (!T) { T = { k: key(t.text), text: t.text, details: t.details || [], cells: {} }; G.tasks.push(T); }
+              if (!T.details.length && (t.details || []).length) T.details = t.details;
+              T.cells[c.pkg.id] = t;
+            });
+          }));
+          sections.push({ kind: "compare", title: part.title, subtitle: cols.map((c) => c.part.subtitle).find(Boolean) || "", svc, cols, groups });
+        });
+        const th = (extra) => ({ padding: "8px 10px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", color: "#6B7280", ...extra });
+        return sections.map((sec, si) => {
+          const n = sections.length;
+          if (sec.kind === "single") {
+            const part = sec.part;
+            return (
+              <Page key={part.id}>
+                <H kicker={`Work checklist · part ${si + 1} of ${n}${sec.svc ? ` · ${f(sec.svc.title)}` : ""}`} title={f(part.title)} sub={f(part.subtitle)} />
+                <table className="pp-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: "#F3F4F6" }}>
+                      <th style={th({ textAlign: "left", width: 190 })}>Task</th>
+                      <th style={th({ textAlign: "left" })}>What gets done</th>
+                      <th style={th({ textAlign: "right", width: 96 })}>Quantity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(part.groups || []).map((g) => (g.tasks || []).map((t, ti) => (
+                      <tr key={t.id} style={{ borderBottom: "1px solid #EEF0F3", borderTop: ti === 0 ? "2px solid #E5E7EB" : undefined }}>
+                        {ti === 0 && <td rowSpan={g.tasks.length} style={{ padding: "9px 12px", verticalAlign: "top", fontWeight: 700, color: accent, fontSize: 12, background: accent + "08" }}>{f(g.title)}</td>}
+                        <td style={{ padding: "7px 12px", color: "#1F2937", verticalAlign: "top" }}>
+                          {f(t.text)}
+                          {(t.details || []).filter(Boolean).length > 0 && (
+                            <div style={{ marginTop: 3, display: "grid", gap: 2 }}>
+                              {t.details.filter(Boolean).map((x, i) => <div key={i} style={{ fontSize: 10.5, color: "#6B7280", display: "flex", gap: 6 }}><span style={{ color: accent }}>✓</span>{f(x)}</div>)}
+                            </div>
+                          )}
+                        </td>
+                        <td className="ll-mono" style={{ padding: "7px 12px", textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 600, color: t.qty ? "#111827" : accent }}>
+                          {t.qty ? t.qty : <Check size={13} strokeWidth={3} style={{ display: "inline" }} />}
+                        </td>
+                      </tr>
+                    )))}
+                  </tbody>
+                </table>
+              </Page>
+            );
+          }
+          const last = sec.cols.length - 1;
+          return (
+            <Page key={"cmp" + si}>
+              <H kicker={`Work checklist · part ${si + 1} of ${n} · ${f(sec.svc.title)} · ${sec.cols.map((c) => c.pkg.name || "package").join(" vs ")}`} title={f(sec.title)} sub={f(sec.subtitle)} />
+              <table className="pp-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: "#F3F4F6" }}>
+                    <th style={th({ textAlign: "left", width: 150 })}>Task</th>
+                    <th style={th({ textAlign: "left" })}>What gets done</th>
+                    {sec.cols.map((c, j) => (
+                      <th key={c.pkg.id} style={th({ textAlign: "center", width: 92, background: j === last ? accent + "14" : undefined })}>
+                        <div className="ll-display" style={{ fontSize: 11.5, fontWeight: 700, color: "#111827", textTransform: "none", letterSpacing: 0 }}>{c.pkg.name || "Package"}</div>
+                        <div className="ll-mono" style={{ fontSize: 9.5, fontWeight: 700, color: accent, textTransform: "none", letterSpacing: 0 }}>{c.pkg.price}</div>
+                      </th>
+                    ))}
                   </tr>
-                )))}
-              </tbody>
-            </table>
-          </Page>
-        );
-      })}
+                </thead>
+                <tbody>
+                  {sec.groups.map((g) => g.tasks.map((t, ti) => (
+                    <tr key={g.k + t.k} style={{ borderBottom: "1px solid #EEF0F3", borderTop: ti === 0 ? "2px solid #E5E7EB" : undefined }}>
+                      {ti === 0 && <td rowSpan={g.tasks.length} style={{ padding: "9px 10px", verticalAlign: "top", fontWeight: 700, color: accent, fontSize: 11.5, background: accent + "08" }}>{f(g.title)}</td>}
+                      <td style={{ padding: "6px 10px", color: "#1F2937", verticalAlign: "top" }}>
+                        {f(t.text)}
+                        {(t.details || []).filter(Boolean).length > 0 && (
+                          <div style={{ marginTop: 2, display: "grid", gap: 1 }}>
+                            {t.details.filter(Boolean).map((x, i) => <div key={i} style={{ fontSize: 10, color: "#6B7280", display: "flex", gap: 5 }}><span style={{ color: accent }}>✓</span>{f(x)}</div>)}
+                          </div>
+                        )}
+                      </td>
+                      {sec.cols.map((c, j) => {
+                        const cell = t.cells[c.pkg.id];
+                        return (
+                          <td key={c.pkg.id} className="ll-mono" style={{ padding: "6px 8px", textAlign: "center", verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 600, fontSize: 10.5, background: j === last ? accent + "08" : undefined, color: !cell ? "#D1D5DB" : cell.qty ? "#111827" : accent }}>
+                            {!cell ? "—" : cell.qty ? cell.qty : <Check size={13} strokeWidth={3} style={{ display: "inline" }} />}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </Page>
+          );
+        });
+      })()}
 
       {/* ---- closing ---- */}
       <Page>
