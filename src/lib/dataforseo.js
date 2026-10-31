@@ -43,12 +43,81 @@ export async function rerunNow(entryIds, dfsCredentials) {
   if (!res.ok) throw new Error(await res.text());
   return res.json(); // { updated: [{ id, positions: [...], url }] }
 }
+/* ---- Google redirect links ------------------------------------------
+   Since late October 2026 Google hands out many result links as a redirect
+   (google.com/goto…, google.com/url?q=…) instead of the landing page, and
+   DataForSEO passes them through at every priority. A tracker that matches
+   the link's host against the client's domain then sees "google.com" and
+   reports "not ranked" for a site that ranks. These helpers recover the
+   real page: the target is usually inside the redirect's query string; when
+   it is not, DataForSEO's own `domain` / `breadcrumb` fields still name the
+   site, and the server can follow the redirect as a last resort. */
+const GOOGLE_HOST = /(^|\.)google\.[a-z.]{2,}$/i;
+const REDIRECT_PATH = /^\/(url|goto|interstitial|aclk|imgres|search\/goto)(\/|$)/i;
+const hostOfUrl = (u) => { try { return new URL(String(u)).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
+export const isGoogleRedirect = (u) => { try { const x = new URL(String(u)); return GOOGLE_HOST.test(x.hostname) && REDIRECT_PATH.test(x.pathname); } catch { return false; } };
+export function unwrapGoogleUrl(u) {
+  if (!isGoogleRedirect(u)) return u;
+  try {
+    const x = new URL(String(u));
+    for (const k of ["q", "url", "u", "adurl", "imgrefurl", "dest", "target", "link", "continue", "to"]) {
+      const v = x.searchParams.get(k);
+      if (v && /^https?:\/\//i.test(v) && !GOOGLE_HOST.test(hostOfUrl(v))) return v;
+    }
+    /* …/goto/<encoded target> and …/goto/<base64url target> */
+    const tail = x.pathname.replace(/^\/(search\/)?goto\/?/i, "");
+    if (tail) {
+      try { const dec = decodeURIComponent(tail); if (/^https?:\/\//i.test(dec)) return dec; } catch { /* not percent-encoded */ }
+      try {
+        const b64 = Buffer.from(tail.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+        if (/^https?:\/\/[^\s]+$/i.test(b64)) return b64;
+      } catch { /* not base64 */ }
+    }
+  } catch { /* leave as is */ }
+  return u;
+}
+/* "https://www.example.com › services › plumbing" → "https://www.example.com/services/plumbing" */
+export function breadcrumbUrl(bc) {
+  const parts = String(bc || "").split(/\s*›\s*/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length || !/^https?:\/\//i.test(parts[0])) return "";
+  const path = parts.slice(1).filter((x) => !/^\.\.\.?$/.test(x)).map((x) => x.replace(/^\/+|\/+$/g, "")).filter(Boolean).join("/");
+  return parts[0].replace(/\/+$/, "") + (path ? "/" + path : "");
+}
+/* rewrite every `url` in a DataForSEO SERP task result to the real page:
+   organic items, local pack, AI-overview references, nested elements.
+   The original link is kept as `redirect_url`; `domain` is corrected when
+   it named google. Idempotent, in place. */
+export function normalizeSerpItems(task) {
+  const fix = (node, depth = 0) => {
+    if (!node || typeof node !== "object" || depth > 8) return;
+    if (Array.isArray(node)) { node.forEach((n) => fix(n, depth + 1)); return; }
+    if (typeof node.url === "string" && isGoogleRedirect(node.url)) {
+      const original = node.url;
+      let real = unwrapGoogleUrl(original);
+      if (isGoogleRedirect(real) && node.breadcrumb) real = breadcrumbUrl(node.breadcrumb) || real;
+      if (isGoogleRedirect(real) && node.domain && !GOOGLE_HOST.test(node.domain)) real = "https://" + String(node.domain).replace(/^https?:\/\//, "");
+      if (real !== original) { node.redirect_url = original; node.url = real; }
+      const h = hostOfUrl(node.url);
+      if (h && !GOOGLE_HOST.test(h) && (!node.domain || GOOGLE_HOST.test(String(node.domain)))) node.domain = h;
+    }
+    for (const k of ["items", "references", "links", "expanded_element", "expanded_elements", "table", "chunks", "elements"]) if (node[k]) fix(node[k], depth + 1);
+  };
+  for (const r of task?.result || []) fix(r);
+  return task;
+}
+
 export function parseSerpRank(taskResult, domain) {
+  normalizeSerpItems(taskResult);
   const items = taskResult?.result?.[0]?.items || [];
   const clean = domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase();
+  const sameSite = (hd) => hd && (hd === clean || hd.endsWith("." + clean)); // subdomains rank for the site too
   const matches = (it) => {
-    const hd = (it.domain || (it.url || "").replace(/^https?:\/\//, "")).replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase();
-    return hd && (hd === clean || hd.endsWith("." + clean)); // subdomains rank for the site too
+    /* every hint of the real host: DataForSEO's domain, the (unwrapped)
+       link, the breadcrumb — a redirect link alone must never decide */
+    const hosts = [it.domain, hostOfUrl(it.url), hostOfUrl(breadcrumbUrl(it.breadcrumb))]
+      .map((h) => String(h || "").replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase())
+      .filter((h) => h && !GOOGLE_HOST.test(h));
+    return hosts.some(sameSite);
   };
   const hit = items.find((it) => it.type === "organic" && matches(it));
   /* local map pack (3-pack) — SAME response, zero extra cost: the business's

@@ -12,6 +12,7 @@ import { INTENT_STYLE, OPP_STYLE, genPageQueries } from "../../lib/seo.js";
 import { ACCENTS, askConfirm, askDelete, Card, DateRangeBar, Delta, inputCls, Labeled, LogoUpload, PosChange, RankChip, SaveBar, SectionHeader, Seg, Spark, StatCard, Toggle, tooltipStyle, useDraft } from "../../ui/primitives.jsx";
 import { DfsCostChip, dfsCost, fmtDfsCost } from "../../lib/dfsCost.jsx";
 import { ALL_CITIES, COUNTRY_LABEL, cityKey, cityLabel, urlSlug } from "../../lib/geo.js";
+import { unwrapGoogleUrl } from "../../lib/dataforseo.js";
 import { LABELS, rangeIdx } from "../../lib/months.jsx";
 import { avgPosDaysAgo } from "../../data/gen.js";
 import { fmt, pctDelta } from "../../lib/format.jsx";
@@ -1444,7 +1445,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                     {colOn("life") && <td className={`px-3 ${rowPy}`}><PosChange value={t.stats.life} /></td>}
                     {colOn("url") && <td className={`max-w-44 truncate px-3 ${rowPy} text-[12px]`} title={t.url || ""}>
                       {t.url
-                        ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(t.url)}</a>
+                        ? <a href={unwrapGoogleUrl(t.url)} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: accent }}>{urlSlug(unwrapGoogleUrl(t.url))}</a>
                         : <span className="text-[11px] text-gray-300">{t.stats.cur == null ? "not scanned yet" : "not in top 100"}</span>}
                     </td>}
                     <td className={`px-3 ${rowPy} no-print`}>

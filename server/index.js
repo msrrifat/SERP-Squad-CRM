@@ -29,7 +29,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFil
 import { gzip, gzipSync, gunzipSync } from "node:zlib";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
-import { parseSerpRank } from "../src/lib/dataforseo.js";
+import { isGoogleRedirect, normalizeSerpItems, parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, PROJECT_KEYED, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
 import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
@@ -71,7 +71,50 @@ async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "b
   const data = await res.json();
   const t = data.tasks?.[0];
   if (!t || t.status_code !== 20000) throw new Error(`DataForSEO task ${t?.status_code}: ${t?.status_message}`);
-  return t;
+  return normalizeSerpItems(t);
+}
+
+/* ---- Google redirect links (Oct 2026): every SERP result that comes back
+   from DataForSEO is normalised in place as it arrives — google.com/goto
+   and google.com/url links are unwrapped to the real page, or rebuilt from
+   DataForSEO's breadcrumb / domain — so rank matching, landing URLs, the
+   competitor scans and the index checker all see real pages. A link that
+   still cannot be read is followed here once (Google limits how often
+   these resolve, so the answer is cached) and otherwise falls back to the
+   site root. */
+const redirectCache = new Map(); // google link → { url, at }
+/* Google answers a HEAD on a goto link with a 200 "redirect notice" page
+   but a GET with a 302 to the real page (checked 31 Oct 2026); the token
+   in the link is encrypted, so there is nothing to decode offline. Google
+   limits how often these resolve, so lookups run one at a time, spaced
+   out, and every answer is cached for a week. */
+let redirectChain = Promise.resolve();
+async function resolveGoogleRedirect(u, domainHint = "") {
+  if (!isGoogleRedirect(u)) return u;
+  const hit = redirectCache.get(u);
+  if (hit && Date.now() - hit.at < 7 * 86400e3) return hit.url;
+  let out = "";
+  const attempt = async () => {
+    try {
+      const res = await fetch(u, { method: "GET", redirect: "manual", headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+      const loc = res.headers.get("location") || "";
+      if (/^https?:\/\//i.test(loc) && !isGoogleRedirect(loc) && !/(^|\.)google\.[a-z.]+$/i.test(new URL(loc).hostname)) out = loc;
+      else if (res.status === 200) {
+        /* the notice page links the target when Google will not redirect */
+        const html = await res.text().catch(() => "");
+        const m = html.match(/href="(https?:\/\/(?!(?:www\.)?google\.)[^"]+)"/i);
+        if (m) out = m[1].replace(/&amp;/g, "&");
+      }
+      try { res.body?.cancel?.(); } catch { /* already consumed */ }
+    } catch { /* blocked or slow — fall back below */ }
+    await new Promise((r) => setTimeout(r, 400));
+  };
+  redirectChain = redirectChain.then(attempt, attempt);
+  await redirectChain;
+  if (!out && domainHint) out = "https://" + String(domainHint).replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (out) redirectCache.set(u, { url: out, at: Date.now() });
+  if (redirectCache.size > 5000) redirectCache.delete(redirectCache.keys().next().value);
+  return out || u;
 }
 
 /* ---- LIVE batch: one synchronous SERP per task, run concurrently -------
@@ -103,7 +146,7 @@ async function dfsLivePool(creds, pathSeg, tasks, { concurrency = 8, attempts = 
           continue;
         }
         const t = (await res.json()).tasks?.[0];
-        if (t?.status_code === 20000) return { task: t };
+        if (t?.status_code === 20000) return { task: normalizeSerpItems(t) };
         lastErr = `task ${t?.status_code}: ${t?.status_message}`;
         /* 40xxx = malformed request; retrying sends the same thing again */
         if (t?.status_code >= 40000 && t?.status_code < 50000) return { error: lastErr };
@@ -159,7 +202,7 @@ async function dfsQueue(creds, pathSeg, tasks, { budgetMs = 480000, pollMs = 800
     const idx = pending.get(id);
     if (idx === undefined) return true;
     pending.delete(id);
-    out[idx] = t.status_code === 20000 ? { task: t } : { error: `task ${t.status_code}: ${t.status_message}` };
+    out[idx] = t.status_code === 20000 ? { task: normalizeSerpItems(t) } : { error: `task ${t.status_code}: ${t.status_message}` };
     return true;
   };
   const deadline = Date.now() + budgetMs;
@@ -4237,7 +4280,7 @@ async function dfsTaskGet(creds, pathSeg, taskId) {
   if (!res.ok) return null;
   const t = (await res.json()).tasks?.[0];
   if (!t || t.status_code === 40602) return null;        // 40602 = Task In Queue
-  return t.status_code === 20000 ? { task: t } : { error: `task ${t.status_code}: ${t.status_message}` };
+  return t.status_code === 20000 ? { task: normalizeSerpItems(t) } : { error: `task ${t.status_code}: ${t.status_message}` };
 }
 
 /* ---- DataForSEO LOCATION RESOLVER =====================================
@@ -4386,11 +4429,13 @@ async function handleRerun(body) {
     for (let round = 0; round < 3 && work.length; round++) {
       const res = await dfsQueue(creds, engine + "/organic", work.map(({ i }) => buildTask(list[i], engine, locOf(list[i]))));
       const next = [];
-      res.forEach((r, j) => {
+      for (let j = 0; j < res.length; j++) {
+        const r = res[j];
         const { i, vi } = work[j];
         const e = list[i];
         if (r?.task) {
-          const { position, url, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(r.task, e.domain);
+          const { position, url: url0, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(r.task, e.domain);
+          const url = url0 && isGoogleRedirect(url0) ? await resolveGoogleRedirect(url0, e.domain) : url0;
           const loc = locOf(e);
           updated[i] = { id: e.id, position, url, mapPos, packShown, aiPos, aiShown, aiRefs,
             location: loc?.name || variantsOf(e)[vi],
@@ -4403,7 +4448,7 @@ async function handleRerun(body) {
         else updated[i] = { id: e.id, keyword: e.keyword, error: r?.error || "no result" };
         /* transient task failures (40101 bursts, queue timeouts) surface as
            per-entry errors — the client's retry pass reposts exactly those */
-      });
+      }
       work = next;
     }
     work.forEach(({ i }) => { updated[i] = updated[i] || { id: list[i].id, keyword: list[i].keyword, error: "location not accepted by DataForSEO" }; });
@@ -4539,6 +4584,9 @@ async function handleRankStatus(body) {
         const { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(task, item.domain);
         item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs };
         if (++dirty >= 5) { dirty = 0; saveJob(job); }
+        /* a landing link still wrapped in a Google redirect is followed in
+           the background; the row already has its position either way */
+        if (url && isGoogleRedirect(url)) resolveGoogleRedirect(url, item.domain).then((real) => { if (real && real !== url && item.result) { item.result.url = real; saveJob(job); } }).catch(() => {});
       };
       /* a keyword the queue cannot answer has to be run live. Re-POSTING it is
          useless — DataForSEO would just hand back the same stale task again,
