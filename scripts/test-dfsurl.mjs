@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { breadcrumbUrl, isGoogleRedirect, normalizeSerpItems, parseSerpRank, unwrapGoogleUrl } from "../src/lib/dataforseo.js";
+import { applyGotoMap, breadcrumbUrl, isGoogleRedirect, normalizeSerpItems, parseGotoConverter, parseSerpRank, unwrapGoogleUrl } from "../src/lib/dataforseo.js";
 
 const ok = (name) => console.log("  ✓ " + name);
 console.log("google redirect links:");
@@ -31,4 +31,25 @@ assert.equal(r.aiPos, 1); ok("AI overview citation matched through the redirect"
 const r2 = parseSerpRank({ result: [{ items: [{ type: "organic", rank_group: 4, rank_absolute: 6, domain: "google.com", url: "https://www.google.com/goto?id=x", breadcrumb: "https://rival.ca › a" }] }] }, "antaplumbing.com");
 assert.equal(r2.position, null); ok("a redirect to another site never counts as ours");
 assert.equal(normalizeSerpItems(task).result[0].items[0].url, "https://antaplumbing.com/toilet"); ok("normalisation is idempotent");
+
+console.log("goto_url_converter:");
+const G1 = "https://google.com/goto?url=CAESabc", G2 = "https://www.google.com/goto?url=CAESdef";
+const rA = parseGotoConverter({ tasks: [{ status_code: 20000, result: [{ goto_url: G1, url: "https://a.com/x" }, { goto_url: G2, url: "https://b.com/y" }] }] }, [G1, G2]);
+assert.equal(rA.get(G1), "https://a.com/x"); assert.equal(rA.get(G2), "https://b.com/y"); ok("object rows (goto_url/url) parsed");
+const rA2 = parseGotoConverter({ tasks: [{ result: [{ items: [{ url: G1, resolved_url: "https://a.com/x", domain: "a.com" }] }] }] }, [G1]);
+assert.equal(rA2.get(G1), "https://a.com/x"); ok("nested items with other key names parsed");
+const rB = parseGotoConverter({ tasks: [{ result: [{ [G1]: "https://a.com/x" }] }] }, [G1]);
+assert.equal(rB.get(G1), "https://a.com/x"); ok("goto-keyed map parsed");
+const rC = parseGotoConverter({ tasks: [{ result: [{ urls: ["https://a.com/x", "https://b.com/y"] }] }] }, [G1, G2]);
+assert.equal(rC.get(G2), "https://b.com/y"); ok("ordered list parsed");
+assert.equal(parseGotoConverter({ tasks: [{ status_code: 40000, result: null }] }, [G1]).size, 0); ok("empty reply → no mapping");
+const t3 = { result: [{ items: [
+  { type: "organic", rank_group: 1, rank_absolute: 2, domain: "google.com", url: G1, breadcrumb: "https://antaplumbing.com" },
+  { type: "organic", rank_group: 2, rank_absolute: 3, domain: "google.com", url: G2 },
+] }] };
+const r3 = parseSerpRank(t3, "antaplumbing.com");
+assert.equal(r3.position, 1); assert.equal(r3.url, "https://antaplumbing.com"); assert.equal(r3.gotoUrl, G1); ok("hit reports its goto link for conversion");
+assert.equal(applyGotoMap(t3, new Map([[G1, "https://antaplumbing.com/toilet-repair"]])), 1);
+assert.equal(t3.result[0].items[0].url, "https://antaplumbing.com/toilet-repair"); assert.equal(t3.result[0].items[0].redirect_url, G1); ok("converter answer applied, original kept");
+assert.equal(t3.result[0].items[1].url, G2); ok("unanswered link left for the next pass");
 console.log("dfs url tests passed");

@@ -29,7 +29,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, copyFil
 import { gzip, gzipSync, gunzipSync } from "node:zlib";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
-import { isGoogleRedirect, normalizeSerpItems, parseSerpRank } from "../src/lib/dataforseo.js";
+import { GOTO_CONVERTER_URL, isGoogleRedirect, normalizeSerpItems, parseGotoConverter, parseSerpRank } from "../src/lib/dataforseo.js";
 import { DOMAINS, PROJECT_KEYED, splitWorkspace, joinWorkspace } from "../src/lib/domains.js";
 import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
@@ -78,42 +78,93 @@ async function dfsLive(creds, pathSeg, task) { // pathSeg: "google/organic" | "b
    from DataForSEO is normalised in place as it arrives — google.com/goto
    and google.com/url links are unwrapped to the real page, or rebuilt from
    DataForSEO's breadcrumb / domain — so rank matching, landing URLs, the
-   competitor scans and the index checker all see real pages. A link that
-   still cannot be read is followed here once (Google limits how often
-   these resolve, so the answer is cached) and otherwise falls back to the
-   site root. */
-const redirectCache = new Map(); // google link → { url, at }
-/* Google answers a HEAD on a goto link with a 200 "redirect notice" page
-   but a GET with a 302 to the real page (checked 31 Oct 2026); the token
-   in the link is encrypted, so there is nothing to decode offline. Google
-   limits how often these resolve, so lookups run one at a time, spaced
-   out, and every answer is cached for a week. */
+   competitor scans and the index checker all see real pages.
+
+   DataForSEO's notice (30/31 Oct 2026): Google now throttles how many goto
+   links resolve per results page. Standard priority (what the tracker
+   posts) resolves them all but slowly; Live / High priority come back with
+   about half unresolved. The free POST /v3/appendix/goto_url_converter
+   ([{ goto_urls: [≤100] }], 40–60 s for a full page) turns the leftovers
+   into real pages, so a ranked keyword's landing page is the actual page
+   and not just the site root the breadcrumb gives. Answers are cached for
+   a week — a goto token never changes its target. */
+const gotoCache = new Map(); // google goto link → { url, at }
+const gotoFresh = (hit) => hit && Date.now() - hit.at < 7 * 86400e3;
+let gotoShapeLogged = false;
+async function dfsGotoConvert(creds, urls, deadlineMs = 60000) {
+  const want = [...new Set(urls.filter((u) => isGoogleRedirect(u)).map((u) => String(u).trim()))];
+  const out = new Map();
+  const todo = [];
+  for (const u of want) { const hit = gotoCache.get(u); if (gotoFresh(hit)) out.set(u, hit.url); else todo.push(u); }
+  if (!todo.length || !creds) return out;
+  const deadline = Date.now() + deadlineMs;
+  const chunks = [];
+  for (let i = 0; i < todo.length; i += 100) chunks.push(todo.slice(i, i + 100));
+  await pool(chunks, async (chunk) => {
+    const left = deadline - Date.now();
+    if (left < 3000) return;
+    const res = await fetch(GOTO_CONVERTER_URL, {
+      method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+      body: JSON.stringify([{ goto_urls: chunk }]), signal: AbortSignal.timeout(Math.min(95000, left)),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data) throw new Error(`goto_url_converter HTTP ${res.status}`);
+    const map = parseGotoConverter(data, chunk);
+    /* the reply schema is unpublished — log one sample so it can be checked */
+    if (!gotoShapeLogged || (!map.size && data.tasks?.[0]?.status_code === 20000)) {
+      gotoShapeLogged = true;
+      console.log("[goto_url_converter] status", data.status_code, "task", data.tasks?.[0]?.status_code, data.tasks?.[0]?.status_message, "resolved", map.size, "/", chunk.length, "sample:", JSON.stringify(data.tasks?.[0]?.result ?? data).slice(0, 1200));
+    }
+    for (const [g, real] of map) { out.set(g, real); gotoCache.set(g, { url: real, at: Date.now() }); }
+  }, 2);
+  if (gotoCache.size > 20000) for (const k of [...gotoCache.keys()].slice(0, 5000)) gotoCache.delete(k);
+  return out;
+}
+/* rows: [{ gotoUrl, apply(realUrl) }] — whatever the converter answers within
+   the deadline is applied; the rest keeps its breadcrumb/site-root page and
+   is offered again on the next pass (cached answers cost nothing) */
+async function convertLandings(creds, rows, deadlineMs = 40000) {
+  const list = rows.filter((r) => r && isGoogleRedirect(r.gotoUrl));
+  if (!list.length) return 0;
+  let map;
+  try { map = await dfsGotoConvert(creds, list.map((r) => r.gotoUrl), deadlineMs); }
+  catch (e) { console.log("[goto_url_converter]", String(e?.message || e).slice(0, 160)); map = new Map(); }
+  let n = 0;
+  for (const r of list) { const real = map.get(String(r.gotoUrl).trim()); if (real) { r.apply(real); n++; } }
+  return n;
+}
+/* single link, last resort: the converter when credentials are at hand,
+   otherwise a direct GET — Google answers a HEAD on a goto link with a 200
+   "redirect notice" page but a GET with a 302 to the real page (checked
+   31 Oct 2026); lookups run one at a time, spaced out, and are cached. */
 let redirectChain = Promise.resolve();
-async function resolveGoogleRedirect(u, domainHint = "") {
+async function resolveGoogleRedirect(u, domainHint = "", creds = null) {
   if (!isGoogleRedirect(u)) return u;
-  const hit = redirectCache.get(u);
-  if (hit && Date.now() - hit.at < 7 * 86400e3) return hit.url;
+  const hit = gotoCache.get(String(u).trim());
+  if (gotoFresh(hit)) return hit.url;
   let out = "";
-  const attempt = async () => {
-    try {
-      const res = await fetch(u, { method: "GET", redirect: "manual", headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
-      const loc = res.headers.get("location") || "";
-      if (/^https?:\/\//i.test(loc) && !isGoogleRedirect(loc) && !/(^|\.)google\.[a-z.]+$/i.test(new URL(loc).hostname)) out = loc;
-      else if (res.status === 200) {
-        /* the notice page links the target when Google will not redirect */
-        const html = await res.text().catch(() => "");
-        const m = html.match(/href="(https?:\/\/(?!(?:www\.)?google\.)[^"]+)"/i);
-        if (m) out = m[1].replace(/&amp;/g, "&");
-      }
-      try { res.body?.cancel?.(); } catch { /* already consumed */ }
-    } catch { /* blocked or slow — fall back below */ }
-    await new Promise((r) => setTimeout(r, 400));
-  };
-  redirectChain = redirectChain.then(attempt, attempt);
-  await redirectChain;
+  if (creds) { try { out = (await dfsGotoConvert(creds, [u], 45000)).get(String(u).trim()) || ""; } catch { /* fall through */ } }
+  if (!out) {
+    const attempt = async () => {
+      try {
+        const res = await fetch(u, { method: "GET", redirect: "manual", headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) });
+        const loc = res.headers.get("location") || "";
+        if (/^https?:\/\//i.test(loc) && !isGoogleRedirect(loc) && !/(^|\.)google\.[a-z.]+$/i.test(new URL(loc).hostname)) out = loc;
+        else if (res.status === 200) {
+          /* the notice page links the target when Google will not redirect */
+          const html = await res.text().catch(() => "");
+          const m = html.match(/href="(https?:\/\/(?!(?:www\.)?google\.)[^"]+)"/i);
+          if (m) out = m[1].replace(/&amp;/g, "&");
+        }
+        try { res.body?.cancel?.(); } catch { /* already consumed */ }
+      } catch { /* blocked or slow — fall back below */ }
+      await new Promise((r) => setTimeout(r, 400));
+    };
+    redirectChain = redirectChain.then(attempt, attempt);
+    await redirectChain;
+    if (out) gotoCache.set(String(u).trim(), { url: out, at: Date.now() });
+  }
   if (!out && domainHint) out = "https://" + String(domainHint).replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-  if (out) redirectCache.set(u, { url: out, at: Date.now() });
-  if (redirectCache.size > 5000) redirectCache.delete(redirectCache.keys().next().value);
   return out || u;
 }
 
@@ -4120,6 +4171,26 @@ async function handleAgentExec(req, body) {
   return [200, { live: true, result: out }];
 }
 
+/* ---- DataForSEO goto_url_converter, by hand: lets an admin resolve a
+   handful of stored goto links and see the provider's raw reply ---- */
+async function handleGotoConvert(body) {
+  const creds = resolveCreds(body);
+  if (!creds) return [503, { error: "not_configured", detail: "DataForSEO credentials missing — add them in Company Settings → API settings." }];
+  const urls = (Array.isArray(body?.urls) ? body.urls : []).map((u) => String(u || "").trim()).filter(isGoogleRedirect).slice(0, 100);
+  if (!urls.length) return [400, { error: "urls[] of google.com/goto links required" }];
+  try {
+    const r = await fetch(GOTO_CONVERTER_URL, {
+      method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+      body: JSON.stringify([{ goto_urls: urls }]), signal: AbortSignal.timeout(95000),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok || !data) return [502, { error: "provider_error", detail: `DataForSEO HTTP ${r.status}` }];
+    const map = parseGotoConverter(data, urls);
+    for (const [g, real] of map) gotoCache.set(g, { url: real, at: Date.now() });
+    return [200, { live: true, sent: urls.length, resolved: Object.fromEntries(map), status: data.tasks?.[0]?.status_code, message: data.tasks?.[0]?.status_message, time: data.time, cost: data.cost, raw: JSON.stringify(data.tasks?.[0]?.result ?? data).slice(0, 6000) }];
+  } catch (e) { return [502, { error: "provider_error", detail: "DataForSEO: " + (e?.message || e) }]; }
+}
+
 /* ---- DataForSEO account balance: GET v3/appendix/user_data ---- */
 async function handleDfsBalance(body) {
   const creds = resolveCreds(body);
@@ -4434,10 +4505,10 @@ async function handleRerun(body) {
         const { i, vi } = work[j];
         const e = list[i];
         if (r?.task) {
-          const { position, url: url0, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(r.task, e.domain);
-          const url = url0 && isGoogleRedirect(url0) ? await resolveGoogleRedirect(url0, e.domain) : url0;
+          const { position, url: url0, gotoUrl, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(r.task, e.domain);
+          const url = url0 && isGoogleRedirect(url0) ? await resolveGoogleRedirect(url0, e.domain, creds) : url0;
           const loc = locOf(e);
-          updated[i] = { id: e.id, position, url, mapPos, packShown, aiPos, aiShown, aiRefs,
+          updated[i] = { id: e.id, position, url, gotoUrl, mapPos, packShown, aiPos, aiShown, aiRefs,
             location: loc?.name || variantsOf(e)[vi],
             /* "city" means this really is the local ranking; anything coarser
                is a wider result set and is labelled as such rather than being
@@ -4453,6 +4524,10 @@ async function handleRerun(body) {
     }
     work.forEach(({ i }) => { updated[i] = updated[i] || { id: list[i].id, keyword: list[i].keyword, error: "location not accepted by DataForSEO" }; });
   }
+  /* landing pages that arrived as goto links: one converter call for the
+     whole batch, bounded so the request still answers */
+  await convertLandings(creds, updated.filter((u) => u?.gotoUrl).map((u) => ({ gotoUrl: u.gotoUrl, apply: (real) => { u.url = real; } })), 40000);
+  updated.forEach((u) => { if (u) delete u.gotoUrl; });
   return [200, { live: true, updated }];
 }
 
@@ -4581,12 +4656,11 @@ async function handleRankStatus(body) {
          Persisting per item makes a restart cost nothing. */
       let dirty = 0;
       const land = (item, task) => {
-        const { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(task, item.domain);
-        item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs };
+        const { position, absPos, url, gotoUrl, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(task, item.domain);
+        /* gotoUrl = the redirect the landing link arrived in; the row has its
+           position now, the real page follows from the converter below */
+        item.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs, ...(gotoUrl ? { gotoUrl } : {}) };
         if (++dirty >= 5) { dirty = 0; saveJob(job); }
-        /* a landing link still wrapped in a Google redirect is followed in
-           the background; the row already has its position either way */
-        if (url && isGoogleRedirect(url)) resolveGoogleRedirect(url, item.domain).then((real) => { if (real && real !== url && item.result) { item.result.url = real; saveJob(job); } }).catch(() => {});
       };
       /* a keyword the queue cannot answer has to be run live. Re-POSTING it is
          useless — DataForSEO would just hand back the same stale task again,
@@ -4625,14 +4699,23 @@ async function handleRankStatus(body) {
       }
       saveJob(job);
     }
+    /* landing pages still behind a goto link: one converter call for every
+       such row in the job (answers are cached, so a row the deadline cut
+       off is simply offered again on the next poll) */
+    const unresolved = job.items.filter((x) => x.result?.gotoUrl && !x.result.urlResolved);
+    if (unresolved.length) {
+      const n = await convertLandings(creds, unresolved.map((x) => ({ gotoUrl: x.result.gotoUrl, apply: (real) => { x.result.url = real; x.result.urlResolved = true; } })), 40000);
+      if (n) saveJob(job);
+    }
   } finally { rankLocks.delete(job.id); }
   const done = job.items.filter((x) => x.result || x.error);
   return [200, { live: true, jobId: job.id, total: job.items.length,
     done: done.length, pending: job.items.length - done.length,
     ageSec: Math.round((Date.now() - job.createdAt) / 1000),
-    updated: job.items.filter((x) => x.result).map((x) => ({
-      id: x.entryId, ...x.result, location: x.location, precision: x.precision,
-    })),
+    updated: job.items.filter((x) => x.result).map((x) => {
+      const { gotoUrl, urlResolved, ...r } = x.result;
+      return { id: x.entryId, ...r, location: x.location, precision: x.precision };
+    }),
     /* what this job has actually put on the DataForSEO bill, in the same units
        the pre-scan estimate is quoted in — so the two can be compared */
     billedTasks: job.billedTasks || 0, liveTasks: job.liveTasks || 0, depth: job.depth,
@@ -5594,7 +5677,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5646,6 +5729,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/custom/test" ? await handleCustomTest(body)
         : req.url === "/api/custom/deploy" ? await handleCustomDeploy(body)
         : req.url === "/api/dfs-balance" ? await handleDfsBalance(body)
+        : req.url === "/api/dfs/goto-convert" ? await handleGotoConvert(body)
         : req.url === "/api/wp/media" ? await handleWpMedia(body)
         : req.url === "/api/wp/media-update" ? await handleWpMediaUpdate(body)
         : req.url === "/api/wp/content" ? await handleWpContent(body)

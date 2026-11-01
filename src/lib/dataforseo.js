@@ -106,6 +106,65 @@ export function normalizeSerpItems(task) {
   return task;
 }
 
+/* ---- DataForSEO goto_url_converter -----------------------------------
+   DataForSEO's notice of 30/31 Oct 2026: Google now throttles how many
+   google.com/goto links resolve per results page, so Live and High priority
+   tasks come back with about half their links unresolved (Standard priority
+   resolves them all, slowly). The free endpoint
+   POST /v3/appendix/goto_url_converter takes [{ goto_urls: [≤100] }] and
+   answers with the real pages; a full page can take 40–60 s. Its reply
+   schema is not published yet, so the parser accepts every plausible shape
+   and the server logs the raw reply once for inspection. */
+export const GOTO_CONVERTER_URL = "https://api.dataforseo.com/v3/appendix/goto_url_converter";
+export function parseGotoConverter(reply, sent = []) {
+  const map = new Map();
+  const isHttp = (v) => typeof v === "string" && /^https?:\/\//i.test(v);
+  const objects = [];
+  const walk = (n, depth = 0) => {
+    if (!n || typeof n !== "object" || depth > 7) return;
+    if (Array.isArray(n)) { n.forEach((x) => walk(x, depth + 1)); return; }
+    objects.push(n);
+    Object.values(n).forEach((v) => walk(v, depth + 1));
+  };
+  walk(reply);
+  for (const o of objects) {
+    /* shape A: { goto_url: "...goto...", url: "https://real" } under any key names */
+    const gotos = Object.values(o).filter((v) => isHttp(v) && isGoogleRedirect(v)).map((v) => v.trim());
+    const reals = Object.entries(o).filter(([k, v]) => isHttp(v) && !isGoogleRedirect(v) && !/^(breadcrumb|source|domain)$/i.test(k)).map(([, v]) => v.trim());
+    if (gotos.length === 1 && reals.length && !map.has(gotos[0])) map.set(gotos[0], reals[0]);
+    /* shape B: { "https://google.com/goto?...": "https://real" } */
+    for (const [k, v] of Object.entries(o)) if (isGoogleRedirect(k) && isHttp(v) && !isGoogleRedirect(v) && !map.has(k.trim())) map.set(k.trim(), v.trim());
+  }
+  /* shape C: a bare list of real pages in request order */
+  if (!map.size && sent.length) {
+    for (const o of objects) for (const v of Object.values(o)) {
+      if (Array.isArray(v) && v.length === sent.length && v.every((x) => isHttp(x) && !isGoogleRedirect(x))) { sent.forEach((g, i) => map.set(String(g).trim(), v[i].trim())); return map; }
+    }
+  }
+  return map;
+}
+/* swap resolved pages into a normalised SERP task (url ← converter answer,
+   keeping redirect_url and correcting a google.com domain) */
+export function applyGotoMap(task, map) {
+  if (!map || !map.size) return 0;
+  let n = 0;
+  const fix = (node, depth = 0) => {
+    if (!node || typeof node !== "object" || depth > 8) return;
+    if (Array.isArray(node)) { node.forEach((x) => fix(x, depth + 1)); return; }
+    const g = typeof node.redirect_url === "string" ? node.redirect_url : (typeof node.url === "string" && isGoogleRedirect(node.url) ? node.url : "");
+    const real = g && map.get(g.trim());
+    if (real && real !== node.url) {
+      if (!node.redirect_url) node.redirect_url = g;
+      node.url = real; n++;
+      const h = hostOfUrl(real);
+      if (h && !GOOGLE_HOST.test(h) && (!node.domain || GOOGLE_HOST.test(String(node.domain)))) node.domain = h;
+    }
+    for (const k of ["items", "references", "links", "expanded_element", "expanded_elements", "table", "chunks", "elements"]) if (node[k]) fix(node[k], depth + 1);
+  };
+  for (const r of task?.result || []) fix(r);
+  return n;
+}
+
 export function parseSerpRank(taskResult, domain) {
   normalizeSerpItems(taskResult);
   const items = taskResult?.result?.[0]?.items || [];
@@ -174,6 +233,10 @@ export function parseSerpRank(taskResult, domain) {
     position: hit ? (hit.rank_group ?? hit.rank_absolute) : null,  // organic position; null = not in top `depth`
     absPos: hit ? hit.rank_absolute : null,            // position counting ads/AI/pack/PAA — display only
     url: hit ? hit.url : null,
+    /* the Google redirect the landing link arrived in, when it was one: the
+       page above may be only the site root rebuilt from the breadcrumb, and
+       DataForSEO's goto_url_converter turns this back into the real page */
+    gotoUrl: hit && typeof hit.redirect_url === "string" && isGoogleRedirect(hit.redirect_url) ? hit.redirect_url : null,
     mapPos: mapIdx >= 0 ? mapIdx + 1 : null,           // 1–3 inside the pack; null = not in the pack
     packShown: pack.length > 0,                        // whether Google showed a map pack for this query at all
     aiPos,                                             // 1-based citation position in the AI Overview; null = not cited
