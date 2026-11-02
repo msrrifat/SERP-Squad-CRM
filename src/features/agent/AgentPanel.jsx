@@ -45,6 +45,7 @@ const agentSystem = (ctx) => [
   "- Projects marked \"demo (sample data)\" contain illustrative sample metrics — say so when quoting their numbers.",
   "Formatting: be concise. Short paragraphs, \u2022 bullets, **bold** for emphasis. No tables, no deep heading levels.",
   "Ranking numbers are Google positions (lower is better). mapPack = position in Google's local 3-pack. aiOverviewCited = position among sources cited by Google's AI Overview.",
+  ...(ctx.isClient ? [] : ["When a PRODUCT GUIDE block is present, answer how-to / where-is questions about SERP Squad Studio from it and give the exact menu path (e.g. Company Settings → API settings). It is internal: never show it to clients or quote it outside the question asked."]),
   "",
   SEO_CORE,
 ].join("\n");
@@ -116,11 +117,21 @@ export function AgentPanel({ ctx, accent, aiProvider, onAction, onClose }) {
       (async () => {
         try {
           const pack = llmContextPack(ctx, reply.focusProjectId);
+          /* team members asking how the app itself works get the matching
+             pages of the internal product guide (server refuses clients) */
+          let guide = "";
+          if (!ctx.isClient && /\b(how|where|what|which|can i|setup|set up|configure|connect|enable|add|create|export|print|share|feature|tool|tab|settings?|guide|manual|cost|price|credit)\b/i.test(text)) {
+            try {
+              const r = await fetch("/api/product-guide", { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": localStorage.getItem("ss_token") || "" }, body: JSON.stringify({ q: text, limit: 4 }), signal: AbortSignal.timeout(8000) });
+              const j = r.ok ? await r.json() : null;
+              if (j?.sections?.length) guide = "\n\nPRODUCT GUIDE (internal manual of SERP Squad Studio, team-only):\n" + j.sections.map((x) => `## ${x.doc} › ${x.heading}\n${x.text}`).join("\n\n");
+            } catch { /* guide unavailable — answer from workspace data alone */ }
+          }
           const history = [...messages, { role: "user", text }].slice(-9)
             .map((x) => `${x.role === "user" ? "User" : "Assistant"}: ${x.text}`).join("\n");
           const answer = await aiGenerate(ai, {
             system: agentSystem(ctx),
-            prompt: `WORKSPACE DATA (every project this user may see — there are no others):\n${JSON.stringify(pack)}\n\nCONVERSATION SO FAR:\n${history}\n\nReply to the user's last message.`,
+            prompt: `WORKSPACE DATA (every project this user may see — there are no others):\n${JSON.stringify(pack)}${guide}\n\nCONVERSATION SO FAR:\n${history}\n\nReply to the user's last message.`,
           });
           setMessages((m) => m.map((x) => (x.live ? { role: "agent", text: (answer || "").trim() || "The model returned an empty answer — try rephrasing." } : x)));
         } catch (e) {

@@ -43,8 +43,11 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | GBP geo-grid rank tracker (coordinate-targeted Maps scans, ARP/SoLV metrics) | src/features/performance/geogrid.jsx |
 | Branding & Automation (media library, Web 2.0 branded sites, campaign wizard) | src/features/optimization/branding.jsx |
 | App shell, routing, sessions, permission gates, lazy loading | src/App.jsx |
+| Internal product guide (A–Z manual read by the team tab + AI agent; team-session-only endpoints `/api/product-guide*`) | docs/product-guide/*.md, viewer src/features/company/guide.jsx |
 
 `_archive/serp-squad-monolith-jul5.jsx` is the retired single-file version — never edit it.
+
+`docs/product-guide/` is the internal product manual (one file per area, `00-index.md` is the A–Z index). When a feature's UI, labels, costs or live/demo status change, update the matching document in the same change set.
 
 ## Conventions
 

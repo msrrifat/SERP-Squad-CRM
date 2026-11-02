@@ -1892,6 +1892,72 @@ function handleSeoGuideToc(req) {
   return [200, { ok: true, chapters: loadSeoGuide().map((ch) => ({ title: ch.t, sections: (ch.s || []).map((x) => x.h) })) }];
 }
 
+/* ===== INTERNAL PRODUCT GUIDE ============================================
+   docs/product-guide/*.md — the A–Z manual of the CRM for the team and the
+   in-app AI agent. Never served to clients or anonymous callers: a TEAM
+   session is required on every route, and the files are not part of the
+   built site. Re-read at most once a minute so a deploy shows up without a
+   restart. */
+const GUIDE_DIR = new URL("../docs/product-guide/", import.meta.url);
+let guideCache = null;
+function loadProductGuide() {
+  if (guideCache && Date.now() - guideCache.at < 60e3) return guideCache.docs;
+  const docs = [];
+  try {
+    for (const f of readdirSync(GUIDE_DIR).filter((x) => x.endsWith(".md")).sort()) {
+      const raw = readFileSync(new URL(f, GUIDE_DIR), "utf8");
+      const title = (raw.match(/^#\s+(.+)$/m) || [])[1]?.trim() || f;
+      const sections = [];
+      let cur = { heading: title, level: 1, lines: [] };
+      for (const line of raw.split("\n")) {
+        const m = line.match(/^(#{1,3})\s+(.+)$/);
+        if (m) { sections.push(cur); cur = { heading: m[2].trim(), level: m[1].length, lines: [] }; }
+        else cur.lines.push(line);
+      }
+      sections.push(cur);
+      docs.push({ file: f, title, raw, sections: sections.map((x) => ({ heading: x.heading, level: x.level, text: x.lines.join("\n").trim() })).filter((x) => x.text) });
+    }
+  } catch { /* guide not shipped on this install */ }
+  guideCache = { at: Date.now(), docs };
+  return docs;
+}
+const teamSessionOnly = (req) => { const s = sessionFromReq(req); return s && s.kind === "team" ? s : null; };
+const guideForbidden = [403, { error: "forbidden", detail: "The product guide is internal — team sign-in required." }];
+function handleProductGuideToc(req) {
+  if (!teamSessionOnly(req)) return guideForbidden;
+  return [200, { ok: true, docs: loadProductGuide().map((d) => ({ file: d.file, title: d.title, sections: d.sections.filter((x) => x.level === 2).map((x) => x.heading) })) }];
+}
+function handleProductGuideDoc(req, file) {
+  if (!teamSessionOnly(req)) return guideForbidden;
+  const d = loadProductGuide().find((x) => x.file === file);
+  if (!d) return [404, { error: "not_found", detail: "No such guide document." }];
+  return [200, { ok: true, file: d.file, title: d.title, markdown: d.raw }];
+}
+function handleProductGuideQuery(req, body) {
+  if (!teamSessionOnly(req)) return guideForbidden;
+  const q = String(body?.q || "").toLowerCase();
+  const limit = Math.min(10, Math.max(1, +body?.limit || 5));
+  const terms = [...new Set(q.split(/[^a-z0-9-]+/).filter((w) => w.length > 2 && !/^(the|and|for|how|what|where|can|does|with|this|that|into|from|our|you|your|are|have|has|should|which|when|will|about|there|them|then|than|been|were|was)$/.test(w)))];
+  if (!terms.length) return [400, { error: "bad_request", detail: "q (a question or topic) is required." }];
+  const scored = [];
+  for (const d of loadProductGuide()) {
+    for (const sec of d.sections) {
+      const head = (d.title + " " + sec.heading).toLowerCase();
+      const lower = sec.text.toLowerCase();
+      let score = 0;
+      for (const t of terms) {
+        if (head.includes(t)) score += 5;
+        let i = 0, c = 0;
+        while ((i = lower.indexOf(t, i)) >= 0 && c < 6) { c++; i += t.length; }
+        score += c;
+      }
+      if (score > 2) scored.push({ score, doc: d.title, file: d.file, heading: sec.heading, text: sec.text.slice(0, 2400) });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return [200, { ok: true, count: scored.length, sections: scored.slice(0, limit) }];
+}
+
 /* ---- backup listing + restore: the daily rolling copies saveState() keeps ---- */
 function handleStateBackups(req) {
   const sess = sessionFromReq(req);
@@ -5644,6 +5710,8 @@ http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/chat/since")) { const [c2, p2] = handleChatSince(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/seo-guide/toc") { const [c2, p2] = handleSeoGuideToc(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url === "/api/product-guide/toc") { const [c2, p2] = handleProductGuideToc(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url.startsWith("/api/product-guide/doc?")) { const [c2, p2] = handleProductGuideDoc(req, decodeURIComponent(new URL(req.url, "http://x").searchParams.get("file") || "")); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
     if (req.method === "GET" && req.url.startsWith("/api/oauth/social/callback")) {
       const html = await handleSocialCallback(req.url);
@@ -5677,7 +5745,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/product-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5784,6 +5852,7 @@ http.createServer(async (req, res) => {
         : req.url === "/api/chat/read" ? handleChatRead(req, body)
         : req.url === "/api/chat/typing" ? handleChatTyping(req, body)
         : req.url === "/api/seo-guide" ? handleSeoGuideQuery(req, body)
+        : req.url === "/api/product-guide" ? handleProductGuideQuery(req, body)
         : req.url === "/api/state/domains" ? handleStateDomains(req, body)
         : req.url === "/api/state/restore" ? handleStateRestore(req, body)
         : req.url === "/api/state/backup-extract" ? handleStateBackupExtract(req, body)
