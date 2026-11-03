@@ -4792,6 +4792,310 @@ async function handleRankStatus(body) {
     })) }];
 }
 
+/* ===== SERVER-SIDE RANK RUNS ==============================================
+   A rank scan used to be driven by the browser: 25-keyword batches, each a
+   separate request with a two-minute budget, results applied by the tab.
+   A slow location lookup, a long DataForSEO queue or a closed laptop ended
+   the run half-way ("Scan failed at batch 3/14", "signal timed out") and
+   the remaining cities never started.
+
+   Now the whole scan is ONE persistent run owned by this server
+   (data/rank-runs/<id>.json). A worker tick posts tasks, collects results,
+   retries transient failures with backoff for up to two days, falls back to
+   the live endpoint for tasks DataForSEO will not re-queue, resolves goto
+   landing pages, and writes every landed position straight into the stored
+   workspace — so the scan finishes whether or not anyone is online, and the
+   tracker shows the result on the next load. The browser only starts a run
+   and watches it. The same worker runs the "every N days" schedules. */
+const RUN_DIR = new URL("./data/rank-runs/", import.meta.url);
+const runPath = (id) => new URL(`${String(id).replace(/[^a-z0-9-]/gi, "")}.json`, RUN_DIR);
+const loadRun = (id) => { try { return JSON.parse(readFileSync(runPath(id), "utf8")); } catch { return null; } };
+const saveRun = (run) => {
+  mkdirSync(RUN_DIR, { recursive: true });
+  run.updatedAt = Date.now();
+  const tmp = new URL(`${run.id}.tmp`, RUN_DIR);
+  writeFileSync(tmp, JSON.stringify(run));
+  renameSync(tmp, runPath(run.id));
+};
+const listRuns = () => { try { return readdirSync(RUN_DIR).filter((f) => f.endsWith(".json")).map((f) => loadRun(f.slice(0, -5))).filter(Boolean); } catch { return []; } };
+const runActive = (r) => r.status === "queued" || r.status === "running" || r.status === "paused";
+const RUN_MAX_AGE = 48 * 3600e3;          // a run older than this gives up on what is still missing
+const RUN_MAX_ATTEMPTS = 10;
+const runBackoff = (n) => Math.min(60 * 60e3, [60e3, 120e3, 300e3, 600e3, 900e3, 1800e3][Math.min(5, Math.max(0, n - 1))]);
+
+/* DataForSEO credentials for a project, from the STORED workspace: the
+   client's own account when it brings one, otherwise the agency's, otherwise
+   credentials.json / env. A scheduled run has no browser to ask. */
+function dfsForProject(projectId) {
+  const core = readDocCached("core", null);
+  const usable = (d) => d?.login && d?.password && !/demo@serpsquad/i.test(String(d.login)) ? { login: d.login, password: d.password } : null;
+  if (core) {
+    const client = (core.clients || []).find((c) => (c.projects || []).some((p) => p.id === projectId));
+    if (client?.dfs?.useOwn && usable(client.dfs)) return usable(client.dfs);
+    if (usable(core.company?.dfs)) return usable(core.company.dfs);
+    if (usable(core.company?.apis?.dataforseo?.values)) return usable(core.company.apis.dataforseo.values);
+  }
+  return fileCreds();
+}
+const engineOfEntry = (e) => ((e.engine || "Google").toLowerCase() === "bing" ? "bing" : "google");
+function buildRankTask(e, engine, loc, depth, projectId) {
+  return {
+    keyword: e.keyword, language_code: "en",
+    device: (e.device || "Desktop").toLowerCase(),
+    os: e.device === "Mobile" ? "android" : "windows",
+    depth,
+    ...(engine === "google" && e.domain ? {
+      stop_crawl_on_match: [{ match_type: "with_subdomains", match_value: String(e.domain).replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "") }],
+      find_targets_in: ["organic"],
+    } : {}),
+    tag: `${String(projectId || "proj").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32)}|${String(e.entryId || e.id).slice(0, 40)}`,
+    ...(loc ? { location_code: loc.code } : { location_name: [e.city?.city, e.city?.region, e.city?.country].filter(Boolean).join(",") }),
+    ...(engine === "google" && SE_DOMAINS[e.city?.country] ? { se_domain: SE_DOMAINS[e.city.country] } : {}),
+    ...(engine === "google" ? { load_async_ai_overview: true } : {}),
+  };
+}
+/* entries already waiting in an active run of this project (never queue a keyword twice) */
+function entriesInFlight(projectId) {
+  const out = new Set();
+  for (const r of listRuns()) if (r.projectId === projectId && runActive(r)) for (const it of r.items) if (it.status === "pending" || it.status === "posted") out.add(it.entryId);
+  return out;
+}
+function createRankRun({ projectId, entries, depth = 100, source = "manual", by = null }) {
+  const inFlight = entriesInFlight(projectId);
+  const fresh = entries.filter((e) => !inFlight.has(e.id));
+  const run = {
+    id: "rr" + Date.now().toString(36) + randomBytes(3).toString("hex"),
+    projectId, source, by, depth: [10, 20, 30, 50, 100].includes(+depth) ? +depth : 100,
+    status: "queued", createdAt: Date.now(), startedAt: null, finishedAt: null, reason: null,
+    billedTasks: 0, liveTasks: 0, locs: {},
+    items: fresh.map((e) => ({
+      entryId: e.id, keyword: e.keyword, domain: e.domain, engine: engineOfEntry(e), city: e.city || null, device: e.device || "Desktop",
+      status: "pending", attempts: 0, nextAt: 0, taskId: null, task: null, postedAt: null, doneAt: null, result: null, error: null, applied: false,
+    })),
+  };
+  if (!run.items.length) return { run: null, skipped: entries.length };
+  saveRun(run);
+  setTimeout(() => tickRankRuns().catch(() => {}), 300);
+  return { run, skipped: entries.length - fresh.length };
+}
+/* write landed positions into the stored workspace — the same shape the
+   browser's applyRerun produces, keyed by the scan time so a tab that also
+   applied the result merges into one entry instead of two */
+function applyRunResults(run, items) {
+  if (!items.length) return 0;
+  const doc = readDocCached("performance", {}) || {};
+  const cur = doc[run.projectId];
+  if (!cur || !Array.isArray(cur.tracking)) return 0;
+  let n = 0;
+  const tracking = cur.tracking.map((t) => {
+    const it = items.find((x) => x.entryId === t.id);
+    if (!it || !it.result) return t;
+    const at = it.doneAt, r = it.result, pos = r.position ?? 101;
+    if ((t.scans || []).some((sc) => sc.t === at)) { n++; return t; }
+    n++;
+    return {
+      ...t,
+      extraPositions: [...(t.extraPositions || []), pos],
+      scans: [...(t.scans || []), { t: at, p: pos, u: r.url || null, ...(r.mapPos !== undefined ? { mp: r.mapPos } : {}), ...(r.aiPos !== undefined ? { ai: r.aiPos } : {}) }],
+      rankUrl: r.url || t.rankUrl || null,
+      ...(r.mapPos !== undefined ? { mapPos: r.mapPos, packShown: !!r.packShown } : {}),
+      ...(r.aiPos !== undefined ? { aiPos: r.aiPos, aiShown: !!r.aiShown, aiRefs: r.aiRefs ?? 0 } : {}),
+      lastScanAt: at,
+    };
+  });
+  const next = { ...doc, [run.projectId]: { ...cur, tracking } };
+  const out = saveDomainDocs({ performance: next }, { performance: { set: [run.projectId] } });
+  rememberDoc("performance", out.written.performance ?? next);
+  return n;
+}
+const transientDfs = (msg) => /4050[0-9]|internal error|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN|socket|HTTP 5\d\d|HTTP 429|fetch failed|aborted/i.test(String(msg || ""));
+const fundsDfs = (msg) => /4020[0-9]|insufficient|balance|not enough money|payment/i.test(String(msg || ""));
+let runTickBusy = false;
+async function tickRankRuns() {
+  if (runTickBusy) return;
+  runTickBusy = true;
+  try { for (const run of listRuns().filter(runActive)) { try { await processRun(run); } catch (e) { console.log("[rank-run]", run.id, String(e?.message || e).slice(0, 160)); } } }
+  finally { runTickBusy = false; }
+}
+async function processRun(run) {
+  const now = Date.now();
+  if (run.status === "paused" && run.resumeAt && now < run.resumeAt) return;
+  const creds = dfsForProject(run.projectId);
+  if (!creds) {
+    run.status = "paused"; run.reason = "DataForSEO credentials missing — add them in Company Settings → API settings; the scan resumes by itself once they are there."; run.resumeAt = now + 10 * 60e3;
+    saveRun(run); return;
+  }
+  run.status = "running"; run.reason = null; run.resumeAt = null; run.startedAt ||= now;
+  const pause = (why, ms) => { run.status = "paused"; run.reason = why; run.resumeAt = Date.now() + ms; };
+
+  /* 1. POST what is due, per engine, 100 per request */
+  for (const engine of ["google", "bing"]) {
+    const due = run.items.filter((x) => x.status === "pending" && x.engine === engine && x.nextAt <= now && x.attempts < RUN_MAX_ATTEMPTS).slice(0, 100);
+    if (!due.length) continue;
+    for (const it of due) {
+      const k = `${it.city?.city}|${it.city?.region}|${it.city?.country}`;
+      if (!(k in run.locs)) { try { run.locs[k] = await resolveLocation(creds, it.city || {}); } catch { run.locs[k] = null; } }
+      it.task = buildRankTask(it, engine, it.locFallback ? null : run.locs[k], run.depth, run.projectId);
+      it.location = run.locs[k]?.name || null; it.locationCode = run.locs[k]?.code || null; it.precision = run.locs[k]?.precision || "unverified";
+    }
+    let posted;
+    try { posted = await dfsPost(creds, engine + "/organic", due.map((x) => x.task)); }
+    catch (err) {
+      const msg = String(err?.message || err);
+      if (fundsDfs(msg)) { pause("DataForSEO refused the tasks: " + msg.slice(0, 120) + " — top up the account; the scan resumes by itself.", 60 * 60e3); saveRun(run); return; }
+      for (const it of due) { it.attempts++; it.nextAt = Date.now() + runBackoff(it.attempts); it.error = msg.slice(0, 160); }
+      saveRun(run);
+      if (!transientDfs(msg)) pause("DataForSEO rejected the request: " + msg.slice(0, 140), 15 * 60e3);
+      saveRun(run); return;
+    }
+    due.forEach((it, i) => {
+      const p = posted[i] || { error: "no response for this task" };
+      if (p.taskId) { it.taskId = p.taskId; it.reused = !!p.reused; it.status = "posted"; it.postedAt = Date.now(); it.error = null; if (!p.reused) run.billedTasks++; }
+      else if (/location/i.test(p.error || "") && !it.locFallback) { it.locFallback = true; it.attempts++; it.nextAt = Date.now() + 5e3; it.error = p.error; }
+      else { it.attempts++; it.nextAt = Date.now() + runBackoff(it.attempts); it.error = String(p.error || "task not created").slice(0, 160); }
+    });
+    saveRun(run);
+  }
+
+  /* 2. COLLECT finished tasks */
+  const posted = run.items.filter((x) => x.status === "posted");
+  const liveNeeded = [];
+  const land = (it, task) => {
+    const { position, absPos, url, gotoUrl, mapPos, packShown, aiPos, aiShown, aiRefs } = parseSerpRank(task, it.domain);
+    it.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs, ...(gotoUrl ? { gotoUrl } : {}) };
+    it.status = "done"; it.doneAt = Date.now(); it.error = null;
+  };
+  if (posted.length) {
+    await pool(posted, async (it) => {
+      if (it.reused && !it.recovered) { liveNeeded.push(it); return; }
+      let got;
+      try { got = await dfsTaskGet(creds, it.engine + "/organic", it.taskId); } catch (e) { it.error = String(e?.message || e).slice(0, 120); return; }
+      if (!got) {
+        /* still queued. Standard priority normally lands within minutes; a
+           task that has not surfaced in six hours is treated as lost and
+           posted again (DataForSEO does not bill a task it never delivered) */
+        if (Date.now() - (it.postedAt || now) > 6 * 3600e3) { it.status = "pending"; it.attempts++; it.nextAt = Date.now(); it.error = "task never completed — posted again"; }
+        return;
+      }
+      if (got.error) {
+        if (/40601|handed/i.test(got.error) && !it.recovered) { liveNeeded.push(it); return; }
+        if (/40102/.test(got.error)) { land(it, { result: [{ items: [] }] }); return; }   // "No Search Results" = genuinely unranked
+        it.attempts++; it.error = got.error.slice(0, 160);
+        if (transientDfs(got.error) && it.attempts < RUN_MAX_ATTEMPTS) { it.status = "pending"; it.nextAt = Date.now() + runBackoff(it.attempts); it.taskId = null; }
+        else it.status = "failed";
+        return;
+      }
+      land(it, got.task);
+    }, 8);
+  }
+  if (liveNeeded.length) {
+    await pool(liveNeeded, async (it) => {
+      it.recovered = "live";
+      try { const t = await dfsLive(creds, it.engine + "/organic", it.task); run.liveTasks++; land(it, t); }
+      catch (e2) {
+        it.attempts++; it.error = `live re-check failed: ${String(e2?.message || e2).slice(0, 110)}`;
+        if (it.attempts < RUN_MAX_ATTEMPTS) { it.status = "pending"; it.nextAt = Date.now() + runBackoff(it.attempts); it.taskId = null; it.recovered = null; }
+        else it.status = "failed";
+      }
+    }, 4);
+  }
+  saveRun(run);
+
+  /* 3. landing pages still behind a Google goto link */
+  const unresolved = run.items.filter((x) => x.status === "done" && x.result?.gotoUrl && !x.result.urlResolved);
+  if (unresolved.length) await convertLandings(creds, unresolved.map((x) => ({ gotoUrl: x.result.gotoUrl, apply: (real) => { x.result.url = real; x.result.urlResolved = true; } })), 30000);
+
+  /* 4. APPLY to the workspace, then expose to watchers */
+  const fresh = run.items.filter((x) => x.status === "done" && !x.applied);
+  if (fresh.length) {
+    try { applyRunResults(run, fresh); fresh.forEach((x) => { x.applied = true; }); }
+    catch (e) { console.log("[rank-run] apply failed", run.id, String(e?.message || e).slice(0, 120)); }
+  }
+
+  /* 5. bookkeeping */
+  for (const it of run.items) if (it.status === "pending" && it.attempts >= RUN_MAX_ATTEMPTS) it.status = "failed";
+  if (Date.now() - run.createdAt > RUN_MAX_AGE) for (const it of run.items) if (it.status === "pending" || it.status === "posted") { it.status = "failed"; it.error = it.error || "gave up after 48 hours"; }
+  if (!run.items.some((x) => x.status === "pending" || x.status === "posted")) { run.status = "done"; run.finishedAt = Date.now(); }
+  saveRun(run);
+}
+/* "Rerun every N days": real projects' recurring keywords that are overdue
+   are queued here — the browser used to display the schedule but nothing
+   ever executed it. */
+let schedTickBusy = false;
+async function tickRankSchedule() {
+  if (schedTickBusy) return;
+  schedTickBusy = true;
+  try {
+    const core = readDocCached("core", null); const perf = readDocCached("performance", {}) || {};
+    if (!core) return;
+    const now = Date.now();
+    const recentFail = new Map();            // entryId → last failed time (6 h cool-down)
+    for (const r of listRuns()) if (!runActive(r) && r.finishedAt && now - r.finishedAt < 6 * 3600e3) for (const it of r.items) if (it.status === "failed") recentFail.set(it.entryId, r.finishedAt);
+    for (const c of core.clients || []) for (const p of c.projects || []) {
+      if (p.demoMode !== false || p.archived) continue;
+      const tracking = perf[p.id]?.tracking || [];
+      const inFlight = entriesInFlight(p.id);
+      const due = tracking.filter((t) => {
+        if (t.paused || t.reportingType !== "Recurring" || !(t.rerunDays > 0) || inFlight.has(t.id) || recentFail.has(t.id)) return false;
+        const last = Math.max(0, ...(t.scans || []).map((s) => +s.t || 0), +t.lastScanAt || 0);
+        return now - last >= t.rerunDays * 864e5;
+      });
+      if (!due.length) continue;
+      const { run } = createRankRun({ projectId: p.id, source: "schedule", entries: due.map((t) => ({ id: t.id, keyword: t.keyword, domain: t.domain || p.website, engine: t.engine, city: t.city, device: t.device })) });
+      if (run) console.log(`[rank-schedule] ${p.name}: ${run.items.length} keyword(s) queued (run ${run.id})`);
+    }
+  } catch (e) { console.log("[rank-schedule]", String(e?.message || e).slice(0, 160)); }
+  finally { schedTickBusy = false; }
+}
+setInterval(() => tickRankRuns().catch(() => {}), 15000);
+setInterval(() => tickRankSchedule().catch(() => {}), 10 * 60e3);
+setTimeout(() => { tickRankRuns().catch(() => {}); tickRankSchedule().catch(() => {}); }, 5000);
+
+function runSummary(run, since = 0) {
+  const by = (st) => run.items.filter((x) => x.status === st).length;
+  return {
+    id: run.id, projectId: run.projectId, source: run.source, status: run.status, reason: run.reason || null,
+    createdAt: run.createdAt, startedAt: run.startedAt, finishedAt: run.finishedAt, resumeAt: run.resumeAt || null,
+    total: run.items.length, done: by("done"), failed: by("failed"), pending: by("pending"), posted: by("posted"),
+    billedTasks: run.billedTasks, liveTasks: run.liveTasks, depth: run.depth,
+    updated: run.items.filter((x) => x.status === "done" && x.applied && x.doneAt > since).map((x) => {
+      const { gotoUrl, urlResolved, ...r } = x.result || {};
+      return { id: x.entryId, ...r, at: x.doneAt, location: x.location || null, precision: x.precision || "unverified" };
+    }),
+    errors: run.items.filter((x) => x.status === "failed").map((x) => ({ id: x.entryId, keyword: x.keyword, error: x.error })),
+    waiting: run.items.filter((x) => x.status === "pending" && x.attempts > 0).slice(0, 5).map((x) => ({ keyword: x.keyword, error: x.error, retryAt: x.nextAt })),
+  };
+}
+function handleRankRunStart(body, req) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden", detail: "Team sign-in required to start a scan." }];
+  const projectId = String(body?.projectId || "");
+  const entries = Array.isArray(body?.entries) ? body.entries : [];
+  if (!projectId || !entries.length) return [400, { error: "bad_request", detail: "projectId and entries[] required" }];
+  const opBad = entries.find((e) => SERP_OPERATOR.test(String(e.keyword || "")));
+  if (opBad) return [400, { error: "search_operator", detail: operatorError(opBad.keyword) }];
+  if (!dfsForProject(projectId) && !(body?.dfs?.login && body?.dfs?.password)) return credsMissing(body);
+  const { run, skipped } = createRankRun({ projectId, entries, depth: body.depth, source: "manual", by: sess.id });
+  if (!run) { const active = listRuns().find((r) => r.projectId === projectId && runActive(r)); return [200, { live: true, runId: active?.id || null, total: 0, skipped, alreadyRunning: true }]; }
+  return [200, { live: true, runId: run.id, total: run.items.length, skipped }];
+}
+function handleRankRunStatus(body, req) {
+  if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
+  const since = +body?.since || 0;
+  const projectId = String(body?.projectId || "");
+  const runs = body?.runId ? [loadRun(String(body.runId))].filter(Boolean)
+    : listRuns().filter((r) => r.projectId === projectId && (runActive(r) || (r.finishedAt && Date.now() - r.finishedAt < 24 * 3600e3)));
+  return [200, { live: true, now: Date.now(), runs: runs.sort((a, b) => b.createdAt - a.createdAt).map((r) => runSummary(r, since)) }];
+}
+function handleRankRunCancel(body, req) {
+  const sess = sessionFromReq(req);
+  if (!sess || sess.kind !== "team") return [403, { error: "forbidden" }];
+  const run = loadRun(String(body?.runId || ""));
+  if (!run) return [404, { error: "unknown_run" }];
+  if (runActive(run)) { for (const it of run.items) if (it.status === "pending") { it.status = "failed"; it.error = "cancelled"; } run.status = run.items.some((x) => x.status === "posted") ? "running" : "cancelled"; run.cancelRequested = true; run.finishedAt = run.status === "cancelled" ? Date.now() : null; saveRun(run); }
+  return [200, { live: true, run: runSummary(run) }];
+}
+
 /* ---- GBP geo-grid rank scan =================================
    The Local Falcon / SEO Utils technique, for real: one Google Maps SERP
    task per grid point with an exact location_coordinate (lat,lng,17z),
@@ -5745,7 +6049,7 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/product-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/rank/run", "/api/rank/run/status", "/api/rank/run/cancel", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/product-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -5830,6 +6134,9 @@ http.createServer(async (req, res) => {
         : req.url === "/api/guestpost/metrics" ? await handleGuestMetrics(body)
         : req.url === "/api/rank/start" ? await handleRankStart(body)
         : req.url === "/api/rank/status" ? await handleRankStatus(body)
+        : req.url === "/api/rank/run" ? handleRankRunStart(body, req)
+        : req.url === "/api/rank/run/status" ? handleRankRunStatus(body, req)
+        : req.url === "/api/rank/run/cancel" ? handleRankRunCancel(body, req)
         : req.url === "/api/mail/test" ? await handleMailTest(body)
         : req.url === "/api/form/register" ? handleFormRegister(body)
         : req.url === "/api/form/submit" ? await handleFormSubmit(body, ip)

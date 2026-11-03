@@ -1375,11 +1375,18 @@ export default function App() {
     updateProject((p) => ({ tracking: p.tracking.map((t) => {
       const u = updates.find((x) => x.id === t.id);
       if (!u) return t;
+      /* server-side runs stamp each result with the time it landed and write
+         it into the workspace themselves — the same stamp here means the two
+         copies union-merge into ONE scan entry, and a result that already
+         arrived through a reload is simply skipped */
+      const at = +u.at || ts;
+      if (u.at && (t.scans || []).some((sc) => sc.t === at)) return t;
       return {
         ...t,
         extraPositions: [...(t.extraPositions || []), u.newPos],
         /* dated scan log — powers the Ranking history tab (mp = map-pack pos) */
-        scans: [...(t.scans || []), { t: ts, p: u.newPos, u: u.url || null, ...(u.mapPos !== undefined ? { mp: u.mapPos } : {}), ...(u.aiPos !== undefined ? { ai: u.aiPos } : {}) }],
+        scans: [...(t.scans || []), { t: at, p: u.newPos, u: u.url || null, ...(u.mapPos !== undefined ? { mp: u.mapPos } : {}), ...(u.aiPos !== undefined ? { ai: u.aiPos } : {}) }],
+        lastScanAt: at,
         rankUrl: u.url || t.rankUrl || null,
         /* latest local map-pack position — undefined on demo fallbacks keeps the old value */
         ...(u.mapPos !== undefined ? { mapPos: u.mapPos, packShown: !!u.packShown } : {}),

@@ -963,160 +963,96 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
      automatic initial scan right after keywords are added (real projects).
      Runs as a global background job — finishing is guaranteed even if the
      user navigates to any other page mid-scan. */
+  const hdrs = () => ({ "Content-Type": "application/json", "X-SS-Token": localStorage.getItem("ss_token") || "" });
+  const credsFor = () => (dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined);
+  /* Watch a SERVER-SIDE run. The server owns the scan now (server/index.js
+     rank runs): it posts, retries with backoff, falls back to live, writes
+     every landed position into the workspace and keeps going after this tab
+     is closed. This loop only mirrors progress and applies what has landed
+     so the table fills in while the page is open. */
+  const followRun = async (runId, total, setProgress) => {
+    let since = 0, ok = 0, failed = [], last = null, misses = 0;
+    for (let poll = 0; ; poll++) {
+      await new Promise((r) => setTimeout(r, poll === 0 ? 4000 : 8000));
+      let st;
+      try {
+        const sr = await fetch("/api/rank/run/status", { method: "POST", headers: hdrs(), signal: AbortSignal.timeout(30000), body: JSON.stringify({ projectId: project.id, runId, since }) });
+        if (!sr.ok) throw new Error(await sr.text());
+        st = (await sr.json()).runs?.[0]; misses = 0;
+      } catch (e) {
+        /* the server keeps scanning while we cannot reach it — keep watching */
+        if (++misses > 40) throw new Error("Lost contact with the API server. The scan continues on the server — reopen this page later to see the results.");
+        setProgress({ done: ok, total, note: "reconnecting to the server…" }); continue;
+      }
+      if (!st) throw new Error("That scan is no longer on the server.");
+      last = st;
+      const fresh = st.updated || [];
+      if (fresh.length) {
+        since = Math.max(since, ...fresh.map((u) => +u.at || 0));
+        onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0, at: u.at })));
+        ok += fresh.length;
+      }
+      const note = st.status === "paused" ? `paused — ${st.reason || "waiting"}`
+        : st.posted ? `${st.done}/${st.total} back · ${st.posted} in DataForSEO's queue${st.pending ? ` · ${st.pending} retrying` : ""}`
+        : st.pending ? `${st.pending} waiting to post` : undefined;
+      setProgress({ done: st.done, total: st.total || total, note });
+      if (st.status === "done" || st.status === "cancelled") { failed = st.errors || []; ok = st.done; break; }
+    }
+    if (!ok) throw new Error(failed.length ? `All ${failed.length} scan${failed.length > 1 ? "s" : ""} failed — ${String(failed[0].error || "").slice(0, 140)}` : "No positions came back from the scan.");
+    const depthUsed = last?.depth || 100;
+    return { ok, failed: failed.length, firstError: failed[0] ? `${failed[0].keyword ? failed[0].keyword + ": " : ""}${String(failed[0].error || "").slice(0, 120)}` : null, live: true, server: true,
+      billed: last?.billedTasks || 0, liveBilled: last?.liveTasks || 0,
+      spend: dfsCost(last?.billedTasks || 0, "organicQueue", depthUsed) + dfsCost(last?.liveTasks || 0, "organic", depthUsed) };
+  };
   const runScan = (list) => {
     if (!list.length) return;
     const started = startScanJob(jobKey, `Rank scan · ${project.name} — ${list.length} keyword${list.length > 1 ? "s" : ""}`, async (setProgress) => {
-      /* NO keyword limit: any count is scanned in sequential batches of 25
-         (the server's per-request cap, sized to dodge HTTP timeouts). Each
-         batch's positions are applied the moment it returns, so a 150-keyword
-         scan fills the table progressively instead of all-or-nothing. */
       const entries = list.map((e) => ({ id: e.id, keyword: e.keyword, city: e.city, device: e.device, engine: e.engine, domain: e.domain }));
-      const CHUNK = 25;
-      const chunks = [];
-      for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
-      let ok = 0, applied = 0, live = false, billed = 0, liveBilled = 0, depthUsed = 100;
-      const failed = [];
-      for (let ci = 0; ci < chunks.length; ci++) {
-        const chunk = chunks[ci];
-        setProgress({ done: applied, total: entries.length, note: chunks.length > 1 ? `batch ${ci + 1}/${chunks.length}` : undefined });
-        let updates = null;
-        try {
-          const creds = dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined;
-          /* Post the batch, then collect it. The DataForSEO queue answers when
-             it answers — there is no deadline to impose, and imposing one is
-             what turned slow keywords into "timeout" failures that were then
-             re-posted and paid for twice. */
-          const res = await fetch("/api/rank/start", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(120000),
-            body: JSON.stringify({ entries: chunk, dfs: creds, depth: 100, projectId: project.id }),
-          });
-          if (res.ok) {
-            const { jobId, total } = await res.json();
-            const seen = new Set();
-            for (let poll = 0; ; poll++) {
-              await new Promise((r) => setTimeout(r, poll === 0 ? 6000 : 10000));
-              const sr = await fetch("/api/rank/status", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                signal: AbortSignal.timeout(120000),
-                body: JSON.stringify({ jobId, dfs: creds }),
-              });
-              if (!sr.ok) throw new Error(await sr.text());
-              const st = await sr.json();
-              if (st.busy) continue;                      // another pass is collecting
-              /* results land as they arrive, so a long batch fills the table
-                 progressively instead of showing nothing until the end */
-              const fresh = (st.updated || []).filter((u) => !seen.has(u.id));
-              fresh.forEach((u) => seen.add(u.id));
-              /* count them HERE. `updates` stays empty on this path because the
-                 rows were already applied as they arrived, so the old
-                 `ok += updates.length` below could never move off zero — a scan
-                 where 24 of 32 keywords came back perfectly still reported
-                 "All 32 scans failed" and quoted the first error as if it were
-                 every keyword's. */
-              if (fresh.length) {
-                onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0 })));
-                ok += fresh.length;
-              }
-              setProgress({ done: applied + st.done, total: entries.length,
-                note: st.pending ? `${st.done}/${st.total} back · ${st.pending} still in Google's queue (${Math.round(st.ageSec / 60)}m)` : undefined });
-              if (!st.pending) {
-                billed += st.billedTasks || 0; liveBilled += st.liveTasks || 0;
-                depthUsed = st.depth || depthUsed;
-                failed.push(...(st.errors || [])); break;
-              }
-            }
-            updates = [];                 // already applied above, as they arrived
-            live = true;
-          } else if (res.status === 503) {
-            /* credentials never reached the server. On a REAL project this must
-               never turn into demo positions — say what happened instead. */
-            const d = await res.json().catch(() => ({}));
-            if (project.demoMode === false) throw new Error(d.detail || "DataForSEO credentials aren't reaching the scan.");
-          } else throw new Error(await res.text());
-        } catch (e) {
-          /* real projects surface the actual failure — only demo mode falls through */
-          if (project.demoMode === false) throw new Error(`Scan failed at batch ${ci + 1}/${chunks.length}${applied ? ` — ${applied} of ${entries.length} keywords were already updated` : ""}. ` + String(e?.message || e).slice(0, 150));
-        }
-
-        if (!updates) {
-          /* REAL projects never fabricate positions — surface the failure honestly */
-          if (project.demoMode === false) throw new Error("DataForSEO isn't reachable or configured — " + (applied ? `${applied} of ${entries.length} keywords were updated before the failure.` : "no positions were changed.") + " Check Company Settings → API settings and that the API server is running.");
-          /* DEMO fallback: deterministic-ish nudge, clearly labeled in the result toast */
-          await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
-          updates = chunk.map((e) => {
-            const entry = tracking.find((t) => t.id === e.id);
-            const shift = Math.round((Math.random() - 0.45) * 3);
-            return { id: e.id, newPos: Math.max(1, Math.min(60, (entry?.stats.cur ?? 30) + shift)), url: null };
-          });
-        }
-        if (updates.length) onRerun?.(updates); // partial results land immediately
-        ok += updates.length;
-        applied += chunk.length;
+      setProgress({ done: 0, total: entries.length, note: "handing the scan to the server" });
+      let res = null;
+      try {
+        res = await fetch("/api/rank/run", { method: "POST", headers: hdrs(), signal: AbortSignal.timeout(60000), body: JSON.stringify({ projectId: project.id, entries, dfs: credsFor(), depth: 100 }) });
+      } catch (e) { if (project.demoMode === false) throw new Error("The API server isn't reachable — " + String(e?.message || e).slice(0, 100)); }
+      if (res?.ok) {
+        const { runId, total } = await res.json();
+        if (!runId) throw new Error("Those keywords are already being scanned.");
+        return followRun(runId, total || entries.length, setProgress);
       }
-      /* second pass — ONLY for keywords whose task was never created.
-         A task that failed to post is not billed, so re-posting it costs the
-         one scan it should have cost. A task that WAS created and then failed
-         (handed out, provider error) has already been paid for, and the server
-         now re-queues those itself inside the same job. Re-posting them from
-         here as well is what turned a $0.19 estimate into a ~$1 charge: every
-         one of them went onto the bill a second time, at full depth-100 price,
-         for a result the job was already going to produce. */
-      const paidAlready = failed.filter((f) => !f.retryable);
-      let failedFinal = failed;
-      const retryable = failed.filter((f) => f.retryable);
-      if (live && retryable.length) {
-        setProgress({ done: applied, total: entries.length, note: `retrying ${retryable.length} unbilled failure${retryable.length > 1 ? "s" : ""}` });
-        await new Promise((r) => setTimeout(r, 5000));
-        const retryList = entries.filter((e) => retryable.some((f) => f.id === e.id));
-        failedFinal = [...paidAlready];
-        for (let i = 0; i < retryList.length; i += CHUNK) {
-          const chunk = retryList.slice(i, i + CHUNK);
-          try {
-            /* the retry goes through the SAME queue-backed path as the main
-               run — the old blocking endpoint reintroduced the eight-minute
-               deadline for exactly the keywords that were already slow */
-            const creds2 = dfs?.login && dfs?.password && !dfs.login.includes("demo@serpsquad") ? dfs : undefined;
-            const res = await fetch("/api/rank/start", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              signal: AbortSignal.timeout(120000),
-              body: JSON.stringify({ entries: chunk, dfs: creds2, depth: 100, projectId: project.id }),
-            });
-            if (res.ok) {
-              const { jobId } = await res.json();
-              const seen2 = new Set();
-              for (let poll = 0; ; poll++) {
-                await new Promise((r) => setTimeout(r, poll === 0 ? 6000 : 10000));
-                const sr = await fetch("/api/rank/status", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  signal: AbortSignal.timeout(120000),
-                  body: JSON.stringify({ jobId, dfs: creds2 }),
-                });
-                if (!sr.ok) throw new Error(await sr.text());
-                const stt = await sr.json();
-                if (stt.busy) continue;                   // another pass is collecting
-                const fresh = (stt.updated || []).filter((u) => !seen2.has(u.id));
-                fresh.forEach((u) => seen2.add(u.id));
-                if (fresh.length) { onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0 }))); ok += fresh.length; }
-                setProgress({ done: applied, total: entries.length, note: `retrying ${chunk.length} — ${stt.done}/${stt.total} back` });
-                if (!stt.pending) { billed += stt.billedTasks || 0; liveBilled += stt.liveTasks || 0; failedFinal.push(...(stt.errors || [])); break; }
-              }
-            } else failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: `HTTP ${res.status}` })));
-          } catch (e2) { failedFinal.push(...chunk.map((e) => ({ id: e.id, keyword: e.keyword, error: String(e2?.message || e2).slice(0, 100) }))); }
-        }
+      if (res && project.demoMode === false) {
+        /* REAL projects never fabricate positions — surface the failure honestly */
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || d.error || `HTTP ${res.status}`);
       }
-      /* never report a scan where nothing landed as a success */
-      if (!ok) throw new Error(failedFinal.length
-        ? `All ${failedFinal.length} scan${failedFinal.length > 1 ? "s" : ""} failed — ${String(failedFinal[0].error || "").slice(0, 140)}`
-        : "No positions came back from the scan.");
-      return { ok, failed: failedFinal.length, firstError: failedFinal[0] ? `${failedFinal[0].keyword ? failedFinal[0].keyword + ": " : ""}${String(failedFinal[0].error || "").slice(0, 120)}` : null, live,
-        /* what DataForSEO actually charged, so it can be checked against the
-           estimate on the button instead of discovered on the invoice */
-        billed, liveBilled,
-        spend: live ? dfsCost(billed, "organicQueue", depthUsed) + dfsCost(liveBilled, "organic", depthUsed) : 0 };
+      /* DEMO fallback: deterministic-ish nudge, clearly labeled in the result toast */
+      await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
+      const updates = entries.map((e) => {
+        const entry = tracking.find((t) => t.id === e.id);
+        const shift = Math.round((Math.random() - 0.45) * 3);
+        return { id: e.id, newPos: Math.max(1, Math.min(60, (entry?.stats.cur ?? 30) + shift)), url: null };
+      });
+      onRerun?.(updates);
+      return { ok: updates.length, failed: 0, firstError: null, live: false, billed: 0, liveBilled: 0, spend: 0 };
     });
     if (started) setSelected(new Set());
   };
+  /* a run started earlier — from this tab before a reload, another device, or
+     the "every N days" schedule — is still going on the server: pick it up */
+  useEffect(() => {
+    if (readOnly || clientView) return;
+    let gone = false;
+    (async () => {
+      try {
+        const sr = await fetch("/api/rank/run/status", { method: "POST", headers: hdrs(), signal: AbortSignal.timeout(20000), body: JSON.stringify({ projectId: project.id }) });
+        if (!sr.ok || gone) return;
+        const active = ((await sr.json()).runs || []).find((r) => r.status === "queued" || r.status === "running" || r.status === "paused");
+        if (active && getJob(jobKey)?.status !== "running") {
+          startScanJob(jobKey, `Rank scan · ${project.name} — ${active.total} keyword${active.total === 1 ? "" : "s"} (running on the server)`, (setProgress) => followRun(active.id, active.total, setProgress));
+        }
+      } catch { /* server unreachable — nothing to resume */ }
+    })();
+    return () => { gone = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
   const doRerun = () => runScan([...selected].map((id) => tracking.find((t) => t.id === id)).filter(Boolean));
 
   /* real projects can hold entries that were never scanned (cur == null) —
@@ -1334,7 +1270,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
               <span className="flex items-center gap-1.5 font-medium" style={{ color: rerunResult.error ? "#991B1B" : rerunResult.failed ? "#92400E" : "#166534" }}>
                 {rerunResult.error
                   ? <><X size={14} /> Rerun failed: {rerunResult.error}</>
-                  : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? "via DataForSEO (live)" : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
+                  : <><RefreshCw size={13} /> Re-checked {rerunResult.ok} keyword{rerunResult.ok > 1 ? "s" : ""} {rerunResult.live ? (rerunResult.server ? "via DataForSEO (ran on the server)" : "via DataForSEO (live)") : "(demo — start the API server + add DataForSEO credentials for live checks)"}.
                       {rerunResult.failed > 0 ? ` ${rerunResult.failed} failed — ${rerunResult.firstError}` : " Positions updated."}
                       {/* the actual bill, next to the result — no more finding out on the invoice */}
                       {rerunResult.spend > 0 && <span className="ll-mono ml-1 opacity-70">
