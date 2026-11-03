@@ -971,6 +971,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
      is closed. This loop only mirrors progress and applies what has landed
      so the table fills in while the page is open. */
   const followRun = async (runId, total, setProgress) => {
+    const j = getJob(jobKey); if (j) j.runId = runId;
     let since = 0, ok = 0, failed = [], last = null, misses = 0;
     for (let poll = 0; ; poll++) {
       await new Promise((r) => setTimeout(r, poll === 0 ? 4000 : 8000));
@@ -992,9 +993,10 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
         onRerun?.(fresh.map((u) => ({ id: u.id, newPos: u.position ?? 101, url: u.url || null, mapPos: u.mapPos ?? null, packShown: !!u.packShown, aiPos: u.aiPos ?? null, aiShown: !!u.aiShown, aiRefs: u.aiRefs ?? 0, at: u.at })));
         ok += fresh.length;
       }
+      const mins = (t) => (t && t !== Infinity ? Math.max(0, Math.round((Date.now() - t) / 60000)) + " min" : null);
       const note = st.status === "paused" ? `paused — ${st.reason || "waiting"}`
-        : st.posted ? `${st.done}/${st.total} back · ${st.posted} in DataForSEO's queue${st.pending ? ` · ${st.pending} retrying` : ""}`
-        : st.pending ? `${st.pending} waiting to post` : undefined;
+        : st.posted ? `${st.posted} in DataForSEO's queue${mins(st.oldestPostedAt) ? ` (oldest ${mins(st.oldestPostedAt)})` : ""}${st.pending ? ` · ${st.pending} waiting to retry` : ""}${st.failed ? ` · ${st.failed} failed` : ""}${st.lastError ? ` · last: ${String(st.lastError).slice(0, 90)}` : ""}`
+        : st.pending ? `${st.pending} waiting to post${st.lastError ? ` · last: ${String(st.lastError).slice(0, 90)}` : ""}` : (st.status === "queued" ? "queued on the server" : undefined);
       setProgress({ done: st.done, total: st.total || total, note });
       if (st.status === "done" || st.status === "cancelled") { failed = st.errors || []; ok = st.done; break; }
     }
@@ -1257,7 +1259,7 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
                       ? { borderColor: accent, color: accent, background: accent + "0F" }
                       : { borderColor: "#E5E7EB", color: "#6B7280", background: "#fff" }}>
                     {rerunning
-                      ? <><RefreshCw size={13} className="animate-spin" /> Scanning {job?.progress?.total || ""} keyword{(job?.progress?.total || 0) > 1 ? "s" : ""}… (runs in background)</>
+                      ? <><RefreshCw size={13} className="animate-spin" /> Scanning {job?.progress?.total || ""} keyword{(job?.progress?.total || 0) > 1 ? "s" : ""}… (runs on the server)</>
                       : <><RefreshCw size={13} /> Rerun now {selected.size > 0 ? `(${selected.size})` : ""}</>}
                   </button>
                 </>
@@ -1265,7 +1267,14 @@ export function RankTrackingView({ project, tracking, dfsConnected, accent, onAd
             </div>
             )}
           </div>
-          {rerunResult && (
+          {job?.status === "running" && job.progress?.note && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-[11.5px] text-sky-900">
+            <RefreshCw size={12} className="animate-spin shrink-0" />
+            <span className="min-w-0 flex-1">{job.progress.done || 0}/{job.progress.total} done · {job.progress.note} · keeps running if you close this tab</span>
+            {!readOnly && job.runId && <button onClick={async () => { try { await fetch("/api/rank/run/cancel", { method: "POST", headers: hdrs(), body: JSON.stringify({ runId: job.runId }) }); } catch { /* best effort */ } }} className="rounded-md border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-100">Stop scan</button>}
+          </div>
+        )}
+        {rerunResult && (
             <div className={`ll-fade flex items-center justify-between px-5 py-2.5 text-[12.5px] ${rerunResult.error ? "bg-red-50" : rerunResult.failed ? "bg-amber-50" : "bg-emerald-50"}`}>
               <span className="flex items-center gap-1.5 font-medium" style={{ color: rerunResult.error ? "#991B1B" : rerunResult.failed ? "#92400E" : "#166534" }}>
                 {rerunResult.error

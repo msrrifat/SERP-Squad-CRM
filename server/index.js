@@ -4410,14 +4410,31 @@ function taskAgeMin(taskId) {
 const REUSED_AFTER_MIN = 15;                          // queue tasks start within minutes
 
 /* fetch one task if it is finished; null means "still in the queue" */
-async function dfsTaskGet(creds, pathSeg, taskId) {
+async function dfsTaskGet(creds, pathSeg, taskId, { strict = false } = {}) {
   const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/task_get/advanced/${taskId}`, {
     headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(40000),
   });
-  if (!res.ok) return null;
+  if (!res.ok) return strict ? { error: `HTTP ${res.status}`, http: res.status } : null;
   const t = (await res.json()).tasks?.[0];
-  if (!t || t.status_code === 40602) return null;        // 40602 = Task In Queue
-  return t.status_code === 20000 ? { task: normalizeSerpItems(t) } : { error: `task ${t.status_code}: ${t.status_message}` };
+  /* 40602 = in queue, 40601 = received but not yet queued (DataForSEO docs):
+     both mean "not yet" — the worker decides how long to wait for a 40601 */
+  if (!t || t.status_code === 40602) return null;
+  if (t.status_code === 40601) return strict ? { waiting: "handed" } : { error: `task 40601: ${t.status_message}` };
+  return t.status_code === 20000 ? { task: normalizeSerpItems(t) } : { error: `task ${t.status_code}: ${t.status_message}`, code: t.status_code };
+}
+/* live SERP for the worker: a depth-100 Google live call with the AI
+   Overview can take well over a minute, and a call cut off client-side is
+   still executed and billed — so the worker waits, instead of 35 s */
+async function dfsLiveSlow(creds, pathSeg, task) {
+  const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/live/advanced`, {
+    method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
+    body: JSON.stringify([task]), signal: AbortSignal.timeout(180000),
+  });
+  if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  const t = data.tasks?.[0];
+  if (!t || t.status_code !== 20000) throw new Error(`DataForSEO task ${t?.status_code}: ${t?.status_message}`);
+  return normalizeSerpItems(t);
 }
 
 /* ---- DataForSEO LOCATION RESOLVER =====================================
@@ -4819,7 +4836,8 @@ const saveRun = (run) => {
 };
 const listRuns = () => { try { return readdirSync(RUN_DIR).filter((f) => f.endsWith(".json")).map((f) => loadRun(f.slice(0, -5))).filter(Boolean); } catch { return []; } };
 const runActive = (r) => r.status === "queued" || r.status === "running" || r.status === "paused";
-const RUN_MAX_AGE = 48 * 3600e3;          // a run older than this gives up on what is still missing
+const RUN_MAX_AGE = 48 * 3600e3;
+const workerState = { lastTickAt: 0, lastTickMs: 0, ticks: 0, lastError: null, busySince: 0, lastRun: null };          // a run older than this gives up on what is still missing
 const RUN_MAX_ATTEMPTS = 10;
 const runBackoff = (n) => Math.min(60 * 60e3, [60e3, 120e3, 300e3, 600e3, 900e3, 1800e3][Math.min(5, Math.max(0, n - 1))]);
 
@@ -4912,10 +4930,21 @@ const transientDfs = (msg) => /4050[0-9]|internal error|timeout|timed out|ECONN|
 const fundsDfs = (msg) => /4020[0-9]|insufficient|balance|not enough money|payment/i.test(String(msg || ""));
 let runTickBusy = false;
 async function tickRankRuns() {
+  /* watchdog: a tick that has not returned in 20 minutes is abandoned so the
+     next one can run — whatever it was waiting on is logged, not trusted */
+  if (runTickBusy && Date.now() - workerState.busySince > 20 * 60e3) { console.log("[rank-run] watchdog: tick stuck since", new Date(workerState.busySince).toISOString(), "on", workerState.lastRun); runTickBusy = false; }
   if (runTickBusy) return;
-  runTickBusy = true;
-  try { for (const run of listRuns().filter(runActive)) { try { await processRun(run); } catch (e) { console.log("[rank-run]", run.id, String(e?.message || e).slice(0, 160)); } } }
-  finally { runTickBusy = false; }
+  runTickBusy = true; workerState.busySince = Date.now();
+  const t0 = Date.now();
+  try {
+    /* oldest-touched first, so one busy run never starves the others */
+    const runs = listRuns().filter(runActive).sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
+    for (const run of runs) {
+      workerState.lastRun = run.id;
+      try { await processRun(run); } catch (e) { workerState.lastError = `${run.id}: ${String(e?.message || e).slice(0, 160)}`; console.log("[rank-run]", run.id, String(e?.message || e).slice(0, 160)); }
+      if (Date.now() - t0 > 10 * 60e3) break;              // let the next tick take the rest
+    }
+  } finally { runTickBusy = false; workerState.busySince = 0; workerState.lastTickAt = Date.now(); workerState.lastTickMs = Date.now() - t0; workerState.ticks++; }
 }
 async function processRun(run) {
   const now = Date.now();
@@ -4965,11 +4994,25 @@ async function processRun(run) {
     it.result = { position, absPos, url, mapPos, packShown, aiPos, aiShown, aiRefs, ...(gotoUrl ? { gotoUrl } : {}) };
     it.status = "done"; it.doneAt = Date.now(); it.error = null;
   };
+  let authProblem = null;
   if (posted.length) {
     await pool(posted, async (it) => {
-      if (it.reused && !it.recovered) { liveNeeded.push(it); return; }
       let got;
-      try { got = await dfsTaskGet(creds, it.engine + "/organic", it.taskId); } catch (e) { it.error = String(e?.message || e).slice(0, 120); return; }
+      try { got = await dfsTaskGet(creds, it.engine + "/organic", it.taskId, { strict: true }); } catch (e) { it.error = String(e?.message || e).slice(0, 120); return; }
+      if (got && got.http) {
+        if (got.http === 401 || got.http === 403) { authProblem = `DataForSEO refused the credentials (HTTP ${got.http})`; return; }
+        if (got.http === 404) { it.status = "pending"; it.attempts++; it.nextAt = Date.now() + 5e3; it.taskId = null; it.error = "task id not found — posted again"; return; }
+        it.error = `DataForSEO HTTP ${got.http} while collecting — will retry`; return;    // 429 / 5xx: just wait
+      }
+      if (got && got.waiting) {
+        /* "handed" = received, not yet queued. A re-used id (DataForSEO
+           de-duplicated our post against an older task whose result was
+           already handed out) stays handed forever — after ten minutes of
+           it the keyword is fetched live instead, once. */
+        it.handedSince ||= Date.now();
+        if (Date.now() - it.handedSince > 10 * 60e3 && !it.recovered) liveNeeded.push(it);
+        return;
+      }
       if (!got) {
         /* still queued. Standard priority normally lands within minutes; a
            task that has not surfaced in six hours is treated as lost and
@@ -4988,16 +5031,17 @@ async function processRun(run) {
       land(it, got.task);
     }, 8);
   }
+  if (authProblem) { pause(authProblem + " — check Company Settings → API settings; the scan resumes by itself.", 15 * 60e3); saveRun(run); return; }
   if (liveNeeded.length) {
     await pool(liveNeeded, async (it) => {
       it.recovered = "live";
-      try { const t = await dfsLive(creds, it.engine + "/organic", it.task); run.liveTasks++; land(it, t); }
+      try { const t = await dfsLiveSlow(creds, it.engine + "/organic", it.task); run.liveTasks++; land(it, t); }
       catch (e2) {
         it.attempts++; it.error = `live re-check failed: ${String(e2?.message || e2).slice(0, 110)}`;
-        if (it.attempts < RUN_MAX_ATTEMPTS) { it.status = "pending"; it.nextAt = Date.now() + runBackoff(it.attempts); it.taskId = null; it.recovered = null; }
+        if (it.attempts < RUN_MAX_ATTEMPTS) { it.status = "pending"; it.nextAt = Date.now() + runBackoff(it.attempts); it.taskId = null; it.recovered = null; it.handedSince = null; }
         else it.status = "failed";
       }
-    }, 4);
+    }, 2);
   }
   saveRun(run);
 
@@ -5055,7 +5099,9 @@ function runSummary(run, since = 0) {
   const by = (st) => run.items.filter((x) => x.status === st).length;
   return {
     id: run.id, projectId: run.projectId, source: run.source, status: run.status, reason: run.reason || null,
-    createdAt: run.createdAt, startedAt: run.startedAt, finishedAt: run.finishedAt, resumeAt: run.resumeAt || null,
+    createdAt: run.createdAt, startedAt: run.startedAt, finishedAt: run.finishedAt, resumeAt: run.resumeAt || null, updatedAt: run.updatedAt || null,
+    oldestPostedAt: run.items.filter((x) => x.status === "posted").reduce((m, x) => Math.min(m, x.postedAt || Infinity), Infinity),
+    lastError: run.items.map((x) => x.error).filter(Boolean).slice(-1)[0] || null,
     total: run.items.length, done: by("done"), failed: by("failed"), pending: by("pending"), posted: by("posted"),
     billedTasks: run.billedTasks, liveTasks: run.liveTasks, depth: run.depth,
     updated: run.items.filter((x) => x.status === "done" && x.applied && x.doneAt > since).map((x) => {
@@ -5082,10 +5128,11 @@ function handleRankRunStart(body, req) {
 function handleRankRunStatus(body, req) {
   if (!sessionFromReq(req)) return [401, { error: "unauthorized", detail: "Session required." }];
   const since = +body?.since || 0;
+  if (body?.detail && body?.runId) { const r = loadRun(String(body.runId)); return r ? [200, { live: true, worker: workerState, run: { ...runSummary(r), items: r.items.map(({ task, result, ...x }) => x) } }] : [404, { error: "unknown_run" }]; }
   const projectId = String(body?.projectId || "");
   const runs = body?.runId ? [loadRun(String(body.runId))].filter(Boolean)
     : listRuns().filter((r) => r.projectId === projectId && (runActive(r) || (r.finishedAt && Date.now() - r.finishedAt < 24 * 3600e3)));
-  return [200, { live: true, now: Date.now(), runs: runs.sort((a, b) => b.createdAt - a.createdAt).map((r) => runSummary(r, since)) }];
+  return [200, { live: true, now: Date.now(), worker: { ...workerState, busy: runTickBusy, uptimeSec: Math.round(process.uptime()) }, runs: runs.sort((a, b) => b.createdAt - a.createdAt).map((r) => runSummary(r, since)) }];
 }
 function handleRankRunCancel(body, req) {
   const sess = sessionFromReq(req);
@@ -5963,7 +6010,7 @@ http.createServer(async (req, res) => {
   if (req.url === "/api/form/submit" && rateLimited(ip, "form", 8, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many submissions — please call us instead." });
   if (req.url.startsWith("/api/outreach/") && rateLimited(ip, "outreach", 60, 60 * 60e3)) return send(429, { error: "rate_limited", detail: "Outreach send limit reached (60/hour) — protects your sender reputation." });
   try {
-    if (req.method === "GET" && req.url === "/api/health") return send(200, { ok: true, dfsConfigured: !!fileCreds() });
+    if (req.method === "GET" && req.url === "/api/health") return send(200, { ok: true, dfsConfigured: !!fileCreds(), uptimeSec: Math.round(process.uptime()), rankWorker: { ...workerState, busy: runTickBusy, activeRuns: listRuns().filter(runActive).length } });
     if (req.method === "GET" && req.url.startsWith("/px.js")) {
       const host = String(req.headers["x-forwarded-host"] || req.headers.host || "app.serpsquad.com").split(",")[0].trim();
       const proto = /^(localhost|127\.)/.test(host) ? "http://" : "https://";

@@ -2051,7 +2051,7 @@ export default function App() {
               <RefreshCw size={12} className="animate-spin" style={{ color: accent }} />
               <span className="max-w-[380px] truncate">{j.label}</span>
               {j.progress?.total > 1 && <span className="ll-mono text-gray-400">{Math.min((j.progress.done || 0) + 1, j.progress.total)}/{j.progress.total}</span>}
-              <span className="text-[10px] text-gray-400">scanning…</span>
+              <span className="max-w-[320px] truncate text-[10px] text-gray-400" title={j.progress?.note || ""}>{j.progress?.note || "scanning…"}</span>
             </div>
           ))}
         </div>
