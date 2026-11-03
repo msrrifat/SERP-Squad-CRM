@@ -4428,7 +4428,7 @@ async function dfsTaskGet(creds, pathSeg, taskId, { strict = false } = {}) {
 async function dfsLiveSlow(creds, pathSeg, task) {
   const res = await fetch(`${DFS_BASE}/serp/${pathSeg}/live/advanced`, {
     method: "POST", headers: { Authorization: authHeader(creds), "Content-Type": "application/json" },
-    body: JSON.stringify([task]), signal: AbortSignal.timeout(180000),
+    body: JSON.stringify([task]), signal: AbortSignal.timeout(150000),
   });
   if (!res.ok) throw new Error(`DataForSEO HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
@@ -4926,7 +4926,8 @@ function applyRunResults(run, items) {
   rememberDoc("performance", out.written.performance ?? next);
   return n;
 }
-const transientDfs = (msg) => /4050[0-9]|internal error|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN|socket|HTTP 5\d\d|HTTP 429|fetch failed|aborted/i.test(String(msg || ""));
+const transientDfs = (msg) => /4050[0-9]|4020[256]|internal error|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN|socket|HTTP 5\d\d|HTTP 429|fetch failed|aborted/i.test(String(msg || ""));
+const dupLimitDfs = (msg) => /4020[56]|duplicate task limit/i.test(String(msg || ""));
 const fundsDfs = (msg) => /4020[0-9]|insufficient|balance|not enough money|payment/i.test(String(msg || ""));
 let runTickBusy = false;
 async function tickRankRuns() {
@@ -4972,6 +4973,7 @@ async function processRun(run) {
     catch (err) {
       const msg = String(err?.message || err);
       if (fundsDfs(msg)) { pause("DataForSEO refused the tasks: " + msg.slice(0, 120) + " — top up the account; the scan resumes by itself.", 60 * 60e3); saveRun(run); return; }
+      if (dupLimitDfs(msg)) { pause("DataForSEO's duplicate-task limit was reached (" + msg.slice(0, 80) + ") — the scan resumes in an hour.", 60 * 60e3); saveRun(run); return; }
       for (const it of due) { it.attempts++; it.nextAt = Date.now() + runBackoff(it.attempts); it.error = msg.slice(0, 160); }
       saveRun(run);
       if (!transientDfs(msg)) pause("DataForSEO rejected the request: " + msg.slice(0, 140), 15 * 60e3);
@@ -4981,6 +4983,7 @@ async function processRun(run) {
       const p = posted[i] || { error: "no response for this task" };
       if (p.taskId) { it.taskId = p.taskId; it.reused = !!p.reused; it.status = "posted"; it.postedAt = Date.now(); it.error = null; if (!p.reused) run.billedTasks++; }
       else if (/location/i.test(p.error || "") && !it.locFallback) { it.locFallback = true; it.attempts++; it.nextAt = Date.now() + 5e3; it.error = p.error; }
+      else if (dupLimitDfs(p.error)) { it.nextAt = Date.now() + 60 * 60e3; it.error = String(p.error).slice(0, 160); }   // not an attempt: wait out the hour
       else { it.attempts++; it.nextAt = Date.now() + runBackoff(it.attempts); it.error = String(p.error || "task not created").slice(0, 160); }
     });
     saveRun(run);
@@ -4996,7 +4999,22 @@ async function processRun(run) {
   };
   let authProblem = null;
   if (posted.length) {
-    await pool(posted, async (it) => {
+    /* DataForSEO's recommended collection: ask tasks_ready which of our
+       tasks have finished (one call per engine), task_get only those, and
+       sweep every posted id directly every five minutes in case a result
+       was listed earlier and missed. Polling every task every tick was
+       hundreds of calls a minute on a big project. */
+    const ready = new Set();
+    for (const engine of ["google", "bing"]) {
+      if (!posted.some((x) => x.engine === engine)) continue;
+      try {
+        const res = await fetch(`${DFS_BASE}/serp/${engine}/organic/tasks_ready`, { headers: { Authorization: authHeader(creds) }, signal: AbortSignal.timeout(40000) });
+        if (res.ok) for (const r of (await res.json()).tasks?.[0]?.result || []) ready.add(r.id);
+      } catch { /* a failed listing just means the direct sweep does the work */ }
+    }
+    const SWEEP_MS = 5 * 60e3;
+    await pool(posted.filter((it) => ready.has(it.taskId) || Date.now() - (it.lastCheckAt || 0) > SWEEP_MS || it.reused), async (it) => {
+      it.lastCheckAt = Date.now();
       let got;
       try { got = await dfsTaskGet(creds, it.engine + "/organic", it.taskId, { strict: true }); } catch (e) { it.error = String(e?.message || e).slice(0, 120); return; }
       if (got && got.http) {
