@@ -1011,9 +1011,20 @@ async function handleGa4Report(body) {
   if (!body?.connectionId || !body?.propertyId) return [400, { error: "bad_request", detail: "connectionId and propertyId required." }];
   const days = Math.min(Math.max(+body?.days || 28, 1), 365);
   const pid = String(body.propertyId).replace(/^properties\//, "");
-  const range = [{ startDate: `${days}daysAgo`, endDate: "today" }];
-  /* sources get a second range so each source shows a vs-prev-period delta */
-  const cmpRange = [...range, { startDate: `${2 * days}daysAgo`, endDate: `${days + 1}daysAgo` }];
+  /* an explicit window (the report builder's date range) beats "last N days" */
+  const isoDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null;
+  const sD = isoDay(body?.startDate), eD = isoDay(body?.endDate);
+  let range, cmpRange;
+  if (sD && eD && sD <= eD) {
+    const ms = 864e5, a = Date.parse(sD + "T00:00:00Z"), b = Date.parse(eD + "T00:00:00Z"), len = Math.round((b - a) / ms) + 1;
+    const iso = (t) => new Date(t).toISOString().slice(0, 10);
+    range = [{ startDate: sD, endDate: eD }];
+    cmpRange = [...range, { startDate: iso(a - len * ms), endDate: iso(a - ms) }];
+  } else {
+    range = [{ startDate: `${days}daysAgo`, endDate: "today" }];
+    /* sources get a second range so each source shows a vs-prev-period delta */
+    cmpRange = [...range, { startDate: `${2 * days}daysAgo`, endDate: `${days + 1}daysAgo` }];
+  }
   try { const { accessToken } = await googleAccess(body.connectionId);
     const d = await gPost(accessToken, `https://analyticsdata.googleapis.com/v1beta/properties/${pid}:batchRunReports`, {
       requests: [

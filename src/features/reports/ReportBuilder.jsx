@@ -209,15 +209,63 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       .finally(() => { if (alive) setGscBusy(false); });
     return () => { alive = false; };
   }, [isReal, gscReady, g.connectionId, g.gscSite, range.start, range.end]); // eslint-disable-line
+  /* ---- LIVE GA4 for the EXACT selected window ---------------------------
+     channels, sources, events, landing pages and the user/conversion KPIs
+     used to come from a fixed "latest month" bucket, so changing the report
+     date range changed nothing on the GA4 charts. */
+  const ga4Ready = !!(g.connectionId && g.ga4Property);
+  const [ga4, setGa4] = useState(null);   // { totals, prevTotals, channels, sources, events, topPages } | { error }
+  useEffect(() => {
+    if (!isReal || !ga4Ready) { setGa4(null); return; }
+    let alive = true;
+    const q = (s2, e2) => fetch("/api/google/ga4/report", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({ connectionId: g.connectionId, propertyId: g.ga4Property, startDate: isoD(s2), endDate: isoD(e2) }),
+    }).then((r) => r.json().then((d) => ({ ok: r.ok, d })));
+    Promise.all([q(startD, endD), hasPrev ? q(prevStartD, prevEndD) : Promise.resolve({ ok: true, d: null })])
+      .then(([a, b2]) => {
+        if (!alive) return;
+        if (!a.ok || !a.d?.live) { setGa4({ error: a.d?.detail || a.d?.error || "Google Analytics request failed" }); return; }
+        setGa4({ totals: a.d.totals || {}, prevTotals: b2.ok && b2.d?.live ? b2.d.totals : null, channels: a.d.channels || [], sources: a.d.sources || [], events: a.d.events || [], topPages: a.d.topPages || [] });
+      })
+      .catch((e) => { if (alive) setGa4({ error: String(e?.message || e) }); });
+    return () => { alive = false; };
+  }, [isReal, ga4Ready, g.connectionId, g.ga4Property, range.start, range.end]); // eslint-disable-line
 
   const fmtD2 = (d) => d.toLocaleDateString("en", { month: "short", day: "numeric" });
   const rangeLabel = `${fmtD2(startD)} – ${fmtD2(endD)}, ${endD.getFullYear()}`;
   const prevLabel = hasPrev ? `${fmtD2(prevStartD)} – ${fmtD2(prevEndD)}` : null;
   /* rank metrics are daily already — evaluate at the window ends */
   const daysAgoOf = (d) => Math.max(0, Math.round((todayD - d) / MS));
-  const rankAvgAt = (d) => { const v = avgPosDaysAgo(tracking, daysAgoOf(d)); return v == null ? null : +v.toFixed(1); };
-  const posAtD = (t, d) => t.positions[Math.max(0, t.positions.length - 1 - daysAgoOf(d))];
-  const tierAtD = (n, d) => tracking.filter((t) => posAtD(t, d) <= n).length;
+  /* Position of a keyword on a given day. Real projects hold a DATED scan
+     log; indexing the position array by "days ago" only works for the demo
+     generator's daily series — on a real project that array is one entry
+     per scan, so the KPI cards disagreed with the ranking table. */
+  const posAtD = (t, d) => {
+    if (Array.isArray(t.scans) && t.scans.length) {
+      const end = d.getTime() + MS - 1;
+      let p = null;
+      for (const sc of t.scans) if (+sc.t <= end && sc.p != null) p = sc.p;
+      return p;                                   // null = not scanned yet on that day
+    }
+    return t.positions?.length ? t.positions[Math.max(0, t.positions.length - 1 - daysAgoOf(d))] : null;
+  };
+  const tierAtD = (n, d) => tracking.filter((t) => { const p = posAtD(t, d); return p != null && p <= n; }).length;
+  const rankAvgAt = (d) => {
+    if (tracking.some((t) => Array.isArray(t.scans) && t.scans.length)) {
+      const ps = tracking.map((t) => posAtD(t, d)).filter((p) => p != null && p <= 100);
+      return ps.length ? +(ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(1) : null;
+    }
+    const v = avgPosDaysAgo(tracking, daysAgoOf(d)); return v == null ? null : +v.toFixed(1);
+  };
+  /* change over the last N days of the window (positive = improved) */
+  const changeOver = (t, days) => {
+    if (!(Array.isArray(t.scans) && t.scans.length)) return t.stats?.d30 ?? null;
+    const cur = posAtD(t, endD), before = posAtD(t, new Date(endD.getTime() - days * MS));
+    if (cur == null || before == null) return null;
+    const norm = (p) => (p > 100 ? 101 : p);
+    return norm(before) - norm(cur);
+  };
   /* month indices covering the window (section trend charts stay monthly) */
   const monthIdxOf = (d) => { let i = 0; for (let j = 0; j < 13; j++) if (MONTH_DATES[j].getTime() <= d.getTime()) i = j; return i; };
   const RA = monthIdxOf(startD), RB = monthIdxOf(endD);
@@ -287,8 +335,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     avgRank: { label: "Avg. ranking position", get: (_, i) => { const v = avgPosDaysAgo(tracking, (12 - i) * 30); return v == null ? null : +v.toFixed(1); }, invert: true, show: tracking.length > 0 },
   };
   const BREAKDOWN = {
-    channels: { label: "GA4 traffic channels", items: data.channels, show: project.integrations.ga },
-    sources: { label: "GA4 traffic sources", items: data.sources.map((x) => ({ name: x.name, value: x.series[12] })), show: project.integrations.ga },
+    /* live: the selected window; demo: sum the window's months of the series */
+    channels: { label: "GA4 traffic channels", items: ga4?.channels || data.channels, show: project.integrations.ga },
+    sources: { label: "GA4 traffic sources", items: ga4?.sources ? ga4.sources.map((x) => ({ name: x.name, value: x.value })) : data.sources.map((x) => ({ name: x.name, value: x.series.slice(RA, RB + 1).reduce((a, b) => a + b, 0) })), show: project.integrations.ga },
     platformDevice: {
       label: "GBP views by platform & device", show: project.integrations.gbp,
       items: [
@@ -350,8 +399,12 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       appleCalls: add("appleCalls", "Call taps", "APPLE", (m) => m.apple?.calls || 0, project.integrations.apple),
       appleDirections: add("appleDirections", "Direction taps", "APPLE", (m) => m.apple?.directions || 0, project.integrations.apple),
       appleWebsiteTaps: add("appleWebsiteTaps", "Website taps", "APPLE", (m) => m.apple?.websiteTaps || 0, project.integrations.apple),
-      gaUsers: add("gaUsers", "Website users", "GA4", (m) => m.ga.users, project.integrations.ga),
-      gaConversions: add("gaConversions", "Conversions", "GA4", (m) => m.ga.conversions, project.integrations.ga),
+      gaUsers: ga4?.totals
+        ? { label: "Website users", src: "GA4", val: () => ga4.totals.users || 0, prev: () => ga4.prevTotals?.users ?? null, show: true, live: true }
+        : add("gaUsers", "Website users", "GA4", (m) => m.ga.users, project.integrations.ga),
+      gaConversions: ga4?.totals
+        ? { label: "Conversions", src: "GA4", val: () => ga4.totals.conversions || 0, prev: () => ga4.prevTotals?.conversions ?? null, show: true, live: true }
+        : add("gaConversions", "Conversions", "GA4", (m) => m.ga.conversions, project.integrations.ga),
       /* GSC KPIs read the LIVE window when Google is connected (real projects),
          so the numbers always match the selected date range exactly */
       gscClicks: gsc?.cur
@@ -367,9 +420,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         ? { label: "Avg. search position", src: "GSC", val: () => +gsc.cur.position.toFixed(1), prev: () => (gsc.prev ? +gsc.prev.position.toFixed(1) : null), invert: true, isRank: true, show: true, live: true }
         : { label: "Avg. search position", src: "GSC", val: () => 0, prev: () => null, show: false },
       avgRank: { label: "Avg. position", src: "Ranks", val: () => rankAvgAt(endD), prev: () => (hasPrev ? rankAvgAt(prevEndD) : null), invert: true, isRank: true, show: tracking.length > 0 },
-      top3: { label: "Keywords in top 3", src: "Ranks", val: () => tierAtD(3, endD), prev: () => (hasPrev ? tierAtD(3, prevEndD) : null), show: tracking.length > 0 },
-      top10: { label: "Keywords in top 10", src: "Ranks", val: () => tierAtD(10, endD), prev: () => (hasPrev ? tierAtD(10, prevEndD) : null), show: tracking.length > 0 },
-      top20: { label: "Keywords in top 20", src: "Ranks", val: () => tierAtD(20, endD), prev: () => (hasPrev ? tierAtD(20, prevEndD) : null), show: tracking.length > 0 },
+      top3: { label: "Keywords in top 3", src: "Ranks", val: () => tierAtD(3, endD), prev: () => (hasPrev ? tierAtD(3, prevEndD) : null), count: true, show: tracking.length > 0 },
+      top10: { label: "Keywords in top 10", src: "Ranks", val: () => tierAtD(10, endD), prev: () => (hasPrev ? tierAtD(10, prevEndD) : null), count: true, show: tracking.length > 0 },
+      top20: { label: "Keywords in top 20", src: "Ranks", val: () => tierAtD(20, endD), prev: () => (hasPrev ? tierAtD(20, prevEndD) : null), count: true, show: tracking.length > 0 },
     };
   })();
   const TABLE_KINDS = {
@@ -384,7 +437,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
 
   /* ---- default report layout (fully editable from there) ---- */
   const [blocks, setBlocks] = useState(() => {
-    if (initialBlocks) return initialBlocks.map((b) => ({ ...b, id: uid() }));
+    const summaryText = () => aiSummary || `This report covers ${project.website} and compares the latest month against ${defaultCmp || 3} month(s) ago. Highlights: visibility, customer actions and local rankings all trend upward.`;
+    if (initialBlocks) return initialBlocks.map((b) => {
+      /* the default summary names the site it was written for — a template
+         or a saved report reopened on another project keeps the OTHER site's
+         name unless it is rewritten for this one */
+      const stock = b.type === "paragraph" && (b.auto === "summary" || /^This report covers \S+ and compares the latest month against \d+ month\(s\) ago\./.test(String(b.text || "")));
+      return { ...b, id: uid(), ...(stock ? { text: summaryText(), auto: "summary" } : {}) };
+    });
     if (template === "work") {
       const b = [
         { id: uid(), type: "heading", text: "Work summary", level: 2 },
@@ -396,7 +456,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     }
     const b = [
       { id: uid(), type: "heading", text: "Executive summary", level: 2 },
-      { id: uid(), type: "paragraph", text: aiSummary || `This report covers ${project.website} and compares the latest month against ${defaultCmp || 3} month(s) ago. Highlights: visibility, customer actions and local rankings all trend upward.` },
+      { id: uid(), type: "paragraph", auto: "summary", text: summaryText() },
       { id: uid(), type: "kpis", metrics: ["allProfileViews", "gbpViews", "bingImpressions", "appleViews", "gaUsers", "gscClicks", "avgRank", "top3", "top10", "top20"].filter((k) => KPIS[k].show) },
     ];
     if (TREND.gbpViews.show) b.push({ id: uid(), type: "heading", text: "Visibility trend", level: 2 }, { id: uid(), type: "chart", mode: "trend", source: "gbpViews", chartType: "area", months: 13 });
@@ -574,8 +634,13 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
      copy fits on one line on the page (or the reverse), and every row's
      height is mis-predicted by a text line. Fixed widths make the measuring
      copy and every printed part wrap identically. */
-  const RANK_COLS = ["30%", "16%", "10%", "10%", "7%", "9%", "18%"];
-  const RankCols = () => <colgroup>{RANK_COLS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>;
+  const rankColsOf = (b) => {
+    const cols = [["keyword", 30], ...(b.showCity ? [["city", 16]] : []), ["start", 9], ["current", 9],
+      ...(b.showMap !== false ? [["map", 8]] : []), ...(b.showAi !== false ? [["ai", 9]] : []), ["d30", 7], ["life", 8], ["url", 16]];
+    const sum = cols.reduce((a, c) => a + c[1], 0);
+    return cols.map(([k, w]) => [k, (w / sum * 100).toFixed(2) + "%"]);
+  };
+  const RankCols = ({ b }) => <colgroup>{rankColsOf(b).map(([k, w]) => <col key={k} style={{ width: w }} />)}</colgroup>;
   /* everything a geo-grid section draws, resolved once — shared by the
      renderer and the paginator, which divides the section by keyword card */
   const geoPartsOf = (b) => {
@@ -967,7 +1032,9 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 <SourceTag label={d.src} />
               </div>
               <div className="ll-display text-[26px] font-semibold leading-none tracking-tight">{d.isRank ? "#" + v : fmt(v)}</div>
-              <div className="mt-1"><Delta pct={pctDelta(v, p)} invert={d.invert} /> <span className="text-[10.5px] text-gray-400">vs prev. period</span></div>
+              <div className="mt-1">{d.count
+                ? <span className={`ll-mono text-[11px] font-semibold ${v - p > 0 ? "text-emerald-600" : v - p < 0 ? "text-red-500" : "text-gray-400"}`}>{v - p > 0 ? "↗ +" : v - p < 0 ? "↘ " : "— "}{v - p === 0 ? "0" : v - p}</span>
+                : <Delta pct={pctDelta(v, p)} invert={d.invert} />} <span className="text-[10.5px] text-gray-400">vs prev. period</span></div>
             </div>
           );
         })}
@@ -992,12 +1059,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       return (
       <div>
         <table className="w-full text-[12.5px]" style={{ tableLayout: "fixed" }}>
-          <RankCols />
-          <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th><th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
+          <RankCols b={b} />
+          <thead><tr className="border-b border-gray-100"><th className={th}>Keyword</th>{b.showCity && <th className={th}>City</th>}<th className={th}>Start</th><th className={th}>Current</th>{b.showMap !== false && <th className={th}>Map pack</th>}{b.showAi !== false && <th className={th}>AI Overview</th>}<th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>Ranking URL</th></tr></thead>
           <tbody>{sliceRows(b, rr.rows).map((t) => (
-            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
+            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td>{b.showCity && <td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>}
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
-              <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
+              {b.showMap !== false && <td className={td}>{t.mapPos != null ? <span className="ll-mono rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">#{t.mapPos}</span> : <span className="text-gray-300">—</span>}</td>}
+              {b.showAi !== false && <td className={td}>{t.aiPos != null ? <span className="ll-mono rounded-md bg-violet-50 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700">#{t.aiPos}</span> : <span className="text-gray-300">—</span>}</td>}
+              <td className={td}><PosChange value={changeOver(t, 30)} /></td><td className={td}><PosChange value={t.stats.life} /></td>
               <td className={td + " max-w-40 truncate text-[11.5px]"} title={t.url || ""}>
                 {t.url
                   ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: b.color || accent }}>{urlSlug(t.url)}</a>
@@ -1031,7 +1100,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
       const kws = [...new Set(project.tracking.map((t) => t.keyword))];
       const pages = project.opt?.website?.pages?.length
         ? project.opt.website.pages.map((pg) => pg.origUrl || pg.url)
-        : data.topPages.map((tp) => tp.page);
+        : (ga4?.topPages || data.topPages).map((tp) => tp.page);
       const opps = pages.flatMap((url) => {
         const { queries } = genPageQueries(project.id, url, kws, project.name);
         return queries.filter((q) => q.position > 3 && q.position <= 25).map((q) => ({ url, ...q }));
@@ -1075,7 +1144,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     if (b.kind === "events") return (
       <table className="w-full text-[12.5px]">
         <thead><tr className="border-b border-gray-100"><th className={th}>Event name</th><th className={th}>Count</th><th className={th}>vs previous</th></tr></thead>
-        <tbody>{cap(data.events).map((e, i) => (
+        <tbody>{cap(ga4?.events || data.events).map((e, i) => (
           <tr key={i}><td className={td + " ll-mono"}>{e.name}</td><td className={td + " ll-mono font-semibold"}>{fmt(e.series[12])}</td>
             <td className={td}><Delta pct={pctDelta(e.series[12], e.series[12 - cmpMonths])} /></td></tr>
         ))}</tbody>
@@ -1084,7 +1153,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
     return (
       <table className="w-full text-[12.5px]">
         <thead><tr className="border-b border-gray-100"><th className={th}>Page</th><th className={th}>Users</th><th className={th}>Conversions</th></tr></thead>
-        <tbody>{cap(data.topPages).map((p, i) => (
+        <tbody>{cap(ga4?.topPages || data.topPages).map((p, i) => (
           <tr key={i}><td className={td + " ll-mono"}>{project.website}{p.page === "/" ? "" : p.page}</td>
             <td className={td + " ll-mono"}>{fmt(p.users)}</td><td className={td + " ll-mono"}>{fmt(p.conversions)}</td></tr>
         ))}</tbody>
@@ -1347,7 +1416,7 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
             <ProjectMark project={cp.project} />
             <div>
               <div className="ll-display text-[15px] font-semibold leading-tight">{cp.project.name}</div>
-              <div className="text-[10.5px] text-gray-400">{rr.locLabel || [...new Set(cp.tracking.map((t) => cityLabel(t.city)))].join(" · ") || cp.project.website}</div>
+              <div className="text-[10.5px] text-gray-400">{rr.locLabel || (b.showCity ? [...new Set(cp.tracking.map((t) => cityLabel(t.city)))].join(" · ") : cp.project.website) || cp.project.website}</div>
             </div>
           </div>
           <SourceTag label={rr.top ? `Top ${rr.top} rankings` : "Keyword rankings"} />
@@ -1364,15 +1433,18 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
         )}
         {showKeywords && (
         <table className="w-full text-[12px]" style={{ tableLayout: "fixed" }}>
-          <RankCols />
+          <RankCols b={b} />
           <thead><tr className="border-b border-gray-100">
-            <th className={th}>Keyword</th><th className={th}>City</th><th className={th}>Start</th>
-            <th className={th}>Current</th><th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>URL</th>
+            <th className={th}>Keyword</th>{b.showCity && <th className={th}>City</th>}<th className={th}>Start</th>
+            <th className={th}>Current</th>{b.showMap !== false && <th className={th}>Map pack</th>}{b.showAi !== false && <th className={th}>AI Overview</th>}
+            <th className={th}>30d</th><th className={th}>Lifetime</th><th className={th}>URL</th>
           </tr></thead>
           <tbody>{rows.map((t) => (
-            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td><td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>
+            <tr key={t.id} data-rbrow><td className={td + " font-medium"}>{t.keyword}</td>{b.showCity && <td className={td + " text-gray-500"}>{cityLabel(t.city)}</td>}
               <td className={td}><RankChip pos={t.stats.start} muted /></td><td className={td}><RankChip pos={t.stats.cur} /></td>
-              <td className={td}><PosChange value={t.stats.d30} /></td><td className={td}><PosChange value={t.stats.life} /></td>
+              {b.showMap !== false && <td className={td}>{t.mapPos != null ? <span className="ll-mono rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">#{t.mapPos}</span> : <span className="text-gray-300">—</span>}</td>}
+              {b.showAi !== false && <td className={td}>{t.aiPos != null ? <span className="ll-mono rounded-md bg-violet-50 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700">#{t.aiPos}</span> : <span className="text-gray-300">—</span>}</td>}
+              <td className={td}><PosChange value={changeOver(t, 30)} /></td><td className={td}><PosChange value={t.stats.life} /></td>
               <td className={td + " max-w-32 truncate"} title={t.url || ""}>
                 {t.url
                   ? <a href={t.url} target="_blank" rel="noopener noreferrer" className="ll-mono hover:underline" style={{ color: color }}>{urlSlug(t.url)}</a>
@@ -1809,6 +1881,14 @@ function ReportBuilderInner({ project, data, tracking, clientProjects = [], reco
                 {RANK_TIERS.map((n) => <option key={n} value={n}>Top {n} positions</option>)}
                 <option value="all">All keywords</option>
               </select>
+            </Labeled>
+            <Labeled label="Columns">
+              <div className="flex flex-wrap gap-1.5">
+                {[["showCity", "City", !!b.showCity], ["showMap", "Map pack", b.showMap !== false], ["showAi", "AI Overview", b.showAi !== false]].map(([k, label, on]) => (
+                  <button key={k} type="button" onClick={() => patch(b.id, { [k]: !on })}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${on ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-500 hover:bg-gray-50"}`}>{label}</button>
+                ))}
+              </div>
             </Labeled>
           </>
         ) : (
