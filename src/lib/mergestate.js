@@ -106,6 +106,56 @@ const mergeGeoGrid = (a, b) => {
   return { ...base, reports: unionById(ga.reports, gb.reports, mergeGeoReport) };
 };
 
+/* The month's automatic "Optimization Work" record is identified by its
+   autoKey. Two sessions that both started the month (or a stale tab) used to
+   create it twice with different random ids, and a union by id kept both.
+   Records that share an autoKey collapse into one here — on every merge
+   path, so a conflict merge can never resurrect a duplicate — with their
+   checklists joined by section and their auto-tasks joined by work key. */
+export function collapseAutoRecords(records) {
+  const list = records || [];
+  const groups = new Map();
+  for (const r of list) if (r && r.autoKey) groups.set(r.autoKey, [...(groups.get(r.autoKey) || []), r]);
+  if (![...groups.values()].some((g) => g.length > 1)) return list;
+  const mergeTasks = (ta, tb) => {
+    const out = [...(ta || [])];
+    for (const t of tb || []) {
+      const i = t.workKey ? out.findIndex((x) => x.workKey === t.workKey) : out.findIndex((x) => x.id === t.id);
+      if (i < 0) { out.push(t); continue; }
+      const x = out[i];
+      if (!t.workKey) { out[i] = ts(t) > ts(x) ? t : x; continue; }
+      const workCount = (x.workCount || 1) + (t.workCount || 1);
+      const bigger = (t.workCount || 1) > (x.workCount || 1) ? t : x;
+      out[i] = { ...bigger, id: x.id, workCount, workDetails: [...new Set([...(x.workDetails || []), ...(t.workDetails || [])])].slice(-8),
+        assignees: [...new Set([...(x.assignees || []), ...(t.assignees || [])])],
+        completedAt: x.completedAt || t.completedAt || null, titleEdited: !!(x.titleEdited || t.titleEdited),
+        title: x.titleEdited ? x.title : t.titleEdited ? t.title : bigger.title, retitle: !(x.titleEdited || t.titleEdited) };
+    }
+    return out;
+  };
+  const mergeTwo = (a, b) => {
+    const [first, second] = ts(a) <= ts(b) ? [a, b] : [b, a];   // the older copy keeps its id
+    const checklists = [...(first.checklists || [])];
+    for (const c of second.checklists || []) {
+      const i = checklists.findIndex((x) => (c.sectionKey && x.sectionKey === c.sectionKey) || x.name === c.name || x.id === c.id);
+      if (i < 0) checklists.push(c); else checklists[i] = { ...checklists[i], tasks: mergeTasks(checklists[i].tasks, c.tasks) };
+    }
+    return { ...first, checklists,
+      assignees: [...new Set([...(first.assignees || []), ...(second.assignees || [])])],
+      comments: unionById(first.comments, second.comments), activity: unionById(first.activity, second.activity).slice(0, 80),
+      completedAt: first.completedAt && second.completedAt ? first.completedAt : null,
+      updatedAt: Math.max(ts(first), ts(second)) || first.updatedAt };
+  };
+  const seen = new Set(); const out = [];
+  for (const r of list) {
+    if (!r || !r.autoKey) { out.push(r); continue; }
+    if (seen.has(r.autoKey)) continue;
+    seen.add(r.autoKey);
+    out.push(groups.get(r.autoKey).reduce((acc, x) => (acc ? mergeTwo(acc, x) : x), null));
+  }
+  return out;
+}
+
 const mergeProject = (a, b) => {
   /* scalar/config fields follow the side edited last, so a settings change is
      not undone; the collections below are unions regardless */
@@ -113,7 +163,7 @@ const mergeProject = (a, b) => {
   const geoGrid = mergeGeoGrid(a.geoGrid, b.geoGrid);
   return {
     ...base,
-    records: unionById(a.records, b.records, mergeRecord),
+    records: collapseAutoRecords(unionById(a.records, b.records, mergeRecord)),
     lists: unionById(a.lists, b.lists),
     tracking: unionById(a.tracking, b.tracking, mergeTracking),
     chatMsgs: unionById(a.chatMsgs, b.chatMsgs),

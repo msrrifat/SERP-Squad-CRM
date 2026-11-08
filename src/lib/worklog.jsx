@@ -8,6 +8,7 @@
    a live who-did-what work report (and feeds Report builder record imports,
    which show completed tasks). */
 import { createContext, useContext } from "react";
+import { collapseAutoRecords } from "./mergestate.js";
 
 /* mirrors the Optimization Studio left-sidebar buttons, in order */
 export const OPT_WORK_SECTIONS = [
@@ -116,13 +117,25 @@ const taskTitle = (ev, count, details) => {
    Returns a project patch ({records, lists}) or null when nothing changed. */
 export function ensureMonthlyWorkRecord(project, teamNames, now = Date.now()) {
   const tag = workMonthTag(now);
-  const records = project.records || [];
-  if (records.some((r) => r.autoKey === `optwork-${tag}`)) return null;
+  /* duplicates of an automatic record (two sessions starting the same
+     month) are folded into one first; merged auto-tasks get their titles
+     rebuilt from the combined counts */
+  const raw = project.records || [];
+  let records = collapseAutoRecords(raw);
+  const collapsed = records !== raw;
+  if (collapsed) records = records.map((r) => (!r.autoKey ? r : { ...r, checklists: (r.checklists || []).map((c) => ({ ...c, tasks: (c.tasks || []).map((t) => {
+    if (!t.retitle) return t;
+    const ev = WORK_EVENTS[t.workKey]; const { retitle, ...rest } = t;
+    return ev ? { ...rest, title: taskTitle(ev, t.workCount || 1, t.workDetails || []) } : rest;
+  }) })) }));
+  if (records.some((r) => r.autoKey === `optwork-${tag}`)) return collapsed ? { records } : null;
   const lists = project.lists || [];
   let list = lists.find((l) => /monthly tasks/i.test(l.name));
   const nextLists = list ? lists : [...lists, (list = { id: wuid("l"), name: "Monthly Tasks" })];
   const record = {
-    id: wuid("r"), autoKey: `optwork-${tag}`, auto: true, listId: list.id,
+    /* one deterministic id per project and month: a second session that
+       creates the same record merges into this one instead of beside it */
+    id: `r-optwork-${project.id}-${tag}`, autoKey: `optwork-${tag}`, auto: true, listId: list.id,
     name: `Optimization Work — ${monthName(now)}`,
     createdAt: now, updatedAt: now, dueDate: monthEndIso(now), completedAt: null,
     assignees: [...new Set(teamNames)],
