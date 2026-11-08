@@ -723,7 +723,10 @@ export function ProjectManagementView({ project, people, perms, currentUser, acc
       {/* board: one column per list, cards filtered by the active view */}
       <div className="flex items-start gap-3 overflow-x-auto pb-2">
         {lists.map((list) => {
-          const cards = rows.filter((r) => listIdOf(r) === list.id);
+          /* newest record on top. Array order is not reliable: a union merge
+             keeps the server's order and appends anything this tab added, so
+             a record created a minute ago used to land at the bottom. */
+          const cards = rows.filter((r) => listIdOf(r) === list.id).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
           const allCount = records.filter((r) => listIdOf(r) === list.id).length;
           return (
             <div key={list.id}
