@@ -9,7 +9,7 @@ import { mdInline } from "../../lib/text.jsx";
 const hdrs = () => ({ "X-SS-Token": localStorage.getItem("ss_token") || "" });
 
 /* tiny markdown renderer: headings, lists, tables, code, paragraphs */
-function renderMd(md) {
+export function renderMd(md) {
   const lines = String(md || "").split("\n");
   const out = [];
   let i = 0, key = 0;

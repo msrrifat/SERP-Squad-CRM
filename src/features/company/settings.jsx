@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { BookOpen, 
+import { BookOpen, Bot,
   MapPin, Phone, Globe, Star, Search, Users, Eye, Settings, Plus, X,
   Building2, LayoutDashboard, Target, Palette, Link2, CheckCircle2,
   Printer, ArrowUpRight, ArrowDownRight, Minus, Navigation, Upload,
@@ -22,6 +22,7 @@ import { relTime } from "../../lib/format.jsx";
 import { AccountingSection } from "./accounting.jsx";
 import { ProposalSection } from "./proposal.jsx";
 import { ProductGuideSection } from "./guide.jsx";
+import { AgentOpsSection } from "./agentdash.jsx";
 import { GoogleAccountsAdmin } from "../performance/googleaccounts.jsx";
 
 export const API_REGISTRY = [
@@ -1337,6 +1338,7 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark,
     { key: "invoice", label: "Invoices", icon: Receipt, sub: "Branded invoices per client" },
     { key: "proposal", label: "Proposal template", icon: FileTextIcon, sub: "Client proposals: services, pricing, work checklist" },
     { key: "activity", label: "Activity log", icon: History, sub: "Who's doing what, where" },
+    { key: "agent", label: "AI agent", icon: Bot, sub: "Local agent: tasks, working limits, token limits, devices" },
     { key: "guide", label: "Product guide", icon: BookOpen, sub: "Internal A–Z manual for the team and the AI agent" },
   ];
   const active = TABS.find((t) => t.key === tab);
@@ -1387,6 +1389,7 @@ export function CompanyPage({ company, onChange, clients, onBack, dark, setDark,
           {tab === "proposal" && <ProposalSection company={company} onChange={onChange}
             ai={(() => { const id = effectiveAiId(company); const a = id && company.apis?.[id]; return a?.values?.apiKey ? { provider: id, key: a.values.apiKey, model: a.values.model || undefined } : null; })()} />}
           {tab === "activity" && <ActivitySection company={company} />}
+          {tab === "agent" && <AgentOpsSection company={company} />}
           {tab === "guide" && <ProductGuideSection />}
         </div>
       </main>

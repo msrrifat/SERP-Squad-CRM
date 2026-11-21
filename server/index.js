@@ -34,6 +34,7 @@ import { DOMAINS, PROJECT_KEYED, splitWorkspace, joinWorkspace } from "../src/li
 import { mergeWorkspace } from "../src/lib/mergestate.js";
 import { mergeChatDocs, mergeMsgList, mergeReadMap } from "../src/lib/chatmerge.js";
 import { compactPerformanceEntry } from "../src/lib/geosnap.js";
+import { initAgentOps, agentOpsGet, agentOpsPost, agentOpsUpload } from "./agentops.js";
 
 const PORT = process.env.PORT || 8787;
 const DFS_BASE = process.env.DFS_BASE || "https://api.dataforseo.com/v3"; // override for offline tests
@@ -6008,6 +6009,8 @@ function migrateStorage() {
   }
 }
 migrateStorage();
+/* local AI agent control plane (devices, task queue, working and token limits) — see agentops.js */
+initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery });
 
 http.createServer(async (req, res) => {
   const CORS = { ...corsFor(req), ...SEC_HEADERS };
@@ -6090,6 +6093,7 @@ http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/state/backups") { const [c2, p2] = handleStateBackups(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/chat/since")) { const [c2, p2] = handleChatSince(req); return send(c2, p2); }
     if (req.method === "GET" && req.url === "/api/seo-guide/toc") { const [c2, p2] = handleSeoGuideToc(req); return send(c2, p2); }
+    if (req.method === "GET" && req.url.startsWith("/api/agentops/")) return agentOpsGet(req, res, send, CORS);
     if (req.method === "GET" && req.url === "/api/product-guide/toc") { const [c2, p2] = handleProductGuideToc(req); return send(c2, p2); }
     if (req.method === "GET" && req.url.startsWith("/api/product-guide/doc?")) { const [c2, p2] = handleProductGuideDoc(req, decodeURIComponent(new URL(req.url, "http://x").searchParams.get("file") || "")); return send(c2, p2); }
     /* Google OAuth callback — Google redirects the browser here; returns an HTML page that hands the connection back to the app */
@@ -6125,7 +6129,9 @@ http.createServer(async (req, res) => {
       res.writeHead(302, { Location: dest, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/rank/run", "/api/rank/run/status", "/api/rank/run/cancel", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/product-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url)) {
+    /* the agent jar is streamed to disk, not parsed as JSON */
+    if (req.method === "POST" && req.url.startsWith("/api/agentops/release/upload")) return await agentOpsUpload(req, send);
+    if (req.method === "POST" && ["/api/scan-listings", "/api/rerun", "/api/check-index", "/api/geo-grid", "/api/places-locate", "/api/share", "/api/serp-top", "/api/generate", "/api/profile-listings", "/api/ads/accounts", "/api/ads/metrics", "/api/ads/publish", "/api/auth/2fa/start", "/api/auth/2fa/verify", "/api/auth/device-check", "/api/custom/test", "/api/custom/deploy", "/api/dfs-balance", "/api/dfs/goto-convert", "/api/wp/media", "/api/wp/media-update", "/api/wp/content", "/api/wp/deploy", "/api/wp/cleanup", "/api/wp/test", "/api/wp/categories", "/api/posts/community", "/api/posts/competitors", "/api/wp/agent/key", "/api/wp/agent/pair", "/api/wp/agent/poll", "/api/wp/agent/result", "/api/wp/agent/status", "/api/wp/agent/exec", "/api/webflow/deploy", "/api/webflow/publish", "/api/pixel/verify", "/api/pixel/status", "/api/pixel/check", "/api/audit/website", "/api/crawl/sitemap", "/api/crawl/page", "/api/crawl/meta", "/api/audit/profile", "/api/leads/search", "/api/scrape-email", "/api/outreach/send", "/api/guestpost/search", "/api/guestpost/metrics", "/api/mail/test", "/api/mail/inbox", "/api/mail/message", "/api/rank/start", "/api/rank/status", "/api/rank/run", "/api/rank/run/status", "/api/rank/run/cancel", "/api/form/register", "/api/form/submit", "/api/form/leads", "/api/track/stats", "/api/kw/research", "/api/kw/domain", "/api/kw/locations", "/api/kw/volume", "/api/insight/audit", "/api/app/login", "/api/app/2fa", "/api/app/logout", "/api/state", "/api/state/client", "/api/state/domains", "/api/chat/send", "/api/chat/react", "/api/chat/read", "/api/chat/typing", "/api/seo-guide", "/api/product-guide", "/api/state/restore", "/api/state/backup-extract", "/api/oauth/google/start", "/api/social/start", "/api/social/status", "/api/social/disconnect", "/api/social/bluesky", "/api/social/pages", "/api/social/select", "/api/google/accounts", "/api/google/gsc/sites", "/api/google/gsc/query", "/api/google/ga4/properties", "/api/google/ga4/report", "/api/files"].includes(req.url) || (req.method === "POST" && req.url.startsWith("/api/agentops/"))) {
       /* /api/state carries the WHOLE workspace (tracking, geo-grid snapshots,
          saved keyword searches) — a tight cap here silently loses data */
       const bodyCap = (req.url === "/api/state" || req.url === "/api/state/domains") ? 32e6
@@ -6160,7 +6166,8 @@ http.createServer(async (req, res) => {
         res.writeHead(ok ? 200 : 400, { "Content-Type": "text/html; charset=utf-8", ...SEC_HEADERS });
         return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${ok ? "Request received" : "Could not send"}</title><body style="font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:34em;margin:14vh auto;padding:0 6vw;color:#141b24"><h1 style="font-size:24px">${ok ? "Thanks — your request is in." : "That didn't send"}</h1><p>${ok ? "We'll reply by email shortly." : escHtml(payload2.detail || "Please check the form and try again.")}</p>${back ? `<p><a href="${escHtml(back)}">← Back to the page</a></p>` : ""}`);
       }
-      const [code, payload] = req.url === "/api/scan-listings" ? await handleScan(body)
+      const [code, payload] = req.url.startsWith("/api/agentops/") ? await agentOpsPost(req, body)
+        : req.url === "/api/scan-listings" ? await handleScan(body)
         : req.url === "/api/check-index" ? await handleCheckIndex(body)
         : req.url === "/api/geo-grid" ? await handleGeoGrid(body)
         : req.url === "/api/places-locate" ? await handlePlacesLocate(body)
