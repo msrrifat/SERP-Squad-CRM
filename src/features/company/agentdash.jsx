@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -63,6 +63,7 @@ export function AgentOpsSection({ company, app = null }) {
   const [busy, setBusy] = useState(false);
   const [openTask, setOpenTask] = useState(null);
   const [chatPid, setChatPid] = useState("");
+  const [inProject, setInProject] = useState(false);
 
   const load = useCallback(async () => {
     try { setData(await api("overview")); setErr(""); } catch (e) { setErr(String(e.message || e)); }
@@ -94,8 +95,8 @@ export function AgentOpsSection({ company, app = null }) {
     <div className="space-y-4">
       {err && <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{err}</div>}
 
-      {/* company-wide controls */}
-      <Card className="p-4">
+      {/* company-wide controls (not shown on a project's own page, which is about that one project) */}
+      <Card className={"p-4" + (view === "limits" && inProject ? " hidden" : "")}>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={18} /></span>
@@ -138,7 +139,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -162,24 +163,107 @@ function CapInput({ label, value, onSave }) {
 }
 
 /* ---------------- projects: working limits and token limits ---------------- */
-function LimitsView({ data, accent, act, busy, onChat, reload }) {
-  const [pid, setPid] = useState(() => data.projects[0]?.id || "");
-  const project = data.projects.find((p) => p.id === pid) || data.projects[0];
+/* Back and Forward, as in a browser: they walk the pages visited inside the Projects screen */
+function PageNav({ canBack, canForward, onBack, onForward }) {
+  const cls = "flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-35 disabled:hover:bg-white";
+  return (
+    <div className="flex shrink-0 items-center gap-1" role="group" aria-label="Page history">
+      <button type="button" className={cls} disabled={!canBack} onClick={onBack} title="Back" aria-label="Back"><ArrowLeft size={16} /></button>
+      <button type="button" className={cls} disabled={!canForward} onClick={onForward} title="Forward" aria-label="Forward"><ArrowRight size={16} /></button>
+    </div>
+  );
+}
+function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage }) {
+  /* Projects are pages. The list of projects is one page, a project's
+     dashboard is another, and so is each tab of its work setup. `trail` is the
+     history that Back and Forward walk; choosing something new drops whatever
+     lay ahead, as a browser does. */
+  const [trail, setTrail] = useState({ list: [{ pid: "", tab: "settings" }], at: 0 });
+  const here = trail.list[trail.at], pid = here.pid;
+  const project = pid ? data.projects.find((p) => p.id === pid) || null : null;
+  const setupTab = here.tab;
   const [draft, setDraft] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [detail, setDetail] = useState(null);
-  const [setupTab, setSetupTab] = useState("settings");
+  const [find, setFind] = useState("");
+  const topRef = useRef(null), firstPage = useRef(true), seenTick = useRef(tick);
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
   const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
   const sig = project ? JSON.stringify(fromServer(project)) : "";
   useEffect(() => { if (project && !dirty) setDraft(fromServer(project)); }, [sig, pid, dirty]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setDetail(null); if (pid) api("project", { projectId: pid }).then(setDetail).catch(() => {}); }, [pid]);
-  if (!project || !draft) return null;
+  const inside = !!project;
+  useEffect(() => { onPage?.(inside); return () => onPage?.(false); }, [inside]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* a new page starts at its top, like a page that was just opened */
+  useEffect(() => { if (firstPage.current) { firstPage.current = false; return; } topRef.current?.scrollIntoView({ block: "start" }); }, [pid]);
+
+  /* leaving a project with unsaved changes asks first; moving between the tabs of one project keeps them */
+  const mayLeave = async (nextPid) => nextPid === pid || !dirty || (await askConfirm({ title: "Leave without saving?", message: `${project ? project.name : "This project"} has unsaved changes. They will be lost.`, confirmLabel: "Leave without saving", danger: true }));
+  const arrive = (nextPid) => { if (nextPid !== pid) { setDirty(false); setDraft(null); } };
+  const go = async (next) => {
+    if (next.pid === pid && next.tab === setupTab) return;
+    if (!(await mayLeave(next.pid))) return;
+    arrive(next.pid);
+    setTrail((t) => { const list = [...t.list.slice(0, t.at + 1), next].slice(-60); return { list, at: list.length - 1 }; });
+  };
+  const step = async (by) => {
+    const next = trail.list[trail.at + by];
+    if (!next || !(await mayLeave(next.pid))) return;
+    arrive(next.pid);
+    setTrail((t) => ({ ...t, at: Math.min(t.list.length - 1, Math.max(0, t.at + by)) }));
+  };
+  const nav = <PageNav canBack={trail.at > 0} canForward={trail.at < trail.list.length - 1} onBack={() => step(-1)} onForward={() => step(1)} />;
+  /* in the agent's application, pressing Projects in the sidebar again goes back to the list of projects */
+  useEffect(() => { if (tick === seenTick.current) return; seenTick.current = tick; if (pid) go({ pid: "", tab: "settings" }); }, [tick]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- the list of projects ---- */
+  if (!project) {
+    const q = find.trim().toLowerCase();
+    const shown = data.projects.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q));
+    const on = data.projects.filter((p) => p.id !== "_agency" && p.setting.enabled).length;
+    return (
+      <div className="space-y-4" ref={topRef} style={{ scrollMarginTop: 16 }}>
+        <div className="flex flex-wrap items-center gap-3">
+          {nav}
+          <div className="min-w-[200px] flex-1"><div className="text-[15px] font-semibold text-gray-900">Projects</div><div className="text-[11.5px] text-gray-500">Choose a project to open its dashboard. The agent is switched on for {on} of {data.projects.length - 1}.</div></div>
+          {data.projects.length > 8 && <input className={inputCls + " max-w-[240px]"} placeholder="Find a project or client" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Find a project" />}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map((p) => {
+            const agency = p.id === "_agency", cap = p.setting.tokensPerMonth, pct = cap > 0 ? Math.min(100, Math.round((p.usage.month / cap) * 100)) : 0;
+            const toApprove = data.tasks.filter((t) => t.projectId === p.id && t.status === "needs_approval").length;
+            const running = data.tasks.find((t) => t.projectId === p.id && t.status === "running");
+            return (
+              <button key={p.id} type="button" onClick={() => go({ pid: p.id, tab: "settings" })} className="group rounded-2xl border border-gray-200 bg-white p-4 text-left transition-shadow hover:border-gray-300 hover:shadow-md">
+                <div className="flex items-start gap-2.5">
+                  <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: p.setting.enabled ? "#16A34A" : "#D1D5DB" }} title={p.setting.enabled ? "Agent switched on" : "Agent not switched on"} />
+                  <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-gray-900">{p.name}</span><span className="block truncate text-[11.5px] text-gray-500">{agency ? "Agency-level tasks, such as prospect audits" : p.client || "No client name"}</span></span>
+                  <ChevronRight size={18} className="mt-0.5 shrink-0 text-gray-300 group-hover:text-gray-500" />
+                </div>
+                <div className="mt-3 text-[12px] text-gray-700">{p.setting.enabled ? <><b>{fmtTok(p.usage.month)}</b>{cap ? ` of ${fmtTok(cap)}` : ""} tokens this month</> : <span className="text-gray-400">The agent is not switched on for this project</span>}</div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-100">{cap > 0 && p.setting.enabled && <div className="h-full rounded-full" style={{ width: pct + "%", background: pct >= 100 ? "#DC2626" : pct >= 80 ? "#D97706" : accent }} />}</div>
+                <div className="mt-3 flex min-h-[22px] flex-wrap items-center gap-1.5">
+                  {running && <Chip fg="#15803D" bg="#DCFCE7">Working now</Chip>}
+                  {toApprove > 0 && <Chip fg="#B45309" bg="#FEF3C7">{toApprove} to approve</Chip>}
+                  {p.waiting > 0 && <Chip fg="#1D4ED8" bg="#DBEAFE">{p.waiting} waiting</Chip>}
+                  {!agency && p.learning?.lessons > 0 && <Chip>{p.learning.lessons} lesson{p.learning.lessons === 1 ? "" : "s"}</Chip>}
+                  {!agency && p.brand?.source === "agent" && <Chip>Brand voice set</Chip>}
+                  {!running && !toApprove && !p.waiting && !(p.learning?.lessons > 0) && p.brand?.source !== "agent" && <span className="text-[11px] text-gray-400">{p.setting.enabled ? "Nothing waiting" : "Open to set it up"}</span>}
+                </div>
+              </button>
+            );
+          })}
+          {!shown.length && <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-8 text-center text-[12.5px] text-gray-400 sm:col-span-2 xl:col-span-3">No project matches "{find}".</div>}
+        </div>
+      </div>
+    );
+  }
+  if (!draft) return <div ref={topRef} />;
 
   const set = (patch) => { setDraft((d) => ({ ...d, ...patch })); setDirty(true); };
   const setTask = (key, patch) => { setDraft((d) => ({ ...d, tasks: { ...d.tasks, [key]: { ...d.tasks[key], ...patch } } })); setDirty(true); };
-  const pick = (id) => { setDirty(false); setDraft(null); setPid(id); };
+  const setSetupTab = (tab) => go({ pid, tab });
   const save = async () => { const o = await act("config", { projectId: project.id, ...draft }); if (o) setDirty(false); };
   const recommended = () => {
     const tasks = { ...draft.tasks };
@@ -189,20 +273,25 @@ function LimitsView({ data, accent, act, busy, onChat, reload }) {
   const u = project.usage, cap = draft.tokensPerMonth;
   const pct = cap > 0 ? Math.min(100, Math.round((u.month / cap) * 100)) : 0;
 
+  const others = data.projects.filter((p) => p.id !== project.id);
   return (
-    <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
-      <Card className="h-max p-2">
-        <div className="px-2 pb-1 pt-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Projects</div>
-        {data.projects.map((p) => (
-          <button key={p.id} onClick={() => pick(p.id)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-50" style={p.id === project.id ? { background: accent + "12" } : {}}>
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: p.setting.enabled ? "#16A34A" : "#D1D5DB" }} title={p.setting.enabled ? "Agent enabled" : "Agent not enabled"} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] font-medium text-gray-800">{p.name}</span>
-              <span className="block truncate text-[10.5px] text-gray-400">{p.setting.enabled ? `${fmtTok(p.usage.month)}${p.setting.tokensPerMonth ? " of " + fmtTok(p.setting.tokensPerMonth) : ""} tokens` : "not enabled"}{p.waiting ? ` · ${p.waiting} waiting` : ""}</span>
-            </span>
-          </button>
-        ))}
-      </Card>
+    <div ref={topRef} style={{ scrollMarginTop: 16 }}>
+      {/* in the agent's application the bar stays in view while the page scrolls; `sticky` is the scrolling area's top padding, so the bar sits flush with its edge and nothing shows above it */}
+      <div className={"mb-4 flex flex-wrap items-center gap-3 border border-gray-200 bg-white px-3 py-2.5 shadow-sm " + (sticky ? "sticky z-20 rounded-b-2xl border-t-0" : "rounded-2xl")} style={sticky ? { top: -sticky } : undefined}>
+        {nav}
+        <div role="navigation" className="flex min-w-[200px] flex-1 items-center gap-1.5 text-[13px]" aria-label="Where you are">
+          <button type="button" className="shrink-0 rounded-md px-1.5 py-1 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-900" onClick={() => go({ pid: "", tab: "settings" })}>Projects</button>
+          <ChevronRight size={14} className="shrink-0 text-gray-300" />
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: draft.enabled ? "#16A34A" : "#D1D5DB" }} title={draft.enabled ? "Agent switched on" : "Agent not switched on"} />
+          <span className="min-w-0 truncate font-semibold text-gray-900">{project.name}</span>
+          {dirty && <Chip fg="#B45309" bg="#FEF3C7">Unsaved changes</Chip>}
+        </div>
+        {others.length > 0 && (
+          <select aria-label="Open another project" className={inputCls + " max-w-[220px]"} value="" onChange={(e) => { if (e.target.value) go({ pid: e.target.value, tab: "settings" }); }}>
+            <option value="">Open another project…</option>{others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        )}
+      </div>
 
       <div className="space-y-4">
         {project.id !== "_agency" && (
