@@ -10,11 +10,16 @@ import { renderMd } from "./guide.jsx";
    answers Admin/owner sessions. The device does the work; this screen decides
    what it may do: per project, per task type, a working limit (off / limited /
    open) and a token limit, plus approvals, playbooks and device control. */
-const tok = () => localStorage.getItem("ss_token") || "";
+const tok = () => { try { return localStorage.getItem("ss_token") || ""; } catch { return ""; } };
+/* Inside the agent's own application these screens talk to the agent's local
+   server, which forwards to the CRM with the device's token; the page proves
+   itself with the header that application hands in. */
+let EXTRA_HEADERS = {};
+const auth = () => ({ "X-SS-Token": tok(), ...EXTRA_HEADERS });
 async function api(path, body) {
   const r = await fetch("/api/agentops/" + path, body === undefined
-    ? { headers: { "X-SS-Token": tok() } }
-    : { method: "POST", headers: { "Content-Type": "application/json", "X-SS-Token": tok() }, body: JSON.stringify(body) });
+    ? { headers: auth() }
+    : { method: "POST", headers: { "Content-Type": "application/json", ...auth() }, body: JSON.stringify(body) });
   let j = {};
   try { j = await r.json(); } catch { /* non-JSON error page */ }
   if (!r.ok) throw new Error(j.detail || j.error || `Request failed (${r.status})`);
@@ -43,11 +48,17 @@ const Switch = ({ on, onChange, label }) => (
 const numCls = "w-20 rounded-lg border border-gray-200 px-2 py-1 text-[12.5px]";
 const selCls = "rounded-lg border border-gray-200 bg-white px-2 py-1 text-[12.5px]";
 
-export function AgentOpsSection({ company }) {
+/* `app` is set only inside the agent's own application: { headers, view, onView, onCounts }.
+   The application's sidebar chooses the view, so the tab row is hidden, and
+   device management stays in the CRM. */
+export function AgentOpsSection({ company, app = null }) {
+  EXTRA_HEADERS = app?.headers || {};
   const accent = company?.accent || "#1F2A44";
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
-  const [view, setView] = useState("limits");
+  const [ownView, setOwnView] = useState("limits");
+  const view = app?.view || ownView;
+  const setView = (v) => { if (app?.onView) app.onView(v); else setOwnView(v); };
   const [busy, setBusy] = useState(false);
   const [openTask, setOpenTask] = useState(null);
   const [chatPid, setChatPid] = useState("");
@@ -68,12 +79,14 @@ export function AgentOpsSection({ company }) {
     finally { setBusy(false); }
   }, []);
 
+  const toApprove = data ? data.tasks.filter((t) => t.status === "needs_approval").length : 0;
+  useEffect(() => { if (app?.onCounts) app.onCounts({ approvals: toApprove }); }, [toApprove]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!data) {
-    return <Card className="p-6 text-[13px] text-gray-500">{err ? <span className="text-red-700">{/forbidden|Admin/i.test(err) ? "The AI agent panel is for the owner and Admins." : err}</span> : "Loading the AI agent panel…"}</Card>;
+    return <Card className="p-6 text-[13px] text-gray-500">{err ? <span className="text-red-700">{app ? err : /forbidden|Admin/i.test(err) ? "The AI agent panel is for the owner and Admins." : err}</span> : "Loading the AI agent panel…"}</Card>;
   }
   const g = data.global;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
-  const VIEWS = [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
+  const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
@@ -117,7 +130,7 @@ export function AgentOpsSection({ company }) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className={app ? "hidden" : "flex flex-wrap gap-1.5"}>
         {VIEWS.map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold"
             style={view === k ? { background: accent, color: "#fff", borderColor: accent } : { background: "#fff", color: "#374151", borderColor: "#E5E7EB" }}><Icon size={13} />{label}</button>
@@ -127,7 +140,7 @@ export function AgentOpsSection({ company }) {
       {view === "limits" && <LimitsView data={data} accent={accent} act={act} busy={busy} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
-      {view === "devices" && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
+      {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
       {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
       {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
@@ -467,7 +480,7 @@ function useProjectChat(chatId) {
       while (!stop) {
         if (document.visibilityState !== "visible") { await nap(1500); continue; }
         try {
-          const r = await fetch("/api/agentops/chat/get", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", "X-SS-Token": tok() }, body: JSON.stringify({ projectId: chatId, wait: v >= 0, v }) });
+          const r = await fetch("/api/agentops/chat/get", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", ...auth() }, body: JSON.stringify({ projectId: chatId, wait: v >= 0, v }) });
           const o = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(o.detail || `Request failed (${r.status})`);
           if (stop) return;
@@ -651,13 +664,14 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
   const [name, setName] = useState(""); const [fresh, setFresh] = useState(null); const [copied, setCopied] = useState(false);
   const [version, setVersion] = useState(""); const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
-  const add = async () => { const o = await act("device/create", { name }); if (o?.token) { setFresh({ name, token: o.token }); setName(""); reload(); } };
+  const [mayManage, setMayManage] = useState(true);
+  const add = async () => { const o = await act("device/create", { name, canManage: mayManage }); if (o?.token) { setFresh({ name, token: o.token }); setName(""); reload(); } };
   const publish = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file || !/^\d+\.\d+\.\d+$/.test(version)) { setErr("Choose the .jar file and enter its version, for example 0.2.0."); return; }
     setUploading(true);
     try {
-      const r = await fetch(`/api/agentops/release/upload?version=${encodeURIComponent(version)}`, { method: "POST", headers: { "X-SS-Token": tok(), "Content-Type": "application/octet-stream" }, body: file });
+      const r = await fetch(`/api/agentops/release/upload?version=${encodeURIComponent(version)}`, { method: "POST", headers: { ...auth(), "Content-Type": "application/octet-stream" }, body: file });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.detail || j.error || `Upload failed (${r.status})`);
       setVersion(""); if (fileRef.current) fileRef.current.value = ""; setErr(""); reload();
@@ -665,7 +679,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
   };
   const download = async () => {
     try {
-      const r = await fetch("/api/agentops/release/download", { headers: { "X-SS-Token": tok() } });
+      const r = await fetch("/api/agentops/release/download", { headers: auth() });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Download failed.");
       const url = URL.createObjectURL(await r.blob());
       const a = document.createElement("a"); a.href = url; a.download = "serpsquad-agent.jar"; a.click();
@@ -690,6 +704,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
                 <div className="truncate text-[11.5px] text-gray-600">{d.currentTask ? "Working on: " + d.currentTask : d.state || ""}{stale ? " · playbooks not synced yet" : ""}{behind ? (d.updateSkipped === data.release.version ? ` · version ${data.release.version} failed its self-test here and was not installed` : ` · update to ${data.release.version} pending`) : ""}{d.googleProfile === false ? " · no Google browser profile" : ""}{d.localKey ? " · uses its own Claude key" : ""}</div>
               </div>
               <Btn ghost onClick={() => act("device/update", { id: d.id, syncNow: true })} disabled={busy} title="The device syncs playbooks and settings on its next check-in, within a minute."><RefreshCw size={13} /> {d.syncRequested ? "Sync requested" : "Sync now"}</Btn>
+              <Btn ghost onClick={() => act("device/update", { id: d.id, canManage: !d.canManage })} disabled={busy} title="When on, limits, tasks, approvals, directions, playbooks and API keys can be changed in the agent's application on this computer. Devices and program versions are always managed here.">{d.canManage ? "Manages settings: on" : "Manages settings: off"}</Btn>
               <Btn ghost onClick={() => act("device/update", { id: d.id, paused: !d.paused })} disabled={busy}>{d.paused ? <><Play size={13} /> Resume</> : <><Pause size={13} /> Pause</>}</Btn>
               <Btn ghost danger onClick={async () => { if (await askConfirm({ title: "Remove this device?", message: `"${d.name}" will stop being able to connect.`, note: "Its token stops working at once. Register it again to bring it back.", confirmLabel: "Yes, remove", danger: true })) act("device/update", { id: d.id, revoke: true }); }}><Trash2 size={13} /></Btn>
             </div>
@@ -697,6 +712,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
         <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 bg-gray-50 px-4 py-3">
           <input className={inputCls + " max-w-xs"} placeholder="Device name, for example Office PC" value={name} onChange={(e) => setName(e.target.value)} />
           <Btn accent={accent} onClick={add} disabled={!name.trim() || busy}><Plus size={13} /> Register device</Btn>
+          <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Limits, tasks, approvals, directions, playbooks and API keys can then be changed in the agent's application on that computer."><input type="checkbox" checked={mayManage} onChange={(e) => setMayManage(e.target.checked)} /> Settings can be managed from that computer</label>
         </div>
       </Card>
 

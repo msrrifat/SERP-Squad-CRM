@@ -151,6 +151,20 @@ function deviceOf(req) {
   return load("devices").find((d) => d.th === th && !d.revoked) || null;
 }
 const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." }];
+/* A device whose "manage settings from this computer" switch is on may use
+   the same settings endpoints as an Admin, from the application window on
+   that computer: limits, tasks and approvals, directions, playbooks, keys and
+   the chat. It can never register or remove devices or publish a program
+   version. The switch is set per device in the dashboard and is off unless
+   an Admin turned it on. The AI model itself has no tool that reaches these
+   endpoints, and the agent's browser refuses local addresses, so the agent
+   cannot change its own limits or approve its own work. */
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+function deviceManager(req, path) {
+  const d = deviceOf(req);
+  return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
+}
+const MANAGE_OFF = [403, { error: "manage_off", detail: "Managing settings from this computer is switched off for this device. An Admin can switch it on in the CRM under AI agent, Devices & updates." }];
 const BAD_DEVICE = [401, { error: "bad_device", detail: "Unknown or revoked device token." }];
 
 /* ---------- projects (read-only view of the workspace) ---------- */
@@ -547,7 +561,7 @@ function overview(admin) {
   const projects = [...projectList(), { id: AGENCY_PROJECT, name: "Agency (no project)", client: "", demo: false }];
   const tasks = load("tasks");
   return {
-    ok: true, me: admin.name, catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults })), models: MODELS,
+    ok: true, me: admin.name, viaDevice: !!admin.viaDevice, catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults })), models: MODELS,
     global: cfg.global, playbooksRev: cfg.playbooksRev, companyMonthTokens: companyMonthTokens(),
     credentials: { claude: maskKey(secrets().claude) },
     projects: projects.map((p) => {
@@ -601,7 +615,7 @@ function deviceCreate(admin, body) {
   const name = clip(String(body?.name || "").trim(), 60);
   if (!name) return [400, { error: "bad_request", detail: "Give the device a name." }];
   const token = "ssa_" + randomBytes(32).toString("hex");
-  const d = { id: uid("dev_"), name, th: sha(token), createdAt: now(), createdBy: admin.name, lastSeen: 0, version: "", host: "", os: "", paused: false, syncRequested: false, revoked: false };
+  const d = { id: uid("dev_"), name, th: sha(token), createdAt: now(), createdBy: admin.name, lastSeen: 0, version: "", host: "", os: "", paused: false, syncRequested: false, revoked: false, canManage: body?.canManage === true };
   load("devices").push(d); save("devices");
   logActivity("device", `${admin.name} registered the device "${name}".`);
   return [200, { ok: true, token, deviceId: d.id }];
@@ -612,6 +626,7 @@ function deviceUpdate(admin, body) {
   if (body.paused != null) d.paused = !!body.paused;
   if (body.syncNow) d.syncRequested = true;
   if (body.name) d.name = clip(body.name, 60);
+  if (body.canManage != null && !!body.canManage !== !!d.canManage) { d.canManage = !!body.canManage; logActivity("device", `${admin.name} switched ${d.canManage ? "on" : "off"} managing settings from "${d.name}".`); }
   if (body.revoke) { d.revoked = true; d.th = ""; logActivity("device", `${admin.name} removed the device "${d.name}".`); }
   save("devices");
   return [200, overview(admin)];
@@ -733,7 +748,7 @@ function agentHello(d, body) {
   save("devices");
   const cfg = load("config");
   for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = now();
-  return [200, { ok: true, device: { id: d.id, name: d.name, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key }];
+  return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key }];
 }
 function agentClaim(d) {
   requeueStale();
@@ -1099,8 +1114,8 @@ export async function agentOpsPost(req, body) {
       default: return [404, { error: "not_found" }];
     }
   }
-  const admin = teamAdmin(req);
-  if (!admin) return FORBIDDEN;
+  const admin = teamAdmin(req) || deviceManager(req, path);
+  if (!admin) return deviceOf(req) ? MANAGE_OFF : FORBIDDEN;
   switch (path) {
     case "config": return saveConfig(admin, body || {});
     case "device/create": return deviceCreate(admin, body);
@@ -1124,8 +1139,8 @@ export async function agentOpsPost(req, body) {
 export function agentOpsGet(req, res, send, headers) {
   const path = req.url.split("?")[0].slice("/api/agentops/".length);
   if (path === "overview") {
-    const admin = teamAdmin(req);
-    return admin ? send(200, overview(admin)) : send(...FORBIDDEN);
+    const admin = teamAdmin(req) || deviceManager(req, path);
+    return admin ? send(200, overview(admin)) : send(...(deviceOf(req) ? MANAGE_OFF : FORBIDDEN));
   }
   if (path === "release/download") {
     if (!deviceOf(req) && !teamAdmin(req)) return send(401, { error: "unauthorized" });
