@@ -43,7 +43,7 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | GBP geo-grid rank tracker (coordinate-targeted Maps scans, ARP/SoLV metrics) | src/features/performance/geogrid.jsx |
 | Branding & Automation (media library, Web 2.0 branded sites, campaign wizard) | src/features/optimization/branding.jsx |
 | App shell, routing, sessions, permission gates, lazy loading | src/App.jsx |
-| Local AI agent control plane (devices, task queue, per-project working limits per task type, token limits, approvals, playbook sync, agent releases; Admin-only endpoints `/api/agentops/*`, device endpoints under `/api/agentops/agent/*`) | server/agentops.js, server/agentops-catalog.js (task types + default playbooks), dashboard src/features/company/agentdash.jsx |
+| Local AI agent control plane (devices, task queue, per-project working limits per task type, token limits, approvals, live chat per project, API setup, playbook sync, agent releases; Admin-only endpoints `/api/agentops/*`, device endpoints under `/api/agentops/agent/*`) | server/agentops.js, server/agentops-catalog.js (task types + default playbooks), dashboard src/features/company/agentdash.jsx |
 | Local AI agent program (Java 17+, Maven; Claude tool loop, Chrome control, sync, self-update, its own dashboard on 127.0.0.1:7717 with device API setup). Build: `cd agent && mvn package` | agent/ (see agent/README.md); dashboard page agent/src/main/resources/ui.html, served by LocalUi.java |
 | Internal product guide (A–Z manual read by the team tab + AI agent; team-session-only endpoints `/api/product-guide*`) | docs/product-guide/*.md, viewer src/features/company/guide.jsx |
 

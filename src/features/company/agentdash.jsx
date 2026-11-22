@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, KeyRound, ListTodo, Monitor, Pause, Play, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, KeyRound, ListTodo, MessageSquare, Monitor, Pause, Play, Plus, RefreshCw, Send, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -50,6 +50,7 @@ export function AgentOpsSection({ company }) {
   const [view, setView] = useState("limits");
   const [busy, setBusy] = useState(false);
   const [openTask, setOpenTask] = useState(null);
+  const [chatPid, setChatPid] = useState("");
 
   const load = useCallback(async () => {
     try { setData(await api("overview")); setErr(""); } catch (e) { setErr(String(e.message || e)); }
@@ -72,7 +73,7 @@ export function AgentOpsSection({ company }) {
   }
   const g = data.global;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
-  const VIEWS = [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
+  const VIEWS = [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
@@ -123,7 +124,8 @@ export function AgentOpsSection({ company }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView data={data} accent={accent} act={act} busy={busy} />}
+      {view === "limits" && <LimitsView data={data} accent={accent} act={act} busy={busy} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
       {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
@@ -146,7 +148,7 @@ function CapInput({ label, value, onSave }) {
 }
 
 /* ---------------- projects: working limits and token limits ---------------- */
-function LimitsView({ data, accent, act, busy }) {
+function LimitsView({ data, accent, act, busy, onChat }) {
   const [pid, setPid] = useState(() => data.projects[0]?.id || "");
   const project = data.projects.find((p) => p.id === pid) || data.projects[0];
   const [draft, setDraft] = useState(null);
@@ -214,6 +216,7 @@ function LimitsView({ data, accent, act, busy }) {
             <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
             {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
             {project.id !== "_agency" && <Btn ghost onClick={recommended} title="Sets every task type to its recommended limit and schedule. Nothing is saved until you press Save.">Use the recommended schedule</Btn>}
+            {project.id !== "_agency" && <Btn ghost onClick={() => onChat(project.id)}><MessageSquare size={13} /> Chat about this project</Btn>}
             {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes</span>}
           </div>
         </Card>
@@ -425,6 +428,138 @@ function TaskModal({ id, accent, act, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ---------------- live chat: one conversation per project ----------------
+   The message goes to the server, a device that is listening picks it up at
+   once and answers with Claude using that project's data. While it works the
+   bubble shows what it is doing. Chat tokens count against the project's
+   token limit. */
+const STARTERS = ["How are the rankings doing this week?", "What changed since last month, and why?", "What is the agent working on for this project?", "What should we do next to get more calls?"];
+function ChatView({ data, accent, pid, setPid, goTasks }) {
+  const projects = data.projects.filter((p) => p.id !== "_agency");
+  const project = projects.find((p) => p.id === pid) || projects[0] || null;
+  const id = project?.id || "";
+  const [chat, setChat] = useState(null); const [text, setText] = useState(""); const [err, setErr] = useState(""); const [sending, setSending] = useState(false);
+  const boxRef = useRef(null);
+  /* One held request per open conversation: the server answers the moment the
+     conversation changes (a new message, a progress note, a stop), so the
+     screen is live without asking every second. */
+  useEffect(() => {
+    setChat(null); setErr("");
+    if (!id) return undefined;
+    let stop = false, v = -1;
+    const ctrl = new AbortController();
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      while (!stop) {
+        if (document.visibilityState !== "visible") { await nap(1500); continue; }
+        try {
+          const r = await fetch("/api/agentops/chat/get", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", "X-SS-Token": tok() }, body: JSON.stringify({ projectId: id, wait: v >= 0, v }) });
+          const o = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(o.detail || `Request failed (${r.status})`);
+          if (stop) return;
+          v = o.v; setChat(o); setErr("");
+        } catch (e) {
+          if (stop) return;
+          setErr(String(e.message || e)); v = -1;
+          await nap(4000);
+        }
+      }
+    })();
+    return () => { stop = true; ctrl.abort(); };
+  }, [id]);
+  const pending = !!chat?.pending;
+  const last = chat?.messages[chat.messages.length - 1];
+  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, last?.activity, pending, id]);
+  const call = async (path, body) => { try { const o = await api(path, body); setChat(o); setErr(""); return o; } catch (e) { setErr(String(e.message || e)); return null; } };
+  const send = async (t) => { const msg = (t ?? text).trim(); if (!msg || sending || pending) return; setSending(true); const o = await call("chat/send", { projectId: id, text: msg }); if (o) setText(""); setSending(false); };
+  if (!project) return <Card className="p-6 text-[13px] text-gray-500">Add a project first; each project gets its own conversation with the agent.</Card>;
+  const a = chat?.agent;
+  const avail = !a ? null : a.listening.length ? { tone: "#15803D", text: `${a.listening.join(", ")} is listening and answers within seconds.` }
+    : a.outdated.length ? { tone: "#B45309", text: `${a.outdated.join(", ")} is online but runs an agent version without chat. Publish version 0.3.0 or newer under Devices & updates.` }
+    : { tone: "#6B7280", text: "No device is online. Your message is answered as soon as the agent is running." };
+  const canSend = !!chat && !chat.blocked && !pending && !sending;
+  return (
+    <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
+      <Card className="h-max p-2">
+        <div className="px-2 pb-1 pt-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Conversations</div>
+        {projects.map((p) => (
+          <button key={p.id} onClick={() => setPid(p.id)} className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-50" style={p.id === id ? { background: accent + "12" } : {}}>
+            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: p.chat.pending ? "#D97706" : p.chat.last ? accent : "#E5E7EB" }} title={p.chat.pending ? "The agent is answering" : ""} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] font-medium text-gray-800">{p.name}</span>
+              <span className="block truncate text-[10.5px] text-gray-400">{p.chat.pending ? "Answering…" : p.chat.last ? (p.chat.last.role === "user" ? "You: " : "") + p.chat.last.text.replace(/[*_`#>|]/g, "").replace(/\s+/g, " ") : "No messages yet"}</span>
+            </span>
+          </button>
+        ))}
+      </Card>
+
+      <Card className="flex flex-col overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-[14px] font-semibold text-gray-900">{project.name}</div>
+            {avail && <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: avail.tone }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: avail.tone }} />{avail.text}</div>}
+          </div>
+          <div className="flex items-center gap-3 text-[11.5px] text-gray-500">
+            <span title="Chat counts against this project's token limit.">{fmtTok(project.usage.month)}{project.setting.tokensPerMonth ? ` of ${fmtTok(project.setting.tokensPerMonth)}` : ""} tokens this month</span>
+            {chat?.messages.length > 0 && <button className="font-semibold text-gray-500 underline hover:text-gray-800" onClick={async () => { if (await askConfirm({ title: "Clear this conversation?", message: `The messages for ${project.name} are deleted and the agent starts fresh.`, note: "Notes the agent saved and its task reports are kept.", confirmLabel: "Yes, clear", danger: true })) call("chat/clear", { projectId: id }); }}>Clear</button>}
+          </div>
+        </div>
+
+        <div ref={boxRef} className="space-y-3 overflow-y-auto bg-gray-50 px-4 py-4" style={{ height: "max(300px, calc(100vh - 480px))" }}>
+          {!chat && <div className="py-10 text-center text-[12.5px] text-gray-400">Loading the conversation…</div>}
+          {chat && !chat.messages.length && (
+            <div className="mx-auto max-w-md py-8 text-center">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={20} /></div>
+              <div className="mt-2 text-[13.5px] font-semibold text-gray-900">Talk to the agent about {project.name}</div>
+              <div className="mt-1 text-[12px] text-gray-500">It reads this project's rankings, Search Console, map grid, its own notes and past reports before it answers, and it can queue tasks for you.</div>
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5">{STARTERS.map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[12px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
+            </div>
+          )}
+          {chat?.messages.map((m) => m.system ? (
+            <div key={m.id} className={`text-center text-[11.5px] ${m.error ? "text-red-700" : "text-gray-400"}`}>{m.text}</div>
+          ) : m.role === "user" ? (
+            <div key={m.id} className="flex justify-end">
+              <div className="max-w-[78%]">
+                <div className="whitespace-pre-wrap rounded-2xl rounded-br-md px-3.5 py-2 text-[13px] leading-5 text-white" style={{ background: accent }}>{m.text}</div>
+                <div className="mt-0.5 text-right text-[10.5px] text-gray-400">{m.by || "You"} · {relTime(m.at)}{m.status === "cancelled" ? " · stopped" : ""}</div>
+              </div>
+            </div>
+          ) : (
+            <div key={m.id} className="flex justify-start gap-2">
+              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>
+              <div className="min-w-0 max-w-[84%]">
+                <div className={`rounded-2xl rounded-bl-md border px-3.5 py-1.5 ${m.error ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>{renderMd(m.text)}</div>
+                <div className="mt-0.5 text-[10.5px] text-gray-400">{m.device || "Agent"} · {relTime(m.at)}{m.tokens ? ` · ${fmtTok(m.tokens)} tokens · ${usd(m.costUsd)}` : ""}</div>
+              </div>
+            </div>
+          ))}
+          {pending && (
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>
+              <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-gray-200 bg-white px-3.5 py-2 text-[12.5px] text-gray-600">
+                <span className="flex gap-1">{[0, 1, 2].map((i) => <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-gray-400" style={{ animationDelay: i * 0.2 + "s" }} />)}</span>
+                {last?.status === "queued" ? (a?.listening.length ? "Sending to the agent…" : "Waiting for the agent to come online…") : (last?.activity || "Thinking") + "…"}
+              </div>
+              <button onClick={() => call("chat/stop", { projectId: id })} className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-gray-500 hover:text-red-700"><Square size={11} /> Stop</button>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-gray-100 p-3">
+          {chat?.blocked && <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{chat.blocked}</div>}
+          {err && <div className="mb-2 text-[12px] text-red-700">{err}</div>}
+          <div className="flex items-end gap-2">
+            <textarea aria-label={`Message about ${project.name}`} rows={2} className={inputCls + " min-h-[44px] flex-1 resize-none"} placeholder={`Ask about ${project.name}, or tell the agent what to do…`} value={text} disabled={!!chat?.blocked}
+              onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
+            <Btn accent={accent} disabled={!canSend || !text.trim()} onClick={() => send()}><Send size={13} /> Send</Btn>
+          </div>
+          <div className="mt-1.5 text-[11px] text-gray-400">Enter sends, Shift+Enter starts a new line. Work you ask for is queued as a task; see <button className="underline" onClick={goTasks}>Tasks</button> for reports and approvals.</div>
+        </div>
+      </Card>
+    </div>
   );
 }
 

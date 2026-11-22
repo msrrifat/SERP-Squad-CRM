@@ -40,10 +40,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0 }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}),
 };
 const cache = {};
 function load(name) {
@@ -299,10 +299,12 @@ setInterval(tickAgentSchedule, 5 * 60e3).unref?.();
 setTimeout(tickAgentSchedule, 20e3).unref?.();
 
 /* ---------- playbooks, settings and the CRM tool list synced to devices ---------- */
+const PLAYBOOK_KEYS = ["_rules", "_chat", ...CATALOG.map((c) => c.key)];
+const PLAYBOOK_LABEL = (k) => (k === "_rules" ? "Agent rules (all tasks)" : k === "_chat" ? "Chat (talking about a project)" : CATALOG_BY_KEY[k].label);
 function playbookFiles() {
   const cfg = load("config");
   const files = [];
-  for (const key of ["_rules", ...CATALOG.map((c) => c.key)]) {
+  for (const key of PLAYBOOK_KEYS) {
     const text = cfg.playbooks[key]?.text ?? DEFAULT_PLAYBOOKS[key] ?? "";
     files.push({ name: key + ".md", sha256: sha(text), text });
   }
@@ -461,11 +463,22 @@ const SERVER_TOOLS = [
     const cat = CATALOG_BY_KEY[a.type];
     if (!cat || cat.agencyOnly) return { error: "Unknown task type key." };
     const open = load("tasks").filter((t) => t.projectId === ctx.task.projectId && t.source === "agent" && ACTIVE.has(t.status)).length;
-    if (open >= 10) return { error: "This project already has ten open agent-suggested tasks. Do not suggest more." };
+    if (!ctx.chat && open >= 10) return { error: "This project already has ten open agent-suggested tasks. Do not suggest more." };
     const ts = taskSetting(ctx.task.projectId, a.type);
-    const r = createTask({ projectId: ctx.task.projectId, type: a.type, title: a.title, instructions: a.instructions, reason: a.reason, source: "agent", createdBy: "AI agent" });
+    /* asked for in the chat = the person's own request, so it is queued in their name */
+    const r = createTask({ projectId: ctx.task.projectId, type: a.type, title: a.title, instructions: a.instructions, reason: a.reason, source: ctx.chat ? "manual" : "agent", createdBy: ctx.chat ? `${ctx.chat.by} (chat)` : "AI agent" });
     if (r.error) return { error: r.error };
-    return { ok: true, willStart: ts.mode === "open" ? "yes, this task type is open" : ts.mode === "limited" ? "when it fits the working limit" : "no, this task type is off; a person has to switch it on" };
+    if (!projectSetting(ctx.task.projectId).enabled) return { ok: true, queued: true, willStart: "no: the agent is not enabled for this project yet. A person has to switch on \"Agent works on this project\" in Projects & limits" };
+    return { ok: true, queued: true, willStart: ts.mode === "open" ? "yes, this task type is open" : ts.mode === "limited" ? "when it fits the working limit" : "no, this task type is off for the project; a person has to switch it on in Projects & limits" };
+  }),
+  tool("project_tasks", "List this project's recent agent tasks with their status (waiting, running, needs approval, done, failed, stopped), why a waiting one is held, and a one-line summary. Also returns which task types are switched on. Use it to say what is in progress, what is waiting for approval, or what the agent may do here.", { limit: { type: "integer", description: "How many tasks, default 12, max 30." } }, [], (ctx, a) => {
+    const pid = ctx.task.projectId, room = tokenRoom(pid);
+    return {
+      agentEnabledForProject: projectSetting(pid).enabled, tokensLeftNow: room.left === Infinity ? "no limit" : Math.max(0, room.left),
+      tasks: load("tasks").filter((t) => t.projectId === pid).slice(-num(a.limit, 1, 30, 12)).reverse().map((t) => ({ type: t.type, title: t.title, status: t.status, startedBy: t.source === "auto" ? "schedule" : t.source === "agent" ? "the agent" : t.createdBy || "the team", created: new Date(t.createdAt).toISOString().slice(0, 16).replace("T", " "),
+        ...(t.status === "queued" || t.status === "approved" ? { heldBecause: blockOf(t, null) } : {}), summary: t.result?.summary || t.proposal?.summary || t.error || "" })),
+      taskTypes: CATALOG.filter((c) => !c.agencyOnly).map((c) => { const ts = taskSetting(pid, c.key); return { key: c.key, label: c.label, limit: ts.mode === "limited" ? `limited to ${ts.max} per ${ts.per}` : ts.mode, startsByItself: ts.mode !== "off" && ts.auto }; }),
+    };
   }),
 ];
 function addChange(pid, { what, where, by, taskId }) {
@@ -487,12 +500,12 @@ function overview(admin) {
     credentials: { claude: maskKey(secrets().claude) },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, ownKey: maskKey(secrets().projects[p.id]) };
+      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
     activity: load("activity").slice(0, 60),
-    playbooks: ["_rules", ...CATALOG.map((c) => c.key)].map((k) => ({ key: k, label: k === "_rules" ? "Agent rules (all tasks)" : CATALOG_BY_KEY[k].label, edited: !!cfg.playbooks[k], updatedAt: cfg.playbooks[k]?.updatedAt || null })),
+    playbooks: PLAYBOOK_KEYS.map((k) => ({ key: k, label: PLAYBOOK_LABEL(k), edited: !!cfg.playbooks[k], updatedAt: cfg.playbooks[k]?.updatedAt || null })),
     release: load("releases").current, releases: load("releases").list.slice(0, 8),
   };
 }
@@ -580,7 +593,7 @@ function taskGet(body) {
 }
 function playbookSave(admin, body) {
   const key = String(body?.key || "");
-  if (key !== "_rules" && !CATALOG_BY_KEY[key]) return [404, { error: "not_found" }];
+  if (!PLAYBOOK_KEYS.includes(key)) return [404, { error: "not_found" }];
   const cfg = load("config");
   if (body.get) return [200, { ok: true, key, text: cfg.playbooks[key]?.text ?? DEFAULT_PLAYBOOKS[key] ?? "", edited: !!cfg.playbooks[key], defaultText: DEFAULT_PLAYBOOKS[key] || "" }];
   if (body.reset) delete cfg.playbooks[key];
@@ -692,23 +705,28 @@ function agentClaim(d) {
   return [200, { ok: true, task: null, reason: firstReason || "Nothing is waiting." }];
 }
 const myRunning = (d, id) => load("tasks").find((t) => t.id === id && t.status === "running" && t.deviceId === d.id) || null;
-function agentUsage(d, body) {
-  const t = myRunning(d, body?.taskId);
-  if (!t) return [409, { error: "not_running", stop: true, reason: "This task is no longer assigned to this device." }];
+/* one Claude call's tokens into the project's ledger (tasks and chat alike) */
+function recordUsage(pid, type, body) {
   const u = { input: num(body.input, 0, 1e9, 0), output: num(body.output, 0, 1e9, 0), cacheRead: num(body.cacheRead, 0, 1e9, 0), cacheWrite: num(body.cacheWrite, 0, 1e9, 0) };
   const total = u.input + u.output + u.cacheRead + u.cacheWrite;
-  const model = String(body.model || "");
-  const cost = costOf(model, u);
-  for (const k of Object.keys(u)) t.usage[k] += u[k];
-  t.usage.total += total; t.usage.calls += 1; t.usage.costUsd = +(t.usage.costUsd + cost).toFixed(5);
-  t.heartbeatAt = now();
+  const cost = costOf(String(body.model || ""), u);
   const usage = load("usage");
-  const row = ((usage[monthKey()] ||= {})[t.projectId] ||= { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, days: {}, types: {} });
+  const row = ((usage[monthKey()] ||= {})[pid] ||= { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, days: {}, types: {} });
   for (const k of Object.keys(u)) row[k] += u[k];
   row.total += total; row.costUsd = +(row.costUsd + cost).toFixed(5);
   row.days[dayKey()] = (row.days[dayKey()] || 0) + total;
-  const ty = (row.types[t.type] ||= { total: 0, calls: 0 }); ty.total += total; ty.calls += 1;
-  save("usage"); save("tasks");
+  const ty = (row.types[type] ||= { total: 0, calls: 0 }); ty.total += total; ty.calls += 1;
+  save("usage");
+  return { u, total, cost };
+}
+function agentUsage(d, body) {
+  const t = myRunning(d, body?.taskId);
+  if (!t) return [409, { error: "not_running", stop: true, reason: "This task is no longer assigned to this device." }];
+  const { u, total, cost } = recordUsage(t.projectId, t.type, body);
+  for (const k of Object.keys(u)) t.usage[k] += u[k];
+  t.usage.total += total; t.usage.calls += 1; t.usage.costUsd = +(t.usage.costUsd + cost).toFixed(5);
+  t.heartbeatAt = now();
+  save("tasks");
   const room = tokenRoom(t.projectId);
   const runUsed = t.usage.total - (t.runStartTokens || 0);
   const runLeft = (t.runBudget || 0) - runUsed;
@@ -728,13 +746,15 @@ function agentEvent(d, body) {
   return [200, { ok: true, stop: t.status !== "running" }];
 }
 async function agentTool(d, body) {
-  const t = myRunning(d, body?.taskId);
+  /* a chat turn reads the same project-scoped tools as a task */
+  const turn = !body?.taskId && body?.turnId ? myTurn(d, body.turnId) : null;
+  const t = turn ? { id: turn.m.id, projectId: turn.pid } : myRunning(d, body?.taskId);
   if (!t) return [409, { error: "not_running", detail: "This task is no longer assigned to this device." }];
   const def = SERVER_TOOLS.find((x) => x.name === body?.name);
   if (!def) return [404, { error: "unknown_tool", detail: "No such CRM tool." }];
-  t.heartbeatAt = now();
+  if (turn) turn.m.turn.activityAt = now(); else t.heartbeatAt = now();
   try {
-    const out = await def.run({ task: t, device: d }, body.input && typeof body.input === "object" ? body.input : {});
+    const out = await def.run({ task: t, device: d, chat: turn ? { by: turn.m.by || "the team" } : null }, body.input && typeof body.input === "object" ? body.input : {});
     return [200, { ok: true, result: out }];
   } catch (e) { return [200, { ok: true, result: { error: "The CRM could not answer: " + clip(e?.message || e, 200) } }]; }
 }
@@ -768,6 +788,194 @@ function agentComplete(d, body) {
   return [200, { ok: true }];
 }
 
+/* ---------- live chat per project ----------
+   One conversation per project. A person writes in the dashboard; a device
+   that is listening (a long poll that returns the moment a message arrives)
+   answers with Claude, reading the same project-scoped CRM tools a task uses.
+   Chat tokens count against the project's token limit like any other work. */
+const CHAT_KEEP = 200;
+const chatOf = (pid) => (load("chats")[pid] ||= { messages: [] });
+const isPending = (m) => m.role === "user" && (m.turn?.status === "queued" || m.turn?.status === "working");
+const pendingOf = (pid) => (load("chats")[pid]?.messages || []).find(isPending) || null;
+let chatWaiters = [];
+const wakeChat = () => { const w = chatWaiters; chatWaiters = []; w.forEach((f) => f()); };
+/* the dashboard holds one request open per conversation and is answered the
+   moment that conversation changes, instead of asking every second */
+const chatVer = {}, chatWatch = {};
+function touchChat(pid) {
+  chatVer[pid] = (chatVer[pid] || 0) + 1;
+  const w = chatWatch[pid] || [];
+  chatWatch[pid] = [];
+  w.forEach((f) => f());
+}
+const listening = (d) => !d.revoked && now() - (d.chatAt || 0) < 45000;
+function pushReply(pid, m, text, extra = {}) {
+  const c = chatOf(pid);
+  c.messages.push({ id: uid("cm_"), role: "agent", text: clip(text, 30000), at: now(), turnId: m.id, ...extra });
+  if (c.messages.length > CHAT_KEEP) c.messages.splice(0, c.messages.length - CHAT_KEEP);
+}
+/* why the agent cannot answer in this project right now (null = it can) */
+function chatBlock(pid) {
+  const g = load("config").global;
+  if (!g.enabled) return "The agent is switched off for the whole company.";
+  if (g.paused) return "The agent is paused for the whole company.";
+  const room = tokenRoom(pid);
+  if (room.left <= 0) return `Token limit reached: ${room.why}.`;
+  if (!serverKeyFor(pid) && !load("devices").some((d) => !d.revoked && d.localKey === true)) return "No Claude API key is set for the agent. Add one in API setup.";
+  return null;
+}
+function sweepChats() {
+  let changed = false;
+  for (const [pid, c] of Object.entries(load("chats"))) {
+    for (const m of c.messages || []) {
+      if (m.role !== "user" || m.turn?.status !== "working" || now() - (m.turn.activityAt || m.turn.startedAt || 0) < 6 * 60e3) continue;
+      m.turn.status = "error"; changed = true;
+      pushReply(pid, m, "The agent stopped responding while it was answering. Please send your message again.", { system: true, error: true });
+      chatVer[pid] = (chatVer[pid] || 0) + 1;
+    }
+  }
+  if (changed) save("chats");
+}
+function chatState(pid) {
+  sweepChats();
+  const devs = load("devices").filter((d) => !d.revoked);
+  const online = devs.filter((d) => now() - (d.lastSeen || 0) < 3 * 60e3);
+  return {
+    ok: true, projectId: pid, v: chatVer[pid] || 0, pending: !!pendingOf(pid), blocked: chatBlock(pid),
+    agent: { listening: devs.filter(listening).map((d) => d.name), online: online.map((d) => d.name), outdated: online.filter((d) => !listening(d)).map((d) => d.name) },
+    messages: (load("chats")[pid]?.messages || []).slice(-120).map((m) => ({ id: m.id, role: m.role, text: m.text, at: m.at, by: m.by || "", status: m.turn?.status || null, activity: m.turn?.status === "working" ? m.turn.activity || "" : "", tokens: m.usage?.total || 0, costUsd: m.usage?.costUsd || 0, error: !!m.error, system: !!m.system, device: m.device || "" })),
+  };
+}
+const chatProject = (body) => { const p = projectOf(body?.projectId); return p && p.id !== AGENCY_PROJECT ? p : null; };
+function chatSend(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const text = String(body.text || "").trim();
+  if (!text) return [400, { error: "bad_request", detail: "Write a message first." }];
+  if (text.length > 6000) return [400, { error: "bad_request", detail: "Keep a message under 6,000 characters." }];
+  if (pendingOf(p.id)) return [409, { error: "busy", detail: "The agent is still answering your last message." }];
+  const why = chatBlock(p.id);
+  if (why) return [409, { error: "blocked", detail: why }];
+  const c = chatOf(p.id);
+  c.messages.push({ id: uid("cm_"), role: "user", text, at: now(), by: admin.name, turn: { status: "queued" } });
+  if (c.messages.length > CHAT_KEEP) c.messages.splice(0, c.messages.length - CHAT_KEEP);
+  save("chats");
+  touchChat(p.id);
+  wakeChat();
+  return [200, chatState(p.id)];
+}
+function chatStop(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found" }];
+  const m = pendingOf(p.id);
+  if (m) { m.turn.status = "cancelled"; pushReply(p.id, m, `Stopped by ${admin.name}.`, { system: true }); save("chats"); touchChat(p.id); }
+  return [200, chatState(p.id)];
+}
+function chatClear(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found" }];
+  load("chats")[p.id] = { messages: [] };
+  save("chats");
+  touchChat(p.id);
+  return [200, chatState(p.id)];
+}
+/* hand the oldest waiting message to this device, with the conversation so far */
+function claimTurn(d) {
+  sweepChats();
+  const cfg = load("config");
+  if (!cfg.global.enabled || cfg.global.paused || d.paused) return null;
+  const waiting = [];
+  for (const [pid, c] of Object.entries(load("chats"))) { const m = (c.messages || []).find((x) => x.role === "user" && x.turn?.status === "queued"); if (m) waiting.push({ pid, m }); }
+  waiting.sort((a, b) => a.m.at - b.m.at);
+  for (const { pid, m } of waiting) {
+    const p = projectOf(pid);
+    if (!p) { m.turn.status = "error"; save("chats"); continue; }
+    const room = tokenRoom(pid);
+    if (room.left <= 0) { m.turn.status = "error"; pushReply(pid, m, `I cannot answer right now: token limit reached (${room.why}).`, { system: true, error: true }); save("chats"); touchChat(pid); continue; }
+    const projectKey = secrets().projects[pid]?.key || "";
+    const claudeKey = projectKey || (d.localKey === true ? "" : secrets().claude?.key || "");
+    if (!claudeKey && d.localKey !== true) continue;            // this device has no key for it; another may
+    const all = load("chats")[pid].messages;
+    const history = all.slice(0, all.indexOf(m)).filter((x) => !x.system && !x.error && (x.role === "agent" || x.turn?.status === "done")).slice(-30).map((x) => ({ role: x.role === "agent" ? "assistant" : "user", text: clip(x.text, 8000) }));
+    while (history.length && history[0].role !== "user") history.shift();
+    m.turn = { status: "working", deviceId: d.id, startedAt: now(), activityAt: now(), activity: "", budget: Math.max(20000, Math.min(150000, room.left)), usage: { total: 0, calls: 0, costUsd: 0 } };
+    save("chats");
+    touchChat(pid);
+    return { id: m.id, projectId: pid, projectName: p.name, clientName: p.client, text: m.text, by: m.by || "", history, model: cfg.global.model, effort: cfg.global.effort, budgetTokens: m.turn.budget, keySource: projectKey ? "project" : claudeKey ? "company" : "device", ...(claudeKey ? { claudeApiKey: claudeKey } : {}) };
+  }
+  return null;
+}
+/* long poll: answers at once when a message is waiting, otherwise holds the
+   request for up to 25 s and answers the moment one arrives */
+function agentChatWait(d) {
+  d.chatAt = now();
+  const first = claimTurn(d);
+  if (first) return [200, { ok: true, turn: first }];
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      chatWaiters = chatWaiters.filter((f) => f !== finish);
+      d.chatAt = now();
+      resolve([200, { ok: true, turn: d.revoked ? null : claimTurn(d) }]);
+    };
+    const timer = setTimeout(finish, 25000);
+    chatWaiters.push(finish);
+  });
+}
+function myTurn(d, id) {
+  for (const [pid, c] of Object.entries(load("chats"))) { const m = (c.messages || []).find((x) => x.id === id); if (m) return m.turn?.status === "working" && m.turn.deviceId === d.id ? { pid, m } : null; }
+  return null;
+}
+function agentChatProgress(d, body) {
+  const t = myTurn(d, body?.turnId);
+  if (!t) return [200, { ok: true, stop: true }];
+  const text = clip(body.text || "", 160);
+  const changed = text !== t.m.turn.activity;
+  t.m.turn.activity = text; t.m.turn.activityAt = now();
+  if (changed) touchChat(t.pid);
+  return [200, { ok: true, stop: false }];
+}
+function agentChatUsage(d, body) {
+  const t = myTurn(d, body?.turnId);
+  if (!t) return [409, { error: "not_running", stop: true, reason: "This conversation turn was stopped." }];
+  const { total, cost } = recordUsage(t.pid, "chat", body);
+  const u = t.m.turn.usage; u.total += total; u.calls += 1; u.costUsd = +(u.costUsd + cost).toFixed(5);
+  t.m.turn.activityAt = now();
+  const room = tokenRoom(t.pid);
+  const reason = room.left <= 0 ? `Token limit reached: ${room.why}.` : u.total >= t.m.turn.budget ? "This answer used its token budget." : "";
+  return [200, { ok: true, stop: !!reason, reason }];
+}
+function agentChatReply(d, body) {
+  const t = myTurn(d, body?.turnId);
+  if (!t) return [409, { error: "not_running" }];
+  const text = String(body.text || "").trim();
+  t.m.turn.status = body.error ? "error" : "done";
+  pushReply(t.pid, t.m, text || "I have no answer to give.", { usage: { ...t.m.turn.usage }, device: d.name, ...(body.error ? { error: true } : {}) });
+  save("chats");
+  touchChat(t.pid);
+  return [200, { ok: true }];
+}
+/* read a conversation; with wait:true and the version the screen already has,
+   the answer is held (up to 20 s) until something in it changes */
+function chatGet(body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  if (!body.wait || (chatVer[p.id] || 0) !== +body.v) return [200, chatState(p.id)];
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      chatWatch[p.id] = (chatWatch[p.id] || []).filter((f) => f !== finish);
+      resolve([200, chatState(p.id)]);
+    };
+    const timer = setTimeout(finish, 20000);
+    (chatWatch[p.id] ||= []).push(finish);
+  });
+}
+
 /* ---------- routing ---------- */
 export async function agentOpsPost(req, body) {
   const path = req.url.split("?")[0].slice("/api/agentops/".length);
@@ -782,6 +990,10 @@ export async function agentOpsPost(req, body) {
       case "agent/event": return agentEvent(d, body);
       case "agent/tool": return agentTool(d, body);
       case "agent/complete": return agentComplete(d, body);
+      case "agent/chat/wait": return agentChatWait(d);
+      case "agent/chat/progress": return agentChatProgress(d, body);
+      case "agent/chat/usage": return agentChatUsage(d, body);
+      case "agent/chat/reply": return agentChatReply(d, body);
       default: return [404, { error: "not_found" }];
     }
   }
@@ -798,6 +1010,10 @@ export async function agentOpsPost(req, body) {
     case "change": return changeAdd(admin, body);
     case "project": return projectDetail(body);
     case "credentials": return credentials(admin, body || {});
+    case "chat/get": return chatGet(body || {});
+    case "chat/send": return chatSend(admin, body || {});
+    case "chat/stop": return chatStop(admin, body || {});
+    case "chat/clear": return chatClear(admin, body || {});
     default: return [404, { error: "not_found" }];
   }
 }
