@@ -47,13 +47,11 @@
   .botcap b i { width: 8px; height: 8px; border-radius: 50%; background: #94A3B8; }
   .bot.work .botcap b i { background: #4ADE80; box-shadow: 0 0 8px #4ADE80; animation: pulse 1.4s infinite; }
   .botcap span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bot .b-head, .bot .b-body, .bot .b-arm1, .bot .b-arm2 { transition: transform .9s cubic-bezier(.34, 1.3, .5, 1); }
-  .bot .b-head { transform-origin: 256px 122px; }
-  .bot .b-body { transform-origin: 258px 178px; }
-  .bot .b-arm1 { transform-origin: 238px 136px; }
-  .bot .b-arm2 { transform-origin: 272px 140px; }
+  .bot .b-head, .bot .b-body { transition: transform .9s cubic-bezier(.34, 1.3, .5, 1); }
+  .bot .b-head { transform-origin: 262px 128px; }
+  .bot .b-body { transform-origin: 266px 196px; }
   .bot .b-eye, .bot .b-lid, .bot .b-spill, .bot .b-z, .bot .b-bit, .bot .b-eq, .bot .b-lidtxt { transition: opacity .6s; }
-  .bot .b-lid, .bot .b-z, .bot .b-bit { opacity: 0; }
+  .bot .b-lid, .bot .b-z, .bot .b-bit, .bot .b-key { opacity: 0; }
   .bot .b-eye { transform-box: fill-box; transform-origin: center; }
   .bot .b-eq rect { transform-box: fill-box; transform-origin: bottom; }
   .bot .b-z { transform-box: fill-box; transform-origin: left bottom; }
@@ -62,8 +60,8 @@
   .bot .b-ring { animation: bRing 2.6s ease-in-out infinite; }
   /* working */
   .bot.work .b-head { animation: bNod 2.6s ease-in-out infinite; }
-  .bot.work .b-arm1 { animation: bType .2s steps(2, jump-none) infinite; }
-  .bot.work .b-arm2, .bot.work .b-mouse { animation: bMouse 2.2s ease-in-out infinite; }
+  .bot.work .b-key { animation: bKey 1.1s steps(1) infinite; }
+  .bot.work .b-key:nth-child(2) { animation-delay: .22s; } .bot.work .b-key:nth-child(3) { animation-delay: .44s; } .bot.work .b-key:nth-child(4) { animation-delay: .66s; } .bot.work .b-key:nth-child(5) { animation-delay: .88s; }
   .bot.work .b-eyes { animation: bScan 3.4s ease-in-out infinite; }
   .bot.work .b-eye { animation: bBlink 4.2s infinite; }
   .bot.work .b-spill { animation: bFlicker 1.7s ease-in-out infinite; }
@@ -72,24 +70,21 @@
   .bot.work .b-eq rect { animation: bEq .7s ease-in-out infinite alternate; }
   .bot.work .b-eq rect:nth-child(2) { animation-delay: .15s; } .bot.work .b-eq rect:nth-child(3) { animation-delay: .3s; } .bot.work .b-eq rect:nth-child(4) { animation-delay: .45s; }
   /* asleep: the head rests on the keyboard, the eyes are closed, z's drift up */
-  .bot.sleep .b-head { transform: translate(-3px, 9px) rotate(-74deg); }
-  .bot.sleep .b-body { transform: rotate(-7deg); animation: bBreathe 3.6s ease-in-out infinite; }
-  .bot.sleep .b-arm1 { transform: rotate(9deg); }
-  .bot.sleep .b-arm2 { transform: rotate(-6deg); }
+  .bot.sleep .b-head { transform: translate(-20px, 34px) rotate(-68deg); }
+  .bot.sleep .b-body { transform: rotate(-10deg); animation: bBreathe 3.6s ease-in-out infinite; }
   .bot.sleep .b-eye { opacity: 0; } .bot.sleep .b-lid { opacity: 1; }
   .bot.sleep .b-spill { opacity: .1; } .bot.sleep .b-eq { opacity: .25; } .bot.sleep .b-lidtxt { opacity: .7; }
   .bot.sleep .b-z { animation: bZ 3.6s ease-in infinite; }
   .bot.sleep .b-z:nth-of-type(2) { animation-delay: 1.2s; } .bot.sleep .b-z:nth-of-type(3) { animation-delay: 2.4s; }
   .bot.sleep .b-ring { animation-duration: 5s; }
   @keyframes bNod { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-3deg) translateY(1px); } }
-  @keyframes bType { 0% { transform: rotate(0deg); } 100% { transform: rotate(3.2deg); } }
-  @keyframes bMouse { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-4px, -1px); } 50% { transform: translate(-1px, 1.5px); } 75% { transform: translate(3px, -.5px); } }
+  @keyframes bKey { 0%, 100% { opacity: 0; } 4%, 18% { opacity: .85; } 19% { opacity: 0; } }
   @keyframes bScan { 0%, 100% { transform: translateX(0); } 35% { transform: translateX(-3px); } 70% { transform: translateX(1.5px); } }
   @keyframes bBlink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.12); } }
   @keyframes bFlicker { 0%, 100% { opacity: .5; } 40% { opacity: .78; } 55% { opacity: .58; } 70% { opacity: .72; } }
   @keyframes bRise { 0% { opacity: 0; transform: translate(0, 0); } 15% { opacity: .9; } 100% { opacity: 0; transform: translate(-6px, -30px); } }
   @keyframes bEq { 0% { transform: scaleY(.25); } 100% { transform: scaleY(1); } }
-  @keyframes bBreathe { 0%, 100% { transform: rotate(-7deg) scale(1); } 50% { transform: rotate(-7deg) scale(1.025, 1.035); } }
+  @keyframes bBreathe { 0%, 100% { transform: rotate(-10deg) scale(1); } 50% { transform: rotate(-10deg) scale(1.025, 1.035); } }
   @keyframes bZ { 0% { opacity: 0; transform: translate(0, 0) scale(.55); } 18% { opacity: 1; } 70% { opacity: .9; } 100% { opacity: 0; transform: translate(34px, -52px) scale(1.25); } }
   @keyframes bTwinkle { 0%, 100% { opacity: .25; } 50% { opacity: .9; } }
   @keyframes bRing { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
@@ -238,65 +233,74 @@
         <div class="stack">
           <section class="card botcard" aria-label="What the agent is doing">
             <div class="bot sleep" id="bot">
-              <svg viewBox="0 0 360 206" role="img" aria-labelledby="botTitle">
+              <svg viewBox="0 0 380 262" role="img" aria-labelledby="botTitle">
                 <title id="botTitle">The agent is asleep</title>
                 <defs>
                   <linearGradient id="bBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0C1233"/><stop offset="1" stop-color="#25114D"/></linearGradient>
                   <radialGradient id="bGlow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#C026D3" stop-opacity=".5"/><stop offset="1" stop-color="#C026D3" stop-opacity="0"/></radialGradient>
                   <linearGradient id="bBody" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#C5C9EA"/></linearGradient>
-                  <linearGradient id="bLid" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7F6CFA"/><stop offset="1" stop-color="#35288A"/></linearGradient>
-                  <linearGradient id="bSpill" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#B197FC" stop-opacity=".8"/><stop offset="1" stop-color="#B197FC" stop-opacity="0"/></linearGradient>
+                  <linearGradient id="bLid" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8672FB"/><stop offset="1" stop-color="#35288A"/></linearGradient>
+                  <linearGradient id="bDeck" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4A4FA0"/><stop offset="1" stop-color="#31366F"/></linearGradient>
+                  <linearGradient id="bSpill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C4B5FD" stop-opacity=".75"/><stop offset="1" stop-color="#C4B5FD" stop-opacity="0"/></linearGradient>
+                  <radialGradient id="bFace" cx=".3" cy=".6" r=".7"><stop offset="0" stop-color="#C4B5FD" stop-opacity=".55"/><stop offset="1" stop-color="#C4B5FD" stop-opacity="0"/></radialGradient>
                 </defs>
-                <rect width="360" height="206" fill="url(#bBg)"/>
-                <g fill="#C4B5FD"><circle class="b-star" cx="34" cy="30" r="1.6"/><circle class="b-star" cx="118" cy="20" r="1.2"/><circle class="b-star" cx="196" cy="34" r="1.5"/><circle class="b-star" cx="326" cy="26" r="1.7"/><circle class="b-star" cx="300" cy="58" r="1.1"/><circle class="b-star" cx="52" cy="92" r="1.2"/></g>
-                <ellipse cx="200" cy="182" rx="170" ry="30" fill="url(#bGlow)"/>
-                <!-- the robot's body, behind the desk -->
+                <rect width="380" height="262" fill="url(#bBg)"/>
+                <g fill="#C4B5FD"><circle class="b-star" cx="34" cy="34" r="1.6"/><circle class="b-star" cx="128" cy="24" r="1.2"/><circle class="b-star" cx="190" cy="52" r="1.4"/><circle class="b-star" cx="344" cy="30" r="1.7"/><circle class="b-star" cx="330" cy="150" r="1.1"/><circle class="b-star" cx="46" cy="150" r="1.2"/></g>
+                <ellipse cx="196" cy="236" rx="180" ry="32" fill="url(#bGlow)"/>
+                <ellipse cx="204" cy="226" rx="150" ry="17" fill="#141940" opacity=".6"/>
+                <!-- the robot's body, behind the laptop -->
                 <g class="b-body">
-                  <ellipse cx="258" cy="176" rx="34" ry="8" fill="#151A40"/>
-                  <rect x="228" y="120" width="60" height="58" rx="26" fill="url(#bBody)"/>
-                  <rect x="241" y="150" width="30" height="15" rx="7.5" fill="#1A1F45"/>
-                  <circle cx="249" cy="157.5" r="2.2" fill="#67E8F9"/><circle cx="256" cy="157.5" r="2.2" fill="#E879F9"/><circle cx="263" cy="157.5" r="2.2" fill="#A78BFA"/>
-                  <circle cx="246" cy="135" r="4" fill="none" stroke="#E879F9" stroke-width="2.4" class="b-ring"/>
+                  <ellipse cx="266" cy="197" rx="38" ry="9" fill="#0F133A"/>
+                  <rect x="232" y="126" width="64" height="68" rx="28" fill="url(#bBody)"/>
+                  <rect x="252" y="166" width="32" height="15" rx="7.5" fill="#1A1F45"/>
+                  <circle cx="260" cy="173.5" r="2.2" fill="#67E8F9"/><circle cx="268" cy="173.5" r="2.2" fill="#E879F9"/><circle cx="276" cy="173.5" r="2.2" fill="#A78BFA"/>
+                  <circle cx="284" cy="140" r="4" fill="none" stroke="#E879F9" stroke-width="2.4" class="b-ring"/>
                 </g>
-                <!-- desk and the laptop's keyboard deck -->
-                <rect x="20" y="172" width="320" height="9" rx="4.5" fill="#262C5C"/><rect x="20" y="172" width="320" height="2.5" rx="1.2" fill="#3B4284"/>
-                <polygon points="86,166 168,178 168,182 86,170" fill="#191D45"/><polygon points="168,178 246,164 246,168 168,182" fill="#202552"/>
-                <polygon points="86,166 168,178 246,164 170,153" fill="#2E3368"/>
-                <g stroke="#565CA8" stroke-width="1.6" stroke-linecap="round"><path d="M178 173 l52 -9.5"/><path d="M168 168.5 l52 -9.5"/><path d="M158 164 l46 -8.4"/></g>
-                <!-- light from the screen on the robot -->
-                <polygon class="b-spill" points="168,70 168,176 262,150 250,62" fill="url(#bSpill)" opacity=".5"/>
-                <g class="b-bits"><rect class="b-bit" x="196" y="146" width="7" height="3" rx="1.5" fill="#67E8F9"/><rect class="b-bit" x="212" y="150" width="5" height="3" rx="1.5" fill="#E879F9"/><rect class="b-bit" x="186" y="150" width="6" height="3" rx="1.5" fill="#A78BFA"/><rect class="b-bit" x="204" y="142" width="4" height="3" rx="1.5" fill="#FDE68A"/></g>
-                <!-- the arm that types -->
-                <g class="b-arm1"><path d="M238 136 Q214 138 205 156" stroke="#B4B8DE" stroke-width="13" stroke-linecap="round" fill="none"/><ellipse cx="203" cy="158" rx="10" ry="7" fill="#1A1F45"/></g>
+                <!-- the laptop's base: its two visible sides, then the top with the keyboard and the trackpad, drawn in the base's own plane -->
+                <polygon points="106,190 180,228 180,236 106,198" fill="#161A44"/>
+                <polygon points="180,228 258,209 258,217 180,236" fill="#242A5E"/>
+                <g transform="matrix(0.569,0.292,0.82,-0.2,106,190)">
+                  <rect width="130" height="95" rx="6" fill="url(#bDeck)" stroke="#7479C9" stroke-width="1"/>
+                  <g stroke="#171B45" stroke-width="7.4" fill="none"><path d="M9 12H121" stroke-dasharray="8.4 2.2"/><path d="M9 22H121" stroke-dasharray="8.4 2.2"/><path d="M9 32H121" stroke-dasharray="8.4 2.2"/><path d="M9 42H121" stroke-dasharray="8.4 2.2"/><path d="M9 52H28M31 52H40M43 52H87M90 52H99M102 52H121"/></g>
+                  <g class="b-keys" fill="#67E8F9"><rect class="b-key" x="30.2" y="18.3" width="8.4" height="7.4" rx="1.4"/><rect class="b-key" x="72.6" y="28.3" width="8.4" height="7.4" rx="1.4"/><rect class="b-key" x="51.4" y="38.3" width="8.4" height="7.4" rx="1.4"/><rect class="b-key" x="93.8" y="18.3" width="8.4" height="7.4" rx="1.4"/><rect class="b-key" x="19.6" y="28.3" width="8.4" height="7.4" rx="1.4"/></g>
+                  <rect x="45" y="63" width="40" height="25" rx="3" fill="#262B60" stroke="#6C72C2" stroke-width=".9"/>
+                  <rect class="b-spill" width="130" height="70" rx="6" fill="url(#bSpill)" opacity=".5"/>
+                </g>
+                <g class="b-bits"><rect class="b-bit" x="196" y="176" width="7" height="3" rx="1.5" fill="#67E8F9"/><rect class="b-bit" x="214" y="186" width="5" height="3" rx="1.5" fill="#E879F9"/><rect class="b-bit" x="184" y="184" width="6" height="3" rx="1.5" fill="#A78BFA"/><rect class="b-bit" x="206" y="170" width="4" height="3" rx="1.5" fill="#FDE68A"/></g>
+                <!-- both arms: the far one first. Their hands are moved by the script below, so they really type -->
+                <path id="bArmF" d="M247 132 Q222 166 172 191" stroke="#B4B8DE" stroke-width="14" stroke-linecap="round" fill="none"/>
+                <g id="bHandF" transform="translate(172,191) rotate(27)"><ellipse rx="11.5" ry="7.5" fill="#1A1F45"/></g>
+                <g id="bMouse" transform="translate(254,224)"><rect x="-13" y="-7.5" width="26" height="15" rx="7.5" fill="#E6E8F7" transform="rotate(-14)"/><path d="M-6 -4.5 l5 1.2" stroke="#9499C8" stroke-width="1.5" stroke-linecap="round"/></g>
+                <path id="bArmN" d="M277 148 Q258 188 198 204" stroke="#E6E8F7" stroke-width="14" stroke-linecap="round" fill="none"/>
+                <g id="bHandN" transform="translate(198,204) rotate(27)"><ellipse rx="11.5" ry="7.5" fill="#1A1F45"/></g>
                 <!-- the head -->
                 <g class="b-head">
-                  <rect x="248" y="110" width="16" height="14" rx="5" fill="#9499C8"/>
-                  <path d="M254 47 v-11" stroke="#B4B8DE" stroke-width="3" stroke-linecap="round"/><circle cx="254" cy="33" r="4.2" fill="#E879F9" class="b-ring"/>
-                  <circle cx="293" cy="84" r="14" fill="#1A1F45"/>
-                  <rect x="212" y="46" width="84" height="72" rx="34" fill="url(#bBody)"/>
-                  <circle cx="290" cy="84" r="12.5" fill="#1A1F45"/><circle cx="290" cy="84" r="7.5" fill="none" stroke="#E879F9" stroke-width="3" class="b-ring"/><circle cx="290" cy="84" r="2.6" fill="#F5D0FE"/>
-                  <rect x="218" y="62" width="58" height="40" rx="19" fill="#12173A"/>
+                  <rect x="254" y="116" width="16" height="15" rx="5" fill="#9499C8"/>
+                  <path d="M256 44 v-11" stroke="#B4B8DE" stroke-width="3" stroke-linecap="round"/><circle cx="256" cy="30" r="4.4" fill="#E879F9" class="b-ring"/>
+                  <circle cx="297" cy="84" r="15" fill="#1A1F45"/>
+                  <rect x="206" y="43" width="92" height="78" rx="37" fill="url(#bBody)"/>
+                  <circle cx="294" cy="84" r="13.5" fill="#1A1F45"/><circle cx="294" cy="84" r="8" fill="none" stroke="#E879F9" stroke-width="3" class="b-ring"/><circle cx="294" cy="84" r="2.8" fill="#F5D0FE"/>
+                  <rect x="212" y="61" width="62" height="42" rx="20" fill="#12173A"/>
+                  <rect class="b-spill" x="212" y="61" width="62" height="42" rx="20" fill="url(#bFace)" opacity=".5"/>
                   <g class="b-eyes">
-                    <rect class="b-eye" x="230" y="74" width="9" height="16" rx="4.5" fill="#67E8F9"/><rect class="b-eye" x="250" y="74" width="9" height="16" rx="4.5" fill="#67E8F9"/>
-                    <path class="b-lid" d="M228 84 q6.5 5.5 13 0" stroke="#67E8F9" stroke-width="2.6" fill="none" stroke-linecap="round"/><path class="b-lid" d="M248 84 q6.5 5.5 13 0" stroke="#67E8F9" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+                    <rect class="b-eye" x="226" y="73" width="10" height="17" rx="5" fill="#67E8F9"/><rect class="b-eye" x="248" y="73" width="10" height="17" rx="5" fill="#67E8F9"/>
+                    <path class="b-lid" d="M224 84 q7 6 14 0" stroke="#67E8F9" stroke-width="2.8" fill="none" stroke-linecap="round"/><path class="b-lid" d="M246 84 q7 6 14 0" stroke="#67E8F9" stroke-width="2.8" fill="none" stroke-linecap="round"/>
                   </g>
                 </g>
-                <!-- the laptop's lid, its back towards us: how many projects have work going on -->
-                <g transform="translate(86,60) skewY(8.3)">
-                  <rect width="82" height="106" rx="7" fill="url(#bLid)" stroke="#B4AEFF" stroke-opacity=".55" stroke-width="1.2"/>
-                  <rect x="5" y="5" width="72" height="96" rx="4.5" fill="none" stroke="#FFFFFF" stroke-opacity=".12"/>
+                <!-- the laptop's lid, its back towards us, drawn in the lid's own plane: how many projects have work going on -->
+                <polygon points="161,143 180,228 184,227 165,142" fill="#D8CCFF"/>
+                <g transform="matrix(0.569,0.292,0.2065,0.924,87,105)">
+                  <rect width="130" height="92" rx="7" fill="url(#bLid)" stroke="#B4AEFF" stroke-opacity=".6" stroke-width="1.2"/>
+                  <rect x="5" y="5" width="120" height="82" rx="4.5" fill="none" stroke="#FFFFFF" stroke-opacity=".13"/>
                   <g class="b-lidtxt" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-                    <text id="botNum" x="41" y="52" font-size="36" font-weight="800" fill="#FFFFFF">–</text>
-                    <text id="botUnit" x="41" y="68" font-size="8.6" font-weight="700" letter-spacing="1.3" fill="#E4E1FF">PROJECTS</text>
-                    <text x="41" y="79" font-size="7.2" font-weight="600" letter-spacing="1.6" fill="#C4BEFF">IN WORK</text>
+                    <text id="botNum" x="65" y="50" font-size="44" font-weight="800" fill="#FFFFFF">–</text>
+                    <text id="botUnit" x="65" y="65" font-size="8.4" font-weight="700" letter-spacing="1.1" fill="#E4E1FF">PROJECTS IN WORK</text>
                   </g>
-                  <g class="b-eq" fill="#67E8F9"><rect x="27" y="87" width="4" height="10" rx="1.5"/><rect x="35" y="87" width="4" height="10" rx="1.5"/><rect x="43" y="87" width="4" height="10" rx="1.5"/><rect x="51" y="87" width="4" height="10" rx="1.5"/></g>
+                  <g class="b-eq" fill="#67E8F9"><rect x="51" y="72" width="4" height="10" rx="1.5"/><rect x="59" y="72" width="4" height="10" rx="1.5"/><rect x="67" y="72" width="4" height="10" rx="1.5"/><rect x="75" y="72" width="4" height="10" rx="1.5"/></g>
                 </g>
-                <!-- the mouse and the arm on it -->
-                <g class="b-mouse"><rect x="292" y="163" width="24" height="12" rx="6" fill="#E6E8F7"/><path d="M304 163 v5" stroke="#9499C8" stroke-width="1.4" stroke-linecap="round"/></g>
-                <g class="b-arm2"><path d="M272 140 Q294 146 301 160" stroke="#E6E8F7" stroke-width="13" stroke-linecap="round" fill="none"/><ellipse cx="302" cy="163" rx="10" ry="6.5" fill="#1A1F45"/></g>
+                <path d="M106 190 L180 228" stroke="#1A1F45" stroke-width="3" stroke-linecap="round"/>
                 <!-- asleep -->
-                <g font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" fill="#EDE9FE" stroke="#7C3AED" stroke-width=".6"><text class="b-z" x="236" y="74" font-size="17">z</text><text class="b-z" x="238" y="72" font-size="23">z</text><text class="b-z" x="234" y="76" font-size="29">Z</text></g>
+                <g font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" fill="#EDE9FE" stroke="#7C3AED" stroke-width=".6"><text class="b-z" x="236" y="112" font-size="17">z</text><text class="b-z" x="238" y="110" font-size="23">z</text><text class="b-z" x="234" y="114" font-size="29">Z</text></g>
               </svg>
               <div class="botcap"><b><i></i><span id="botState">Asleep</span></b><span id="botLine">Waiting for work.</span></div>
             </div>
@@ -534,13 +538,48 @@
     bot.classList.toggle("work", working); bot.classList.toggle("sleep", !working);
     const n = board && board.projects ? board.projects.filter((p) => p.counts && (p.counts.running || p.counts.waiting || p.counts.needsApproval)).length : null;
     $("botNum").textContent = n == null ? "–" : n > 99 ? "99+" : String(n);
-    $("botUnit").textContent = n === 1 ? "PROJECT" : "PROJECTS";
+    $("botUnit").textContent = n === 1 ? "PROJECT IN WORK" : "PROJECTS IN WORK";
     const what = s.state === "working" && s.current ? s.current.title : answering ? "Answering a chat message" + (typeof s.chat.answering === "string" && s.chat.answering ? " about " + s.chat.answering : "") : "";
     const idle = { paused: "Paused. It starts again when you resume it.", blocked: "Waiting: it cannot call Claude right now.", offline: "Cannot reach the CRM. It keeps trying.", setup: "Not connected to the CRM yet.", stopped: "The agent is not running." }[s.state] || "Waiting for work.";
     $("botState").textContent = working ? "Working" : "Asleep";
     $("botLine").textContent = working ? what : idle;
     $("botTitle").textContent = (working ? "The agent is working" + (what ? ": " + what : "") : "The agent is asleep. " + idle) + (n == null ? "" : " " + n + (n === 1 ? " project has" : " projects have") + " work going on.");
   }
+  /* The robot's two hands. While it works both type on the keyboard, each in its own rhythm, and every few
+     seconds the near hand goes to the mouse, moves it and comes back. Asleep, both rest on the keys. The arms
+     are redrawn every frame from shoulder to hand, so they follow whatever the hands do. */
+  const BOT = { far: { sh: [247, 132], el: [222, 166], home: [172, 191], rest: [166, 195] }, near: { sh: [277, 148], el: [258, 188], home: [198, 204], rest: [204, 209] }, mouse: [254, 222] };
+  let botAwake = 0;
+  const botCalm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function botArms(now) {
+    const bot = $("bot");
+    if (view !== "overview" || document.visibilityState !== "visible") { setTimeout(() => requestAnimationFrame(botArms), 600); return; }
+    const t = now / 1000, working = bot.classList.contains("work");
+    botAwake += ((working ? 1 : 0) - botAwake) * 0.07;                      // eases between asleep (0) and working (1)
+    const k = botAwake, ramp = (x, a, b) => Math.min(1, Math.max(0, (x - a) / (b - a))), ease = (x) => x * x * (3 - 2 * x);
+    const cycle = t % 7.5, onMouse = k * ease(ramp(cycle, 5.0, 5.45)) * (1 - ease(ramp(cycle, 6.9, 7.35)));     // 0 = on the keys, 1 = on the mouse
+    const tap = (phase, speed) => Math.max(0, Math.sin(t * speed + phase)) ** 2;                               // a key press: down and up
+    const along = (d) => [0.569 * d, 0.292 * d];                                                               // a step along the keyboard's rows
+    const mix = (a, b, m) => [a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m];
+    const place = (arm, hand, armId, handId) => {
+      const el = [arm.el[0] + (hand[0] - arm.home[0]) * 0.4, arm.el[1] + (hand[1] - arm.home[1]) * 0.4];
+      $(armId).setAttribute("d", "M" + arm.sh[0] + " " + arm.sh[1] + " Q" + el[0].toFixed(1) + " " + el[1].toFixed(1) + " " + hand[0].toFixed(1) + " " + hand[1].toFixed(1));
+      $(handId).setAttribute("transform", "translate(" + hand[0].toFixed(1) + "," + hand[1].toFixed(1) + ") rotate(27)");
+    };
+    /* far hand: walks along its half of the keyboard and taps */
+    const fw = along(Math.sin(t * 2.3) * 7 * k), fTap = tap(0, 19) * 3.4 * k;
+    place(BOT.far, mix(BOT.far.rest, [BOT.far.home[0] + fw[0], BOT.far.home[1] + fw[1] - fTap], k), "bArmF", "bHandF");
+    /* near hand: the same on its half, out of step with the other; now and then it goes to the mouse */
+    const nw = along(Math.sin(t * 1.9 + 2) * 7 * k), nTap = tap(1.7, 23) * 3.4 * k * (1 - onMouse);
+    const typing = [BOT.near.home[0] + nw[0], BOT.near.home[1] + nw[1] - nTap];
+    const slide = [Math.sin(t * 4.1) * 5 * onMouse, Math.cos(t * 3.3) * 2.2 * onMouse];
+    const lift = Math.sin(Math.PI * Math.min(1, onMouse * 2 > 1 ? 2 - onMouse * 2 : onMouse * 2)) * 0;                 // the hand slides, it does not hop
+    const hand = mix(mix(BOT.near.rest, typing, k), [BOT.mouse[0] + slide[0], BOT.mouse[1] - 3 + slide[1] - lift], onMouse);
+    place(BOT.near, hand, "bArmN", "bHandN");
+    $("bMouse").setAttribute("transform", "translate(" + (BOT.mouse[0] + slide[0]).toFixed(1) + "," + (BOT.mouse[1] + 2 + slide[1]).toFixed(1) + ")");
+    requestAnimationFrame(botArms);
+  }
+  if (!botCalm) requestAnimationFrame(botArms);
   function renderBoard() {
     const b = board, now = last ? last.now : Date.now();
     renderBot();
