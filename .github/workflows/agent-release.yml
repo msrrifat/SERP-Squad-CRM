@@ -38,7 +38,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -84,32 +84,37 @@ jobs:
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
-          SSH="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@$VPS_HOST"
+          # One connection for everything, kept open and reused by every command below and by the
+          # next step. The server limits how many new SSH connections it takes in a short time, and
+          # the CRM's own deploy is usually connecting at the same moment as this build.
+          OPTS="-i $HOME/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-%C -o ControlPersist=900"
+          echo "SSH_OPTS=$OPTS" >> "$GITHUB_ENV"
           DIR=/var/www/serpsquad/server/data/agentops/incoming
           # the description is put in place last: the CRM only looks at a pair that is complete
-          for attempt in 1 2 3; do
-            if $SSH "mkdir -p $DIR && rm -f $DIR/release.json $DIR/*.part" \
-              && scp -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 out/serpsquad-agent.jar "root@$VPS_HOST:$DIR/serpsquad-agent.jar.part" \
-              && scp -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 out/release.json "root@$VPS_HOST:$DIR/release.json.part" \
-              && $SSH "cd $DIR && mv -f serpsquad-agent.jar.part serpsquad-agent.jar && mv -f release.json.part release.json"; then
-              echo "uploaded on attempt $attempt"; break
+          for attempt in 1 2 3 4 5 6; do
+            if ssh $OPTS "root@$VPS_HOST" "mkdir -p $DIR && rm -f $DIR/release.json $DIR/*.part" \
+              && scp $OPTS out/serpsquad-agent.jar "root@$VPS_HOST:$DIR/serpsquad-agent.jar.part" \
+              && scp $OPTS out/release.json "root@$VPS_HOST:$DIR/release.json.part" \
+              && ssh $OPTS "root@$VPS_HOST" "cd $DIR && mv -f serpsquad-agent.jar.part serpsquad-agent.jar && mv -f release.json.part release.json"; then
+              echo "uploaded on attempt $attempt"; exit 0
             fi
-            test "$attempt" = 3 && { echo "the upload failed three times"; exit 1; }
-            sleep 30
+            ssh $OPTS -O exit "root@$VPS_HOST" 2>/dev/null || true
+            test "$attempt" = 6 && { echo "the upload failed six times"; exit 1; }
+            echo "the server did not take the connection; waiting $((attempt * 45)) seconds before attempt $((attempt + 1))"
+            sleep $((attempt * 45))
           done
       - name: Confirm the CRM took it
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          SSH="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@$VPS_HOST"
           V="${{ steps.v.outputs.version }}"
           # the CRM looks for a new version every 30 seconds; a deploy of the same push may also be restarting it
           for i in $(seq 1 24); do
-            if $SSH "test -f /var/www/serpsquad/server/data/agentops/releases/agent-$V.jar && grep -q '\"version\":\"$V\"' /var/www/serpsquad/server/data/agentops/releases.json"; then
+            if ssh $SSH_OPTS "root@$VPS_HOST" "test -f /var/www/serpsquad/server/data/agentops/releases/agent-$V.jar && grep -q '\"version\":\"$V\"' /var/www/serpsquad/server/data/agentops/releases.json"; then
               echo "The live CRM now offers agent version $V to its devices."; exit 0
             fi
             sleep 15
           done
           echo "The CRM did not pick up version $V within six minutes. The file is still in the incoming folder and is taken at the next look."
-          $SSH "ls -la /var/www/serpsquad/server/data/agentops/incoming/ /var/www/serpsquad/server/data/agentops/releases/ 2>&1 | tail -20; pm2 logs serpsquad-api --lines 15 --nostream 2>&1 | tail -20" || true
+          ssh $SSH_OPTS "root@$VPS_HOST" "ls -la /var/www/serpsquad/server/data/agentops/incoming/ /var/www/serpsquad/server/data/agentops/releases/ 2>&1 | tail -20; pm2 logs serpsquad-api --lines 15 --nostream 2>&1 | tail -20" || true
           exit 1
