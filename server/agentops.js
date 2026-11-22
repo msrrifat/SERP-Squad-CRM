@@ -28,7 +28,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSyn
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { AREAS, CATALOG, CATALOG_BY_KEY, CHANNEL_CHECK_URL, CHANNEL_HOSTS, DEFAULT_PLAYBOOKS, MODELS, PRICES, SOCIAL_PLATFORMS } from "./agentops-catalog.js";
+import { AREAS, CATALOG, CATALOG_BY_KEY, CHANNEL_CHECK_URL, CHANNEL_HOSTS, DEFAULT_PLAYBOOKS, MODELS, PRICES, REPORT_LABEL, SOCIAL_PLATFORMS, WORK_KINDS } from "./agentops-catalog.js";
 
 const DIR = new URL("./data/agentops/", import.meta.url);
 const REL_DIR = new URL("./data/agentops/releases/", import.meta.url);
@@ -75,10 +75,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0 }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }),
 };
 const cache = {};
 function load(name) {
@@ -243,7 +243,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -978,6 +978,95 @@ function knowledgeEdit(admin, body) {
   return [200, knowledgeState()];
 }
 
+/* ---------- the work log behind a project's report ----------
+   Everything that was done for a project, kept for good: one entry for every
+   task the agent finished, one for every change in the change journal, the
+   items the agent records while it works (a page it wrote for, a link that
+   was won, a post that went out) and the entries a person adds by hand for
+   work done outside the agent. The report is this list, filtered by dates and
+   laid out by section. It does not depend on the task list, which only keeps
+   the most recent tasks. */
+const WORK_KEEP = 20000, WORK_PER_TASK = 25;
+const WORK_SECTIONS = Object.keys(WORK_KINDS);
+const firstUrl = (...texts) => { for (const t of texts) { const m = String(t || "").match(/https?:\/\/[^\s<>"')\]]+/i); if (m) return m[0].replace(/[.,;:!?]+$/, ""); } return ""; };
+const httpUrl = (u) => { const v = line(u, 500); if (!v) return ""; const w = /^https?:\/\//i.test(v) ? v : /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(v) ? "https://" + v : ""; try { return w ? new URL(w).href : ""; } catch { return ""; } };
+/* a change that was only described in words is filed by what it mentions */
+const sectionByWords = (text) => (/business profile|gbp|google profile|review|citation|backlink|link (won|built)|directory|outreach/i.test(text) ? "offpage" : /facebook|instagram|linkedin|tiktok|youtube|pinterest|social|\btweet|\bx post/i.test(text) ? "social" : "onpage");
+function workStore() {
+  const w = load("work");
+  if (!w.projects || typeof w.projects !== "object") w.projects = {};
+  if (!w.init) {
+    /* the first time: what the agent already did is put in the log, oldest first */
+    w.init = true;
+    for (const t of load("tasks").slice().sort((a, b) => (a.finishedAt || 0) - (b.finishedAt || 0))) if (t.status === "done" && CATALOG_BY_KEY[t.type]?.report && t.projectId !== AGENCY_PROJECT) pushWork(w, t.projectId, taskWork(t));
+    for (const [pid, list] of Object.entries(load("changes") || {})) for (const c of list || []) pushWork(w, pid, changeWork(c, Date.parse(c.at) || now()));
+    for (const list of Object.values(w.projects)) list.sort((a, b) => a.at - b.at);
+    save("work");
+  }
+  return w;
+}
+function pushWork(w, pid, item) {
+  const section = WORK_SECTIONS.includes(item.section) ? item.section : "research";
+  const title = line(item.title, 200);
+  if (!title) return null;
+  const it = { id: uid("wk_"), at: num(item.at, 0, 4e12, now()), section, kind: WORK_KINDS[section].includes(item.kind) ? item.kind : "other", title, detail: line(item.detail, 500), url: httpUrl(item.url), target: line(item.target, 300),
+    platform: SOCIAL_PLATFORMS.some((x) => x.key === item.platform) ? item.platform : "", type: CATALOG_BY_KEY[item.type] ? item.type : "", taskId: item.taskId || null, by: cut(item.by || "", 80), source: ["agent", "manual", "journal"].includes(item.source) ? item.source : "agent" };
+  const list = (w.projects[pid] ||= []);
+  list.push(it);
+  if (list.length > WORK_KEEP) list.splice(0, list.length - WORK_KEEP);
+  return it;
+}
+function addWork(pid, item) {
+  const fresh = !load("work").init, w = workStore();
+  /* the very first entry arrives while the log is being filled from what already exists, which may include this same thing */
+  if (fresh) { const same = (w.projects[pid] || []).find((x) => x.title === line(item.title, 200) && x.kind === item.kind && (x.taskId || null) === (item.taskId || null)); if (same) return same; }
+  const it = pushWork(w, pid, item);
+  if (it) save("work");
+  return it;
+}
+const taskWork = (t) => ({ at: t.finishedAt || now(), section: CATALOG_BY_KEY[t.type].report, kind: "task", type: t.type, title: t.title, detail: t.result?.summary || "", url: firstUrl(t.title, t.instructions, t.result?.summary), taskId: t.id, by: "AI agent", source: "agent" });
+const changeWork = (c, at) => { const where = String(c.where || ""), section = c.taskId && CATALOG_BY_KEY[load("tasks").find((t) => t.id === c.taskId)?.type]?.report || sectionByWords(c.what + " " + where); return { at, section: section === "research" ? "onpage" : section, kind: "change", title: c.what, url: httpUrl(where), target: httpUrl(where) ? "" : where, taskId: c.taskId || null, by: c.by || "", source: c.taskId ? "agent" : "journal" }; };
+function workView(pid, it, alive) {
+  return { id: it.id, at: it.at, section: it.section, kind: it.kind, title: it.title, detail: it.detail || "", url: it.url || "", target: it.target || "", platform: it.platform || "", type: it.type || "", typeLabel: it.type ? (it.section === "research" && REPORT_LABEL[it.type]) || CATALOG_BY_KEY[it.type]?.label || "" : "",
+    taskId: it.taskId && alive.has(it.taskId) ? it.taskId : null, by: it.by || "", source: it.source };
+}
+/* the report for a period: every entry between two moments, newest first */
+function reportOf(pid, body, extra = {}) {
+  const all = workStore().projects[pid] || [], from = num(body.from, 0, 4e12, 0), to = num(body.to, 0, 4e12, 0) || 4e12;
+  const alive = new Set(load("tasks").filter((t) => t.projectId === pid).map((t) => t.id));
+  const items = all.filter((x) => x.at >= from && x.at <= to).sort((a, b) => b.at - a.at);
+  return { ok: true, projectId: pid, from, to: to >= 4e12 ? 0 : to, firstAt: all.length ? Math.min(...all.map((x) => x.at)) : 0, total: all.length, shown: Math.min(items.length, 4000), more: Math.max(0, items.length - 4000),
+    items: items.slice(0, 4000).map((x) => workView(pid, x, alive)), kinds: WORK_KINDS, platforms: SOCIAL_PLATFORMS.map(({ key, label }) => ({ key, label })), ...extra };
+}
+function reportGet(body) {
+  const p = chatProject(body);
+  return p ? [200, reportOf(p.id, body)] : [404, { error: "not_found", detail: "Unknown project." }];
+}
+/* work a person records by hand, and removing an entry that should not be in the report */
+function workEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const bad = (detail, code = 400) => [code, { error: code === 404 ? "not_found" : "bad_request", detail }];
+  if (body.action === "add") {
+    if (!WORK_SECTIONS.includes(body.section)) return bad("Choose which part of the work this belongs to.");
+    if (line(body.title, 200).length < 4) return bad("Say what was done.");
+    if (body.url && !httpUrl(body.url)) return bad("That link is not a web address. It should start with https://");
+    const at = num(body.at, 0, now(), now());      // never in the future
+    const it = addWork(p.id, { at, section: body.section, kind: body.kind, title: body.title, detail: body.detail, url: body.url, target: body.target, platform: body.platform, by: admin.name, source: "manual" });
+    logActivity("report", `${admin.name} added work to the report of ${p.name}: ${cut(it.title, 120)}`, { projectId: p.id });
+    return [200, reportOf(p.id, body, { added: it.id })];
+  }
+  if (body.action === "remove") {
+    const w = workStore(), list = w.projects[p.id] || [], i = list.findIndex((x) => x.id === body.id);
+    if (i < 0) return bad("That entry is no longer in the report.", 404);
+    const [gone] = list.splice(i, 1);
+    save("work");
+    logActivity("report", `${admin.name} removed an entry from the report of ${p.name}: ${cut(gone.title, 120)}`, { projectId: p.id });
+    return [200, reportOf(p.id, body)];
+  }
+  return bad("Unknown action.");
+}
+
 /* ---------- usage ledger ---------- */
 const monthKey = (t = now()) => new Date(t).toISOString().slice(0, 7);
 const dayKey = (t = now()) => new Date(t).toISOString().slice(8, 10);
@@ -1304,6 +1393,20 @@ const SERVER_TOOLS = [
     addChange(ctx.task.projectId, { what: a.what, where: a.where, by: "AI agent", taskId: ctx.task.id });
     return { ok: true };
   }),
+  tool("log_work", "Record one thing that was done for this project, for its work report: a page you changed or wrote for, a link that was won or built, a citation corrected, a post published or drafted, a review reply, or a distinct piece of research. One entry per thing, a short factual sentence, with the live address where there is one. Do not record plans or proposals as done, and do not repeat a change already logged with log_change.", { section: { type: "string", enum: ["research", "onpage", "offpage", "social"], description: "research = research and planning; onpage = work on the website's pages; offpage = links, citations, Business Profile; social = social media." },
+    kind: { type: "string", enum: ["keywords", "competitors", "serp", "rankings", "audit", "plan", "page_change", "content", "meta", "technical", "internal_links", "link_won", "link_built", "citation", "outreach", "gbp_post", "review_reply", "gbp_edit", "post_published", "post_drafted", "calendar", "engagement", "other"] },
+    title: { type: "string", description: "What was done, in one short sentence." }, detail: { type: "string", description: "One or two sentences more, if useful." },
+    url: { type: "string", description: "The live address: the page that was worked on, the page where the link is, the post." }, target: { type: "string", description: "For a link or a citation: the page on the client's site it points to." }, platform: { type: "string", description: "For social work: facebook, instagram, linkedin, x, youtube, tiktok or pinterest." } }, ["section", "kind", "title"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "The work report belongs to a client project." };
+    const holder = ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id);
+    if (holder && (holder.workLogged || 0) >= WORK_PER_TASK) return { error: "Twenty-five entries are already recorded from this task. Record the rest as one summary entry in your report." };
+    if (a.url && !httpUrl(a.url)) return { error: "That is not a web address. Leave url out or give the full https address." };
+    const it = addWork(pid, { section: a.section, kind: a.kind, title: a.title, detail: a.detail, url: a.url, target: a.target, platform: a.platform, type: ctx.task.type || "", taskId: ctx.chat ? null : ctx.task.id, by: ctx.chat ? `${ctx.chat.by} (chat)` : "AI agent", source: "agent" });
+    if (!it) return { error: "Say what was done." };
+    if (holder) { holder.workLogged = (holder.workLogged || 0) + 1; save("tasks"); }
+    return { ok: true, recorded: it.title, section: it.section };
+  }),
   tool("suggest_task", "Propose a follow-up task for this project (for example a rank-drop diagnosis for one keyword). It starts by itself only when that task type is open or within its working limit; otherwise it waits for a person.", { type: { type: "string", description: "Task type key, one of: " + CATALOG.filter((c) => !c.agencyOnly).map((c) => c.key).join(", ") }, title: { type: "string" }, instructions: { type: "string", description: "Exactly what to do, with the keyword, page or date it concerns." }, reason: { type: "string", description: "Why it is worth doing, in one sentence." } }, ["type", "title", "instructions"], (ctx, a) => {
     const cat = CATALOG_BY_KEY[a.type];
     if (!cat || cat.agencyOnly) return { error: "Unknown task type key." };
@@ -1396,6 +1499,7 @@ function addChange(pid, { what, where, by, taskId }) {
   list.push({ id: uid("ch_"), at: new Date().toISOString().slice(0, 10), what: clip(what, 400), where: clip(where || "", 300), by: clip(by || "", 80), taskId: taskId || null });
   if (list.length > 400) list.splice(0, list.length - 400);
   save("changes");
+  if (pid !== AGENCY_PROJECT) addWork(pid, changeWork(list[list.length - 1], now()));
 }
 
 /* ---------- team endpoints ---------- */
@@ -1412,7 +1516,7 @@ function overview(admin) {
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -1757,6 +1861,7 @@ function agentComplete(d, body) {
     logActivity("approval", `"${t.title}" is waiting for approval.`, { taskId: t.id, projectId: t.projectId });
   } else if (st === "done") {
     t.status = "done"; t.finishedAt = now(); t.result = { summary: clip(body.summary || "", 800), report: clip(body.report || "", 60000), findings };
+    if (CATALOG_BY_KEY[t.type]?.report && t.projectId !== AGENCY_PROJECT) addWork(t.projectId, taskWork(t));
     logActivity("task", `${d.name} finished "${t.title}".`, { taskId: t.id, projectId: t.projectId });
   } else if (st === "released") {
     /* the device cannot call Claude (bad key, no credit, outage): the task goes
@@ -2049,6 +2154,8 @@ export async function agentOpsPost(req, body) {
     case "brand": return brandEdit(admin, body || {});
     case "knowledge": return knowledgeEdit(admin, body || {});
     case "roster": return rosterEdit(admin, body || {});
+    case "report": return reportGet(body || {});
+    case "work": return workEdit(admin, body || {});
     case "logos": return logosGet(body || {});
     case "check": return checkRequest(admin, body || {});
     case "lesson": return lessonEdit(admin, body || {});

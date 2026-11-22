@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, LogoUpload, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -168,7 +168,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onOpenTask={setOpenTask} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -299,7 +299,7 @@ function PageNav({ canBack, canForward, onBack, onForward }) {
     </div>
   );
 }
-function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData }) {
+function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData, onOpenTask }) {
   /* Projects are pages. The list of projects is one page, a project's
      dashboard is another, and so is each tab of its work setup. `trail` is the
      history that Back and Forward walk; choosing something new drops whatever
@@ -499,9 +499,9 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
           </div>
         </Card>
 
-        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} tab={project.id === "_agency" ? "settings" : setupTab} setTab={setSetupTab} dirty={dirty} busy={busy} reload={reload}
+        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} tab={project.id === "_agency" ? "settings" : setupTab} setTab={setSetupTab} dirty={dirty} busy={busy} reload={reload} onOpenTask={onOpenTask}
           onCheck={(key) => act("check", { projectId: project.id, ...(key ? { key } : {}) })} />
-        <div className={"flex flex-wrap items-center gap-2" + (["brand", "experience"].includes(setupTab) && !dirty && project.id !== "_agency" ? " hidden" : "")}>
+        <div className={"flex flex-wrap items-center gap-2" + (["brand", "experience", "report"].includes(setupTab) && !dirty && project.id !== "_agency" ? " hidden" : "")}>
           <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
           {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
           {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes in the work setup</span>}
@@ -584,7 +584,7 @@ const Tile = ({ icon: Icon, title, sub, accent, right, children }) => (
 const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
 const txtCls = inputCls + " min-h-[64px] resize-y";
 const numOnly = (v) => +String(v).replace(/[^0-9]/g, "") || 0;
-function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, dirty, busy, reload, onCheck }) {
+function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, dirty, busy, reload, onCheck, onOpenTask }) {
   const [brandNow, setBrandNow] = useState(null);   // counts after a change in the Brand voice tab, until the next refresh brings them
   const agency = project.id === "_agency";
   const profiles = data.devices.flatMap((d) => (d.profiles || []).map((p) => ({ ...p, device: d.name })));
@@ -639,7 +639,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
-    ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`]];
+    ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`],
+    ["report", "Report", ClipboardList, `${project.workItems || 0} thing${project.workItems === 1 ? "" : "s"} done`]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
   const online = data.devices.filter((d) => d.online);
   const gbpSigned = ch.gbp.some((g) => g.id && checks["gbp:" + g.id]?.state === "ok");
@@ -657,7 +658,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
     <div className="space-y-4">
       <div>
         <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
           {TABS.map(([k, label, Icon, sub]) => (
             <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
               style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
@@ -830,6 +831,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
+      {tab === "report" && <WorkReport key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} />}
     </div>
   );
 }
@@ -931,6 +933,189 @@ function Experience({ project, data, accent }) {
           {!st.skills.length && <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-[12px] text-gray-400">Nothing yet.</div>}
         </div>
       </Card>
+    </>
+  );
+}
+
+/* ---------------- report: everything that was done for a project, by period and by kind of work ---------------- */
+const WORK_KIND_LABEL = { task: "Task", keywords: "Keywords", competitors: "Competitors", serp: "Search results", rankings: "Rankings", audit: "Audit", plan: "Plan", page_change: "Page changed", content: "Content", meta: "Titles and descriptions", technical: "Technical fix", internal_links: "Internal links",
+  change: "Change made", link_won: "Link won", link_built: "Link built", citation: "Citation", outreach: "Outreach", gbp_post: "Business Profile post", review_reply: "Review reply", gbp_edit: "Business Profile edit", post_published: "Post published", post_drafted: "Post drafted", calendar: "Content calendar", engagement: "Engagement", other: "Other" };
+const WORK_SECTION_LABEL = { research: "Research and planning", onpage: "On-page SEO", offpage: "Off-page SEO", social: "Social media" };
+const dayText = (ms) => new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const dayInput = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const shortUrl = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, "") + x.pathname + x.search).replace(/\/$/, ""); } catch { return u; } };
+const LiveLink = ({ url, children }) => <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1 break-all font-medium text-blue-700 hover:underline">{children || shortUrl(url)} <ExternalLink size={11} className="shrink-0" /></a>;
+function WorkRow({ it, onOpenTask, onRemove, showLink = true, showKind = true }) {
+  return (
+    <div className="group flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-gray-50 px-1 py-2 last:border-0">
+      <span className="w-[86px] shrink-0 pt-0.5 text-[11.5px] text-gray-500">{dayText(it.at)}</span>
+      <div className="min-w-[200px] flex-1">
+        <div className="text-[12.5px] leading-relaxed text-gray-900">{showKind && it.kind !== "task" && <span className="mr-1.5"><Chip>{WORK_KIND_LABEL[it.kind] || it.kind}</Chip></span>}{it.title}</div>
+        {it.detail && <div className="text-[12px] leading-relaxed text-gray-600">{it.detail}</div>}
+        {(showLink && it.url) || it.target ? <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[11.5px] text-gray-500">{showLink && it.url && <LiveLink url={it.url} />}{it.target && <span>{it.url ? "points to " : "on "}{/^https?:/.test(it.target) ? <LiveLink url={it.target} /> : it.target}</span>}</div> : null}
+      </div>
+      <span className="shrink-0 text-[11px] text-gray-400">{it.source === "manual" ? `added by ${it.by}` : it.source === "journal" ? `logged by ${it.by}` : it.by && it.by !== "AI agent" ? it.by : "AI agent"}</span>
+      <div className="flex shrink-0 items-center gap-1">
+        {it.taskId && onOpenTask && <Btn ghost onClick={() => onOpenTask(it.taskId)} title="Open the task with its full report"><FileText size={12} /> Full report</Btn>}
+        <button type="button" className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-600" title="Remove this entry from the report" aria-label={`Remove "${it.title}" from the report`} onClick={onRemove}><Trash2 size={13} /></button>
+      </div>
+    </div>
+  );
+}
+function WorkReport({ project, accent, onOpenTask }) {
+  const [mode, setMode] = useState("all");                                  // all | month | custom
+  const [month, setMonth] = useState(() => dayInput(Date.now()).slice(0, 7));
+  const [from, setFrom] = useState(() => dayInput(Date.now() - 29 * 864e5));
+  const [to, setTo] = useState(() => dayInput(Date.now()));
+  const [rp, setRp] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [adding, setAdding] = useState(null);
+  const [copied, setCopied] = useState(false);
+  /* the period as two moments in this computer's own time: the first instant of the first day, the last of the last day */
+  const range = useMemo(() => {
+    if (mode === "month") { const [y, m] = month.split("-").map(Number); return { from: new Date(y, m - 1, 1).getTime(), to: new Date(y, m, 1).getTime() - 1 }; }
+    if (mode === "custom") { const a = from ? new Date(from + "T00:00:00").getTime() : 0, b = to ? new Date(to + "T23:59:59.999").getTime() : 0; return a && b && b < a ? { from: b - 86399999, to: a + 86399999 } : { from: a, to: b }; }
+    return { from: 0, to: 0 };
+  }, [mode, month, from, to]);
+  const run = async (path, body) => {
+    setBusy(true); setMsg("");
+    try { const o = await api(path, { projectId: project.id, from: range.from, to: range.to, ...body }); setRp(o); return o; }
+    catch (e) { setMsg(String(e.message || e)); return null; }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { run("report", {}); }, [project.id, range.from, range.to]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!rp) return <Card className="p-4 text-[13px] text-gray-500">{msg || "Loading the report…"}</Card>;
+
+  const months = []; { const first = new Date(rp.firstAt || Date.now()); const d = new Date(); d.setDate(1); for (let i = 0; i < 60; i++) { months.push({ key: dayInput(d.getTime()).slice(0, 7), label: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }) }); if (d.getFullYear() === first.getFullYear() && d.getMonth() === first.getMonth()) break; d.setMonth(d.getMonth() - 1); } }
+  const items = rp.items, of = (sec) => items.filter((x) => x.section === sec);
+  const remove = async (it) => { if (await askConfirm({ title: "Remove this entry?", message: `"${it.title}" will be taken out of the report. The work itself is not undone.`, confirmLabel: "Yes, remove it", danger: true })) run("work", { action: "remove", id: it.id }); };
+  const row = (it, opts = {}) => <WorkRow key={it.id} it={it} onOpenTask={onOpenTask} onRemove={() => remove(it)} {...opts} />;
+  const none = (text) => <div className="px-1 py-3 text-[12px] text-gray-400">{text}</div>;
+  const sub = (title, hint) => <div className="mb-1 mt-3 first:mt-0"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{title}</div>{hint && <div className="text-[11px] text-gray-400">{hint}</div>}</div>;
+
+  /* research and planning: the agent's research runs, grouped by what they looked into, then single findings */
+  const research = of("research"), groups = [];
+  for (const it of research.filter((x) => x.kind === "task")) { const key = it.typeLabel || "Other research and tasks"; let g = groups.find((x) => x.key === key); if (!g) groups.push((g = { key, list: [] })); g.list.push(it); }
+  const notes = research.filter((x) => x.kind !== "task");
+  /* on-page: by page */
+  const onpage = of("onpage"), pages = [];
+  for (const it of onpage) { const key = it.url || (/^https?:|^\//.test(it.target) ? it.target : ""); if (!key) continue; let g = pages.find((x) => x.key === key); if (!g) pages.push((g = { key, list: [] })); g.list.push(it); }
+  const noPage = onpage.filter((x) => !(x.url || /^https?:|^\//.test(x.target)));
+  /* off-page: links first, then the Business Profile, then everything else */
+  const offpage = of("offpage"), LINKS = ["link_won", "link_built", "citation"], GBP = ["gbp_post", "review_reply", "gbp_edit"], GBP_TYPES = ["gbp_post", "gbp_review_reply", "gbp_update", "gbp_audit", "profile_guard"];
+  const links = offpage.filter((x) => LINKS.includes(x.kind)), gbp = offpage.filter((x) => GBP.includes(x.kind) || (!LINKS.includes(x.kind) && GBP_TYPES.includes(x.type))), offRest = offpage.filter((x) => !links.includes(x) && !gbp.includes(x));
+  const social = of("social"), posts = social.filter((x) => ["post_published", "post_drafted"].includes(x.kind)), socRest = social.filter((x) => !posts.includes(x));
+  const platformLabel = (k) => (rp.platforms || []).find((p) => p.key === k)?.label || "";
+  const period = mode === "all" ? (rp.firstAt ? `From the start (${dayText(rp.firstAt)}) to today` : "From the start to today") : `${dayText(range.from)} to ${dayText(Math.min(range.to, Date.now()))}`;
+
+  const asText = () => {
+    const L = [`Work report: ${project.name}`, period, ""];
+    const add = (title, list, f) => { if (!list.length) return; L.push(title); for (const it of list) L.push("- " + f(it)); L.push(""); };
+    const base = (it) => `${dayText(it.at)}: ${it.title}${it.detail ? ". " + it.detail : ""}`;
+    L.push("RESEARCH AND PLANNING", ""); for (const g of groups) add(`${g.key} (${g.list.length})`, g.list, base); add("Research findings", notes, (it) => `${base(it)}${it.url ? " " + it.url : ""}`);
+    L.push("ON-PAGE SEO", ""); for (const g of pages) add(g.key, g.list, base); add("Other on-page work", noPage, base);
+    L.push("OFF-PAGE SEO", ""); add("Links won and built", links, (it) => `${dayText(it.at)}: ${WORK_KIND_LABEL[it.kind]}: ${it.url || it.title}${it.target ? " (points to " + it.target + ")" : ""}${it.url ? ". " + it.title : ""}`); add("Google Business Profile", gbp, base); add("Other off-page work and research", offRest, base);
+    L.push("SOCIAL MEDIA", ""); add("Posts", posts, (it) => `${base(it)}${it.url ? " " + it.url : ""}`); add("Other social media work", socRest, base);
+    return L.join("\n");
+  };
+  const copy = async () => { try { await navigator.clipboard.writeText(asText()); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { setMsg("The report could not be copied. Select the text on the page instead."); } };
+  const tile = (label, value, hint) => <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{label}</div><div className="text-[20px] font-semibold text-gray-900">{value}</div><div className="text-[11px] text-gray-500">{hint}</div></div>;
+  const section = (key, Icon, count, children) => (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><Icon size={16} /></span><div className="text-[14px] font-semibold text-gray-900">{WORK_SECTION_LABEL[key]}</div><Chip>{count} in this period</Chip></div>
+      {children}
+    </Card>
+  );
+  return (
+    <>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><ClipboardList size={17} /></span>
+          <div className="min-w-[220px] flex-1">
+            <div className="text-[13.5px] font-semibold text-gray-900">Work done for {project.name}</div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">Everything that was done for this project: each task the agent finished, each change that was logged, what the agent recorded while working, and work you add yourself. {rp.total.toLocaleString()} in all{rp.firstAt ? `, since ${dayText(rp.firstAt)}` : ""}.</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2"><Btn ghost onClick={copy} disabled={!items.length}><Copy size={13} /> {copied ? "Copied" : "Copy as text"}</Btn><Btn accent={accent} onClick={() => setAdding({ section: "offpage", kind: "link_built", title: "", detail: "", url: "", target: "", platform: "", date: dayInput(Date.now()) })}><Plus size={13} /> Add work done</Btn></div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-gray-200 p-0.5" role="group" aria-label="Period">
+            {[["all", "All time"], ["month", "By month"], ["custom", "Custom dates"]].map(([k, label]) => <button key={k} type="button" aria-pressed={mode === k} onClick={() => setMode(k)} className="rounded-md px-3 py-1 text-[12.5px] font-semibold" style={mode === k ? { background: accent, color: "#fff" } : { color: "#4B5563" }}>{label}</button>)}
+          </div>
+          {mode === "month" && <select aria-label="Month" className={inputCls + " max-w-[200px]"} value={month} onChange={(e) => setMonth(e.target.value)}>{months.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select>}
+          {mode === "custom" && <span className="flex flex-wrap items-center gap-2 text-[12.5px] text-gray-600">from <input type="date" aria-label="From date" className={inputCls + " w-auto"} value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /> to <input type="date" aria-label="To date" className={inputCls + " w-auto"} value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></span>}
+          <span className="text-[12px] text-gray-500">{period} · {items.length.toLocaleString()} thing{items.length === 1 ? "" : "s"} done{busy ? " · loading…" : ""}</span>
+        </div>
+        {rp.more > 0 && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-[11.5px] text-amber-900">This period holds more than can be shown at once. The newest {rp.shown.toLocaleString()} are shown; choose a shorter period to see the rest.</div>}
+        {msg && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{msg}</div>}
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          {tile("Research and planning", research.length, "research runs and findings")}
+          {tile("Pages worked on", pages.length, `${onpage.length} on-page item${onpage.length === 1 ? "" : "s"}`)}
+          {tile("Links", links.length, "won, built or corrected")}
+          {tile("Business Profile", gbp.length, "posts, replies, edits, checks")}
+          {tile("Social media", social.length, `${posts.length} post${posts.length === 1 ? "" : "s"}`)}
+        </div>
+      </Card>
+
+      {section("research", Search, research.length, <>
+        {!research.length && none("No research or planning in this period.")}
+        {groups.map((g) => (
+          <details key={g.key} className="border-b border-gray-100 last:border-0" open={groups.length <= 3 || g.list.length <= 3}>
+            <summary className="flex cursor-pointer flex-wrap items-center gap-2 py-2 text-[13px] font-semibold text-gray-900">{g.key} <Chip>{g.list.length}</Chip><span className="text-[11.5px] font-normal text-gray-500">last on {dayText(g.list[0].at)}</span></summary>
+            <div className="pb-2 pl-1">{g.list.map((it) => row(it, { showKind: false }))}</div>
+          </details>
+        ))}
+        {notes.length > 0 && <>{sub("Research findings", "Single findings the agent or a person recorded: keywords, competitors, search results.")}{notes.map((it) => row(it))}</>}
+      </>)}
+
+      {section("onpage", FileText, onpage.length, <>
+        {!onpage.length && none("No on-page work in this period.")}
+        {pages.map((g) => (
+          <div key={g.key} className="mb-2 rounded-xl border border-gray-200">
+            <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2 text-[12.5px]">{/^https?:/.test(g.key) ? <LiveLink url={g.key} /> : <span className="font-medium text-gray-900">{g.key}</span>}<Chip>{g.list.length} thing{g.list.length === 1 ? "" : "s"} done</Chip></div>
+            <div className="px-2">{g.list.map((it) => row(it, { showLink: false }))}</div>
+          </div>
+        ))}
+        {noPage.length > 0 && <>{sub("Other on-page work", "Audits and work that covers the whole site or names no single page.")}{noPage.map((it) => row(it))}</>}
+      </>)}
+
+      {section("offpage", MapPin, offpage.length, <>
+        {!offpage.length && none("No off-page work in this period.")}
+        {links.length > 0 && <>{sub("Links won and built", "The live page that links, and the page it points to.")}{links.map((it) => row(it))}</>}
+        {gbp.length > 0 && <>{sub("Google Business Profile")}{gbp.map((it) => row(it))}</>}
+        {offRest.length > 0 && <>{sub("Other off-page work and research", "Link prospecting, citation checks, map-grid plans and other tasks.")}{offRest.map((it) => row(it))}</>}
+      </>)}
+
+      {section("social", Share2, social.length, <>
+        {!social.length && none("No social media work in this period.")}
+        {posts.length > 0 && <>{sub("Posts")}{posts.map((it) => <WorkRow key={it.id} it={{ ...it, title: (platformLabel(it.platform) ? platformLabel(it.platform) + ": " : "") + it.title }} onOpenTask={onOpenTask} onRemove={() => remove(it)} />)}</>}
+        {socRest.length > 0 && <>{sub("Other social media work", "Profile checks, content calendars and other tasks.")}{socRest.map((it) => row(it))}</>}
+      </>)}
+
+      {adding && (
+        <Modal title="Add work done" sub={`Work done for ${project.name} outside the agent, so the report is complete.`} onClose={() => setAdding(null)} wide>
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Labeled label="Part of the work"><select className={inputCls} value={adding.section} onChange={(e) => setAdding({ ...adding, section: e.target.value, kind: rp.kinds[e.target.value].filter((k) => k !== "task" && k !== "change")[0] })}>{Object.keys(WORK_SECTION_LABEL).map((k) => <option key={k} value={k}>{WORK_SECTION_LABEL[k]}</option>)}</select></Labeled>
+              <Labeled label="What kind"><select className={inputCls} value={adding.kind} onChange={(e) => setAdding({ ...adding, kind: e.target.value })}>{rp.kinds[adding.section].filter((k) => k !== "task" && k !== "change").map((k) => <option key={k} value={k}>{WORK_KIND_LABEL[k] || k}</option>)}</select></Labeled>
+              <Labeled label="Date"><input type="date" className={inputCls} value={adding.date} max={dayInput(Date.now())} onChange={(e) => setAdding({ ...adding, date: e.target.value })} /></Labeled>
+            </div>
+            <Labeled label="What was done"><input className={inputCls} placeholder={adding.section === "offpage" ? "Guest article published on the Leeds Chamber of Commerce site" : "Rewrote the boiler repair page around emergency call-outs"} value={adding.title} onChange={(e) => setAdding({ ...adding, title: e.target.value })} autoFocus /></Labeled>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Labeled label={adding.section === "offpage" ? "Live link (the page that links)" : adding.section === "social" ? "Link to the post" : "Live page link"}><input className={inputCls} placeholder="https://" value={adding.url} onChange={(e) => setAdding({ ...adding, url: e.target.value })} /></Labeled>
+              {adding.section === "social"
+                ? <Labeled label="Platform"><select className={inputCls} value={adding.platform} onChange={(e) => setAdding({ ...adding, platform: e.target.value })}><option value="">Not one platform</option>{(rp.platforms || []).map((pf) => <option key={pf.key} value={pf.key}>{pf.label}</option>)}</select></Labeled>
+                : <Labeled label={adding.section === "offpage" ? "Page on the site it points to (optional)" : "Page or part of the site (optional)"}><input className={inputCls} placeholder="/boiler-repair/" value={adding.target} onChange={(e) => setAdding({ ...adding, target: e.target.value })} /></Labeled>}
+            </div>
+            <Labeled label="Short description (optional)"><textarea className={inputCls + " resize-y"} rows={2} value={adding.detail} onChange={(e) => setAdding({ ...adding, detail: e.target.value })} /></Labeled>
+            {msg && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{msg}</div>}
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn accent={accent} disabled={busy || adding.title.trim().length < 4} onClick={async () => { const at = adding.date === dayInput(Date.now()) ? Date.now() : new Date(adding.date + "T12:00:00").getTime(); const o = await run("work", { action: "add", section: adding.section, kind: adding.kind, title: adding.title, detail: adding.detail, url: adding.url.trim(), target: adding.target, platform: adding.platform, at }); if (o) setAdding(null); }}><Check size={13} /> Add to the report</Btn>
+              <Btn ghost onClick={() => { setAdding(null); setMsg(""); }}>Cancel</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

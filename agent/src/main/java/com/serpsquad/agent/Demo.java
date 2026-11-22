@@ -83,6 +83,7 @@ final class Demo {
     private final Map<String, ObjectNode> brands = new HashMap<>();
     private final Map<String, List<ObjectNode>> lessons = new HashMap<>();
     private final List<ObjectNode> knowledge = new ArrayList<>();
+    private final Map<String, List<ObjectNode>> work = new HashMap<>();
     /* projects put on the list during this demo (imported from the made-up CRM, or added by hand), and sample projects taken off it */
     private final List<ObjectNode> extras = new ArrayList<>();
     private final java.util.Set<String> hidden = new java.util.HashSet<>();
@@ -108,6 +109,7 @@ final class Demo {
         seedBrands();
         seedLessons();
         seedKnowledge();
+        seedWork();
         log("task", "Office PC finished \"Daily check: Northgate Plumbing & Heating\".", 34);
         log("approval", "\"Business Profile post: winter boiler servicing\" is waiting for approval.", 96);
         log("settings", "You changed agent settings for Harbour Dental Clinic.", 400);
@@ -697,6 +699,7 @@ final class Demo {
             setting.set("checks", checksOf(pid));
             p.set("setting", setting);
             p.set("brand", brandSummary(pid));
+            p.put("workItems", work.getOrDefault(pid, List.of()).size());
             p.putObject("learning").put("lessons", lessons.getOrDefault(pid, List.of()).size()).put("done", doneOf(pid));
             ObjectNode tt = p.putObject("tasks");
             for (Map.Entry<String, ObjectNode> e : taskSetting.get(pid).entrySet()) {
@@ -1140,6 +1143,88 @@ final class Demo {
         }
     }
 
+    // ---------- work report (sample data, same shape as the CRM's answers) ----------
+
+    private static final Map<String, String> RESEARCH_LABEL = Map.of("morning_check", "Daily ranking checks", "rank_drop", "Ranking and search results diagnosis", "google_updates", "Google update watch", "competitor_watch", "Competitor research",
+        "gsc_opportunities", "Keyword research (Search Console)", "content_brief", "Content gaps and planning", "ai_visibility", "AI search research", "monthly_plan", "Monthly planning", "report_draft", "Reporting", "custom", "Other research and tasks");
+
+    private ObjectNode w(String pid, long daysAgo, String section, String kind, String title, String detail, String url, String target, String platform, String type) {
+        ObjectNode it = Json.obj();
+        it.put("id", "wk_demo" + (++ids)).put("at", System.currentTimeMillis() - daysAgo * DAY - (daysAgo > 0 ? (ids % 9) * HOUR : 0)).put("section", section).put("kind", kind).put("title", title).put("detail", detail).put("url", url).put("target", target).put("platform", platform)
+            .put("type", type).put("typeLabel", type.isEmpty() ? "" : section.equals("research") && RESEARCH_LABEL.containsKey(type) ? RESEARCH_LABEL.get(type) : label(type)).putNull("taskId");
+        it.put("by", "AI agent").put("source", "agent");
+        work.computeIfAbsent(pid, (k) -> new ArrayList<>()).add(it);
+        return it;
+    }
+
+    private void seedWork() {
+        String site = "https://northgateplumbing.example", p = "p1";
+        /* research and planning, over the last four months */
+        for (int d = 1; d <= 118; d += 3) w(p, d, "research", "task", "Daily check: Northgate Plumbing & Heating", d % 9 == 1 ? "Action needed: boiler repair leeds fell from 4 to 14 across two scans." : d % 6 == 1 ? "Two keywords entered the top 10: emergency plumber leeds and boiler service headingley." : "All quiet. No keyword moved more than two positions.", "", "", "", "morning_check");
+        for (int d = 5; d <= 118; d += 7) w(p, d, "research", "task", "Competitor watch", d % 14 == 5 ? "Aire Valley Plumbing added six location pages and gained two map pack positions in Horsforth." : "No competitor gained or lost more than one position on the tracked keywords.", "", "", "", "competitor_watch");
+        for (int d = 12; d <= 118; d += 30) w(p, d, "research", "task", "Search Console opportunities", "Seven striking-distance queries and two pages losing clicks. Best next step: the boiler repair title.", "", "", "", "gsc_opportunities");
+        for (int d = 20; d <= 118; d += 31) w(p, d, "research", "task", "Monthly plan", "Three priorities for next month: emergency call-out page, eight new reviews, two local links.", "", "", "", "monthly_plan");
+        w(p, 33, "research", "task", "Rank-drop diagnosis: boiler repair leeds", "Cause found: the page lost its H1 and intro in the 12 Nov template change. Restoring them is the fix.", site + "/boiler-repair/", "", "", "rank_drop");
+        w(p, 47, "research", "task", "Content gaps and briefs", "Brief written for a combi boiler replacement cost page: 1,200 words, price table, three FAQs.", "", "", "", "content_brief");
+        w(p, 14, "research", "task", "Google update watch", "No confirmed Google update in the last 14 days.", "", "", "", "google_updates");
+        w(p, 12, "research", "keywords", "14 striking-distance keywords found for boiler repair and servicing", "Positions 6 to 15 with 40 or more impressions a month. Five need only a better title.", "", "", "", "");
+        w(p, 40, "research", "competitors", "Three competitors outrank the client in the Headingley map pack", "All three have over 150 reviews and list boiler servicing as a service on their profile.", "", "", "", "");
+        w(p, 33, "research", "serp", "Search results for boiler repair leeds now show a price box", "Four of the top five pages state a price range in the first screen.", "", "", "", "");
+        /* on-page, by page */
+        w(p, 30, "onpage", "page_change", "Restored the H1 and the opening paragraph", "They were lost in the template change. Approved and applied in the page editor.", site + "/boiler-repair/", "", "", "site_edit");
+        w(p, 26, "onpage", "meta", "New title and meta description", "Title now leads with \"Boiler repair in Leeds\" and the 24 hour call-out.", site + "/boiler-repair/", "", "", "meta_rewrite");
+        w(p, 19, "onpage", "internal_links", "Added four internal links from service pages", "From boiler servicing, emergency plumber, landlord certificates and the home page.", site + "/boiler-repair/", "", "", "internal_links");
+        w(p, 44, "onpage", "content", "Rewrote the page around emergency call-outs", "900 words, call-out price in the first paragraph, three customer questions answered.", site + "/emergency-plumber/", "", "", "content_draft");
+        w(p, 9, "onpage", "page_change", "Added the Gas Safe number and a price range", "Both now sit above the fold.", site + "/emergency-plumber/", "", "", "site_edit");
+        w(p, 61, "onpage", "content", "New page written and published", "Location page for Headingley with two local job photos.", site + "/bathroom-fitting-headingley/", "", "", "content_draft");
+        w(p, 75, "onpage", "technical", "Fixed two broken links and a missing image", "", site + "/landlord-gas-safety/", "", "", "site_health");
+        w(p, 7, "onpage", "task", "Site health check", "All key pages load. One form on the contact page does not send; a person has to check the mail settings.", "", "", "", "site_health");
+        w(p, 38, "onpage", "task", "On-page audit: combi boiler replacement", "Page is thin against what ranks: 380 words against about 1,100. Six changes proposed.", site + "/combi-boiler-replacement/", "", "", "onpage_audit");
+        /* off-page: links, the Business Profile, research */
+        w(p, 21, "offpage", "link_won", "Member profile with a link, after joining the local chamber", "", "https://leedschamber.example/members/northgate-plumbing", site + "/", "", "");
+        w(p, 52, "offpage", "link_built", "Supplier's approved-installer page now lists and links the client", "", "https://heatwellboilers.example/installers/leeds", site + "/boiler-installation/", "", "");
+        w(p, 83, "offpage", "link_won", "Mention in a local news piece about winter boiler checks turned into a link", "", "https://northleedsnews.example/winter-boiler-checks", site + "/boiler-servicing/", "", "");
+        w(p, 28, "offpage", "citation", "Phone number corrected on the trade directory listing", "It still showed the old 0113 number.", "https://tradefinder.example/northgate-plumbing-leeds", "", "", "");
+        w(p, 64, "offpage", "citation", "Duplicate listing merged", "", "https://localpages.example/leeds/northgate-plumbing", "", "", "");
+        for (int d = 3; d <= 115; d += 7) w(p, d, "offpage", "gbp_post", d % 14 == 3 ? "Post published: winter boiler servicing in Leeds" : "Post published: a finished bathroom in Horsforth", "Approved text, with the phone number and a job photo.", "", "", "", "gbp_post");
+        for (int d = 6; d <= 110; d += 13) w(p, d, "offpage", "review_reply", "Replied to " + (2 + d % 3) + " new reviews", "All four and five stars. Signed with the engineer's first name.", "", "", "", "gbp_review_reply");
+        w(p, 58, "offpage", "gbp_edit", "Added landlord gas safety certificates as a service", "", "", "", "", "gbp_update");
+        w(p, 16, "offpage", "task", "Business Profile optimization audit", "Five edits proposed. Biggest gap: two service categories the top three competitors all have.", "", "", "", "gbp_audit");
+        w(p, 24, "offpage", "task", "Backlink prospects and outreach drafts", "Eight realistic prospects with a drafted email each. Two are suppliers that list installers.", "", "", "", "backlink_prospects");
+        w(p, 36, "offpage", "task", "Citation and link monitor", "Name, address and phone match on eleven of thirteen listings. Two corrections needed.", "", "", "", "citations_links");
+        w(p, 50, "offpage", "task", "Geo-grid action plan", "Weak zone to the south-east for two keywords; a service-area page for Morley is the fix.", "", "", "", "geogrid_plan");
+        /* social media */
+        for (int d = 2; d <= 100; d += 9) w(p, d, "social", "post_published", d % 18 == 2 ? "Before and after: a combi boiler swap in Pudsey" : "Five signs your boiler needs a service before winter", "", "https://www.facebook.com/northgateplumbing/posts/" + (40000 + d * 37), "", d % 18 == 2 ? "facebook" : "instagram", "social_publish");
+        w(p, 1, "social", "post_drafted", "Three posts drafted for next week", "Waiting for two job photos from the client.", "", "", "", "social_post");
+        for (int d = 10; d <= 100; d += 30) w(p, d, "social", "task", "Content calendar", "Twelve posts planned across Facebook and Instagram. Photos requested for four of them.", "", "", "", "social_calendar");
+        w(p, 13, "social", "task", "Social profile check", "Facebook posts weekly; Instagram went quiet for 19 days in October.", "", "", "", "social_watch");
+        /* a second project, lighter */
+        String s2 = "https://harbourdental.example";
+        for (int d = 2; d <= 60; d += 4) w("p2", d, "research", "task", "Daily check: Harbour Dental Clinic", "All quiet. Two keywords entered the top 10.", "", "", "", "morning_check");
+        w("p2", 11, "onpage", "content", "Pricing guide written for dental implants", "Draft ready for the dentist to confirm three figures.", s2 + "/dental-implants-cost/", "", "", "content_draft");
+        w("p2", 18, "offpage", "review_reply", "Replied to 6 new reviews", "", "", "", "", "gbp_review_reply");
+        w("p2", 25, "offpage", "link_built", "Listed on the regional dental association's find-a-dentist page", "", "https://yorkshiredental.example/find-a-dentist/harbour", s2 + "/", "", "");
+    }
+
+    private ObjectNode reportOf(String pid, JsonNode body) {
+        long from = body.path("from").asLong(0), to = body.path("to").asLong(0);
+        List<ObjectNode> all = new ArrayList<>(work.getOrDefault(pid, List.of()));
+        all.sort((a, b) -> Long.compare(b.path("at").asLong(), a.path("at").asLong()));
+        ObjectNode out = Json.obj();
+        ArrayNode items = out.putArray("items");
+        long first = 0;
+        for (ObjectNode it : all) {
+            long at = it.path("at").asLong();
+            if (first == 0 || at < first) first = at;
+            if (at >= from && (to == 0 || at <= to)) items.add(it);
+        }
+        out.put("ok", true).put("projectId", pid).put("from", from).put("to", to).put("firstAt", first).put("total", all.size()).put("shown", items.size()).put("more", 0);
+        out.set("kinds", Json.parse("{\"research\":[\"task\",\"keywords\",\"competitors\",\"serp\",\"rankings\",\"audit\",\"plan\",\"other\"],\"onpage\":[\"task\",\"page_change\",\"content\",\"meta\",\"technical\",\"internal_links\",\"change\",\"other\"],"
+            + "\"offpage\":[\"task\",\"link_won\",\"link_built\",\"citation\",\"outreach\",\"gbp_post\",\"review_reply\",\"gbp_edit\",\"change\",\"other\"],\"social\":[\"task\",\"post_published\",\"post_drafted\",\"calendar\",\"engagement\",\"change\",\"other\"]}"));
+        out.set("platforms", catalogFile.path("platforms"));
+        return out;
+    }
+
     private ObjectNode findTask(String id) {
         for (ObjectNode t : tasks) if (t.path("id").asText().equals(id)) return t;
         return null;
@@ -1246,6 +1331,21 @@ final class Demo {
             case "brand": return brandEdit(pid, body);
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
+            case "report": return known(pid) ? new Reply(200, reportOf(pid, body)) : bad(404, "Unknown project.");
+            case "work": {
+                if (!known(pid)) return bad(404, "Unknown project.");
+                List<ObjectNode> list = work.computeIfAbsent(pid, (k) -> new ArrayList<>());
+                if (body.path("action").asText().equals("add")) {
+                    if (body.path("title").asText("").trim().length() < 4) return bad(400, "Say what was done.");
+                    String url = body.path("url").asText("").trim();
+                    if (!url.isEmpty() && !url.matches("(?i)https?://\\S+")) return bad(400, "That link is not a web address. It should start with https://");
+                    ObjectNode it = w(pid, 0, body.path("section").asText("research"), body.path("kind").asText("other"), body.path("title").asText("").trim(), body.path("detail").asText("").trim(), url, body.path("target").asText("").trim(), body.path("platform").asText(""), "");
+                    it.put("at", body.path("at").asLong(System.currentTimeMillis())).put("by", "Office PC (agent's computer)").put("source", "manual");
+                } else if (body.path("action").asText().equals("remove")) {
+                    if (!list.removeIf((x) -> x.path("id").asText().equals(body.path("id").asText()))) return bad(404, "That entry is no longer in the report.");
+                } else return bad(400, "Unknown action.");
+                return new Reply(200, reportOf(pid, body));
+            }
             case "logos": {
                 ObjectNode out = Json.obj();
                 out.put("ok", true);

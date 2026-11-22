@@ -226,6 +226,15 @@ profile folder; closing the window also closes the local control port, so a
 signed-in session is never left open to other programs between tasks. A
 Chrome left over from a crash is closed, never reused.
 
+### The report
+
+Each project has a Report tab: everything done for it, by period (all time,
+a month, or custom dates) and by section (research and planning, on-page with
+the live page links, off-page with links won and built, social media). The
+agent adds to it by itself: every finished task, every logged change, and
+single items it records with the `log_work` tool. People add work done
+outside the agent there too.
+
 ### Knowledge for every project
 
 The Knowledge screen holds the agency's own documents: methods, standards,
