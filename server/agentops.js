@@ -243,7 +243,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "check", "lesson", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -253,14 +253,40 @@ const BAD_DEVICE = [401, { error: "bad_device", detail: "Unknown or revoked devi
 
 /* ---------- projects (read-only view of the workspace) ---------- */
 export const AGENCY_PROJECT = "_agency";
+/* A project's logo as the CRM holds it (its own, else its client's): a small
+   image kept as a data: address. The project list carries only a fingerprint
+   of it, so the list stays light however often it is read; the images
+   themselves are fetched once, and again only when a fingerprint changes. */
+const LOGO_OK = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+const logoMemo = new Map();                  // project id -> { raw, logo, rev }
+function logoOf(p, c) {
+  const raw = p.logo || c.logo || "";
+  const m = logoMemo.get(p.id);
+  if (m && m.raw === raw) return m;
+  const logo = typeof raw === "string" && raw.length < 600000 && LOGO_OK.test(raw) ? raw : "";
+  const made = { raw, logo, rev: logo ? sha(logo).slice(0, 12) : "" };
+  logoMemo.set(p.id, made);
+  return made;
+}
+const accentOf = (p) => (/^#[0-9a-f]{6}$/i.test(String(p.accent || "")) ? p.accent : "");
 function projectList() {
   const core = deps.readDocCached("core", null);
   const out = [];
   for (const c of core?.clients || []) for (const p of c.projects || []) {
     if (p.archived) continue;
-    out.push({ id: p.id, name: p.name || "Project", client: c.name || "", demo: p.demoMode !== false });
+    out.push({ id: p.id, name: p.name || "Project", client: c.name || "", demo: p.demoMode !== false, accent: accentOf(p), logoRev: logoOf(p, c).rev });
   }
   return out;
+}
+function logosGet(body) {
+  const want = new Set((Array.isArray(body?.ids) ? body.ids : []).slice(0, 300).map(String)), logos = {};
+  let size = 0;
+  for (const c of deps.readDocCached("core", null)?.clients || []) for (const p of c.projects || []) {
+    if (p.archived || !want.has(p.id)) continue;
+    const { logo } = logoOf(p, c);
+    if (logo && size + logo.length < 12e6) { logos[p.id] = logo; size += logo.length; }
+  }
+  return [200, { ok: true, logos }];
 }
 function projectOf(id) {
   if (id === AGENCY_PROJECT) return { id, name: "Agency (no project)", client: "", demo: false, raw: null, clientRaw: null };
@@ -1761,6 +1787,7 @@ export async function agentOpsPost(req, body) {
     case "chat/clear": return chatClear(admin, body || {});
     case "direction": return directionEdit(admin, body || {});
     case "brand": return brandEdit(admin, body || {});
+    case "logos": return logosGet(body || {});
     case "check": return checkRequest(admin, body || {});
     case "lesson": return lessonEdit(admin, body || {});
     case "task/feedback": return taskFeedback(admin, body || {});

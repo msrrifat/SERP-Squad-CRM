@@ -35,6 +35,23 @@ const STATUS = {
 };
 const SEV = { high: ["#B91C1C", "#FEE2E2"], medium: ["#B45309", "#FEF3C7"], low: ["#1D4ED8", "#DBEAFE"], info: ["#6B7280", "#F3F4F6"] };
 const NEEDS = { web: "Web research", google: "Google browser", browser: "Browser" };
+/* Project logos, as the CRM holds them. The project list carries only a
+   fingerprint per project; the images are fetched once (and again when a
+   fingerprint changes) and handed down through this context. */
+const LogoCtx = React.createContext({});
+function ProjectLogo({ project, size = 36, dot = null }) {
+  const src = React.useContext(LogoCtx)[project.id]?.src || "";
+  const initials = project.id === "_agency" ? "A" : (project.name || "P").replace(/[^A-Za-z0-9 ]/g, "").split(" ").filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "P";
+  const box = { width: size, height: size, borderRadius: Math.round(size * 0.28) };
+  return (
+    <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+      {src
+        ? <img src={src} alt={`${project.name} logo`} className="border border-gray-200 bg-white object-contain" style={box} />
+        : <span aria-hidden="true" className="flex items-center justify-center font-bold text-white" style={{ ...box, background: project.accent || "#64748B", fontSize: Math.max(9, Math.round(size * 0.38)) }}>{initials}</span>}
+      {dot != null && <span className="absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-white" style={{ width: Math.max(9, Math.round(size * 0.3)), height: Math.max(9, Math.round(size * 0.3)), background: dot ? "#16A34A" : "#D1D5DB" }} title={dot ? "Agent switched on" : "Agent not switched on"} />}
+    </span>
+  );
+}
 const Chip = ({ children, fg = "#6B7280", bg = "#F3F4F6" }) => <span className="inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-semibold" style={{ color: fg, background: bg }}>{children}</span>;
 const Btn = ({ children, onClick, accent, ghost, danger, disabled, title, type = "button" }) => (
   <button type={type} title={title} onClick={onClick} disabled={disabled}
@@ -64,6 +81,7 @@ export function AgentOpsSection({ company, app = null }) {
   const [openTask, setOpenTask] = useState(null);
   const [chatPid, setChatPid] = useState("");
   const [inProject, setInProject] = useState(false);
+  const [logos, setLogos] = useState({});       // project id -> { rev, src }
 
   const load = useCallback(async () => {
     try { setData(await api("overview")); setErr(""); } catch (e) { setErr(String(e.message || e)); }
@@ -81,6 +99,16 @@ export function AgentOpsSection({ company, app = null }) {
     finally { setBusy(false); }
   }, []);
 
+  /* fetch the logos that are new or changed since the last look; a project without one shows its initials */
+  const wantLogos = data ? data.projects.filter((p) => p.logoRev && logos[p.id]?.rev !== p.logoRev).map((p) => p.id + ":" + p.logoRev).join(",") : "";
+  useEffect(() => {
+    if (!wantLogos) return undefined;
+    let off = false;
+    const ids = wantLogos.split(",").map((x) => { const i = x.lastIndexOf(":"); return [x.slice(0, i), x.slice(i + 1)]; });
+    api("logos", { ids: ids.map((x) => x[0]) }).then((o) => { if (!off) setLogos((cur) => { const next = { ...cur }; for (const [id, rev] of ids) next[id] = { rev, src: /^data:image\//.test(o.logos?.[id] || "") ? o.logos[id] : "" }; return next; }); }).catch(() => { /* initials are shown instead */ });
+    return () => { off = true; };
+  }, [wantLogos]);
+
   const toApprove = data ? data.tasks.filter((t) => t.status === "needs_approval").length : 0;
   useEffect(() => { if (app?.onCounts) app.onCounts({ approvals: toApprove }); }, [toApprove]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!data) {
@@ -92,6 +120,7 @@ export function AgentOpsSection({ company, app = null }) {
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
+    <LogoCtx.Provider value={logos}>
     <div className="space-y-4">
       {err && <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{err}</div>}
 
@@ -147,6 +176,7 @@ export function AgentOpsSection({ company, app = null }) {
       {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
     </div>
+    </LogoCtx.Provider>
   );
 }
 
@@ -237,8 +267,8 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
             return (
               <button key={p.id} type="button" onClick={() => go({ pid: p.id, tab: "settings" })} className="group rounded-2xl border border-gray-200 bg-white p-4 text-left transition-shadow hover:border-gray-300 hover:shadow-md">
                 <div className="flex items-start gap-2.5">
-                  <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: p.setting.enabled ? "#16A34A" : "#D1D5DB" }} title={p.setting.enabled ? "Agent switched on" : "Agent not switched on"} />
-                  <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-gray-900">{p.name}</span><span className="block truncate text-[11.5px] text-gray-500">{agency ? "Agency-level tasks, such as prospect audits" : p.client || "No client name"}</span></span>
+                  <ProjectLogo project={p} size={40} dot={p.setting.enabled} />
+                  <span className="min-w-0 flex-1 self-center"><span className="block truncate text-[14px] font-semibold text-gray-900">{p.name}</span><span className="block truncate text-[11.5px] text-gray-500">{agency ? "Agency-level tasks, such as prospect audits" : p.client || "No client name"}</span></span>
                   <ChevronRight size={18} className="mt-0.5 shrink-0 text-gray-300 group-hover:text-gray-500" />
                 </div>
                 <div className="mt-3 text-[12px] text-gray-700">{p.setting.enabled ? <><b>{fmtTok(p.usage.month)}</b>{cap ? ` of ${fmtTok(cap)}` : ""} tokens this month</> : <span className="text-gray-400">The agent is not switched on for this project</span>}</div>
@@ -282,8 +312,8 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
         <div role="navigation" className="flex min-w-[200px] flex-1 items-center gap-1.5 text-[13px]" aria-label="Where you are">
           <button type="button" className="shrink-0 rounded-md px-1.5 py-1 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-900" onClick={() => go({ pid: "", tab: "settings" })}>Projects</button>
           <ChevronRight size={14} className="shrink-0 text-gray-300" />
-          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: draft.enabled ? "#16A34A" : "#D1D5DB" }} title={draft.enabled ? "Agent switched on" : "Agent not switched on"} />
-          <span className="min-w-0 truncate font-semibold text-gray-900">{project.name}</span>
+          <ProjectLogo project={project} size={26} dot={draft.enabled} />
+          <span className="ml-1 min-w-0 truncate font-semibold text-gray-900">{project.name}</span>
           {dirty && <Chip fg="#B45309" bg="#FEF3C7">Unsaved changes</Chip>}
         </div>
         {others.length > 0 && (
@@ -310,9 +340,12 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
         )}
         <Card className="p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-[15px] font-semibold text-gray-900">{project.name}</div>
-              <div className="text-[11.5px] text-gray-500">{project.client || "Agency-level tasks"}{project.demo ? " · demo data (the agent says so in its reports)" : ""}</div>
+            <div className="flex min-w-0 items-center gap-3">
+              <ProjectLogo project={project} size={48} />
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-semibold text-gray-900">{project.name}</div>
+                <div className="text-[11.5px] text-gray-500">{project.client || "Agency-level tasks"}{project.demo ? " · demo data (the agent says so in its reports)" : ""}</div>
+              </div>
             </div>
             <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={draft.enabled} label="Agent enabled for this project" onChange={(v) => set({ enabled: v })} /> Agent works on this project</label>
           </div>
@@ -1265,7 +1298,7 @@ function PhoneChat({ c, project, accent }) {
       <div className="absolute left-1/2 top-5 z-10 h-[22px] w-[92px] -translate-x-1/2 rounded-full bg-[#0B1020]" />
       <div className="flex h-full flex-col overflow-hidden rounded-[32px] bg-gray-50">
         <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-3.5 pb-2.5 pt-10">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]" style={{ background: accent, color: "#fff" }}><Bot size={17} /></span>
+          <ProjectLogo project={project} size={32} />
           <div className="min-w-0">
             <div className="truncate text-[13.5px] font-semibold leading-tight text-gray-900">{project.name}</div>
             <div className="truncate text-[11px]" style={{ color: line?.tone || "#9CA3AF" }}>{line?.short || "Loading…"}</div>
