@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -116,7 +116,7 @@ export function AgentOpsSection({ company, app = null }) {
   }
   const g = data.global;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
-  const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
+  const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["knowledge", `Knowledge${data.knowledge?.docs ? ` (${data.knowledge.docs})` : ""}`, Library], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
@@ -172,6 +172,7 @@ export function AgentOpsSection({ company, app = null }) {
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
+      {view === "knowledge" && <KnowledgeView data={data} accent={accent} goTasks={() => setView("tasks")} />}
       {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
       {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
@@ -1558,6 +1559,162 @@ function ApiSetupView({ data, accent, act, busy }) {
 }
 
 /* ---------------- playbooks ---------------- */
+/* ---------------- agency knowledge: documents the agent studies and applies to every project ---------------- */
+const STUDY = { studied: ["Key points ready", "#15803D", "#DCFCE7"], studying: ["The agent is studying it now", "#1D4ED8", "#DBEAFE"], waiting: ["Waiting to be studied", "#B45309", "#FEF3C7"], failed: ["Study did not finish", "#B91C1C", "#FEE2E2"], none: ["Not studied yet", "#6B7280", "#F3F4F6"] };
+function KnowledgeRow({ d, scopes, busy, accent, onUpdate, onStudy, onView, onRemove }) {
+  const [note, setNote] = useState(d.note);
+  const [open, setOpen] = useState(false);
+  const [points, setPoints] = useState(d.digest);
+  useEffect(() => { setNote(d.note); }, [d.note]);
+  useEffect(() => { setPoints(d.digest); }, [d.digest]);
+  const [label, fg, bg] = STUDY[d.study.state] || STUDY.none;
+  const active = d.study.state === "studying" || d.study.state === "waiting";
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <FileText size={16} className="shrink-0 text-gray-400" />
+        <div className="min-w-[180px] flex-1">
+          <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-gray-900"><span className="break-all">{d.name}</span><Chip fg={fg} bg={bg}>{label}</Chip></div>
+          <div className="text-[11px] text-gray-500">{d.words.toLocaleString()} words · added {relTime(d.addedAt)}{d.by ? ` by ${d.by}` : ""}{d.digestAt ? ` · key points written ${relTime(d.digestAt)}${d.digestBy ? ` by ${d.digestBy}` : ""}` : ""}</div>
+        </div>
+        <select aria-label={`Area of work for ${d.name}`} className={inputCls + " max-w-[200px]"} value={d.scope} disabled={busy} onChange={(e) => onUpdate({ scope: e.target.value })} title="Which tasks are given this document. All work means every task on every project.">
+          {scopes.map((x) => <option key={x.key} value={x.key}>{x.key === "all" ? "For all work" : `Only ${x.label}`}</option>)}
+        </select>
+        <div className="flex items-center gap-1.5">
+          <Btn ghost disabled={busy || active} onClick={onStudy} title="The agent reads the whole document and writes down its key points. Uses tokens."><GraduationCap size={13} /> {d.digest ? "Study again" : "Study"}</Btn>
+          <Btn ghost onClick={onView} title="Read the text the agent sees"><Eye size={13} /> View</Btn>
+          <Btn ghost danger disabled={busy} onClick={onRemove} title="Remove this document"><Trash2 size={13} /></Btn>
+        </div>
+      </div>
+      {(d.study.state === "waiting" || d.study.state === "failed") && d.study.detail && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-[11.5px] text-amber-900">{d.study.state === "waiting" ? "Waiting: " : ""}{d.study.detail}</div>}
+      <input aria-label={`What ${d.name} is for`} className={inputCls + " mt-2"} placeholder="What it is and when to use it (helps the agent know when to open it)" value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => { if (note.trim() !== d.note) onUpdate({ note: note.trim() }); }} />
+      <div className="mt-2">
+        <button type="button" className="text-[12px] font-semibold" style={{ color: accent }} onClick={() => setOpen(!open)}>{open ? "Hide the key points" : d.digest ? "Show the key points every task is given" : "Write the key points yourself"}</button>
+        {!open && d.digest && <div className="mt-1 line-clamp-2 whitespace-pre-line text-[12px] text-gray-600">{d.digest}</div>}
+        {open && (
+          <div className="mt-2">
+            <textarea className={inputCls + " resize-y font-mono text-[12px]"} rows={7} placeholder={"One key point per line, written as an instruction.\nFor example: Put the service and the town in the first 50 characters of a title."} value={points} onChange={(e) => setPoints(e.target.value)} />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Btn accent={accent} disabled={busy || points.trim() === d.digest.trim()} onClick={() => onUpdate({ digest: points })}><Check size={13} /> Save key points</Btn>
+              <span className="text-[11px] text-gray-400">{points.length.toLocaleString()} of 1,500 characters. These are what every task is given; the full document is opened when needed.</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+function KnowledgeView({ data, accent, goTasks }) {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [scope, setScope] = useState("all");
+  const [study, setStudy] = useState(true);
+  const [paste, setPaste] = useState(null);
+  const [view, setView] = useState(null);
+  const [told, setTold] = useState(false);
+  const run = async (body, quiet) => {
+    if (!quiet) { setBusy(true); setMsg(null); }
+    try { const o = await api("knowledge", body); setSt(o); return o; }
+    catch (e) { if (!quiet) setMsg({ ok: false, text: String(e.message || e) }); return null; }
+    finally { if (!quiet) setBusy(false); }
+  };
+  useEffect(() => { run({ action: "list" }); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* while the agent is studying, look for its key points every few seconds */
+  const active = !!st && st.docs.some((d) => d.study.state === "studying" || d.study.state === "waiting");
+  useEffect(() => { if (!active) return undefined; const t = setInterval(() => run({ action: "list" }, true), 4000); return () => clearInterval(t); }, [active]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!st) return <Card className="p-4 text-[13px] text-gray-500">{msg ? msg.text : "Loading the knowledge…"}</Card>;
+
+  const add = async (name, text, note) => {
+    const o = await run({ action: "add", name, text, note, scope, study });
+    if (o) setMsg({ ok: true, text: `"${name}" was ${o.replaced ? "replaced" : "added"}.${study ? " The agent will study it now and write down its key points." : " It is not studied yet: press Study, or write its key points yourself."}` });
+    return !!o;
+  };
+  const addFiles = async (list) => {
+    for (const f of [...list]) {
+      try {
+        if (/\.pdf$/i.test(f.name) || f.type === "application/pdf") throw new Error(`${f.name}: PDF files cannot be read here. Copy the text out of the PDF and use Paste text, or save it as Word or plain text.`);
+        if (/\.doc$/i.test(f.name)) throw new Error(`${f.name}: old Word files (.doc) cannot be read. Save it as .docx and upload that.`);
+        if (f.size > 8e6) throw new Error(`${f.name} is larger than 8 MB.`);
+        const isDocx = /\.docx$/i.test(f.name);
+        if (!isDocx && !/\.(txt|md|markdown)$/i.test(f.name) && !f.type.startsWith("text/")) throw new Error(`${f.name}: upload a .docx, .txt or .md file, or use Paste text.`);
+        if (!(await add(f.name, isDocx ? await docxToText(await f.arrayBuffer()) : await f.text(), ""))) break;
+      } catch (e) { setMsg({ ok: false, text: String(e.message || e) }); break; }
+    }
+  };
+  const openDoc = async (d) => {
+    setView({ name: d.name, text: "", loading: true });
+    try { const o = await api("knowledge", { action: "doc", id: d.id }); setView({ name: o.name, text: o.text, truncated: o.truncated, words: o.words }); }
+    catch (e) { setView({ name: d.name, text: String(e.message || e) }); }
+  };
+  const remove = async (d) => { if (await askConfirm({ title: "Remove this document?", message: `"${d.name}" and its key points will be removed. The agent will no longer know it, on any project.`, confirmLabel: "Yes, remove it", danger: true })) run({ action: "remove", id: d.id }); };
+  const studied = st.docs.filter((d) => d.digest).length;
+  const agencyOff = !data.global.enabled || data.global.paused;
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><Library size={17} /></span>
+          <div className="min-w-[220px] flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold text-gray-900">Knowledge for every project <Chip>{st.docs.length} document{st.docs.length === 1 ? "" : "s"} · {studied} studied</Chip></div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">Upload your agency's own material here: how you work, your standards, checklists, guides and training documents. The agent studies each document and writes down its key points. Every task and chat answer, on every project, is then given those key points and can open the full document. Where a project's Brand voice or a direction says something else, the project's own instruction wins.</div>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <label className={"inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold text-white " + (busy ? "pointer-events-none opacity-50" : "")} style={{ background: accent }}>
+            <Upload size={13} /> Upload documents
+            <input type="file" accept=".docx,.txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(e) => { const files = e.target.files; addFiles(files); e.target.value = ""; }} />
+          </label>
+          <Btn ghost disabled={busy} onClick={() => setPaste(paste ? null : { name: "", note: "", text: "" })}><Plus size={13} /> Paste text</Btn>
+          <select aria-label="Area of work for new documents" className={inputCls + " max-w-[210px]"} value={scope} onChange={(e) => setScope(e.target.value)} title="Which tasks are given the documents you add now">
+            {st.scopes.map((x) => <option key={x.key} value={x.key}>{x.key === "all" ? "For all work" : `Only ${x.label}`}</option>)}
+          </select>
+          <label className="flex items-center gap-1.5 text-[12px] text-gray-700" title="The agent reads the whole document once and writes down its key points. This uses tokens."><input type="checkbox" checked={study} onChange={(e) => setStudy(e.target.checked)} /> the agent studies it right away</label>
+          <span className="w-full text-[11.5px] text-gray-500">Word (.docx), text (.txt) or Markdown (.md), up to {st.limits.docs} documents. For a PDF, copy its text and paste it.</span>
+        </div>
+        {msg && <div className={"mt-2 rounded-lg px-3 py-2 text-[12px] " + (msg.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800")} role="status">{msg.text}</div>}
+        {active && agencyOff && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">The agent is switched off or paused for the company, so documents wait to be studied until it is on again.</div>}
+        {paste && (
+          <div className="mt-3 space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Labeled label="Document name"><input className={inputCls} placeholder="How we do local SEO" value={paste.name} onChange={(e) => setPaste({ ...paste, name: e.target.value })} /></Labeled>
+              <Labeled label="What it is and when to use it (optional)"><input className={inputCls} placeholder="Our method for every client" value={paste.note} onChange={(e) => setPaste({ ...paste, note: e.target.value })} /></Labeled>
+            </div>
+            <Labeled label="Text"><textarea className={inputCls + " resize-y"} rows={8} placeholder="Paste the document's text here." value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} /></Labeled>
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn accent={accent} disabled={busy || !paste.name.trim() || paste.text.trim().length < 20} onClick={async () => { if (await add(paste.name.trim(), paste.text, paste.note.trim())) setPaste(null); }}><Check size={13} /> Add document</Btn>
+              <Btn ghost onClick={() => setPaste(null)}>Cancel</Btn>
+              <span className="text-[11px] text-gray-400">{(paste.text.match(/\S+/g) || []).length.toLocaleString()} words</span>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <div className="space-y-2">
+        {st.docs.map((d) => <KnowledgeRow key={d.id} d={d} scopes={st.scopes} busy={busy} accent={accent} onUpdate={(patch) => run({ action: "update", id: d.id, ...patch })} onStudy={() => run({ action: "study", id: d.id })} onView={() => openDoc(d)} onRemove={() => remove(d)} />)}
+        {!st.docs.length && <Card className="px-4 py-8 text-center text-[12.5px] text-gray-400">No knowledge documents yet. Upload the first one above.</Card>}
+      </div>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-[200px] flex-1"><div className="text-[13.5px] font-semibold text-gray-900">What every task is told</div><div className="text-[11.5px] text-gray-500">The knowledge section a task on any project receives. Documents limited to one area of work are added for tasks of that area. A document with key points costs a few hundred tokens per task; one without is only named, and opened when needed.</div></div>
+          {goTasks && <Btn ghost onClick={goTasks}><ListTodo size={13} /> See the study tasks</Btn>}
+          <Btn ghost onClick={() => setTold(!told)} disabled={!st.preview}><Eye size={13} /> {told ? "Hide" : "Show"}</Btn>
+        </div>
+        {!st.preview && <div className="mt-2 text-[12px] text-gray-400">Nothing yet.</div>}
+        {told && st.preview && <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[11.5px] leading-relaxed text-gray-700">{st.preview}</pre>}
+      </Card>
+
+      {view && (
+        <Modal title={view.name} sub={view.loading ? "Loading…" : `${view.words != null ? view.words.toLocaleString() + " words. " : ""}This is the text the agent reads.`} onClose={() => setView(null)} wide>
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[12px] leading-relaxed text-gray-800">{view.text}</pre>
+          {view.truncated && <div className="mt-2 text-[11.5px] text-gray-500">Only the first part is shown here. The agent can read all of it.</div>}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function PlaybooksView({ data, accent, act }) {
   const [open, setOpen] = useState(null); const [text, setText] = useState(""); const [meta, setMeta] = useState(null); const [msg, setMsg] = useState("");
   const edit = async (key) => { try { const o = await api("playbook", { key, get: true }); setMeta(o); setText(o.text); setOpen(key); setMsg(""); } catch (e) { setMsg(String(e.message || e)); } };
