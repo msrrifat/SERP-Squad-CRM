@@ -510,9 +510,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
     );
   };
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
-  const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
+  const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
-    ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)],
     ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
   const online = data.devices.filter((d) => d.online);
