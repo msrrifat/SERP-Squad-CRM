@@ -69,7 +69,9 @@ const AREA = {
   prospect_audit: "agency",
 };
 const CHANNEL = { profile_guard: "gbp", gbp_post: "gbp", gbp_review_reply: "gbp", gbp_update: "gbp", gsc_browser: "gsc", site_edit: "website", social_publish: "social" };
-for (const c of CATALOG) { c.area = AREA[c.key] || "general"; c.channel = CHANNEL[c.key] || null; }
+/* task types that write copy for the client: they are given the short brand documents in full, the others only the brand profile and the document list */
+const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_edit", "gbp_post", "gbp_review_reply", "gbp_update", "backlink_prospects", "social_calendar", "social_post", "social_publish", "report_draft", "custom"]);
+for (const c of CATALOG) { c.area = AREA[c.key] || "general"; c.channel = CHANNEL[c.key] || null; c.writes = WRITES.has(c.key); }
 export const AREAS = [
   { key: "general", label: "Monitoring and reporting" }, { key: "onpage", label: "Onpage SEO" }, { key: "offpage", label: "Offpage SEO" }, { key: "social", label: "Social Media" },
 ];
@@ -90,6 +92,7 @@ You are the SEO operations agent of a local-SEO agency. You work on one client p
 - Separate what you observed from what you infer. Name the evidence for each cause you propose and say how confident you are.
 - Prefer the few actions that will move results over long lists. Give each recommended action a concrete target: the page, the keyword, the profile field.
 - Follow the directions from the manager. They are listed in the task message and in project_brief, and they say how this client's work is to be done. Where a direction and a playbook disagree, the direction wins. The safety rules below always stand.
+- Follow the brand voice. When the task message has a Brand voice section, everything you write for the client (pages, posts, review replies, emails, report text) must match its tone and rules and use its business facts exactly. Before writing content, open the listed brand documents that matter with brand_document. If a fact you need is not there, say it is missing; never invent it.
 - Save durable facts with remember. Log only changes that were really made with log_change.
 - Suggest a follow-up task only when it has a clear target and a clear reason.
 
@@ -121,6 +124,7 @@ A manager at the agency is talking to you in a live chat about one client projec
 - Save a durable fact with remember when the manager tells you something worth keeping that is a fact, not an instruction (a decision that was made, what happened, a date). Say that you saved it.
 - Every message in this chat is kept. You see the most recent ones; use chat_history to read older ones when the manager refers to something said before.
 - Follow the directions listed at the end of these instructions in every answer.
+- When you write anything for the client in the chat (a post, a reply, a headline), follow the Brand voice section at the end of these instructions, and open a brand document with brand_document when you need its detail.
 - Log a change with log_change only when the manager tells you a change was actually made.
 
 ## Limits

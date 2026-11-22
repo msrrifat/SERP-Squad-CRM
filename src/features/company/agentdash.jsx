@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, BarChart3, FileText, Globe, KeyRound, ListTodo, MapPin, MessageSquare, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Eye, Gauge, BarChart3, FileText, Globe, KeyRound, ListTodo, MapPin, MessageSquare, Mic, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
+import { docxToText } from "../../lib/docxread.js";
 
 /* ================= AI agent (local worker) =================
    The control panel for the Java agent in /agent that runs on an office PC.
@@ -167,6 +168,7 @@ function LimitsView({ data, accent, act, busy, onChat }) {
   const [draft, setDraft] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [setupTab, setSetupTab] = useState("settings");
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
   const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
@@ -248,8 +250,8 @@ function LimitsView({ data, accent, act, busy, onChat }) {
           </div>
         </Card>
 
-        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} />
-        <div className="flex flex-wrap items-center gap-2">
+        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} tab={project.id === "_agency" ? "settings" : setupTab} setTab={setSetupTab} />
+        <div className={"flex flex-wrap items-center gap-2" + (setupTab === "brand" && !dirty && project.id !== "_agency" ? " hidden" : "")}>
           <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
           {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
           {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes in the work setup</span>}
@@ -332,8 +334,8 @@ const Tile = ({ icon: Icon, title, sub, accent, right, children }) => (
 const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
 const txtCls = inputCls + " min-h-[64px] resize-y";
 const numOnly = (v) => +String(v).replace(/[^0-9]/g, "") || 0;
-function WorkSetup({ data, project, draft, set, setTask, accent }) {
-  const [tab, setTab] = useState("settings");
+function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) {
+  const [brandNow, setBrandNow] = useState(null);   // counts after a change in the Brand voice tab, until the next refresh brings them
   const agency = project.id === "_agency";
   const profiles = data.devices.flatMap((d) => (d.profiles || []).map((p) => ({ ...p, device: d.name })));
   const ch = draft.channels, rules = draft.rules;
@@ -368,13 +370,14 @@ function WorkSetup({ data, project, draft, set, setTask, accent }) {
   const api = project.api || {};
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
-    ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`]];
+    ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
+    ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
   return (
     <div className="space-y-4">
       <div>
         <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
           {TABS.map(([k, label, Icon, sub]) => (
             <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
               style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
@@ -524,7 +527,211 @@ function WorkSetup({ data, project, draft, set, setTask, accent }) {
           {taskList("social", "Social media tasks", "Drafts and plans are safe to leave on. Publishing in the browser is off until you switch it on, always asks first, and is untested against the real platforms.")}
         </>
       )}
+
+      {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
     </div>
+  );
+}
+
+/* ---------------- brand voice: who the client is and how the agent writes for them ---------------- */
+const brandCaption = (b) => (!b || b.source === "none" ? "Not set up yet" : b.source === "crm" ? "From the CRM for now" : `${b.fields} detail${b.fields === 1 ? "" : "s"} · ${b.docs} document${b.docs === 1 ? "" : "s"}`);
+const BIZ_ROWS = [["name", "Business name, as on Google", "Northgate Plumbing & Heating Ltd"], ["category", "Primary category", "Plumber"], ["phone", "Phone", "0113 496 0000"], ["email", "Email", "hello@example.com"],
+  ["address", "Address", "Street, town, postcode"], ["hours", "Opening hours", "Mon to Fri 8am to 6pm, emergencies 24 hours"], ["serviceAreas", "Service areas", "Leeds, Horsforth, Pudsey"], ["services", "Services", "boiler repair, bathroom fitting, drain cleaning"]];
+const filledCount = (p) => (p ? Object.entries(p).filter(([k, v]) => k !== "biz" && v).length + Object.values(p.biz || {}).filter(Boolean).length : 0);
+/* one brand document; its own component so typing a note does not redraw the list */
+function BrandDocRow({ d, canEdit, busy, onNote, onView, onRemove }) {
+  const [note, setNote] = useState(d.note);
+  useEffect(() => { setNote(d.note); }, [d.note]);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+      <FileText size={16} className="shrink-0 text-gray-400" />
+      <div className="min-w-[160px] flex-1">
+        <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-gray-900"><span className="break-all">{d.name}</span>
+          <Chip fg={d.inline ? "#15803D" : "#1D4ED8"} bg={d.inline ? "#DCFCE7" : "#DBEAFE"}>{d.inline ? "Given in full" : "Opened when needed"}</Chip></div>
+        <div className="text-[11px] text-gray-500">{d.words.toLocaleString()} words{d.addedAt ? ` · added ${relTime(d.addedAt)}` : ""}{d.by ? ` by ${d.by}` : ""}</div>
+      </div>
+      {canEdit && <input aria-label={`What ${d.name} is for`} className={inputCls + " min-w-[200px] flex-[2]"} placeholder="What it is and when to use it (helps the agent pick the right one)" value={note}
+        onChange={(e) => setNote(e.target.value)} onBlur={() => { if (note.trim() !== d.note) onNote(note.trim()); }} />}
+      <div className="flex items-center gap-1.5">
+        <Btn ghost onClick={onView} title="Read the text the agent sees"><Eye size={13} /> View</Btn>
+        {canEdit && <Btn ghost danger disabled={busy} onClick={onRemove} title="Remove this document"><Trash2 size={13} /></Btn>}
+      </div>
+    </div>
+  );
+}
+function BrandVoice({ project, accent, onSummary }) {
+  const [st, setSt] = useState(null);         // what the server holds
+  const [form, setForm] = useState(null);     // the profile being edited
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);       // { ok, text }
+  const [paste, setPaste] = useState(null);   // { name, note, text } while the paste form is open
+  const [view, setView] = useState(null);     // a document being read
+  const [told, setTold] = useState(false);
+  const dirtyRef = useRef(false); dirtyRef.current = dirty;
+  const take = (o, keepForm) => {
+    setSt(o);
+    if (!keepForm) { setForm(o.profile); setDirty(false); }
+    onSummary?.({ source: o.source, fields: filledCount(o.profile), docs: o.docs.length });
+  };
+  const run = async (body, keepForm) => {
+    setBusy(true); setMsg(null);
+    try { const o = await api("brand", { projectId: project.id, ...body }); take(o, keepForm); return o; }
+    catch (e) { setMsg({ ok: false, text: String(e.message || e) }); return null; }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { run({ action: "get" }); }, [project.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!st || !form) return <Card className="p-4 text-[13px] text-gray-500">{msg ? msg.text : "Loading the brand voice…"}</Card>;
+
+  const setF = (patch) => { setForm((f) => ({ ...f, ...patch })); setDirty(true); };
+  const setBiz = (patch) => { setForm((f) => ({ ...f, biz: { ...f.biz, ...patch } })); setDirty(true); };
+  const save = async () => { const o = await run({ action: "save", profile: form }); if (o) setMsg({ ok: true, text: "Brand voice saved. The agent uses it from its next task and chat answer." }); };
+  const copyCrm = async () => {
+    const o = await run({ action: "copyFromCrm" }, dirtyRef.current && st.source === "agent");
+    if (o) setMsg({ ok: true, text: o.copied.fields || o.copied.docs ? `Copied ${o.copied.fields} detail${o.copied.fields === 1 ? "" : "s"} and ${o.copied.docs} document${o.copied.docs === 1 ? "" : "s"} from the CRM's Brand Voice.` : "Nothing new to copy: everything in the CRM's Brand Voice is already here." });
+  };
+  const addDoc = async (name, text, note) => {
+    const o = await run({ action: "addDoc", name, text, note }, dirtyRef.current);
+    if (o) setMsg({ ok: true, docs: true, text: o.replaced ? `"${name}" was replaced with the new text.` : `"${name}" was added.` });
+    else setMsg((m) => (m ? { ...m, docs: true } : m));
+    return !!o;
+  };
+  const addFiles = async (list) => {
+    for (const f of [...list]) {
+      try {
+        if (/\.pdf$/i.test(f.name) || f.type === "application/pdf") throw new Error(`${f.name}: PDF files cannot be read here. Copy the text out of the PDF and use Paste text, or save it as Word or plain text.`);
+        if (/\.doc$/i.test(f.name)) throw new Error(`${f.name}: old Word files (.doc) cannot be read. Save it as .docx and upload that.`);
+        if (f.size > 8e6) throw new Error(`${f.name} is larger than 8 MB.`);
+        const isDocx = /\.docx$/i.test(f.name);
+        if (!isDocx && !/\.(txt|md|markdown)$/i.test(f.name) && !f.type.startsWith("text/")) throw new Error(`${f.name}: upload a .docx, .txt or .md file, or use Paste text.`);
+        const text = isDocx ? await docxToText(await f.arrayBuffer()) : await f.text();
+        if (!(await addDoc(f.name, text, ""))) break;
+      } catch (e) { setMsg({ ok: false, docs: true, text: String(e.message || e) }); break; }
+    }
+  };
+  const openDoc = async (d) => {
+    setView({ name: d.name, text: "", loading: true });
+    try { const o = await api("brand", { projectId: project.id, action: "doc", id: d.id }); setView({ name: o.name, text: o.text, truncated: o.truncated, words: o.words }); }
+    catch (e) { setView({ name: d.name, text: String(e.message || e) }); }
+  };
+  const removeDoc = async (d) => { if (await askConfirm({ title: "Remove this document?", message: `"${d.name}" will be removed from the brand documents. The agent will no longer see it.`, confirmLabel: "Yes, remove it", danger: true })) run({ action: "removeDoc", id: d.id }, dirtyRef.current); };
+  const own = st.source === "agent", fromCrm = st.source === "crm";
+  const field = (key, label, ph) => <Labeled label={label}><input className={inputCls} placeholder={ph} value={form[key]} onChange={(e) => setF({ [key]: e.target.value })} /></Labeled>;
+  const area = (key, label, ph, rows = 3) => <Labeled label={label}><textarea className={inputCls + " resize-y"} rows={rows} placeholder={ph} value={form[key]} onChange={(e) => setF({ [key]: e.target.value })} /></Labeled>;
+  const saveBar = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Btn accent={accent} onClick={save} disabled={busy || (!dirty && !fromCrm)}><Check size={13} /> {fromCrm && !dirty ? "Keep this as the agent's brand voice" : "Save brand voice"}</Btn>
+      {dirty && <Btn ghost onClick={() => { setForm(st.profile); setDirty(false); }}>Discard</Btn>}
+      {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes in the brand voice</span>}
+      {msg && !msg.docs && <span className={"text-[11.5px] " + (msg.ok ? "text-green-700" : "text-red-700")} role="status">{msg.text}</span>}
+    </div>
+  );
+  return (
+    <>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><Mic size={17} /></span>
+          <div className="min-w-[220px] flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold text-gray-900">Brand voice for {project.name}
+              <Chip fg={own ? "#15803D" : fromCrm ? "#1D4ED8" : "#B45309"} bg={own ? "#DCFCE7" : fromCrm ? "#DBEAFE" : "#FEF3C7"}>{own ? "Set for the agent" : fromCrm ? "Using the CRM's Brand Voice" : "Not set up yet"}</Chip></div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">
+              {own && <>Every task and every chat answer for this project is given this, so the agent writes like {project.name} and uses the real business facts.{st.updatedAt ? ` Last saved ${relTime(st.updatedAt)}${st.updatedBy ? ` by ${st.updatedBy}` : ""}.` : ""}</>}
+              {fromCrm && <>The agent is working from the Brand Voice already filled in for this project in the CRM (Optimization, Brand Voice). Save a change or add a document here and the agent gets its own copy, documents included. After that, edits made in the CRM no longer reach the agent unless you copy them over.</>}
+              {st.source === "none" && <>Nothing is set yet, here or in the CRM. Fill in what you know and upload the brand's documents: every task and every chat answer for this project is given it, so the agent writes like {project.name} instead of sounding generic.</>}
+            </div>
+          </div>
+          {own && st.crm && <Btn ghost disabled={busy} onClick={copyCrm} title="Fills the empty fields and adds the documents that are not here yet. Nothing you wrote here is overwritten."><Copy size={13} /> Copy what is missing from the CRM's Brand Voice</Btn>}
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div><div className="text-[13.5px] font-semibold text-gray-900">The brand</div><div className="text-[11.5px] text-gray-500">Who {project.name} is and who it talks to.</div></div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {field("brandName", "Brand name", project.name)}
+          {field("tagline", "Tagline or positioning", "Honest, same-day local plumbing")}
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {area("brandInfo", "Who we are: story, what makes us different, proof", "Family firm since 1998. Gas Safe registered. Fixed prices agreed before work starts. 4.9 stars from 600 reviews.")}
+          {area("audience", "Who we talk to", "Homeowners and landlords in north Leeds. They want it fixed today, by someone they can trust in the house.")}
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div><div className="text-[13.5px] font-semibold text-gray-900">Business facts</div><div className="text-[11.5px] text-gray-500">The agent uses these exactly as written and is told never to invent a name, an address, a phone number, a price or opening hours.</div></div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {BIZ_ROWS.map(([k, label, ph]) => <Labeled key={k} label={label}><input className={inputCls} placeholder={ph} value={form.biz[k]} onChange={(e) => setBiz({ [k]: e.target.value })} /></Labeled>)}
+        </div>
+        <Labeled label="Business description"><textarea className={inputCls + " resize-y"} rows={3} placeholder="What the business does, for whom, and what it is best at. The kind of text a Business Profile description holds." value={form.biz.description} onChange={(e) => setBiz({ description: e.target.value })} /></Labeled>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div><div className="text-[13.5px] font-semibold text-gray-900">Voice and tone</div><div className="text-[11.5px] text-gray-500">How everything written for this client should sound: pages, posts, review replies, emails and report text.</div></div>
+        {field("toneWords", "Tone, in a few words", "warm, plain-spoken, confident, never salesy")}
+        <div className="grid gap-3 lg:grid-cols-2">
+          {area("doList", "Always do, one per line", "Use plain English\nLead with what the customer gets\nSay \"we\" and \"you\"\nBack a claim with a fact", 4)}
+          {area("dontList", "Never do, one per line", "No hype or superlatives\nNo claims we cannot prove\nNo exclamation marks\nDo not mention competitors", 4)}
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {field("avoidWords", "Words and phrases to avoid", "cheap, world-class, cutting-edge, solutions")}
+          {field("preferWords", "Preferred terms and spelling", "call-out (not callout), boiler service, British spelling")}
+        </div>
+        {field("cta", "Usual call to action", "Call 0113 496 0000 for a fixed price today")}
+        {area("sample", "A sample of the brand's own writing", "Paste a paragraph or two that sounds exactly right: from the website, a post or an email. The agent matches the style and does not copy it.", 4)}
+      </Card>
+
+      {saveBar}
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <div className="text-[13.5px] font-semibold text-gray-900">Brand documents</div>
+          <div className="text-[11.5px] leading-relaxed text-gray-500">Style guides, tone of voice documents, service and price lists, an approved "about us", past posts that worked. The agent learns the brand from them. Short documents (about {Math.round(st.limits.inlineChars / 6 / 100) * 100} words in total) are given in full with every writing task; longer ones the agent opens when the task needs them. Up to {st.limits.docs} documents per project.</div>
+        </div>
+        <div className="space-y-2">
+          {st.docs.map((d) => <BrandDocRow key={d.id} d={d} canEdit={own} busy={busy} onView={() => openDoc(d)} onRemove={() => removeDoc(d)} onNote={(note) => run({ action: "updateDoc", id: d.id, note }, dirtyRef.current)} />)}
+          {!st.docs.length && <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-[12px] text-gray-400">No brand documents yet.</div>}
+        </div>
+        {fromCrm && st.docs.length > 0 && <div className="text-[11.5px] text-gray-500">These documents come from the CRM's Brand Voice. They can be given a note or removed here once the agent has its own copy.</div>}
+        <div className="flex flex-wrap items-center gap-2">
+          <label className={"inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold text-white " + (busy ? "pointer-events-none opacity-50" : "")} style={{ background: accent }}>
+            <Upload size={13} /> Upload documents
+            <input type="file" accept=".docx,.txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(e) => { const files = e.target.files; addFiles(files); e.target.value = ""; }} />
+          </label>
+          <Btn ghost disabled={busy} onClick={() => setPaste(paste ? null : { name: "", note: "", text: "" })}><Plus size={13} /> Paste text</Btn>
+          <span className="text-[11.5px] text-gray-500">Word (.docx), text (.txt) or Markdown (.md). For a PDF, copy its text and paste it.</span>
+        </div>
+        {msg && msg.docs && <div className={"rounded-lg px-3 py-2 text-[12px] " + (msg.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800")} role="status">{msg.text}</div>}
+        {paste && (
+          <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Labeled label="Document name"><input className={inputCls} placeholder="Tone of voice guide" value={paste.name} onChange={(e) => setPaste({ ...paste, name: e.target.value })} /></Labeled>
+              <Labeled label="What it is and when to use it (optional)"><input className={inputCls} placeholder="Use for every page and post" value={paste.note} onChange={(e) => setPaste({ ...paste, note: e.target.value })} /></Labeled>
+            </div>
+            <Labeled label="Text"><textarea className={inputCls + " resize-y"} rows={8} placeholder="Paste the document's text here." value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} /></Labeled>
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn accent={accent} disabled={busy || !paste.name.trim() || paste.text.trim().length < 20} onClick={async () => { if (await addDoc(paste.name.trim(), paste.text, paste.note.trim())) setPaste(null); }}><Check size={13} /> Add document</Btn>
+              <Btn ghost onClick={() => setPaste(null)}>Cancel</Btn>
+              <span className="text-[11px] text-gray-400">{(paste.text.match(/\S+/g) || []).length.toLocaleString()} words</span>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-[200px] flex-1"><div className="text-[13.5px] font-semibold text-gray-900">What the agent is told</div><div className="text-[11.5px] text-gray-500">The exact brand section a writing task receives, built from what is saved above.</div></div>
+          <Btn ghost onClick={() => setTold(!told)} disabled={!st.preview}><Eye size={13} /> {told ? "Hide" : "Show"}</Btn>
+        </div>
+        {!st.preview && <div className="mt-2 text-[12px] text-gray-400">Nothing yet: the agent is told nothing about this brand.</div>}
+        {told && st.preview && <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[11.5px] leading-relaxed text-gray-700">{st.preview}</pre>}
+      </Card>
+
+      {view && (
+        <Modal title={view.name} sub={view.loading ? "Loading…" : `${view.words != null ? view.words.toLocaleString() + " words. " : ""}This is the text the agent reads.`} onClose={() => setView(null)} wide>
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-[12px] leading-relaxed text-gray-800">{view.text}</pre>
+          {view.truncated && <div className="mt-2 text-[11.5px] text-gray-500">Only the first part is shown here. The agent can read all of it.</div>}
+        </Modal>
+      )}
+    </>
   );
 }
 
