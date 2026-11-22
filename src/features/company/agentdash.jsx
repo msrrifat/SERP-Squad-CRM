@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
-import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
+import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, Clock, Copy, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { Card, Labeled, LogoUpload, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
 import { docxToText } from "../../lib/docxread.js";
@@ -168,7 +168,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -194,6 +194,101 @@ function CapInput({ label, value, onSave }) {
 }
 
 /* ---------------- projects: working limits and token limits ---------------- */
+/* ---------------- putting a project on the agent's list: import it from the CRM, or add it by hand ---------------- */
+const ACCENT_CHOICES = ["#0E7C66", "#2563EB", "#B45309", "#DC2626", "#7C3AED", "#0891B2", "#BE123C", "#4D7C0F", "#1F2937"];
+function ManualProjectForm({ accent, initial, busy, saveLabel, onSave, onCancel, error }) {
+  const [f, setF] = useState(() => ({ name: initial?.name || "", client: initial?.client || "", website: initial?.website || "", accent: initial?.accent || ACCENT_CHOICES[0], logo: initial?.logo ?? null }));
+  const set = (patch) => setF((cur) => ({ ...cur, ...patch }));
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Labeled label="Project name"><input className={inputCls} placeholder="Oakfield Veterinary Clinic" value={f.name} onChange={(e) => set({ name: e.target.value })} autoFocus /></Labeled>
+        <Labeled label="Client or company (optional)"><input className={inputCls} placeholder="Oakfield Vets Ltd" value={f.client} onChange={(e) => set({ client: e.target.value })} /></Labeled>
+      </div>
+      <Labeled label="Website (optional)"><input className={inputCls} placeholder="https://example.com" value={f.website} onChange={(e) => set({ website: e.target.value })} /></Labeled>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Labeled label="Logo (optional)"><LogoUpload value={f.logo} onChange={(logo) => set({ logo })} label="Upload a logo" /></Labeled>
+        <Labeled label="Colour, used where there is no logo">
+          <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Project colour">
+            {ACCENT_CHOICES.map((c) => <button key={c} type="button" role="radio" aria-checked={f.accent === c} aria-label={`Colour ${c}`} onClick={() => set({ accent: c })} className="h-7 w-7 rounded-lg border-2" style={{ background: c, borderColor: f.accent === c ? "#111827" : "transparent", boxShadow: f.accent === c ? "0 0 0 2px #fff inset" : "none" }} />)}
+          </div>
+        </Labeled>
+      </div>
+      {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{error}</div>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn accent={accent} disabled={busy || f.name.trim().length < 2} onClick={() => onSave({ name: f.name.trim(), client: f.client.trim(), website: f.website.trim(), accent: f.accent, ...(f.logo !== (initial?.logo ?? null) ? { logo: f.logo || "" } : {}) })}><Check size={13} /> {saveLabel}</Btn>
+        <Btn ghost onClick={onCancel}>Cancel</Btn>
+      </div>
+    </div>
+  );
+}
+function AddProjectModal({ accent, onClose, onAdded, setData }) {
+  const [mode, setMode] = useState("import");
+  const [list, setList] = useState(null);         // CRM projects that are not on the agent's list yet
+  const [picked, setPicked] = useState({});
+  const [find, setFind] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { api("roster", { action: "list" }).then((o) => setList(o.candidates)).catch((e) => { setErr(String(e.message || e)); setList([]); }); }, []);
+  const send = async (body) => {
+    setBusy(true); setErr("");
+    try { const o = await api("roster", body); setData(o); return o; }
+    catch (e) { setErr(String(e.message || e)); return null; }
+    finally { setBusy(false); }
+  };
+  const q = find.trim().toLowerCase();
+  const shown = (list || []).filter((c) => !q || c.name.toLowerCase().includes(q) || (c.client || "").toLowerCase().includes(q));
+  const ids = Object.keys(picked).filter((id) => picked[id]);
+  const doImport = async (all) => { const o = await send(all ? { action: "import", all: true } : { action: "import", ids }); if (o) onAdded(o.imported || []); };
+  const TABS = [["import", "Import from the CRM", FolderInput], ["manual", "Add by hand", PencilLine]];
+  return (
+    <Modal title="Add a project" sub="Put a project on the agent's list. The agent only works on projects that are on it." onClose={onClose} wide>
+      <div className="mb-4 grid grid-cols-2 gap-2">
+        {TABS.map(([k, label, Icon]) => (
+          <button key={k} type="button" aria-pressed={mode === k} onClick={() => { setMode(k); setErr(""); }} className="flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-[13px] font-semibold"
+            style={mode === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}><Icon size={15} /> {label}</button>
+        ))}
+      </div>
+      {mode === "import" && (
+        <div className="space-y-3">
+          <div className="text-[12px] leading-relaxed text-gray-600">The project stays in the CRM and the agent reads its rankings, Search Console data, logo and Brand Voice from there. Nothing in the CRM is changed. A project already on the agent's list is not shown.</div>
+          {list === null && <div className="text-[12.5px] text-gray-500">Loading the CRM's projects…</div>}
+          {list && !list.length && !err && <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-[12.5px] text-gray-500">Every project in the CRM is already on the agent's list. Create the project in the CRM first, or add it by hand here.</div>}
+          {list && list.length > 0 && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                {list.length > 6 && <input className={inputCls + " min-w-[180px] flex-1"} placeholder="Find a project or client" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Find a CRM project" />}
+                <Btn ghost onClick={() => setPicked(Object.fromEntries(shown.map((c) => [c.id, !shown.every((x) => picked[x.id])])))}>{shown.length && shown.every((x) => picked[x.id]) ? "Clear the selection" : "Select all shown"}</Btn>
+              </div>
+              <div className="max-h-[320px] space-y-1.5 overflow-auto pr-1">
+                {shown.map((c) => (
+                  <label key={c.id} className="flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2" style={picked[c.id] ? { borderColor: accent, background: accent + "0D" } : { borderColor: "#E5E7EB" }}>
+                    <input type="checkbox" checked={!!picked[c.id]} onChange={(e) => setPicked({ ...picked, [c.id]: e.target.checked })} />
+                    <ProjectLogo project={c} size={32} />
+                    <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-semibold text-gray-900">{c.name}</span><span className="block truncate text-[11.5px] text-gray-500">{[c.client, c.website].filter(Boolean).join(" · ") || "No client name"}</span></span>
+                  </label>
+                ))}
+                {!shown.length && <div className="px-1 py-4 text-center text-[12.5px] text-gray-400">No CRM project matches "{find}".</div>}
+              </div>
+            </>
+          )}
+          {err && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn accent={accent} disabled={busy || !ids.length} onClick={() => doImport(false)}><FolderInput size={13} /> {ids.length ? `Import ${ids.length} project${ids.length === 1 ? "" : "s"}` : "Import"}</Btn>
+            {list && list.length > 1 && <Btn ghost disabled={busy} onClick={() => doImport(true)}>Import all {list.length}</Btn>}
+            <Btn ghost onClick={onClose}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+      {mode === "manual" && (
+        <div className="space-y-3">
+          <div className="text-[12px] leading-relaxed text-gray-600">For a business that is not in the CRM. The agent can research, audit, write and work in the browser for it, with its own work setup, brand voice, chat and limits. It has no rank tracking, Search Console data or reports, because those live in the CRM.</div>
+          <ManualProjectForm accent={accent} busy={busy} error={err} saveLabel="Add the project" onCancel={onClose} onSave={async (f) => { const o = await send({ action: "add", ...f }); if (o) onAdded([o.created]); }} />
+        </div>
+      )}
+    </Modal>
+  );
+}
 /* Back and Forward, as in a browser: they walk the pages visited inside the Projects screen */
 function PageNav({ canBack, canForward, onBack, onForward }) {
   const cls = "flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-35 disabled:hover:bg-white";
@@ -204,7 +299,7 @@ function PageNav({ canBack, canForward, onBack, onForward }) {
     </div>
   );
 }
-function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage }) {
+function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData }) {
   /* Projects are pages. The list of projects is one page, a project's
      dashboard is another, and so is each tab of its work setup. `trail` is the
      history that Back and Forward walk; choosing something new drops whatever
@@ -217,7 +312,10 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const [dirty, setDirty] = useState(false);
   const [detail, setDetail] = useState(null);
   const [find, setFind] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(null);     // { error } while a hand-made project's details are being changed
   const topRef = useRef(null), firstPage = useRef(true), seenTick = useRef(tick);
+  const logoSrc = React.useContext(LogoCtx)[pid]?.src || "";
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
   const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
@@ -259,7 +357,16 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
           {nav}
           <div className="min-w-[200px] flex-1"><div className="text-[15px] font-semibold text-gray-900">Projects</div><div className="text-[11.5px] text-gray-500">Choose a project to open its dashboard. The agent is switched on for {on} of {data.projects.length - 1}.</div></div>
           {data.projects.length > 8 && <input className={inputCls + " max-w-[240px]"} placeholder="Find a project or client" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Find a project" />}
+          <Btn accent={accent} onClick={() => setAdding(true)}><Plus size={14} /> Add project</Btn>
         </div>
+        {data.projects.length <= 1 && (
+          <Card className="px-5 py-8 text-center">
+            <div className="text-[14px] font-semibold text-gray-900">No project is on the agent's list yet</div>
+            <div className="mx-auto mt-1 max-w-[520px] text-[12.5px] leading-relaxed text-gray-500">The agent only works on the projects you put here. Import the ones you want from the CRM, or add a business by hand if it is not in the CRM.</div>
+            <div className="mt-4 flex justify-center"><Btn accent={accent} onClick={() => setAdding(true)}><Plus size={14} /> Add your first project</Btn></div>
+          </Card>
+        )}
+        {adding && <AddProjectModal accent={accent} setData={setData} onClose={() => setAdding(false)} onAdded={(ids) => { setAdding(false); if (ids.length === 1) go({ pid: ids[0], tab: "settings" }); }} />}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {shown.map((p) => {
             const agency = p.id === "_agency", cap = p.setting.tokensPerMonth, pct = cap > 0 ? Math.min(100, Math.round((p.usage.month / cap) * 100)) : 0;
@@ -280,7 +387,8 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
                   {p.waiting > 0 && <Chip fg="#1D4ED8" bg="#DBEAFE">{p.waiting} waiting</Chip>}
                   {!agency && p.learning?.lessons > 0 && <Chip>{p.learning.lessons} lesson{p.learning.lessons === 1 ? "" : "s"}</Chip>}
                   {!agency && p.brand?.source === "agent" && <Chip>Brand voice set</Chip>}
-                  {!running && !toApprove && !p.waiting && !(p.learning?.lessons > 0) && p.brand?.source !== "agent" && <span className="text-[11px] text-gray-400">{p.setting.enabled ? "Nothing waiting" : "Open to set it up"}</span>}
+                  {p.manual && <Chip fg="#6D28D9" bg="#EDE9FE">Not in the CRM</Chip>}
+                  {!running && !toApprove && !p.waiting && !(p.learning?.lessons > 0) && p.brand?.source !== "agent" && !p.manual && <span className="text-[11px] text-gray-400">{p.setting.enabled ? "Nothing waiting" : "Open to set it up"}</span>}
                 </div>
               </button>
             );
@@ -305,6 +413,11 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const pct = cap > 0 ? Math.min(100, Math.round((u.month / cap) * 100)) : 0;
 
   const others = data.projects.filter((p) => p.id !== project.id);
+  const removeProject = async () => {
+    if (!(await askConfirm({ title: `Take ${project.name} off the agent's list?`, message: "The agent stops working on it and its waiting tasks are cancelled. Its settings, chat, brand voice and lessons are kept, and come back if you add the project again." + (project.manual ? " Because it was added by hand, it can only be added again by typing it in." : " Nothing changes in the CRM."), confirmLabel: "Take it off the list", danger: true }))) return;
+    const o = await act("roster", { action: "remove", id: project.id });
+    if (o) { setDirty(false); setTrail({ list: [{ pid: "", tab: "settings" }], at: 0 }); }
+  };
   return (
     <div ref={topRef} style={{ scrollMarginTop: 16 }}>
       {/* in the agent's application the bar stays in view while the page scrolls; `sticky` is the scrolling area's top padding, so the bar sits flush with its edge and nothing shows above it */}
@@ -364,6 +477,19 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
               <div className="mt-1 text-[11px] text-gray-400">Today {fmtTok(u.day)}. When a limit is reached the agent stops this project until the period ends.</div>
             </div>
           </div>
+          {project.id !== "_agency" && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] text-gray-600">
+              <span className="min-w-[200px] flex-1">{project.manual ? <>Added by hand: this project is not in the CRM, so it has no rank tracking, Search Console data or reports.{project.website ? ` Website: ${project.website}` : ""}</> : "Imported from the CRM: its name, logo, rankings and data come from the project there."}</span>
+              {project.manual && <Btn ghost onClick={() => setEditing({ error: "" })}><PencilLine size={13} /> Edit details</Btn>}
+              <Btn ghost danger disabled={busy} onClick={removeProject} title="Takes the project off the agent's list. Its settings, chat, brand voice and lessons are kept and come back if you add it again."><Trash2 size={13} /> Take off the agent's list</Btn>
+            </div>
+          )}
+          {editing && (
+            <Modal title={`Edit ${project.name}`} sub="Details of a project that was added by hand." onClose={() => setEditing(null)} wide>
+              <ManualProjectForm accent={accent} busy={busy} error={editing.error} saveLabel="Save details" initial={{ name: project.name, client: project.client, website: project.website, accent: project.accent, logo: logoSrc || null }} onCancel={() => setEditing(null)}
+                onSave={async (f) => { try { setData(await api("roster", { action: "update", id: project.id, ...f })); setEditing(null); } catch (e) { setEditing({ error: String(e.message || e) }); } }} />
+            </Modal>
+          )}
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
             {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
@@ -1449,7 +1575,8 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
 
       <Card className="p-4">
         <div className="text-[13.5px] font-semibold text-gray-900">Agent program</div>
-        <div className="text-[11.5px] text-gray-500">{data.release ? `Published: version ${data.release.version} (${(data.release.size / 1048576).toFixed(1)} MB, ${relTime(data.release.at)} by ${data.release.by}). Devices download it, verify it and restart by themselves.` : "No version is published yet. Copy serpsquad-agent.jar to the computer by hand the first time; publish it here so devices can update themselves afterwards."}</div>
+        <div className="text-[11.5px] text-gray-500">{data.release ? `Published: version ${data.release.version} (${(data.release.size / 1048576).toFixed(1)} MB, ${relTime(data.release.at)} by ${data.release.by})${data.release.notes ? `: ${data.release.notes}` : ""}. Devices download it, verify it and restart by themselves, between tasks; "Sync for update" in the application's Settings does it at once.` : "No version is published yet. Copy serpsquad-agent.jar to the computer by hand the first time."}</div>
+        <div className="mt-1 text-[11.5px] text-gray-500">A new version arrives here by itself whenever the agent's code changes on GitHub and the CRM is deployed. Uploading a file below is only for a version that was built by hand.</div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {data.release && <Btn ghost onClick={download}><Download size={13} /> Download serpsquad-agent.jar</Btn>}
           <input ref={fileRef} type="file" accept=".jar" className="text-[12px]" aria-label="Agent jar file" />

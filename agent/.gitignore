@@ -1,0 +1,16 @@
+target/
+dist/
+demo-home/
+config.json
+data/
+logs/
+run.bat
+run.sh
+*.part
+serpsquad-agent-next.jar
+serpsquad-agent-prev.jar
+# built by `npm run build:agent-ui` (and by the release build), never edited by hand
+src/main/resources/manage/
+src/main/resources/catalog.json
+# working screenshots
+docs/

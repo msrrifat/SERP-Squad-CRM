@@ -1,0 +1,399 @@
+package com.serpsquad.agent;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.errors.AnthropicException;
+import com.anthropic.errors.AnthropicIoException;
+import com.anthropic.errors.AnthropicServiceException;
+import com.anthropic.errors.BadRequestException;
+import com.anthropic.errors.NotFoundException;
+import com.anthropic.errors.PermissionDeniedException;
+import com.anthropic.errors.RateLimitException;
+import com.anthropic.errors.UnauthorizedException;
+import com.anthropic.models.ErrorType;
+import com.anthropic.models.beta.messages.BetaCacheControlEphemeral;
+import com.anthropic.models.beta.messages.BetaContentBlock;
+import com.anthropic.models.beta.messages.BetaContentBlockParam;
+import com.anthropic.models.beta.messages.BetaMessage;
+import com.anthropic.models.beta.messages.BetaMessageParam;
+import com.anthropic.models.beta.messages.BetaOutputConfig;
+import com.anthropic.models.beta.messages.BetaStopReason;
+import com.anthropic.models.beta.messages.BetaTextBlockParam;
+import com.anthropic.models.beta.messages.BetaThinkingConfigAdaptive;
+import com.anthropic.models.beta.messages.BetaTool;
+import com.anthropic.models.beta.messages.BetaToolResultBlockParam;
+import com.anthropic.models.beta.messages.BetaToolUseBlock;
+import com.anthropic.models.beta.messages.BetaWebFetchTool20250910;
+import com.anthropic.models.beta.messages.BetaWebFetchTool20260209;
+import com.anthropic.models.beta.messages.BetaWebSearchTool20250305;
+import com.anthropic.models.beta.messages.BetaWebSearchTool20260209;
+import com.anthropic.models.beta.messages.MessageCreateParams;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Runs one task: a Claude tool-use loop. After every Claude call the token
+ * usage is reported to the CRM, which answers whether the project's token
+ * limit or this run's budget is used up; the loop then stops at once.
+ */
+final class TaskRunner {
+    private static final int MAX_TURNS = 60;
+    private static final long MAX_OUTPUT_TOKENS = 16000L;
+
+    private final AnthropicClient claude;
+    private final CrmClient crm;
+    private final SyncStore store;
+    private final JsonNode task;
+    private final ToolBox tools;
+    private final String taskId;
+    private final String model;
+    private final Watcher watcher;
+
+    /** Told what the task is doing, for the device's own dashboard. */
+    interface Watcher {
+        void step(String text);
+
+        void tokens(long total);
+
+        void finished(String status, String summary);
+    }
+
+    TaskRunner(AnthropicClient claude, CrmClient crm, SyncStore store, JsonNode task, ToolBox tools, Watcher watcher) {
+        this.claude = claude;
+        this.crm = crm;
+        this.store = store;
+        this.task = task;
+        this.tools = tools;
+        this.taskId = task.path("id").asText();
+        this.model = task.path("model").asText("claude-opus-5-5");
+        this.watcher = watcher;
+    }
+
+    // ---------- prompt ----------
+
+    /** Stable for the whole task, so every turn after the first reads it from the prompt cache. */
+    private String systemPrompt() {
+        String rules = store.playbook("_rules");
+        String playbook = store.playbook(task.path("type").asText());
+        StringBuilder s = new StringBuilder();
+        s.append(rules.isBlank() ? "You are the SEO operations agent of a local-SEO agency. Use real data from the tools and finish with finish_task." : rules);
+        s.append("\n\n---\n\n");
+        s.append(playbook.isBlank() ? "# " + task.path("label").asText("Task") + "\n\nFollow the task instructions." : playbook);
+        s.append("\n\n---\n\n# This run\n\n");
+        String phase = task.path("phase").asText("run");
+        if (tools.canRequestApproval()) {
+            s.append("This is the PREPARE phase of a task that changes something live. Do not change anything. Gather what you need, then call request_approval with the exact proposal. Typing in the browser is switched off in this phase.\n");
+        } else if ("execute".equals(phase)) {
+            s.append("This is the EXECUTE phase. A person approved the plan in the task message. Carry out exactly that plan and nothing else. If the page does not match what the plan expects, stop and finish with what you saw.\n");
+        } else if (task.path("write").asBoolean(false)) {
+            s.append("This task type is set to act without asking first. Follow the playbook's prepare and execute steps in one run, and be exact.\n");
+        } else {
+            s.append("This task only reads and reports. It changes nothing outside the CRM.\n");
+        }
+        boolean web = needs("web");
+        s.append(web ? "Web search and page fetch are available. Prefer primary sources and quote the address you relied on.\n" : "This task has no web access. Work from the CRM tools.\n");
+        JsonNode br = task.path("browser");
+        if (tools.hasBrowser() && br.isObject()) {
+            List<String> hosts = new ArrayList<>();
+            for (JsonNode h : br.path("hosts")) { String host = h.asText(); if (!host.startsWith("*.") && !host.startsWith("accounts.")) hosts.add(host); }     // "*.site" (its subdomains) and the sign-in host are not places to work
+            s.append("A Chrome window that a person signed in to for this project's ").append(br.path("label").asText("channel")).append(" is available through the browser tools. It may only show these sites: ").append(String.join(", ", hosts)).append(".");
+            if (!br.path("startUrl").asText("").isBlank()) s.append(" Start at ").append(br.path("startUrl").asText()).append(".");
+            s.append('\n');
+        } else if (tools.hasBrowser()) s.append(needs("google") ? "A Chrome window signed in to Google is available through the browser tools. It may only show Google's own pages.\n" : "A clean Chrome window is available through the browser tools.\n");
+        s.append("You have a token budget for this run. Work efficiently: read what you need, do not repeat tool calls, and finish.\n");
+        return s.toString();
+    }
+
+    private boolean needs(String what) {
+        for (JsonNode n : task.path("needs")) if (what.equals(n.asText())) return true;
+        return false;
+    }
+
+    private String firstMessage() {
+        StringBuilder m = new StringBuilder();
+        m.append("Task: ").append(task.path("title").asText("")).append('\n');
+        m.append("Task type: ").append(task.path("label").asText("")).append('\n');
+        m.append("Project: ").append(task.path("projectName").asText(""));
+        String client = task.path("clientName").asText("");
+        if (!client.isBlank()) m.append(" (client: ").append(client).append(')');
+        m.append('\n').append("Today: ").append(LocalDate.now()).append('\n');
+        String instr = task.path("instructions").asText("");
+        if (!instr.isBlank()) m.append("\nInstructions from the team:\n").append(instr).append('\n');
+        String reason = task.path("reason").asText("");
+        if (!reason.isBlank()) m.append("\nWhy this task was suggested: ").append(reason).append('\n');
+        if (task.path("setup").size() > 0) {
+            m.append("\nWork setup for this project (where to work and the limits that apply):\n");
+            for (JsonNode d : task.path("setup")) m.append("- ").append(d.asText("")).append('\n');
+        }
+        String knowledge = task.path("knowledge").asText("");
+        if (!knowledge.isBlank()) m.append('\n').append(knowledge).append('\n');
+        String brand = task.path("brand").asText("");
+        if (!brand.isBlank()) m.append('\n').append(brand).append('\n');
+        if (task.path("lessons").size() > 0) {
+            m.append("\nWhat you have learned so far (your own notes from earlier work, and corrections from the manager; use them, and correct one with save_lesson when it turns out wrong):\n");
+            for (JsonNode d : task.path("lessons")) m.append("- ").append(d.asText("")).append('\n');
+        }
+        if (task.path("directions").size() > 0) {
+            m.append("\nDirections from the manager for this project (follow them):\n");
+            int n = 1;
+            for (JsonNode d : task.path("directions")) m.append(n++).append(". ").append(d.asText("")).append('\n');
+        }
+        JsonNode approved = task.path("approved");
+        if (approved.isObject()) {
+            m.append("\nAPPROVED PLAN (carry out exactly this):\n").append(approved.path("details").asText("")).append('\n');
+            String note = approved.path("note").asText("");
+            if (!note.isBlank()) m.append("\nNote from the approver: ").append(note).append('\n');
+        }
+        m.append("\nToken budget for this run: about ").append(task.path("runBudgetTokens").asLong(0)).append(" tokens in total.");
+        return m.toString();
+    }
+
+    private MessageCreateParams params(String system, List<BetaTool> toolDefs, List<BetaMessageParam> history) {
+        String effort = task.path("effort").asText("medium");
+        MessageCreateParams.Builder b = MessageCreateParams.builder()
+            .model(model)
+            .maxTokens(MAX_OUTPUT_TOKENS)
+            .systemOfBetaTextBlockParams(List.of(BetaTextBlockParam.builder().text(system).build()))
+            .cacheControl(BetaCacheControlEphemeral.builder().build())   // caches the growing prefix turn after turn
+            .thinking(BetaThinkingConfigAdaptive.builder().build())
+            .outputConfig(BetaOutputConfig.builder().effort("low".equals(effort) ? BetaOutputConfig.Effort.LOW : "high".equals(effort) ? BetaOutputConfig.Effort.HIGH : BetaOutputConfig.Effort.MEDIUM).build())
+            .messages(history);
+        for (BetaTool t : toolDefs) b.addTool(t);
+        if (needs("web")) {
+            /* the newer web tools filter results themselves but need a current Opus or Sonnet model */
+            if (model.contains("haiku")) {
+                b.addTool(BetaWebSearchTool20250305.builder().maxUses(8L).build());
+                b.addTool(BetaWebFetchTool20250910.builder().maxUses(10L).maxContentTokens(20000L).build());
+            } else {
+                b.addTool(BetaWebSearchTool20260209.builder().maxUses(8L).build());
+                b.addTool(BetaWebFetchTool20260209.builder().maxUses(10L).maxContentTokens(20000L).build());
+            }
+        }
+        /* if a safety classifier declines a request, let the API re-run it on its default fallback model */
+        if (!model.contains("haiku")) b.addBeta("server-side-fallback-2026-07-01").fallbacksDefault();
+        return b.build();
+    }
+
+    // ---------- loop ----------
+
+    /**
+     * One Claude call. A problem with the task itself fails the task. A problem
+     * with this device or the account (bad key, no credit, rate limit, outage,
+     * no network) is a DeviceProblem: the task goes back to the queue untouched
+     * and the device waits, instead of failing every queued task in turn.
+     */
+    private BetaMessage call(MessageCreateParams p) throws TaskFailed, DeviceProblem {
+        int attempt = 0;
+        while (true) {
+            attempt += 1;
+            try {
+                return claude.beta().messages().create(p);
+            } catch (UnauthorizedException e) {
+                throw new DeviceProblem("Claude rejected the API key on this device. Run the agent's setup again with a valid key.");
+            } catch (PermissionDeniedException e) {
+                throw new DeviceProblem("The Claude API key on this device is not allowed to use " + model + ".");
+            } catch (NotFoundException e) {
+                throw new TaskFailed("Claude does not know the model " + model + ". Choose another model for this task type.");
+            } catch (BadRequestException e) {
+                String msg = String.valueOf(e.getMessage());
+                if (e.errorType().map((t) -> t.equals(ErrorType.BILLING_ERROR)).orElse(false) || msg.toLowerCase().contains("credit balance")) throw new DeviceProblem("The Claude account has no credit left. Add credit in the Claude Console.");
+                throw new TaskFailed("Claude rejected the request: " + Json.clip(msg, 300));
+            } catch (RateLimitException e) {
+                if (attempt >= 5) throw new DeviceProblem("Claude kept answering \"rate limited\".");
+                pause(30_000L * attempt, "rate limited by Claude");
+            } catch (AnthropicServiceException e) {
+                if (e.errorType().map((t) -> t.equals(ErrorType.BILLING_ERROR)).orElse(false)) throw new DeviceProblem("The Claude account has no credit left. Add credit in the Claude Console.");
+                if (e.statusCode() < 500) throw new TaskFailed("Claude API error " + e.statusCode() + ": " + Json.clip(String.valueOf(e.getMessage()), 300));
+                if (attempt >= 4) throw new DeviceProblem("The Claude API kept failing with error " + e.statusCode() + ".");
+                pause(20_000L * attempt, "Claude API error " + e.statusCode());
+            } catch (AnthropicIoException e) {
+                if (attempt >= 4) throw new DeviceProblem("Claude could not be reached from this device.");
+                pause(20_000L * attempt, "network problem reaching Claude");
+            } catch (AnthropicException e) {
+                throw new DeviceProblem("Claude could not be called: " + Json.clip(String.valueOf(e.getMessage()), 200));
+            }
+        }
+    }
+
+    private void pause(long ms, String why) throws TaskFailed {
+        Log.info("  waiting " + (ms / 1000) + " s: " + why);
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TaskFailed("interrupted"); }
+    }
+
+    static final class TaskFailed extends Exception {
+        TaskFailed(String m) { super(m); }
+    }
+
+    static final class DeviceProblem extends Exception {
+        DeviceProblem(String m) { super(m); }
+    }
+
+    private boolean event(String kind, String text) {
+        try {
+            ObjectNode b = Json.obj();
+            b.put("taskId", taskId);
+            b.put("kind", kind);
+            b.put("text", Json.clip(text, 1400));
+            return crm.post("agent/event", b).path("stop").asBoolean(false);
+        } catch (CrmClient.CrmException e) {
+            return false;   // a missed log line must not stop the work
+        }
+    }
+
+    /** Report one call's tokens. Returns the CRM's reason to stop, or null to carry on. */
+    private String reportUsage(BetaMessage m) {
+        ObjectNode b = Json.obj();
+        b.put("taskId", taskId);
+        b.put("model", model);
+        b.put("input", m.usage().inputTokens());
+        b.put("output", m.usage().outputTokens());
+        b.put("cacheRead", m.usage().cacheReadInputTokens().orElse(0L));
+        b.put("cacheWrite", m.usage().cacheCreationInputTokens().orElse(0L));
+        watcher.tokens(m.usage().inputTokens() + m.usage().outputTokens() + m.usage().cacheReadInputTokens().orElse(0L) + m.usage().cacheCreationInputTokens().orElse(0L));
+        for (int i = 0; i < 3; i++) {
+            try {
+                JsonNode r = crm.post("agent/usage", b);
+                return r.path("stop").asBoolean(false) ? r.path("reason").asText("The CRM asked the task to stop.") : null;
+            } catch (CrmClient.CrmException e) {
+                try { Thread.sleep(4000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+        /* spend that cannot be recorded cannot be limited, so stop rather than run unmetered */
+        return "Token usage could not be reported to the CRM.";
+    }
+
+    private static String textOf(BetaMessage m) {
+        StringBuilder s = new StringBuilder();
+        for (BetaContentBlock b : m.content()) b.text().ifPresent((t) -> { if (s.length() > 0) s.append("\n\n"); s.append(t.text()); });
+        return s.toString();
+    }
+
+    /**
+     * Run to completion and report the outcome to the CRM. Never throws.
+     * Returns null normally, or the reason when this device cannot call Claude
+     * (the task was handed back to the queue).
+     */
+    String run() {
+        String lastText = "";
+        try {
+            String system = systemPrompt();
+            List<BetaTool> toolDefs = tools.definitions();
+            List<BetaMessageParam> history = new ArrayList<>();
+            history.add(BetaMessageParam.ofUser(firstMessage()));
+            int continues = 0;
+            for (int turn = 1; turn <= MAX_TURNS; turn++) {
+                BetaMessage m = call(params(system, toolDefs, history));
+                String stopWhy = reportUsage(m);
+                String text = textOf(m);
+                if (!text.isBlank()) lastText = text;
+                m.content().forEach((b) -> b.fallback().ifPresent((f) -> event("note", "A safety check declined this request on " + model + "; the API continued on its fallback model.")));
+                history.add(m.toParam());
+                BetaStopReason stop = m.stopReason().orElse(BetaStopReason.END_TURN);
+
+                if (stop.equals(BetaStopReason.REFUSAL)) {
+                    String why = m.stopDetails().flatMap((d) -> d.explanation()).orElse("no explanation given");
+                    complete("failed", null, "Claude declined this task: " + Json.clip(why, 300), lastText);
+                    return null;
+                }
+                List<BetaContentBlockParam> results = new ArrayList<>();
+                for (BetaContentBlock block : m.content()) {
+                    if (block.toolUse().isEmpty()) continue;
+                    BetaToolUseBlock use = block.toolUse().get();
+                    JsonNode input;
+                    try { input = use._input().convert(JsonNode.class); } catch (Exception e) { input = null; }
+                    if (input == null || !input.isObject()) {
+                        results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content("The tool input was not a valid JSON object. Send it again.").isError(true).build()));
+                        continue;
+                    }
+                    Log.info("  tool " + use.name() + " " + Json.clip(Json.str(input), 160));
+                    watcher.step(use.name() + " " + Json.clip(Json.str(input), 140));
+                    boolean cancelled = event("tool", use.name() + " " + Json.clip(Json.str(input), 600));
+                    ToolBox.Outcome out = tools.run(use.name(), input);
+                    results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content(out.text).isError(out.error).build()));
+                    if (cancelled) { Log.info("  the task was cancelled in the CRM"); return null; }
+                }
+                if (tools.finished != null) { completeFinished(); return null; }
+                if (tools.approval != null) { completeApproval(); return null; }
+                if (stopWhy != null) {
+                    complete("stopped", null, stopWhy, lastText);
+                    return null;
+                }
+                if (!results.isEmpty()) {
+                    history.add(BetaMessageParam.ofUserOfContentBlockParams(results));   // every result of the turn in ONE message
+                    continue;
+                }
+                if (stop.equals(BetaStopReason.PAUSE_TURN)) continue;                    // a server tool paused; the same history resumes it
+                if (stop.equals(BetaStopReason.MAX_TOKENS) && continues < 2) {
+                    continues += 1;
+                    history.add(BetaMessageParam.ofUser("You were cut off by the output limit. Continue from where you stopped, then end with finish_task."));
+                    continue;
+                }
+                /* the model ended without finish_task: its last words are the report */
+                ObjectNode fin = Json.obj();
+                fin.put("summary", Json.clip(lastText.replaceAll("\\s+", " "), 300));
+                fin.put("report", lastText);
+                tools.finished = fin;
+                completeFinished();
+                return null;
+            }
+            complete("stopped", null, "The task used the maximum number of steps (" + MAX_TURNS + ").", lastText);
+        } catch (DeviceProblem e) {
+            complete("released", null, e.getMessage(), lastText);
+            return e.getMessage();
+        } catch (TaskFailed e) {
+            complete("failed", null, e.getMessage(), lastText);
+        } catch (Throwable e) {
+            complete("failed", null, "The agent hit an unexpected error: " + e.getClass().getSimpleName() + " " + Json.clip(String.valueOf(e.getMessage()), 300), lastText);
+        }
+        return null;
+    }
+
+    private void completeFinished() {
+        String shot = tools.hasBrowser() ? tools.evidence("end") : "";
+        if (!shot.isEmpty()) event("note", "Screenshot of the final browser state saved on the device: " + shot);
+        ObjectNode b = Json.obj();
+        b.put("taskId", taskId);
+        b.put("status", "done");
+        b.put("summary", tools.finished.path("summary").asText(""));
+        b.put("report", tools.finished.path("report").asText(""));
+        if (tools.finished.path("findings").isArray()) b.set("findings", tools.finished.get("findings"));
+        send(b);
+        Log.info("  done: " + Json.clip(tools.finished.path("summary").asText(""), 200));
+        watcher.finished("done", tools.finished.path("summary").asText(""));
+    }
+
+    private void completeApproval() {
+        ObjectNode b = Json.obj();
+        b.put("taskId", taskId);
+        b.put("status", "needs_approval");
+        b.put("summary", tools.approval.path("summary").asText(""));
+        b.put("details", tools.approval.path("details").asText(""));
+        send(b);
+        Log.info("  waiting for approval: " + Json.clip(tools.approval.path("summary").asText(""), 200));
+        watcher.finished("needs_approval", tools.approval.path("summary").asText(""));
+    }
+
+    private void complete(String status, String summary, String error, String report) {
+        ObjectNode b = Json.obj();
+        b.put("taskId", taskId);
+        b.put("status", status);
+        b.put("summary", summary == null ? "" : summary);
+        b.put("error", error == null ? "" : error);
+        b.put("report", report == null ? "" : report);
+        send(b);
+        Log.info("  " + status + ": " + error);
+        watcher.finished(status, error == null ? "" : error);
+    }
+
+    private void send(ObjectNode body) {
+        for (int i = 0; i < 5; i++) {
+            try { crm.post("agent/complete", body); return; } catch (CrmClient.CrmException e) {
+                if (e.status == 409) return;   // no longer ours (cancelled or released)
+                try { Thread.sleep(5000L * (i + 1)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+        }
+        Log.warn("The result of task " + taskId + " could not be delivered to the CRM.");
+    }
+}

@@ -1,0 +1,115 @@
+# Builds the local AI agent program whenever its code changes and hands the new
+# version to the live CRM, which then offers it to every registered device.
+#
+# Flow: push to main -> this builds agent/ into serpsquad-agent.jar with a
+# version number of its own -> the file and a small description are copied to
+# the VPS, into server/data/agentops/incoming/ -> the CRM (server/agentops.js,
+# adoptIncomingRelease) checks the checksum and makes it the current release ->
+# devices install it by themselves, or at once with "Sync for update".
+#
+# Version: MAJOR.MINOR comes from agent/pom.xml, PATCH is this workflow's run
+# number, so every build is newer than the one before without anyone having to
+# remember to raise a number.
+#
+# Uses the same two secrets as the deploy: VPS_HOST and VPS_SSH_KEY.
+name: Build and publish the agent program
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "src/agent-app/**"
+      - "src/features/company/agentdash.jsx"
+      - "src/features/company/guide.jsx"
+      - "src/lib/docxread.js"
+      - "src/lib/format.jsx"
+      - "src/ui/primitives.jsx"
+      - "src/index.css"
+      - "server/agentops-catalog.js"
+      - "scripts/export-agent-catalog.mjs"
+      - "vite.agent.config.js"
+      - ".github/workflows/agent-release.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: agent-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+          cache-dependency-path: agent/pom.xml
+      - name: Version of this build
+        id: v
+        run: |
+          BASE=$(sed -n 's:.*<version>\([0-9]*\.[0-9]*\)\.[0-9]*</version>.*:\1:p' agent/pom.xml | head -1)
+          test -n "$BASE" || { echo "could not read the version from agent/pom.xml"; exit 1; }
+          echo "version=$BASE.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "Building agent version $BASE.${{ github.run_number }}"
+      - name: Build the application's screens
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build:agent-ui
+      - name: Build the program
+        working-directory: agent
+        run: mvn -q -B package -Dagent.version=${{ steps.v.outputs.version }}
+      - name: Check that it starts
+        run: |
+          test "$(java -jar agent/target/serpsquad-agent.jar version)" = "${{ steps.v.outputs.version }}"
+          java -jar agent/target/serpsquad-agent.jar selftest
+      - name: Describe the release
+        run: |
+          mkdir -p out
+          cp agent/target/serpsquad-agent.jar out/serpsquad-agent.jar
+          SHA=$(sha256sum out/serpsquad-agent.jar | cut -d' ' -f1)
+          NOTES=$(git log -1 --pretty=%s | cut -c1-300)
+          node -e 'const fs=require("fs");fs.writeFileSync("out/release.json",JSON.stringify({version:process.argv[1],sha256:process.argv[2],size:fs.statSync("out/serpsquad-agent.jar").size,notes:process.argv[3],commit:process.argv[4],builtAt:new Date().toISOString()}))' "${{ steps.v.outputs.version }}" "$SHA" "$NOTES" "${{ github.sha }}"
+          cat out/release.json
+      - name: Hand it to the live CRM
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          SSH="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@$VPS_HOST"
+          DIR=/var/www/serpsquad/server/data/agentops/incoming
+          # the description is put in place last: the CRM only looks at a pair that is complete
+          for attempt in 1 2 3; do
+            if $SSH "mkdir -p $DIR && rm -f $DIR/release.json $DIR/*.part" \
+              && scp -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 out/serpsquad-agent.jar "root@$VPS_HOST:$DIR/serpsquad-agent.jar.part" \
+              && scp -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 out/release.json "root@$VPS_HOST:$DIR/release.json.part" \
+              && $SSH "cd $DIR && mv -f serpsquad-agent.jar.part serpsquad-agent.jar && mv -f release.json.part release.json"; then
+              echo "uploaded on attempt $attempt"; break
+            fi
+            test "$attempt" = 3 && { echo "the upload failed three times"; exit 1; }
+            sleep 30
+          done
+      - name: Confirm the CRM took it
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          SSH="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@$VPS_HOST"
+          V="${{ steps.v.outputs.version }}"
+          # the CRM looks for a new version every 30 seconds; a deploy of the same push may also be restarting it
+          for i in $(seq 1 24); do
+            if $SSH "test -f /var/www/serpsquad/server/data/agentops/releases/agent-$V.jar && grep -q '\"version\":\"$V\"' /var/www/serpsquad/server/data/agentops/releases.json"; then
+              echo "The live CRM now offers agent version $V to its devices."; exit 0
+            fi
+            sleep 15
+          done
+          echo "The CRM did not pick up version $V within six minutes. The file is still in the incoming folder and is taken at the next look."
+          $SSH "ls -la /var/www/serpsquad/server/data/agentops/incoming/ /var/www/serpsquad/server/data/agentops/releases/ 2>&1 | tail -20; pm2 logs serpsquad-api --lines 15 --nostream 2>&1 | tail -20" || true
+          exit 1

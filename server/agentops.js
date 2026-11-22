@@ -24,7 +24,7 @@
    Team endpoints need an Admin/owner session (X-SS-Token).
    Device endpoints need a device token (X-Agent-Token).
    ===================================================================== */
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync, readdirSync, copyFileSync } from "node:fs";
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,10 +75,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0 }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }),
 };
 const cache = {};
 function load(name) {
@@ -243,7 +243,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -269,31 +269,115 @@ function logoOf(p, c) {
   return made;
 }
 const accentOf = (p) => (/^#[0-9a-f]{6}$/i.test(String(p.accent || "")) ? p.accent : "");
-function projectList() {
-  const core = deps.readDocCached("core", null);
+/* ---------- the agent's own list of projects ----------
+   The agent does not work on every project the CRM holds. A project is put on
+   its list in one of two ways: imported from the CRM (the project stays the
+   CRM's; the agent only reads it), or added by hand (a project that exists
+   only here, for work on a business that is not in the CRM). projects.json
+   holds the imported ids and the hand-made projects. The first time this
+   runs, every CRM project the agent already holds something for is put on
+   the list, so nothing that was in use disappears. */
+const MANUAL_ID = /^ap_[a-f0-9]{16}$/;
+function crmProjects() {
   const out = [];
-  for (const c of core?.clients || []) for (const p of c.projects || []) {
-    if (p.archived) continue;
-    out.push({ id: p.id, name: p.name || "Project", client: c.name || "", demo: p.demoMode !== false, accent: accentOf(p), logoRev: logoOf(p, c).rev });
+  for (const c of deps.readDocCached("core", null)?.clients || []) for (const p of c.projects || []) if (!p.archived) out.push({ p, c });
+  return out;
+}
+function roster() {
+  const r = load("roster");
+  if (!Array.isArray(r.added)) r.added = [];
+  if (!Array.isArray(r.manual)) r.manual = [];
+  if (!r.init) {
+    const cfg = load("config"), used = new Set([...Object.keys(cfg.projects || {}), ...load("tasks").map((t) => t.projectId)]);
+    for (const name of ["chats", "directions", "memory", "changes", "lessons", "brand"]) for (const id of Object.keys(load(name) || {})) used.add(id);
+    r.added = crmProjects().map((x) => x.p.id).filter((id) => used.has(id));
+    r.init = true;
+    save("roster");
   }
+  return r;
+}
+const manualView = (m) => ({ id: m.id, name: m.name, client: m.client || "", demo: false, accent: m.accent || "", logoRev: logoOf(m, {}).rev, manual: true, website: m.website || "" });
+const onAgentList = (id) => id === AGENCY_PROJECT || roster().added.includes(id) || roster().manual.some((m) => m.id === id && !m.removed);
+function projectList() {
+  const r = roster(), listed = new Set(r.added), out = [];
+  for (const { p, c } of crmProjects()) if (listed.has(p.id)) out.push({ id: p.id, name: p.name || "Project", client: c.name || "", demo: p.demoMode !== false, accent: accentOf(p), logoRev: logoOf(p, c).rev });
+  for (const m of r.manual) if (!m.removed) out.push(manualView(m));
   return out;
 }
 function logosGet(body) {
   const want = new Set((Array.isArray(body?.ids) ? body.ids : []).slice(0, 300).map(String)), logos = {};
   let size = 0;
-  for (const c of deps.readDocCached("core", null)?.clients || []) for (const p of c.projects || []) {
-    if (p.archived || !want.has(p.id)) continue;
-    const { logo } = logoOf(p, c);
-    if (logo && size + logo.length < 12e6) { logos[p.id] = logo; size += logo.length; }
-  }
+  const take = (id, logo) => { if (logo && size + logo.length < 12e6) { logos[id] = logo; size += logo.length; } };
+  for (const { p, c } of crmProjects()) if (want.has(p.id)) take(p.id, logoOf(p, c).logo);
+  for (const m of roster().manual) if (!m.removed && want.has(m.id)) take(m.id, logoOf(m, {}).logo);
   return [200, { ok: true, logos }];
 }
 function projectOf(id) {
   if (id === AGENCY_PROJECT) return { id, name: "Agency (no project)", client: "", demo: false, raw: null, clientRaw: null };
   const core = deps.readDocCached("core", null);
   for (const c of core?.clients || []) for (const p of c.projects || []) if (p.id === id) return { id, name: p.name || "Project", client: c.name || "", demo: p.demoMode !== false, raw: p, clientRaw: c };
-  return null;
+  const m = MANUAL_ID.test(String(id)) ? load("roster").manual?.find((x) => x.id === id) : null;
+  return m ? { id, name: m.name, client: m.client || "", demo: false, raw: null, clientRaw: null, manual: true, website: m.website || "" } : null;
 }
+/* putting projects on the agent's list, changing a hand-made one, taking one off */
+function rosterEdit(admin, body) {
+  const r = roster(), action = body.action || "list", bad = (detail, code = 400) => [code, { error: code === 404 ? "not_found" : "bad_request", detail }];
+  const candidates = () => crmProjects().filter((x) => !r.added.includes(x.p.id)).map(({ p, c }) => ({ id: p.id, name: p.name || "Project", client: c.name || "", accent: accentOf(p), logoRev: logoOf(p, c).rev, website: cut(String((deps.readDocCached("optimization", {}) || {})[p.id]?.website || ""), 200) }));
+  if (action === "list") return [200, { ok: true, candidates: candidates(), onList: projectList().length }];
+  const cfg = load("config");
+  const setWebsite = (id, site) => { const w = line(site, 300); if (!w) return; const ps = (cfg.projects[id] ||= {}); const ch = cleanChannels(ps.channels); if (!ch.website.url) { ch.website.url = /^https?:\/\//i.test(w) ? w : "https://" + w; ps.channels = ch; cfg.rev += 1; save("config"); } };
+  const fields = (b, cur = {}) => {
+    const out = { name: b.name != null ? line(b.name, 120) : cur.name, client: b.client != null ? line(b.client, 120) : cur.client || "", website: b.website != null ? line(b.website, 300) : cur.website || "", accent: b.accent != null ? (/^#[0-9a-f]{6}$/i.test(String(b.accent)) ? b.accent : "") : cur.accent || "", logo: cur.logo || "" };
+    if (b.logo != null) { if (b.logo === "") out.logo = ""; else if (typeof b.logo === "string" && b.logo.length < 600000 && LOGO_OK.test(b.logo)) out.logo = b.logo; else return { error: "That logo is not an image this screen can use. Upload a PNG or JPG." }; }
+    if (!out.name || out.name.length < 2) return { error: "Give the project a name." };
+    return out;
+  };
+  if (action === "import") {
+    const all = candidates(), want = body.all ? all.map((x) => x.id) : (Array.isArray(body.ids) ? body.ids.map(String) : []);
+    const picked = all.filter((x) => want.includes(x.id));
+    if (!picked.length) return bad(body.all ? "Every CRM project is already on the agent's list." : "Choose at least one project to import.");
+    for (const x of picked) { r.added.push(x.id); setWebsite(x.id, x.website); }
+    save("roster");
+    logActivity("projects", `${admin.name} imported ${picked.length === 1 ? `"${picked[0].name}"` : `${picked.length} projects`} from the CRM into the agent's list.`);
+    return [200, { ...overview(admin), imported: picked.map((x) => x.id) }];
+  }
+  if (action === "add") {
+    if (r.manual.filter((m) => !m.removed).length >= 300) return bad("The agent's list holds 300 hand-made projects at most.");
+    const f = fields(body);
+    if (f.error) return bad(f.error);
+    if (projectList().some((p) => p.name.toLowerCase() === f.name.toLowerCase())) return bad("A project with that name is already on the list.");
+    const m = { id: uid("ap_"), ...f, createdAt: now(), by: admin.name };
+    r.manual.push(m);
+    save("roster");
+    setWebsite(m.id, m.website);
+    logActivity("projects", `${admin.name} added the project "${m.name}" to the agent's list by hand.`, { projectId: m.id });
+    return [200, { ...overview(admin), created: m.id }];
+  }
+  const m = r.manual.find((x) => x.id === body.id && !x.removed);
+  if (action === "update") {
+    if (!m) return bad("Only a project that was added by hand can be changed here. A CRM project is changed in the CRM.", 404);
+    const f = fields(body, m);
+    if (f.error) return bad(f.error);
+    if (projectList().some((p) => p.id !== m.id && p.name.toLowerCase() === f.name.toLowerCase())) return bad("A project with that name is already on the list.");
+    Object.assign(m, f);
+    save("roster");
+    return [200, overview(admin)];
+  }
+  if (action === "remove") {
+    const p = projectOf(body.id);
+    if (!p || p.id === AGENCY_PROJECT || !onAgentList(p.id)) return bad("That project is not on the agent's list.", 404);
+    if (load("tasks").some((t) => t.projectId === p.id && t.status === "running")) return bad("The agent is working on this project right now. Try again when the task has finished.");
+    if (m) { m.removed = true; m.removedAt = now(); } else r.added = r.added.filter((id) => id !== p.id);
+    save("roster");
+    let cancelled = 0;
+    for (const t of load("tasks")) if (t.projectId === p.id && (t.status === "queued" || t.status === "approved" || t.status === "needs_approval")) { t.status = "cancelled"; t.finishedAt = now(); t.error = "The project was taken off the agent's list."; cancelled += 1; }
+    if (cancelled) save("tasks");
+    logActivity("projects", `${admin.name} took "${p.name}" off the agent's list.${cancelled ? ` ${cancelled} waiting task(s) were cancelled.` : ""} Its settings, chat and lessons are kept.`, { projectId: p.id });
+    return [200, overview(admin)];
+  }
+  return bad("Unknown action.");
+}
+
 
 /* ---------- per-project settings with catalog defaults ---------- */
 const PERIOD_MS = { day: 864e5, week: 7 * 864e5, month: 30 * 864e5 };
@@ -948,6 +1032,7 @@ function blockOf(t, device) {
   if (device?.paused) return "This device is paused.";
   const ps = projectSetting(t.projectId), ts = taskSetting(t.projectId, t.type), cat = CATALOG_BY_KEY[t.type];
   if (!cat) return "Unknown task type.";
+  if (!onAgentList(t.projectId)) return "This project is not on the agent's list. Add it under Projects.";
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
   if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, PERIOD_MS[ts.per]) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
@@ -1145,9 +1230,11 @@ const SERVER_TOOLS = [
     const p = projectOf(ctx.task.projectId);
     if (ctx.task.projectId === AGENCY_PROJECT) return { project: { name: "Agency (no project)" }, note: "Agency-level task: there is no project data. Work from the task instructions." };
     const rows = rankRows(p.id);
+    const outside = p.manual ? { notInTheCrm: "This project was added to the agent by hand and is not in the CRM: there is no rank tracking, Search Console data or report history for it. Work from its website, its work setup, its brand voice and the web, and say so where numbers are missing." } : {};
     const movers = rows.filter((r) => r.pos != null && r.d7 != null && r.d7 !== r.pos).sort((a, b) => (b.pos - b.d7) - (a.pos - a.d7));
     const google = p.raw?.google || {};
     return {
+      ...outside,
       project: { name: p.name, client: p.client, demoData: p.demo, website: [...new Set(trackingOf(p.id).map((t) => t.domain).filter(Boolean))].slice(0, 3), searchConsoleConnected: !!(google.connectionId && google.gscSite), analyticsConnected: !!google.ga4Property },
       ranking: { ...rankSummary(rows), cities: [...new Set(rows.map((r) => r.city).filter(Boolean))].slice(0, 30) },
       biggestDrops7d: movers.slice(0, 15).map(rowOut), biggestGains7d: movers.slice(-10).reverse().map(rowOut),
@@ -1465,6 +1552,48 @@ function directionEdit(admin, body) {
   } else return [400, { error: "bad_request", detail: "Unknown action." }];
   return [200, chatState(p.id)];
 }
+/* ---------- a new version of the agent program that arrived with a deploy ----------
+   The agent's source lives in the same repository as the CRM. When a push
+   changes it, a build puts the new program file and a small description
+   (version, checksum, what changed) into data/agentops/incoming/. This picks
+   it up: the file is checked against its checksum, and if its version is
+   newer than the one devices are offered now it becomes the current release.
+   Devices are told at once and install it by themselves; "Sync for update" in
+   the agent application does the same on demand. Only the three newest
+   program files are kept on disk. */
+const INCOMING = new URL("./data/agentops/incoming/", import.meta.url);
+const newerVersion = (a, b) => { const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+function pruneReleases() {
+  const rel = load("releases"), keep = new Set([rel.current?.version, ...rel.list.slice(0, 3).map((r) => r.version)].filter(Boolean).map((v) => `agent-${v}.jar`));
+  try { for (const f of readdirSync(REL_DIR)) if (/^agent-[0-9.]+\.jar$/.test(f) && !keep.has(f)) rmSync(new URL(f, REL_DIR), { force: true }); } catch { /* no releases folder yet */ }
+}
+let adoptCheckedAt = 0;
+function adoptIncomingRelease(force) {
+  if (!force && now() - adoptCheckedAt < 15000) return;
+  adoptCheckedAt = now();
+  const meta = new URL("release.json", INCOMING), jar = new URL("serpsquad-agent.jar", INCOMING);
+  if (!existsSync(meta) || !existsSync(jar)) return;
+  const drop = (why) => { rmSync(jar, { force: true }); rmSync(meta, { force: true }); if (why) logActivity("release", why); };
+  let m = null;
+  try { m = JSON.parse(readFileSync(meta, "utf8")); } catch { m = null; }
+  if (!m || !/^\d+\.\d+\.\d+$/.test(String(m.version)) || !/^[a-f0-9]{64}$/.test(String(m.sha256))) return drop("A new version of the agent program arrived with a deploy, but its description could not be read. It was ignored.");
+  const buf = readFileSync(jar);
+  if (buf.length < 1000 || buf.length > MAX_RELEASE_BYTES || buf[0] !== 0x50 || buf[1] !== 0x4b || sha(buf) !== m.sha256) return drop(`Agent version ${m.version} arrived with a deploy, but the file did not match its checksum. It was ignored.`);
+  const rel = load("releases");
+  if (rel.current && !newerVersion(m.version, rel.current.version)) return drop("");      // the same or an older version: nothing to do
+  mkdirSync(REL_DIR, { recursive: true });
+  copyFileSync(jar, new URL(`agent-${m.version}.jar`, REL_DIR));
+  const entry = { version: m.version, sha256: m.sha256, size: buf.length, at: now(), by: "a deploy", notes: clip(m.notes || "", 500), commit: String(m.commit || "").replace(/[^a-f0-9]/gi, "").slice(0, 12) };
+  rel.list = [entry, ...rel.list.filter((r) => r.version !== entry.version)].slice(0, 20);
+  rel.current = entry;
+  save("releases");
+  drop("");
+  pruneReleases();
+  logActivity("release", `Agent version ${entry.version} arrived with a deploy${entry.notes ? ` (${entry.notes})` : ""}. Devices install it by themselves.`);
+  pokeDevices();
+}
+setInterval(() => { try { adoptIncomingRelease(true); } catch { /* looked at again in 30 seconds */ } }, 30e3).unref?.();
+
 /* The agent jar is ~50 MB, so it is streamed straight to disk as a raw body
    (never parsed as JSON): POST /api/agentops/release/upload?version=1.2.3 */
 const MAX_RELEASE_BYTES = 150e6;
@@ -1500,13 +1629,16 @@ export async function agentOpsUpload(req, send) {
   rel.list = [entry, ...rel.list.filter((r) => r.version !== version)].slice(0, 20);
   rel.current = entry;
   save("releases");
-  logActivity("release", `${admin.name} published agent version ${version}. Devices install it on their next check-in.`);
+  pruneReleases();
+  pokeDevices();
+  logActivity("release", `${admin.name} published agent version ${version}. Devices install it by themselves.`);
   return send(200, overview(admin));
 }
 
 /* ---------- device endpoints ---------- */
 function agentHello(d, body) {
   ensureDefaultsRev();
+  try { adoptIncomingRelease(false); } catch { /* the timer looks again */ }
   d.lastSeen = now();
   d.version = clip(body?.version || "", 20); d.host = clip(body?.host || "", 80); d.os = clip(body?.os || "", 80);
   d.state = clip(body?.state || "", 120);
@@ -1916,6 +2048,7 @@ export async function agentOpsPost(req, body) {
     case "direction": return directionEdit(admin, body || {});
     case "brand": return brandEdit(admin, body || {});
     case "knowledge": return knowledgeEdit(admin, body || {});
+    case "roster": return rosterEdit(admin, body || {});
     case "logos": return logosGet(body || {});
     case "check": return checkRequest(admin, body || {});
     case "lesson": return lessonEdit(admin, body || {});

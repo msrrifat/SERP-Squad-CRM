@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SERP Squad Agent</title>
+<link rel="icon" href="/icon.png">
+<link rel="stylesheet" href="/manage/manage.css">
+<style>
+  :root {
+    --bg: #F4F5F8; --card: #FFFFFF; --line: #E5E7EB; --ink: #111827; --ink2: #4B5563; --ink3: #9CA3AF; --side: #131B2E; --side2: #1D2740; --sideink: #C7D0E3;
+    --accent: #1F2A44; --green: #15803D; --green-bg: #DCFCE7; --amber: #B45309; --amber-bg: #FEF3C7;
+    --red: #B91C1C; --red-bg: #FEE2E2; --blue: #1D4ED8; --blue-bg: #DBEAFE; --grey-bg: #F3F4F6; --code: #0F172A;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; overflow: hidden; }
+  aside { width: 214px; flex: none; background: var(--side); color: var(--sideink); display: flex; flex-direction: column; padding: 16px 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 16px; }
+  .brand img { width: 34px; height: 34px; border-radius: 9px; }
+  .brand b { display: block; color: #fff; font-size: 14.5px; line-height: 1.2; } .brand span { font-size: 11px; color: #8E9AB5; }
+  #nav button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; margin: 2px 0; border: 0; border-radius: 9px; background: transparent; color: var(--sideink); font: inherit; font-size: 13.5px; font-weight: 550; cursor: pointer; text-align: left; }
+  #nav button:hover { background: var(--side2); } #nav button.on { background: var(--side2); color: #fff; }
+  #nav button svg { width: 17px; height: 17px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #nav button .n { margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 999px; background: #F59E0B; color: #1F1300; font-size: 11px; font-weight: 700; text-align: center; }
+  .foot { margin-top: auto; padding: 10px 6px 2px; font-size: 11.5px; color: #8E9AB5; border-top: 1px solid var(--side2); }
+  .foot b { color: #fff; font-weight: 600; }
+  .wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 13px 24px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  header .sub { font-size: 12px; color: var(--ink3); }
+  .vgrow { flex: 1; }
+  .tag { padding: 3px 9px; border-radius: 999px; background: var(--blue-bg); color: var(--blue); font-size: 11px; font-weight: 700; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 650; background: var(--grey-bg); color: var(--ink2); white-space: nowrap; }
+  .pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.working { background: var(--green-bg); color: var(--green); } .pill.working i { animation: pulse 1.4s infinite; }
+  .pill.idle { background: var(--blue-bg); color: var(--blue); }
+  .pill.paused, .pill.blocked, .pill.setup { background: var(--amber-bg); color: var(--amber); }
+  .pill.offline, .pill.stopped { background: var(--red-bg); color: var(--red); }
+  @keyframes pulse { 50% { opacity: .25; } }
+  main { flex: 1; overflow-y: auto; padding: 18px 24px 36px; }
+  .view { display: none; max-width: 1180px; margin: 0 auto; } .view.on { display: block; }
+  .vgrid { display: grid; gap: 16px; } .g2 { grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); }
+  @media (max-width: 980px) { .g2, .gset, .gproj { grid-template-columns: 1fr !important; } aside { width: 64px; } .brand div, #nav button span.t, .foot { display: none; } }
+  .stack { display: grid; gap: 16px; align-content: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .card h2 { margin: 0 0 2px; font-size: 14px; font-weight: 650; }
+  .hint { font-size: 12px; color: var(--ink3); margin-bottom: 10px; }
+  .banner { border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
+  .banner.warn { background: var(--amber-bg); color: var(--amber); } .banner.bad { background: var(--red-bg); color: var(--red); }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .row:first-child { border-top: 0; }
+  .row span:first-child { color: var(--ink2); } .row span:last-child { text-align: right; font-weight: 550; overflow-wrap: anywhere; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+  button.b { font: inherit; font-size: 12.5px; font-weight: 650; border-radius: 9px; padding: 7px 13px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.b:hover { border-color: var(--ink3); } button.b:disabled { opacity: .45; cursor: default; }
+  button.b.primary { background: var(--accent); border-color: var(--accent); color: #fff; } button.b.danger { color: var(--red); }
+  button.link { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--ink2); text-decoration: underline; cursor: pointer; }
+  .van label { display: block; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink3); margin: 10px 0 4px; }
+  .van input[type=text], .van input[type=password] { width: 100%; font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .title { font-size: 17px; font-weight: 650; margin: 2px 0; }
+  .meta { font-size: 12.5px; color: var(--ink2); }
+  .bar { height: 7px; border-radius: 999px; background: var(--grey-bg); overflow: hidden; margin: 8px 0 4px; }
+  .bar div { height: 100%; border-radius: 999px; background: var(--green); transition: width .4s; } .bar.hot div { background: #D97706; } .bar.full div { background: #DC2626; }
+  .steps { margin: 12px 0 0; padding: 10px 12px; list-style: none; max-height: 230px; overflow: auto; border-radius: 10px; background: var(--code); color: #D7E0F0; font: 11.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .steps li span { color: #7C8AA5; margin-right: 8px; }
+  .empty { padding: 14px 2px 4px; color: var(--ink2); font-size: 13px; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; background: var(--grey-bg); color: var(--ink2); }
+  .chip.done, .chip.on, .chip.running { background: var(--green-bg); color: var(--green); } .chip.failed { background: var(--red-bg); color: var(--red); }
+  .chip.queued, .chip.approved { background: var(--blue-bg); color: var(--blue); }
+  .chip.stopped, .chip.needs_approval, .chip.released, .chip.warn { background: var(--amber-bg); color: var(--amber); }
+  .task { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 9px 0; border-top: 1px solid var(--line); }
+  .task:first-child { border-top: 0; }
+  .task b { display: block; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task small { display: block; color: var(--ink2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task small.held { color: var(--amber); }
+  .task .r { font-size: 11.5px; color: var(--ink3); text-align: right; white-space: nowrap; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--grey-bg); border-radius: 12px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 20px; font-weight: 700; } .stat span { font-size: 11.5px; color: var(--ink2); }
+  .msg { font-size: 12.5px; margin-top: 8px; min-height: 18px; } .msg.ok { color: var(--green); } .msg.no { color: var(--red); } .msg.q { color: var(--amber); }
+  pre.log { margin: 0; padding: 12px 14px; height: calc(100vh - 150px); overflow: auto; border-radius: 12px; background: var(--code); color: #C6D0E2; font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  ol.how { list-style: decimal; margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ink2); } ol.how li { margin: 3px 0; }
+  .vhide { display: none !important; }
+  .pcard { text-align: left; width: 100%; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; cursor: pointer; }
+  .pcard:hover { border-color: var(--ink3); } .pcard.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91, 123, 213, .28); }
+  .pcard .nm { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; } .pcard .nm i { width: 8px; height: 8px; border-radius: 50%; background: #D1D5DB; flex: none; } .pcard .nm i.on { background: #16A34A; } .pcard .nm i.run { background: #16A34A; animation: pulse 1.4s infinite; }
+  .pcard .cl { font-size: 11.5px; color: var(--ink3); margin-bottom: 4px; }
+  .ct { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .van table { width: 100%; border-collapse: collapse; font-size: 12.5px; } .van th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink3); font-weight: 700; padding: 6px 8px 6px 0; }
+  .van td { padding: 7px 8px 7px 0; border-top: 1px solid var(--line); vertical-align: top; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .filters button { font: inherit; font-size: 11.5px; font-weight: 650; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink2); cursor: pointer; }
+  .filters button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .switch { position: relative; width: 38px; height: 22px; border-radius: 999px; border: 0; background: #D1D5DB; cursor: pointer; flex: none; } .switch.on { background: #16A34A; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; } .switch.on::after { transform: translateX(16px); }
+  /* the project chat, shaped like a phone */
+  .ptop { display: grid; grid-template-columns: 348px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1180px) { .ptop { grid-template-columns: 1fr; } .phone { margin: 0 auto; } }
+  .phone { width: 348px; height: 632px; border-radius: 42px; background: #0B1020; padding: 11px; box-shadow: 0 14px 34px rgba(15, 23, 42, .28), inset 0 0 0 2px #2A3350; position: relative; flex: none; }
+  .phone::before { content: ""; position: absolute; top: 20px; left: 50%; width: 92px; height: 22px; margin-left: -46px; border-radius: 999px; background: #0B1020; z-index: 3; }
+  .screen { height: 100%; border-radius: 32px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; }
+  .phead { display: flex; align-items: center; gap: 9px; padding: 40px 14px 10px; background: var(--card); border-bottom: 1px solid var(--line); }
+  .phead img { width: 32px; height: 32px; border-radius: 10px; flex: none; }
+  .phead b { display: block; font-size: 13.5px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .phead span { font-size: 11px; color: var(--ink3); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .phead span.on { color: var(--green); }
+  .pmsgs { flex: 1; overflow-y: auto; padding: 12px 11px; display: flex; flex-direction: column; gap: 8px; }
+  .bub { max-width: 86%; padding: 8px 11px; border-radius: 16px; font-size: 12.8px; line-height: 1.45; overflow-wrap: anywhere; }
+  .bub.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+  .bub.ag { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+  .bub.err { background: var(--red-bg); border-color: transparent; color: var(--red); }
+  .bub code { font: 11.5px ui-monospace, Menlo, Consolas, monospace; background: var(--grey-bg); padding: 0 4px; border-radius: 4px; }
+  .btime { font-size: 10px; color: var(--ink3); margin-top: -4px; } .btime.me { align-self: flex-end; } .bsys { align-self: center; font-size: 10.5px; color: var(--ink3); text-align: center; }
+  .typing { align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); font-size: 12px; color: var(--ink2); }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink3); animation: pulse 1.2s infinite; } .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  .pfoot { padding: 8px 10px 12px; background: var(--card); border-top: 1px solid var(--line); }
+  .pfoot .in { display: flex; align-items: flex-end; gap: 7px; }
+  .pfoot textarea { flex: 1; resize: none; height: 38px; max-height: 92px; font: inherit; font-size: 13px; padding: 8px 12px; border-radius: 19px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .pfoot button.send { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; cursor: pointer; flex: none; display: grid; place-items: center; } .pfoot button.send:disabled { opacity: .4; cursor: default; }
+  .pfoot button.send svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pfoot .perr { font-size: 11px; color: var(--red); margin: 0 4px 6px; } .pfoot .pstop { border: 0; background: none; color: var(--ink2); font: inherit; font-size: 11px; text-decoration: underline; cursor: pointer; margin: 0 4px 6px; padding: 0; }
+  .dir { display: flex; gap: 8px; font-size: 12.5px; color: var(--ink); padding: 6px 0; border-top: 1px solid var(--line); } .dir:first-child { border-top: 0; } .dir b { color: var(--ink3); font-weight: 650; min-width: 16px; }
+  .note { font-size: 12.5px; color: var(--ink2); padding: 7px 0; border-top: 1px solid var(--line); } .note:first-child { border-top: 0; } .note span { color: var(--ink3); }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><img src="/icon.png" alt=""><div><b>SERP Squad Agent</b><span id="sideDevice">This computer</span></div></div>
+  <nav id="nav">
+    <button data-v="overview" class="on"><svg viewBox="0 0 24 24"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span class="t">Overview</span></button>
+    <button data-v="projects"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="t">Projects</span></button>
+    <button data-v="tasks"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg><span class="t">Tasks</span><span class="n vhide" id="navApprove"></span></button>
+    <button data-v="chat" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg><span class="t">Chat</span></button>
+    <button data-v="knowledge" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 012 2v13a2 2 0 00-2-2H4z"/><path d="M20 5h-6a2 2 0 00-2 2v13a2 2 0 012-2h6z"/></svg><span class="t">Knowledge</span></button>
+    <button data-v="playbooks" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11"/></svg><span class="t">Playbooks</span></button>
+    <button data-v="keys" class="vhide" data-manage><svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/></svg><span class="t">API keys</span></button>
+    <button data-v="activity"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="t">Activity</span></button>
+    <button data-v="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg><span class="t">Settings</span></button>
+  </nav>
+  <div class="foot">Version <b id="sideVer">–</b><br>Closing this window does not stop the agent.</div>
+</aside>
+
+<div class="wrap">
+  <header>
+    <div><h1 id="pageTitle">Overview</h1><div class="sub" id="pageSub">What the agent is doing on this computer</div></div>
+    <div class="vgrow"></div>
+    <span class="tag vhide" id="demoTag">Demo data</span>
+    <span class="pill" id="pill"><i></i><span id="pillText">Starting</span></span>
+  </header>
+
+  <main>
+    <div class="van" style="max-width:1180px;margin:0 auto">
+      <div class="banner bad vhide" id="stoppedBanner">The agent is not running on this computer. Start it from the SERP Squad Agent shortcut and this window fills in by itself.</div>
+      <div class="banner warn vhide" id="stateBanner"></div>
+      <section class="card vhide" id="connectCard" style="margin-bottom:16px">
+        <h2>Connect this computer to the CRM</h2>
+        <div class="hint">Do this once. In the CRM open Company Settings, AI agent, Devices &amp; updates, press Register device, and paste the token it shows.</div>
+        <label for="cTok">Device token</label>
+        <input id="cTok" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the token shown once in the CRM">
+        <div id="advBox" class="vhide"><label for="cUrl">CRM address</label><input id="cUrl" type="text" autocomplete="off" spellcheck="false"></div>
+        <div class="btns"><button class="b primary" id="cSave">Connect</button><button class="b vhide" id="cCancel">Cancel</button><button class="link" id="advBtn">Advanced</button></div>
+        <div class="msg" id="cMsg"></div>
+      </section>
+    </div>
+
+    <div class="view van on" id="v-overview">
+      <div class="vgrid g2">
+        <div class="stack">
+          <section class="card" id="nowCard">
+            <h2>Now</h2>
+            <div id="now"></div>
+            <div class="btns"><button class="b" id="pauseBtn">Pause</button><button class="b" id="checkBtn">Check for work now</button><button class="b vhide" id="retryBtn">Try again now</button></div>
+            <div class="msg" id="nowMsg"></div>
+          </section>
+          <section class="card">
+            <h2>Recent tasks on this computer</h2>
+            <div class="hint" id="recentHint">Full reports, findings and approvals are in the CRM under AI agent, Tasks.</div>
+            <div id="recent"></div>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <h2>Today on this computer</h2>
+            <div class="stats" style="margin-top:8px"><div class="stat"><b id="tTasks">0</b><span>tasks finished</span></div><div class="stat"><b id="tTokens">0</b><span>tokens used</span></div></div>
+            <div id="monthBox" class="vhide" style="margin-top:12px"></div>
+          </section>
+          <section class="card">
+            <h2>Projects</h2>
+            <div class="hint" id="projHint">Where the agent is working.</div>
+            <div id="projMini"></div>
+            <div class="btns"><button class="b" data-go="projects">All projects</button></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="view van" id="v-projects">
+      <div class="banner warn vhide" id="manageHintP">This computer can show projects but not change their settings. To set working limits, add tasks and approve from here, switch on "Manages settings" for this device in the CRM under AI agent, Devices &amp; updates.</div>
+      <div id="boardMsgP" class="banner warn vhide"></div>
+      <div class="vgrid gproj" style="grid-template-columns:minmax(260px,330px) minmax(0,1fr)">
+        <div class="stack" id="projList" style="gap:10px"></div>
+        <div class="stack">
+          <div class="ptop" id="ptop">
+            <div class="phone" id="phone">
+              <div class="screen">
+                <div class="phead"><img src="/icon.png" alt=""><div style="min-width:0"><b id="chatName">Agent</b><span id="chatStatus">Choose a project</span></div></div>
+                <div class="pmsgs" id="chatMsgs"></div>
+                <div class="pfoot">
+                  <div class="perr vhide" id="chatErr"></div>
+                  <button class="pstop vhide" id="chatStop">Stop the answer</button>
+                  <div class="in"><textarea id="chatText" aria-label="Message to the agent about this project" placeholder="Message the agent…"></textarea><button class="send" id="chatSend" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
+                </div>
+              </div>
+            </div>
+            <div class="stack" id="projSide"></div>
+          </div>
+          <div class="stack" id="projDetail"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view van" id="v-tasks">
+      <div id="boardMsgT" class="banner warn vhide"></div>
+      <section class="card">
+        <div class="filters" id="taskFilters"></div>
+        <div id="taskList"></div>
+        <div class="hint" style="margin:10px 0 0">Tasks are added, approved and cancelled in the CRM. "This computer" marks the ones done here.</div>
+      </section>
+    </div>
+
+    <div class="view" id="v-manage"><div class="banner warn vhide" id="manageErr"></div><div id="manageRoot"></div></div>
+
+    <div class="view van" id="v-activity"><pre class="log" id="log"></pre></div>
+
+    <div class="view van" id="v-settings">
+      <div class="vgrid gset" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <section class="card">
+          <h2>Connection</h2>
+          <div id="conn" style="margin-top:6px"></div>
+          <div class="btns"><button class="b" id="syncBtn">Sync now</button><button class="b" id="changeBtn">Change connection</button></div>
+          <div class="msg" id="connMsg"></div>
+        </section>
+        <section class="card">
+          <h2>API setup</h2>
+          <div class="hint">The Claude API key this computer works with.</div>
+          <div id="keyState"></div>
+          <label for="kKey">Claude API key for this computer</label>
+          <input id="kKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+          <div class="btns"><button class="b primary" id="kSave">Save key</button><button class="b" id="kTest">Test</button><button class="b danger" id="kRemove">Remove</button></div>
+          <div class="msg" id="kMsg"></div>
+          <div class="hint" style="margin:6px 0 0">A task uses the project's own key from the CRM, otherwise the key saved here, otherwise the company key set in the CRM. A key saved here stays on this computer and is never shown again.</div>
+        </section>
+        <section class="card">
+          <h2>Chrome IDs</h2>
+          <div class="hint">Separate Chrome profiles that you sign in to once: one per Google account or social login. In each project's Work setup you choose which Chrome ID a channel uses. The agent never types passwords or codes; if a site asks again, it stops and tells you.</div>
+          <div id="profiles"></div>
+          <div style="display:flex;gap:8px;margin-top:10px"><input id="pName" type="text" autocomplete="off" placeholder="Name, for example: Agency Google account"><button class="b primary" id="pAdd" style="white-space:nowrap">Add Chrome ID</button></div>
+          <div class="msg" id="gMsg"></div>
+          <ol class="how"><li>Add a Chrome ID and press Sign in. Chrome opens with that profile.</li><li>Sign in to the account yourself, then close that Chrome window. The sign-in is kept.</li><li>In the project's Work setup, choose this Chrome ID for the channel it manages.</li></ol>
+        </section>
+        <section class="card">
+          <h2>This application</h2>
+          <div id="appRows" style="margin-top:6px"></div>
+          <div class="btns" style="margin-top:12px"><button class="b" id="updBtn">Sync for update</button></div>
+          <div class="msg" id="updMsg"></div>
+          <div class="hint" style="margin:6px 0 10px">New versions come from the CRM. The agent installs them by itself, between tasks; this button checks right now. The window reloads when the new version has started.</div>
+          <div id="autoRow" class="vhide" style="align-items:center;gap:10px;margin-top:12px"><button class="switch" id="autoSw" role="switch" aria-label="Start when Windows starts"></button><span style="font-size:13px">Start the agent when Windows starts</span></div>
+          <div class="msg" id="appMsg"></div>
+          <div class="hint" style="margin:6px 0 0">Closing this window does not stop the agent. Use the SERP Squad icon near the clock to open the window again, pause, or quit.</div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/manage/manage.js"></script>
+<script>
+(() => {
+  const TOKEN = "{{TOKEN}}";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
+  const usd = (n) => "$" + (n >= 100 ? Math.round(n) : (n || 0).toFixed(2));
+  const ago = (ms, now) => { if (!ms) return "never"; const s = Math.max(0, Math.round((now - ms) / 1000)); return s < 5 ? "just now" : s < 60 ? s + " s ago" : s < 3600 ? Math.floor(s / 60) + " min ago" : s < 86400 ? Math.floor(s / 3600) + " h ago" : Math.floor(s / 86400) + " d ago"; };
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const api = async (path, body) => {
+    const r = await fetch("/api/" + path, body === undefined ? { headers: { "X-Agent-Ui": TOKEN } } : { method: "POST", headers: { "X-Agent-Ui": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    /* the agent restarted (an update, or it was started again): this page belongs to the old one, so load the new one, at most once every 15 seconds */
+    if (r.status === 403 && path === "status") { const last = +sessionStorage.getItem("ssaReload") || 0; if (Date.now() - last > 15000) { sessionStorage.setItem("ssaReload", String(Date.now())); location.reload(); } }
+    if (!r.ok) throw new Error(j.detail || "The agent refused the request (" + r.status + ").");
+    return j;
+  };
+  const say = (id, text, cls) => { const el = $(id); el.textContent = text || ""; el.className = "msg " + (cls || ""); };
+  const STATUS = { queued: "Waiting", approved: "Approved, waiting", running: "Running", needs_approval: "Needs approval", done: "Done", failed: "Failed", stopped: "Stopped", cancelled: "Cancelled", released: "Returned to queue" };
+  const PILL = { working: "Working", idle: "Idle, waiting for work", paused: "Paused", blocked: "Blocked", offline: "Cannot reach the CRM", setup: "Not connected yet", stopped: "Agent not running" };
+  const PAGES = { overview: ["Overview", "What the agent is doing on this computer"], projects: ["Projects", "Chat, directions, token limits and working limits for each project"], tasks: ["Tasks", "Give the agent work, approve it, see what it found"], chat: ["Chat", "Talk to the agent about a project"], knowledge: ["Knowledge", "Documents the agent studies and applies to every project"], playbooks: ["Playbooks", "The instructions the agent follows for each kind of task"], keys: ["API keys", "The Claude keys the agent works with"], activity: ["Activity", "The agent's own log on this computer"], settings: ["Settings", "Connection, this computer's key, Chrome IDs"] };
+  /* which of the management screens (the same ones the CRM shows) a sidebar entry opens */
+  const MANAGE = { projects: "limits", tasks: "tasks", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", keys: "api" }, BACK = { limits: "projects", tasks: "tasks", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", api: "keys" };
+  let updAsked = 0;      // when "Sync for update" was last pressed in this window
+  let mgr = null, manageKnown = null, navTick = 0;      // navTick moves every time a sidebar entry is pressed, so pressing Projects again returns to the list of projects
+  const canManage = () => !!(last && last.manage && window.SerpSquadManage);
+  function showManage(v) {
+    const opts = { headers: { "X-Agent-Ui": TOKEN }, view: MANAGE[v], tick: navTick, sticky: parseFloat(getComputedStyle(document.querySelector("main")).paddingTop) || 1, onView: (x) => { if (BACK[x] && BACK[x] !== view) go(BACK[x]); }, onCounts: (c) => { $("navApprove").textContent = c.approvals; $("navApprove").classList.toggle("vhide", !c.approvals); } };
+    try { if (mgr) mgr.set(opts); else mgr = window.SerpSquadManage.mount($("manageRoot"), opts); $("manageErr").classList.add("vhide"); }
+    catch (e) { $("manageErr").textContent = "The settings screens could not start: " + e.message; $("manageErr").classList.remove("vhide"); }
+  }
+  let last = null, board = null, view = "overview", changing = false, selProject = "", taskFilter = "all";
+  let profSig = "";
+  const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return u || ""; } };
+  const bar = (used, limit) => { if (!limit) return ""; const p = Math.min(100, Math.round((used / limit) * 100)); return '<div class="bar' + (p >= 100 ? " full" : p >= 80 ? " hot" : "") + '"><div style="width:' + p + '%"></div></div>'; };
+
+  function go(v) {
+    const managed = canManage() && MANAGE[v];
+    if (MANAGE[v] && !managed && !$("v-" + v)) v = "overview";          // no read-only version of that screen
+    view = v;
+    document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+    document.querySelectorAll(".view").forEach((el) => el.classList.toggle("on", el.id === (managed ? "v-manage" : "v-" + v)));
+    $("pageTitle").textContent = PAGES[v][0]; $("pageSub").textContent = PAGES[v][1];
+    document.querySelector("main").scrollTop = 0;
+    if (managed) { stopChat(); showManage(v); return; }
+    if (v !== "projects") stopChat();
+    if (v === "projects" || v === "tasks") loadBoard();
+    if (last) render(last);
+    renderBoard();
+  }
+  document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => { navTick += 1; go(b.dataset.v); }));
+  document.addEventListener("click", (e) => { const t = e.target.closest("[data-go]"); if (t) { if (t.dataset.project) selProject = t.dataset.project; go(t.dataset.go); } });
+
+  function taskRow(t, now, withProject) {
+    const st = t.status;
+    return '<div class="task"><span><span class="chip ' + esc(st) + '">' + esc(STATUS[st] || st) + "</span></span><span><b>" + esc(t.title) + "</b><small>" + (withProject ? esc(t.project) + " · " : "") + esc(t.type || t.label || "")
+      + (t.source ? " · " + (t.source === "auto" ? "started by schedule" : t.source === "agent" ? "suggested by the agent" : "added by " + esc(t.by || "the team")) : "") + (t.mine ? " · this computer" : t.device ? " · " + esc(t.device) : "") + "</small>"
+      + (t.held ? '<small class="held">Held: ' + esc(t.held) + "</small>" : t.summary ? "<small>" + esc(t.summary) + "</small>" : "") + '</span><span class="r">' + (t.tokens ? fmtTok(t.tokens) + " tokens" + (t.costUsd ? " · " + usd(t.costUsd) : "") : "not started") + "<br>" + ago(t.finishedAt || t.createdAt, now) + "</span></div>";
+  }
+
+  function render(s) {
+    last = s;
+    if (manageKnown !== !!s.manage) {                  // the CRM switched managing from this computer on or off
+      manageKnown = !!s.manage;
+      document.querySelectorAll("[data-manage]").forEach((b) => b.classList.toggle("vhide", !canManage()));
+      $("manageHintP").classList.toggle("vhide", canManage() || !s.configured);
+      $("recentHint").textContent = canManage() ? "Open Tasks for full reports, findings and approvals." : "Full reports, findings and approvals are in the CRM under AI agent, Tasks.";
+      go(view);
+      return;
+    }
+    $("stoppedBanner").classList.add("vhide");
+    $("demoTag").classList.toggle("vhide", !s.preview);
+    $("pill").className = "pill " + s.state; $("pillText").textContent = PILL[s.state] || s.state;
+    $("sideDevice").textContent = s.deviceName || "This computer"; $("sideVer").textContent = s.version;
+    const text = s.state === "blocked" ? s.stateDetail + " The agent tries again " + (s.blockedUntil > s.now ? "in " + Math.ceil((s.blockedUntil - s.now) / 60000) + " min." : "shortly.")
+      : s.state === "offline" ? (s.stateDetail || "The CRM cannot be reached.") + " The agent keeps trying."
+      : s.state === "paused" ? s.stateDetail + " No new task is started."
+      : !s.key.local && !s.key.crm && s.configured ? "No Claude API key is saved on this computer and no company key is set in the CRM. Only projects that have their own key can run until one is added in Settings." : "";
+    $("stateBanner").textContent = text; $("stateBanner").classList.toggle("vhide", !text);
+    const showConnect = !s.configured || changing;
+    $("connectCard").classList.toggle("vhide", !showConnect);
+    $("cCancel").classList.toggle("vhide", !s.configured);
+    if (!$("cUrl").value && document.activeElement !== $("cUrl")) $("cUrl").value = s.serverUrl || "";
+    $("nowCard").classList.toggle("vhide", !s.configured);
+
+    const c = s.current;
+    if (c) {
+      const pct = c.budget ? Math.min(100, Math.round((c.tokens / c.budget) * 100)) : 0, mins = Math.max(0, Math.round((s.now - c.startedAt) / 60000));
+      const old = $("now").querySelector(".steps"), atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 8;
+      $("now").innerHTML = '<div class="title">' + esc(c.title) + '</div><div class="meta">' + esc(c.project) + " · " + esc(c.label) + " · " + esc(c.model) + (c.phase === "execute" ? " · carrying out an approved plan" : "") + "</div>"
+        + '<div class="bar"><div style="width:' + pct + '%"></div></div><div class="meta">' + fmtTok(c.tokens) + " of " + fmtTok(c.budget) + " tokens for this run · running " + (mins < 1 ? "under a minute" : mins + " min")
+        + " · key: " + (c.keySource === "project" ? "the project's own" : c.keySource === "company" ? "company key from the CRM" : "this computer's") + "</div>"
+        + '<ul class="steps">' + (c.steps.length ? c.steps.map((x) => "<li><span>" + clock(x.at) + "</span>" + esc(x.text) + "</li>").join("") : "<li>Thinking…</li>") + "</ul>";
+      if (atEnd) { const ul = $("now").querySelector(".steps"); ul.scrollTop = ul.scrollHeight; }
+    } else {
+      const why = { idle: "Waiting for the next task. The agent asks the CRM for work every minute and starts as soon as a project's limits allow one.", paused: "Paused. Nothing new is started until it is resumed.", blocked: "Waiting before trying again.", offline: "Trying to reach the CRM.", setup: "" }[s.state] || "";
+      $("now").innerHTML = '<div class="empty">' + esc(why) + "</div>";
+    }
+    if (s.chat && (s.chat.answering || s.chat.lastAt)) $("now").insertAdjacentHTML("beforeend", '<div class="meta" style="margin-top:10px">Live chat: ' + (s.chat.answering ? "answering a message about <b>" + esc(s.chat.answering) + "</b> right now" : "last answered " + ago(s.chat.lastAt, s.now)) + ". " + (canManage() ? "Chat with the agent under Projects or Chat." : "You chat with the agent in the CRM under AI agent, Chat.") + "</div>");
+    $("pauseBtn").textContent = s.pausedLocal ? "Resume" : "Pause";
+    $("retryBtn").classList.toggle("vhide", s.state !== "blocked");
+    $("checkBtn").disabled = s.state !== "idle";
+    $("recent").innerHTML = s.recent.length ? s.recent.slice(0, 8).map((t) => taskRow(t, s.now, true)).join("") : '<div class="empty">No task has run on this computer yet.</div>';
+    $("tTasks").textContent = s.today.tasks; $("tTokens").textContent = fmtTok(s.today.tokens);
+
+    const inSync = s.sync.rev && s.sync.rev === s.sync.crmRev;
+    const upd = !s.update.published || s.update.published === s.version ? "Up to date" : s.update.skipped === s.update.published ? "Version " + s.update.published + " failed its self-test and was not installed" : "Version " + s.update.published + " will install by itself";
+    $("conn").innerHTML = [["CRM", hostOf(s.serverUrl)], ["This device", s.deviceName ? s.deviceName + " (token ends in " + s.tokenLast4 + ")" : s.configured ? "token ends in " + s.tokenLast4 : "not connected"], ["Last check-in", s.connected ? ago(s.lastCheckIn, s.now) : "not connected"],
+      ["Playbooks", s.sync.rev ? "revision " + s.sync.rev + (inSync ? ", in sync" : ", update waiting") + " · synced " + ago(s.sync.lastSyncAt, s.now) : "not synced yet"]].map(([k, v]) => '<div class="row"><span>' + esc(k) + "</span><span>" + esc(v) + "</span></div>").join("");
+    $("syncBtn").disabled = !s.connected;
+    $("keyState").innerHTML = '<div class="row"><span>On this computer</span><span>' + (s.key.local ? "Saved (ends in " + esc(s.key.localLast4) + ")" : "No key") + '</span></div><div class="row"><span>Company key in the CRM</span><span>' + (s.key.crm ? "Set" : "Not set") + "</span></div>";
+    $("kRemove").disabled = !s.key.local;
+    const psig = JSON.stringify(s.profiles || []) + s.chrome.found;
+    if (psig !== profSig) {                             // only redraw when the list changed, so buttons stay clickable
+      profSig = psig;
+      $("profiles").innerHTML = (s.chrome.found ? "" : '<div class="banner warn">Chrome was not found on this computer. Install Chrome, or set its location in config.json.</div>')
+        + ((s.profiles || []).length ? s.profiles.map((p) => '<div class="row" style="align-items:center"><span style="color:var(--ink)"><code style="font:600 12px ui-monospace,Menlo,Consolas,monospace;background:var(--grey-bg);padding:2px 6px;border-radius:6px">' + esc(p.id) + "</code> " + esc(p.name) + (p.opened ? "" : ' <span class="chip warn">not signed in yet</span>') + '</span><span style="display:flex;gap:6px;flex:none"><button class="b" data-prof="open" data-id="' + esc(p.id) + '">Sign in</button><button class="b" data-prof="rename" data-id="' + esc(p.id) + '" data-name="' + esc(p.name) + '">Rename</button><button class="b danger" data-prof="remove" data-id="' + esc(p.id) + '">Remove</button></span></div>').join("") : '<div class="empty">No Chrome ID yet. Add one below.</div>');
+    }
+    $("appRows").innerHTML = '<div class="row"><span>Version</span><span>' + esc(s.version) + '</span></div><div class="row"><span>Updates</span><span>' + esc(upd) + "</span></div>";
+    /* what the last check for a new version found, shown under the button for as long as it is news */
+    const u = s.update || {}, busyUpd = ["checking", "installing", "restarting", "waiting"].includes(u.state);
+    $("updBtn").disabled = busyUpd;
+    $("updBtn").textContent = busyUpd ? (u.state === "installing" ? "Installing…" : u.state === "restarting" ? "Restarting…" : u.state === "waiting" ? "Waiting for the task…" : "Checking…") : "Sync for update";
+    if (u.state && u.checkedAt && (busyUpd || updAsked || Date.now() - u.checkedAt < 10 * 60000)) say("updMsg", u.detail || "", u.state === "failed" ? "no" : "ok");
+    $("autoRow").classList.toggle("vhide", s.platform !== "windows"); $("autoRow").style.display = s.platform === "windows" ? "flex" : "";
+    $("autoSw").classList.toggle("on", !!s.autostart); $("autoSw").setAttribute("aria-checked", !!s.autostart);
+    const log = $("log"), bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 12;
+    log.textContent = s.log.join("\n"); if (bottom) log.scrollTop = log.scrollHeight;
+  }
+
+  function renderBoard() {
+    const b = board, now = last ? last.now : Date.now();
+    const bad = b && b.ok === false ? (b.detail || "The project list could not be loaded.") : "";
+    ["boardMsgP", "boardMsgT"].forEach((id) => { $(id).textContent = bad; $(id).classList.toggle("vhide", !bad || (last && !last.configured)); });
+    if (!b || !b.projects) {
+      const waitMsg = '<div class="empty">' + (last && !last.configured ? "Connect this computer to see its projects." : bad ? "" : "Loading…") + "</div>";
+      $("projMini").innerHTML = waitMsg; $("projList").innerHTML = waitMsg; $("projDetail").innerHTML = ""; $("projSide").innerHTML = ""; $("ptop").classList.add("vhide"); $("taskList").innerHTML = waitMsg; $("taskFilters").innerHTML = "";
+      return;
+    }
+    const approvals = b.tasks.filter((t) => t.status === "needs_approval").length;
+    if (!canManage()) { $("navApprove").textContent = approvals; $("navApprove").classList.toggle("vhide", !approvals); }
+    $("monthBox").classList.remove("vhide");
+    $("monthBox").innerHTML = '<div class="row"><span>This month, all projects</span><span>' + fmtTok(b.company.monthTokens) + (b.company.limit ? " of " + fmtTok(b.company.limit) : "") + " tokens</span></div>" + bar(b.company.monthTokens, b.company.limit) + '<div class="row"><span>Estimated cost</span><span>' + usd(b.company.monthCostUsd) + '</span></div><div class="row"><span>Waiting for your approval</span><span>' + approvals + "</span></div>";
+    const on = b.projects.filter((p) => p.enabled);
+    $("projHint").textContent = on.length + " of " + b.projects.length + " projects have the agent switched on.";
+    const chips = (p) => (p.counts.running ? '<span class="chip running">Working now</span>' : "") + (p.counts.needsApproval ? '<span class="chip warn">' + p.counts.needsApproval + " to approve</span>" : "") + (p.counts.waiting ? '<span class="chip queued">' + p.counts.waiting + " waiting</span>" : "");
+    $("projMini").innerHTML = (on.length ? on : b.projects).slice(0, 6).map((p) => '<div class="note" style="cursor:pointer" data-go="projects" data-project="' + esc(p.id) + '"><div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--ink);font-weight:600">' + esc(p.name) + "</b><span>" + fmtTok(p.tokens.month) + (p.tokens.limit ? " / " + fmtTok(p.tokens.limit) : "") + "</span></div>" + bar(p.tokens.month, p.tokens.limit) + '<div class="ct">' + chips(p) + "</div></div>").join("") || '<div class="empty">No projects yet.</div>';
+
+    if (!selProject || !b.projects.some((p) => p.id === selProject)) selProject = (on[0] || b.projects[0] || {}).id || "";
+    $("projList").innerHTML = b.projects.map((p) => '<button class="pcard' + (p.id === selProject ? " sel" : "") + '" data-pick="' + esc(p.id) + '"><div class="nm"><i class="' + (p.counts.running ? "run" : p.enabled ? "on" : "") + '"></i>' + esc(p.name) + '</div><div class="cl">' + esc(p.client || "") + (p.enabled ? "" : " · agent not switched on") + "</div>"
+      + (p.enabled ? '<div class="meta" style="font-size:11.5px">' + fmtTok(p.tokens.month) + (p.tokens.limit ? " of " + fmtTok(p.tokens.limit) : "") + " tokens this month</div>" + bar(p.tokens.month, p.tokens.limit) : "") + '<div class="ct">' + chips(p) + "</div></button>").join("");
+    document.querySelectorAll("[data-pick]").forEach((el) => (el.onclick = () => { selProject = el.dataset.pick; renderBoard(); }));
+    const p = b.projects.find((x) => x.id === selProject);
+    $("ptop").classList.toggle("vhide", !p);
+    if (p && view === "projects" && !canManage()) startChat(p.id, p.name);
+    if (p) {
+      const mine = b.tasks.filter((t) => t.projectId === p.id).slice(0, 8);
+      const pct = p.tokens.limit ? Math.round((p.tokens.month / p.tokens.limit) * 100) : 0;
+      $("projSide").innerHTML = '<section class="card"><div style="display:flex;justify-content:space-between;gap:12px;align-items:start"><div><div class="title">' + esc(p.name) + '</div><div class="meta">' + esc(p.client || "") + (p.demoData ? " · demo data in the CRM" : "") + '</div></div><span class="chip ' + (p.enabled ? "on" : "") + '">' + (p.enabled ? "Agent on" : "Agent off") + "</span></div>"
+        + '<div class="stats" style="margin-top:12px"><div class="stat"><b>' + fmtTok(p.tokens.month) + "</b><span>tokens this month" + (p.tokens.limit ? " (" + pct + "% of " + fmtTok(p.tokens.limit) + ")" : "") + '</span></div><div class="stat"><b>' + fmtTok(p.tokens.day) + "</b><span>tokens today" + (p.tokens.dayLimit ? " of " + fmtTok(p.tokens.dayLimit) : "") + '</span></div><div class="stat"><b>' + p.counts.doneThisMonth + '</b><span>tasks done this month</span></div><div class="stat"><b>' + usd(p.tokens.costUsd) + "</b><span>estimated cost</span></div></div>" + bar(p.tokens.month, p.tokens.limit)
+        + (p.last ? '<div style="margin-top:10px" class="meta"><b style="color:var(--ink)">Latest result</b> (' + esc(p.last.title) + ", " + ago(p.last.at, now) + "): " + esc(p.last.summary) + "</div>" : "") + "</section>"
+        + '<section class="card"><h2>Directions for the agent</h2><div class="hint">How you want this project handled. Tell the agent in the chat and it keeps it here; every task and every answer follows them.</div>' + dirList(p.id, p.directions) + "</section>";
+      $("projDetail").innerHTML = '<section class="card"><h2>What the agent may do here</h2><div class="hint">Working limits are set in the CRM under AI agent, Projects &amp; limits.</div>' + (p.taskTypes.length ? "<table><tr><th>Task</th><th>Limit</th><th>Used</th><th>Starts by itself</th></tr>" + p.taskTypes.map((t) => "<tr><td>" + esc(t.label) + (t.write ? ' <span class="chip warn">asks first</span>' : "") + "</td><td>" + esc(t.limit) + "</td><td>" + (t.used == null ? "–" : t.used) + "</td><td>" + (t.auto ? esc(t.auto) : "–") + "</td></tr>").join("") + "</table>" : '<div class="empty">' + (p.enabled ? "Every task type is switched off for this project." : "The agent is not switched on for this project. Switch it on in the CRM to give it work.") + "</div>") + "</section>"
+        + '<section class="card"><h2>Recent tasks</h2>' + (mine.length ? mine.map((t) => taskRow(t, now, false)).join("") : '<div class="empty">No tasks for this project yet.</div>') + "</section>"
+        + (p.notes && p.notes.length ? '<section class="card"><h2>What the agent remembers</h2>' + p.notes.map((n) => '<div class="note"><span>' + esc(n.at) + "</span> · " + esc(n.note) + "</div>").join("") + "</section>" : "");
+    } else { $("projDetail").innerHTML = ""; $("projSide").innerHTML = ""; }
+
+    const F = [["all", "All", () => true], ["running", "Running", (t) => t.status === "running"], ["waiting", "Waiting", (t) => t.status === "queued" || t.status === "approved"], ["needs_approval", "Needs approval", (t) => t.status === "needs_approval"], ["done", "Done", (t) => t.status === "done"], ["problem", "Failed or stopped", (t) => t.status === "failed" || t.status === "stopped"]];
+    $("taskFilters").innerHTML = F.map(([k, l, f]) => '<button data-f="' + k + '" class="' + (taskFilter === k ? "on" : "") + '">' + l + " " + b.tasks.filter(f).length + "</button>").join("");
+    document.querySelectorAll("[data-f]").forEach((el) => (el.onclick = () => { taskFilter = el.dataset.f; renderBoard(); }));
+    const rows = b.tasks.filter(F.find((x) => x[0] === taskFilter)[2]);
+    $("taskList").innerHTML = rows.length ? rows.map((t) => taskRow(t, now, true)).join("") : '<div class="empty">No tasks here.</div>';
+  }
+
+  /* ---- the project chat: one held request per open project, answered when the conversation changes ---- */
+  let chat = { pid: "", data: null, ctrl: null, run: 0 };
+  const md = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/^\s*[-•]\s+/gm, "• ").replace(/^#{1,4}\s+(.+)$/gm, "<b>$1</b>").replace(/\n/g, "<br>");
+  const dirList = (pid, fallback) => {
+    const list = chat.pid === pid && chat.data && chat.data.directions ? chat.data.directions.map((d) => d.text) : (fallback || []);
+    return list.length ? list.map((t, i) => '<div class="dir"><b>' + (i + 1) + "</b><span>" + esc(t) + "</span></div>").join("") : '<div class="empty">None yet. For example, write in the chat: "From now on, focus on emergency keywords first."</div>';
+  };
+  function renderChat() {
+    const d = chat.data, box = $("chatMsgs"), now = last ? last.now : Date.now();
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    if (!d) { box.innerHTML = '<div class="bsys" style="margin-top:40px">Loading the conversation…</div>'; return; }
+    const a = d.agent || { listening: [], online: [], outdated: [] };
+    $("chatStatus").textContent = a.listening.length ? "Agent online, answers in seconds" : a.outdated.length ? "Agent needs an update to chat" : "Agent offline, your message will wait";
+    $("chatStatus").className = a.listening.length ? "on" : "";
+    let html = d.total > d.messages.length ? '<div class="bsys">Showing the latest ' + d.messages.length + " of " + d.total + " messages. All of them are kept.</div>" : "";
+    if (!d.messages.length) html += '<div class="bsys" style="margin-top:36px;padding:0 14px">Talk to the agent about this project. Ask how it is doing, tell it what to do, or tell it how you want the work done. Everything you say here is kept.</div>';
+    for (const m of d.messages) {
+      if (m.system) { html += '<div class="bsys">' + esc(m.text) + "</div>"; continue; }
+      const me = m.role === "user";
+      html += '<div class="bub ' + (me ? "me" : "ag" + (m.error ? " err" : "")) + '">' + (me ? esc(m.text).replace(/\n/g, "<br>") : md(m.text)) + '</div><div class="btime' + (me ? " me" : "") + '">' + (me ? esc(m.by || "You") + " · " : "") + ago(m.at, now) + (m.status === "cancelled" ? " · stopped" : "") + "</div>";
+    }
+    const lastMsg = d.messages[d.messages.length - 1];
+    if (d.pending) html += '<div class="typing"><i></i><i></i><i></i>' + esc(lastMsg && lastMsg.status === "queued" ? (a.listening.length ? "Sending…" : "Waiting for the agent…") : ((lastMsg && lastMsg.activity) || "Thinking") + "…") + "</div>";
+    box.innerHTML = html;
+    if (atEnd || chat.jump) { box.scrollTop = box.scrollHeight; chat.jump = false; }
+    $("chatStop").classList.toggle("vhide", !d.pending);
+    $("chatSend").disabled = !!d.pending || !!d.blocked;
+    if (d.blocked) { $("chatErr").textContent = d.blocked; $("chatErr").classList.remove("vhide"); }
+    const side = document.querySelector("#projSide .dir, #projSide .empty");
+    if (side && board && board.projects) { const card = side.closest("section"); const p = board.projects.find((x) => x.id === chat.pid); if (card && p) { card.querySelectorAll(".dir, .empty").forEach((el) => el.remove()); card.insertAdjacentHTML("beforeend", dirList(p.id, p.directions)); } }
+  }
+  function stopChat() { chat.run += 1; if (chat.ctrl) chat.ctrl.abort(); chat = { pid: "", data: null, ctrl: null, run: chat.run }; }
+  function startChat(pid, name) {
+    if (chat.pid === pid) return;
+    stopChat();
+    const run = chat.run;
+    chat.pid = pid; chat.jump = true; chat.ctrl = new AbortController();
+    $("chatName").textContent = name; $("chatErr").classList.add("vhide"); $("chatText").placeholder = "Message the agent…";
+    renderChat();
+    (async () => {
+      let v = -1;
+      while (run === chat.run) {
+        try {
+          const r = await fetch("/api/chat/get", { method: "POST", signal: chat.ctrl.signal, headers: { "X-Agent-Ui": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify({ projectId: pid, wait: v >= 0, v }) });
+          const o = await r.json().catch(() => ({}));
+          if (run !== chat.run) return;
+          if (!r.ok || o.ok === false) throw new Error(o.detail || "The chat could not be loaded.");
+          v = o.v; chat.data = o; $("chatErr").classList.add("vhide"); renderChat();
+        } catch (e) {
+          if (run !== chat.run) return;
+          $("chatErr").textContent = e.message; $("chatErr").classList.remove("vhide"); v = -1;
+          await new Promise((res) => setTimeout(res, 4000));
+        }
+      }
+    })();
+  }
+  async function chatPost(action, body) {
+    try {
+      const r = await fetch("/api/chat/" + action, { method: "POST", headers: { "X-Agent-Ui": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const o = await r.json().catch(() => ({}));
+      if (!r.ok || o.ok === false) throw new Error(o.detail || "That did not work.");
+      chat.data = o; chat.jump = true; $("chatErr").classList.add("vhide"); renderChat();
+      return true;
+    } catch (e) { $("chatErr").textContent = e.message; $("chatErr").classList.remove("vhide"); return false; }
+  }
+  const sendChat = async () => { const t = $("chatText").value.trim(); if (!t || !chat.pid || (chat.data && chat.data.pending)) return; $("chatSend").disabled = true; if (await chatPost("send", { projectId: chat.pid, text: t })) $("chatText").value = ""; else $("chatSend").disabled = false; };
+  $("chatSend").onclick = sendChat;
+  $("chatText").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); } });
+  $("chatStop").onclick = () => chatPost("stop", { projectId: chat.pid });
+
+  async function tick() {
+    try { render(await api("status")); }
+    catch (e) { $("stoppedBanner").classList.remove("vhide"); $("pill").className = "pill stopped"; $("pillText").textContent = PILL.stopped; }
+  }
+  async function loadBoard() { try { board = await api("board"); } catch (e) { board = { ok: false, detail: e.message }; } renderBoard(); }
+  const act = async (msgId, path, body, okText) => {
+    try { const r = await api(path, body); say(msgId, r.preview ? "Demo: nothing was changed." : (r.detail || okText || "Done."), r.valid === false ? "no" : r.valid === null ? "q" : "ok"); tick(); return r; }
+    catch (e) { say(msgId, e.message, "no"); return null; }
+  };
+  $("pauseBtn").onclick = () => act("nowMsg", "pause", { paused: !(last && last.pausedLocal) }, " ");
+  $("checkBtn").onclick = () => act("nowMsg", "poke", {}, "Asked the CRM for work.");
+  $("retryBtn").onclick = () => act("nowMsg", "retry", {}, "Trying again.");
+  $("syncBtn").onclick = () => act("connMsg", "sync", {}, "Sync started.");
+  $("updBtn").onclick = () => { if (last && last.preview) { say("updMsg", "This is the demo. The real application asks the CRM for a new version here and installs it.", "ok"); return; } updAsked = Date.now(); act("updMsg", "update", {}, "Checking for a new version…"); };
+  $("changeBtn").onclick = () => { changing = true; $("advBox").classList.remove("vhide"); $("cUrl").value = last ? last.serverUrl : ""; if (last) render(last); document.querySelector("main").scrollTop = 0; $("cTok").focus(); };
+  $("advBtn").onclick = () => $("advBox").classList.toggle("vhide");
+  $("cCancel").onclick = () => { changing = false; $("cTok").value = ""; say("cMsg", ""); if (last) render(last); };
+  $("cSave").onclick = async () => { const r = await act("cMsg", "connect", { serverUrl: $("cUrl").value.trim() || (last ? last.serverUrl : ""), deviceToken: $("cTok").value.trim() }, "Saved. Connecting…"); if (r) { $("cTok").value = ""; changing = false; setTimeout(loadBoard, 2500); } };
+  $("kSave").onclick = async () => { const r = await act("kMsg", "key", { action: "set", key: $("kKey").value.trim() }, "Key saved on this computer."); if (r) $("kKey").value = ""; };
+  $("kTest").onclick = () => { say("kMsg", "Asking Claude…", "q"); act("kMsg", "key", { action: "test", key: $("kKey").value.trim() }); };
+  $("kRemove").onclick = () => { if (confirm("Remove the Claude API key from this computer?")) act("kMsg", "key", { action: "remove" }, "Key removed from this computer."); };
+  $("pAdd").onclick = async () => { const r = await act("gMsg", "profile", { action: "add", name: $("pName").value.trim() }, "Chrome ID added. Press Sign in to open it."); if (r) $("pName").value = ""; };
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-prof]");
+    if (!b) return;
+    const id = b.dataset.id, what = b.dataset.prof;
+    if (what === "open") act("gMsg", "profile", { action: "open", id }, "Chrome opened with " + id + ". Sign in there, then close that window.");
+    if (what === "rename") { const name = prompt("Name for " + id, b.dataset.name || ""); if (name && name.trim()) act("gMsg", "profile", { action: "rename", id, name: name.trim() }, "Renamed."); }
+    if (what === "remove" && confirm("Remove " + id + " from this computer? Its sign-in is deleted and channels that use it stop working until you choose another Chrome ID.")) act("gMsg", "profile", { action: "remove", id }, id + " removed.");
+  });
+  $("autoSw").onclick = () => act("appMsg", "autostart", { on: !(last && last.autostart) }, last && last.autostart ? "The agent no longer starts with Windows." : "The agent now starts with Windows.");
+
+  if (PAGES[location.hash.slice(1)]) go(location.hash.slice(1));
+  window.addEventListener("hashchange", () => { if (PAGES[location.hash.slice(1)]) go(location.hash.slice(1)); });
+  tick(); setInterval(tick, 2000);
+  loadBoard(); setInterval(() => { if (view !== "activity" && view !== "settings") loadBoard(); }, 6000);
+})();
+</script>
+</body>
+</html>
