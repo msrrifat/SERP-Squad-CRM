@@ -26,7 +26,7 @@
    ===================================================================== */
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { CATALOG, CATALOG_BY_KEY, DEFAULT_PLAYBOOKS, MODELS, PRICES } from "./agentops-catalog.js";
+import { AREAS, CATALOG, CATALOG_BY_KEY, DEFAULT_PLAYBOOKS, MODELS, PRICES, SOCIAL_PLATFORMS } from "./agentops-catalog.js";
 
 const DIR = new URL("./data/agentops/", import.meta.url);
 const REL_DIR = new URL("./data/agentops/releases/", import.meta.url);
@@ -203,7 +203,110 @@ function taskSetting(pid, type) {
 }
 function projectSetting(pid) {
   const p = load("config").projects[pid] || {};
-  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0) };
+  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0), channels: cleanChannels(p.channels), rules: cleanRules(p.rules) };
+}
+
+/* ---------- work setup: a project's working channels and the rules per work area ----------
+   Channels say WHERE the agent works for a project (its website, Business
+   Profiles, Search Console, Analytics, social profiles) and WHICH signed-in
+   Chrome ID on the agent's computer to use for each. A Chrome ID is a separate
+   Chrome profile a person signed in to once; the agent never signs in itself.
+   Rules are the limits that hold for a whole area of work. Both are handed to
+   the agent with every task of that area. */
+const CHROME_ID = /^CH-[A-Z0-9]{4}$/;
+const line = (v, n = 300) => clip(String(v == null ? "" : v).replace(/\s+/g, " ").trim(), n);
+const lines = (v, n = 2000) => clip(String(v == null ? "" : v).split(/\r?\n/).map((x) => x.trim()).filter(Boolean).join("\n"), n);
+const chrome = (v) => (CHROME_ID.test(String(v || "")) ? String(v) : "");
+const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
+function cleanChannels(c = {}) {
+  const w = c.website || {}, g = c.gsc || {}, a = c.ga4 || {};
+  return {
+    website: { url: line(w.url), cms: oneOf(w.cms, ["", "wordpress", "webflow", "shopify", "wix", "squarespace", "custom", "other"], ""), adminUrl: line(w.adminUrl), browser: chrome(w.browser), note: line(w.note) },
+    gbp: (Array.isArray(c.gbp) ? c.gbp : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("gb_").slice(0, 11), name: line(x?.name, 120), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.name || x.link),
+    gsc: { property: line(g.property), browser: chrome(g.browser), note: line(g.note) },
+    ga4: { property: line(a.property), browser: chrome(a.browser), note: line(a.note) },
+    social: (Array.isArray(c.social) ? c.social : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("so_").slice(0, 11), platform: oneOf(x?.platform, SOCIAL_PLATFORMS.map((p) => p.key), "facebook"), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.link),
+  };
+}
+function cleanRules(r = {}) {
+  const on = r.onpage || {}, off = r.offpage || {}, so = r.social || {};
+  return {
+    onpage: { siteChanges: oneOf(on.siteChanges, ["never", "approval"], "never"), maxPagesPerWeek: num(on.maxPagesPerWeek, 0, 200, 3), wordsMin: num(on.wordsMin, 0, 20000, 0), wordsMax: num(on.wordsMax, 0, 20000, 0), language: line(on.language, 80), protectedUrls: lines(on.protectedUrls), notes: lines(on.notes, 1500) },
+    offpage: { reviewReplies: oneOf(off.reviewReplies, ["all", "positive", "none"], "all"), postsPerWeek: num(off.postsPerWeek, 0, 50, 1), outreachPerMonth: num(off.outreachPerMonth, 0, 500, 10), senderName: line(off.senderName, 120), excludedDomains: lines(off.excludedDomains), notes: lines(off.notes, 1500) },
+    social: { postsPerWeek: num(so.postsPerWeek, 0, 100, 3), hashtags: oneOf(so.hashtags, ["none", "few", "many"], "few"), tone: line(so.tone, 200), avoidTopics: lines(so.avoidTopics, 1000), notes: lines(so.notes, 1500) },
+  };
+}
+const channelsOf = (pid) => cleanChannels(load("config").projects[pid]?.channels);
+const rulesOf = (pid) => cleanRules(load("config").projects[pid]?.rules);
+const hostOfUrl = (u) => { try { return new URL(/^https?:\/\//i.test(u) ? u : "https://" + u).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
+/* the only hosts the agent's signed-in Google browser profile may show (subdomains included) */
+const GOOGLE_HOSTS = ["google.com", "google.co.uk", "google.ca", "google.com.au", "googleusercontent.com", "gstatic.com"];
+const CHANNEL_LABEL = { gbp: "Google Business Profile", gsc: "Search Console", ga4: "Analytics", website: "website", social: "social profiles" };
+/* which Chrome ID and which sites a task of this type gets for the project */
+function browserFor(pid, cat) {
+  if (!cat?.channel) return null;
+  const ch = channelsOf(pid), where = "in Work setup, Settings";
+  if (cat.channel === "gbp") {
+    const g = ch.gbp.find((x) => x.browser);
+    if (!ch.gbp.length) return { error: `Add this project's Google Business Profile ${where}.` };
+    if (!g) return { error: `Choose a Chrome ID for the Google Business Profile ${where}.` };
+    return { profileId: g.browser, hosts: GOOGLE_HOSTS, label: "Google Business Profile", startUrl: g.link || "https://business.google.com/" };
+  }
+  if (cat.channel === "gsc" || cat.channel === "ga4") {
+    const x = ch[cat.channel];
+    if (!x.browser) return { error: `Choose a Chrome ID for ${CHANNEL_LABEL[cat.channel]} ${where}.` };
+    return { profileId: x.browser, hosts: GOOGLE_HOSTS, label: CHANNEL_LABEL[cat.channel], startUrl: cat.channel === "gsc" ? "https://search.google.com/search-console" : "https://analytics.google.com/" };
+  }
+  if (cat.channel === "website") {
+    const w = ch.website, hosts = [hostOfUrl(w.url), hostOfUrl(w.adminUrl)].filter(Boolean);
+    if (!hosts.length) return { error: `Add this project's website ${where}.` };
+    if (!w.browser) return { error: `Choose a Chrome ID for the website's editor ${where}.` };
+    return { profileId: w.browser, hosts: [...new Set(hosts)], label: "website editor", startUrl: w.adminUrl || w.url };
+  }
+  if (cat.channel === "social") {
+    const first = ch.social.find((x) => x.browser);
+    if (!ch.social.length) return { error: "Add this project's social profiles in Work setup, Social Media." };
+    if (!first) return { error: "Choose a Chrome ID for a social profile in Work setup, Social Media." };
+    const same = ch.social.filter((x) => x.browser === first.browser);
+    return { profileId: first.browser, hosts: [...new Set(same.flatMap((x) => SOCIAL_PLATFORMS.find((p) => p.key === x.platform)?.hosts || []))], label: "social profiles", startUrl: first.link };
+  }
+  return null;
+}
+const platformLabel = (k) => SOCIAL_PLATFORMS.find((p) => p.key === k)?.label || k;
+/* what the agent is told about where and how to work, for one area of work */
+function setupLines(pid, area) {
+  const ch = channelsOf(pid), r = rulesOf(pid), out = [];
+  if (ch.website.url) out.push(`Website: ${ch.website.url}${ch.website.cms ? ` (${ch.website.cms})` : ""}${ch.website.note ? `. ${ch.website.note}` : ""}`);
+  if (area === "offpage" || area === "general") for (const g of ch.gbp) out.push(`Google Business Profile: ${g.name || g.link}${g.link && g.name ? ` (${g.link})` : ""}${g.note ? `. ${g.note}` : ""}`);
+  if (area !== "social" && ch.gsc.property) out.push(`Search Console property: ${ch.gsc.property}`);
+  if (area === "general" && ch.ga4.property) out.push(`Analytics property: ${ch.ga4.property}`);
+  if (area === "social" || area === "general") for (const x of ch.social) out.push(`${platformLabel(x.platform)}: ${x.link}${x.note ? `. ${x.note}` : ""}`);
+  if (area === "onpage") {
+    const o = r.onpage;
+    out.push(o.siteChanges === "approval" ? "Changes on the live website are allowed only as an approved task; otherwise deliver drafts and recommendations." : "Never change the live website. Deliver drafts and recommendations only.");
+    if (o.maxPagesPerWeek) out.push(`Work on at most ${o.maxPagesPerWeek} page(s) per week.`);
+    if (o.language) out.push(`Write content in: ${o.language}.`);
+    if (o.wordsMin || o.wordsMax) out.push(`Page and post length: ${o.wordsMin ? "at least " + o.wordsMin + " words" : ""}${o.wordsMin && o.wordsMax ? ", " : ""}${o.wordsMax ? "at most " + o.wordsMax + " words" : ""}.`);
+    if (o.protectedUrls) out.push(`Protected pages, never propose or make changes to them: ${o.protectedUrls.split("\n").join(", ")}`);
+    if (o.notes) out.push(`On-page notes: ${o.notes.split("\n").join(" ")}`);
+  }
+  if (area === "offpage") {
+    const o = r.offpage;
+    out.push(o.reviewReplies === "none" ? "Do not draft review replies." : o.reviewReplies === "positive" ? "Draft replies to reviews of four and five stars only; flag lower ratings for a person." : "Draft replies to every new review; negative ones need extra care.");
+    if (o.postsPerWeek) out.push(`At most ${o.postsPerWeek} Business Profile post(s) per week.`);
+    out.push(`Outreach: at most ${o.outreachPerMonth} prospect(s) per month; drafts only, a person sends.${o.senderName ? ` Sign emails as ${o.senderName}.` : ""}`);
+    if (o.excludedDomains) out.push(`Never propose links from or contact: ${o.excludedDomains.split("\n").join(", ")}`);
+    if (o.notes) out.push(`Off-page notes: ${o.notes.split("\n").join(" ")}`);
+  }
+  if (area === "social") {
+    const o = r.social;
+    if (o.postsPerWeek) out.push(`Plan ${o.postsPerWeek} post(s) per week per platform.`);
+    out.push(o.hashtags === "none" ? "No hashtags." : o.hashtags === "few" ? "Two or three relevant hashtags at most." : "Hashtags are welcome where the platform uses them.");
+    if (o.tone) out.push(`Tone: ${o.tone}.`);
+    if (o.avoidTopics) out.push(`Never post about: ${o.avoidTopics.split("\n").join(", ")}`);
+    if (o.notes) out.push(`Social notes: ${o.notes.split("\n").join(" ")}`);
+  }
+  return out;
 }
 
 /* ---------- usage ledger ---------- */
@@ -250,7 +353,7 @@ function createTask({ projectId, type, title, instructions, source, createdBy, r
   return { task: t };
 }
 const runsInWindow = (pid, type, ms) => load("tasks").filter((t) => t.projectId === pid && t.type === type && t.firstStartedAt && now() - t.firstStartedAt < ms).length;
-const needsGoogle = (type) => (CATALOG_BY_KEY[type]?.needs || []).includes("google");
+const hasChrome = (d, id) => (d.profiles || []).some((p) => p.id === id);
 
 /* why a task cannot start right now (null = it can) */
 function blockOf(t, device) {
@@ -267,8 +370,12 @@ function blockOf(t, device) {
   if (room.left <= 0) return `Token limit reached: ${room.why}.`;
   const running = load("tasks").filter((x) => x.status === "running" && x.id !== t.id);
   if (running.some((x) => x.projectId === t.projectId)) return "Another task is running on this project.";
-  if (needsGoogle(t.type) && running.some((x) => needsGoogle(x.type))) return "Another task is using the Google browser profile.";
-  if (device && needsGoogle(t.type) && device.googleProfile === false) return "This device has no Google browser profile.";
+  const br = browserFor(t.projectId, cat);
+  if (br?.error) return br.error;
+  if (br) {
+    if (running.some((x) => x.browserProfile === br.profileId)) return `Another task is using Chrome ID ${br.profileId}.`;
+    if (device ? !hasChrome(device, br.profileId) : !load("devices").some((d) => !d.revoked && hasChrome(d, br.profileId))) return `${device ? "This device does not have" : "No device has"} Chrome ID ${br.profileId}. Create it on the agent's computer and sign in there.`;
+  }
   if (!serverKeyFor(t.projectId)) {
     const devs = device ? [device] : load("devices").filter((d) => !d.revoked);
     if (devs.length && devs.every((d) => d.localKey === false)) return "No Claude API key is set for the agent. Add one in API setup.";
@@ -324,8 +431,6 @@ function playbookFiles() {
   }
   return files;
 }
-/* the only hosts the agent's signed-in Google browser profile may show (subdomains included) */
-const GOOGLE_HOSTS = ["google.com", "google.co.uk", "google.ca", "google.com.au", "googleusercontent.com", "gstatic.com"];
 function syncPayload() {
   const cfg = load("config");
   return {
@@ -447,6 +552,7 @@ const SERVER_TOOLS = [
       ranking: { ...rankSummary(rows), cities: [...new Set(rows.map((r) => r.city).filter(Boolean))].slice(0, 30) },
       biggestDrops7d: movers.slice(0, 15).map(rowOut), biggestGains7d: movers.slice(-10).reverse().map(rowOut),
       directionsFromTheManager: directionsOf(p.id).map((d) => d.text),
+      workSetup: Object.fromEntries(AREAS.map((a) => [a.label, setupLines(p.id, a.key)])),
       notes: (load("memory")[p.id] || []).slice(-25), recentChanges: (load("changes")[p.id] || []).slice(-25),
       today: new Date().toISOString().slice(0, 10),
     };
@@ -561,12 +667,13 @@ function overview(admin) {
   const projects = [...projectList(), { id: AGENCY_PROJECT, name: "Agency (no project)", client: "", demo: false }];
   const tasks = load("tasks");
   return {
-    ok: true, me: admin.name, viaDevice: !!admin.viaDevice, catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults })), models: MODELS,
+    ok: true, me: admin.name, viaDevice: !!admin.viaDevice, catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults, area: c.area, channel: c.channel })), models: MODELS,
+    areas: AREAS, platforms: SOCIAL_PLATFORMS.map(({ key, label }) => ({ key, label })),
     global: cfg.global, playbooksRev: cfg.playbooksRev, companyMonthTokens: companyMonthTokens(),
     credentials: { claude: maskKey(secrets().claude) },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -591,6 +698,8 @@ function saveConfig(admin, body) {
     if (body.enabled != null) p.enabled = !!body.enabled;
     if (body.tokensPerMonth != null) p.tokensPerMonth = num(body.tokensPerMonth, 0, 2e9, 2000000);
     if (body.tokensPerDay != null) p.tokensPerDay = num(body.tokensPerDay, 0, 2e9, 0);
+    if (body.channels && typeof body.channels === "object") p.channels = cleanChannels(body.channels);
+    if (body.rules && typeof body.rules === "object") p.rules = cleanRules(body.rules);
     if (body.tasks && typeof body.tasks === "object") {
       p.tasks ||= {};
       for (const [type, s] of Object.entries(body.tasks)) {
@@ -742,6 +851,7 @@ function agentHello(d, body) {
   if (body?.googleProfile != null) d.googleProfile = !!body.googleProfile;
   if (body?.updateSkipped != null) d.updateSkipped = clip(body.updateSkipped, 20);
   if (body?.localKey != null) d.localKey = !!body.localKey;
+  if (Array.isArray(body?.browserProfiles)) d.profiles = body.browserProfiles.slice(0, 40).filter((p) => CHROME_ID.test(String(p?.id || ""))).map((p) => ({ id: p.id, name: clip(p.name || "", 60) }));
   if (body?.playbooksRev != null) d.playbooksRev = +body.playbooksRev || 0;
   const syncNow = !!d.syncRequested;
   if (body?.synced) { d.syncRequested = false; d.lastSync = now(); }
@@ -768,6 +878,8 @@ function agentClaim(d) {
     const projectKey = secrets().projects[t.projectId]?.key || "";
     const claudeKey = projectKey || (d.localKey === true ? "" : secrets().claude?.key || "");
     t.keySource = projectKey ? "project" : claudeKey ? "company" : "device";
+    const br = browserFor(t.projectId, cat);
+    t.browserProfile = br?.profileId || null;
     save("tasks");
     logActivity("task", `${d.name} started "${t.title}".`, { taskId: t.id, projectId: t.projectId });
     return [200, { ok: true, playbooksRev: cfg.playbooksRev, task: {
@@ -777,6 +889,8 @@ function agentClaim(d) {
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
       directions: directionsOf(t.projectId).map((x) => x.text),
+      setup: setupLines(t.projectId, cat.area),
+      ...(br && !br.error ? { browser: br } : {}),
     } }];
   }
   save("tasks");

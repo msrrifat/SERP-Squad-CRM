@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, KeyRound, ListTodo, MessageSquare, Monitor, Pause, Play, Plus, RefreshCw, Send, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, BarChart3, FileText, Globe, KeyRound, ListTodo, MapPin, MessageSquare, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -168,7 +168,7 @@ function LimitsView({ data, accent, act, busy, onChat }) {
   const [dirty, setDirty] = useState(false);
   const [detail, setDetail] = useState(null);
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
-  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
+  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
   const sig = project ? JSON.stringify(fromServer(project)) : "";
   useEffect(() => { if (project && !dirty) setDraft(fromServer(project)); }, [sig, pid, dirty]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -184,7 +184,6 @@ function LimitsView({ data, accent, act, busy, onChat }) {
     for (const c of data.catalog) if (tasks[c.key]) tasks[c.key] = { ...tasks[c.key], mode: c.defaults.mode, max: c.defaults.max, per: c.defaults.per, everyDays: c.defaults.everyDays, auto: !!(c.defaults.auto || c.defaults.recAuto) && c.defaults.mode !== "off" };
     set({ tasks });
   };
-  const groups = [...new Set(data.catalog.filter((c) => draft.tasks[c.key]).map((c) => c.group))];
   const u = project.usage, cap = draft.tokensPerMonth;
   const pct = cap > 0 ? Math.min(100, Math.round((u.month / cap) * 100)) : 0;
 
@@ -249,65 +248,282 @@ function LimitsView({ data, accent, act, busy, onChat }) {
           </div>
         </Card>
 
-        <Card className="overflow-hidden">
-          <div className="border-b border-gray-100 px-4 py-3">
-            <div className="text-[13.5px] font-semibold text-gray-900">Working limits per task</div>
-            <div className="text-[11.5px] text-gray-500"><b>Off</b>: never. <b>Limited</b>: at most the number you set. <b>Open</b>: no limit, and the agent may start it whenever it judges it is needed. Every task still stops at the token limit.</div>
-          </div>
-          {groups.map((grp) => (
-            <div key={grp}>
-              <div className="bg-gray-50 px-4 py-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-gray-500">{grp}</div>
-              {data.catalog.filter((c) => c.group === grp && draft.tasks[c.key]).map((c) => {
-                const t = draft.tasks[c.key], used = project.tasks[c.key]?.used || 0;
-                return (
-                  <div key={c.key} className="border-t border-gray-100 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-gray-900">{c.label}
-                        {c.needs.map((n) => <Chip key={n} fg={n === "google" ? "#B45309" : "#4B5563"} bg={n === "google" ? "#FEF3C7" : "#F3F4F6"}>{NEEDS[n] || n}</Chip>)}
-                        {c.write && <Chip fg="#B91C1C" bg="#FEE2E2">Changes live data</Chip>}
-                      </div>
-                      <div className="text-[11.5px] text-gray-500">{c.desc}</div>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-                      <div className="flex rounded-lg border border-gray-200 p-0.5" role="group" aria-label={`Working limit for ${c.label}`}>
-                        {["off", "limited", "open"].map((m) => (
-                          <button key={m} type="button" onClick={() => setTask(c.key, { mode: m })} className="rounded-md px-2.5 py-1 text-[12px] font-semibold capitalize"
-                            style={t.mode === m ? { background: m === "off" ? "#6B7280" : m === "open" ? "#16A34A" : accent, color: "#fff" } : { color: "#4B5563" }}>{m}</button>
-                        ))}
-                      </div>
-                      {t.mode === "limited" && (
-                        <span className="flex items-center gap-1 text-[12px] text-gray-600">
-                          <input aria-label="Maximum runs" className={numCls + " w-14"} inputMode="numeric" value={t.max} onChange={(e) => setTask(c.key, { max: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> per
-                          <select aria-label="Period" className={selCls} value={t.per} onChange={(e) => setTask(c.key, { per: e.target.value })}><option value="day">day</option><option value="week">week</option><option value="month">month</option></select>
-                          <span className="text-[11px] text-gray-400">{used} used</span>
-                        </span>
-                      )}
-                      {t.mode !== "off" && project.id !== "_agency" && (
-                        <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="The agent queues this task by itself on this schedule.">
-                          <input type="checkbox" checked={!!t.auto} onChange={(e) => setTask(c.key, { auto: e.target.checked })} /> starts by itself
-                          {t.auto && <>, every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => setTask(c.key, { everyDays: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> d</>}
-                        </label>
-                      )}
-                      {t.mode !== "off" && c.write && (
-                        <select aria-label="Approval" className={selCls} value={t.approval} onChange={(e) => setTask(c.key, { approval: e.target.value })} title="Ask first: the agent prepares the change and waits for your approval.">
-                          <option value="ask">Ask before changing</option><option value="auto">Act without asking</option>
-                        </select>
-                      )}
-                      {t.mode !== "off" && (
-                        <select aria-label="Model" className={selCls} value={t.model || ""} onChange={(e) => setTask(c.key, { model: e.target.value })}>
-                          <option value="">Default model</option>{data.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                        </select>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </Card>
+        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
+          {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
+          {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes in the work setup</span>}
+        </div>
 
         {project.id !== "_agency" && <ProjectMemory key={project.id} project={project} detail={detail} setDetail={setDetail} accent={accent} />}
       </div>
+    </div>
+  );
+}
+
+/* ---------------- work setup: channels, Chrome IDs, and the tasks and rules of each area ---------------- */
+const NEEDS_LABEL = { web: "Web research", google: "Google browser", browser: "Browser" };
+function TaskRow({ c, t, used, accent, models, agency, onChange, chan }) {
+  return (
+    <div className="border-t border-gray-100 px-4 py-3 first:border-t-0">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-gray-900">{c.label}
+          {!c.channel && c.needs.filter((n) => n === "web").map((n) => <Chip key={n} fg="#4B5563" bg="#F3F4F6">{NEEDS_LABEL[n]}</Chip>)}
+          {chan && <Chip fg={chan.ok ? "#15803D" : "#B45309"} bg={chan.ok ? "#DCFCE7" : "#FEF3C7"}>{chan.text}</Chip>}
+          {c.write && <Chip fg="#B91C1C" bg="#FEE2E2">Changes live data</Chip>}
+        </div>
+        <div className="text-[11.5px] text-gray-500">{c.desc}</div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex rounded-lg border border-gray-200 p-0.5" role="group" aria-label={`Working limit for ${c.label}`}>
+          {["off", "limited", "open"].map((m) => (
+            <button key={m} type="button" onClick={() => onChange({ mode: m })} className="rounded-md px-2.5 py-1 text-[12px] font-semibold capitalize"
+              style={t.mode === m ? { background: m === "off" ? "#6B7280" : m === "open" ? "#16A34A" : accent, color: "#fff" } : { color: "#4B5563" }}>{m}</button>
+          ))}
+        </div>
+        {t.mode === "limited" && (
+          <span className="flex items-center gap-1 text-[12px] text-gray-600">
+            <input aria-label="Maximum runs" className={numCls + " w-14"} inputMode="numeric" value={t.max} onChange={(e) => onChange({ max: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> per
+            <select aria-label="Period" className={selCls} value={t.per} onChange={(e) => onChange({ per: e.target.value })}><option value="day">day</option><option value="week">week</option><option value="month">month</option></select>
+            <span className="text-[11px] text-gray-400">{used} used</span>
+          </span>
+        )}
+        {t.mode !== "off" && !agency && (
+          <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="The agent queues this task by itself on this schedule.">
+            <input type="checkbox" checked={!!t.auto} onChange={(e) => onChange({ auto: e.target.checked })} /> starts by itself
+            {t.auto && <>, every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => onChange({ everyDays: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> d</>}
+          </label>
+        )}
+        {t.mode !== "off" && c.write && (
+          <select aria-label="Approval" className={selCls} value={t.approval} onChange={(e) => onChange({ approval: e.target.value })} title="Ask first: the agent prepares the change and waits for your approval.">
+            <option value="ask">Ask before changing</option><option value="auto">Act without asking</option>
+          </select>
+        )}
+        {t.mode !== "off" && (
+          <select aria-label="Model" className={selCls} value={t.model || ""} onChange={(e) => onChange({ model: e.target.value })}>
+            <option value="">Default model</option>{models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+/* which signed-in Chrome on the agent's computer a channel uses */
+function ChromeSelect({ value, onChange, profiles, label }) {
+  const known = profiles.some((p) => p.id === value);
+  return (
+    <select aria-label={label || "Chrome ID"} className={inputCls} value={value || ""} onChange={(e) => onChange(e.target.value)}>
+      <option value="">No Chrome ID chosen</option>
+      {profiles.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.name}{p.device ? ` (${p.device})` : ""}</option>)}
+      {value && !known && <option value={value}>{value} (not on any device now)</option>}
+    </select>
+  );
+}
+const Tile = ({ icon: Icon, title, sub, accent, right, children }) => (
+  <div className="rounded-xl border border-gray-200 bg-white p-3.5">
+    <div className="flex items-start gap-2.5">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><Icon size={16} /></span>
+      <div className="min-w-0 flex-1"><div className="text-[13px] font-semibold text-gray-900">{title}</div>{sub && <div className="text-[11.5px] text-gray-500">{sub}</div>}</div>
+      {right}
+    </div>
+    {children && <div className="mt-3">{children}</div>}
+  </div>
+);
+const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
+const txtCls = inputCls + " min-h-[64px] resize-y";
+const numOnly = (v) => +String(v).replace(/[^0-9]/g, "") || 0;
+function WorkSetup({ data, project, draft, set, setTask, accent }) {
+  const [tab, setTab] = useState("settings");
+  const agency = project.id === "_agency";
+  const profiles = data.devices.flatMap((d) => (d.profiles || []).map((p) => ({ ...p, device: d.name })));
+  const ch = draft.channels, rules = draft.rules;
+  const setCh = (patch) => set({ channels: { ...ch, ...patch } });
+  const setOne = (key, patch) => setCh({ [key]: { ...ch[key], ...patch } });
+  const setRow = (key, i, patch) => setCh({ [key]: ch[key].map((x, k) => (k === i ? { ...x, ...patch } : x)) });
+  const delRow = (key, i) => setCh({ [key]: ch[key].filter((_, k) => k !== i) });
+  const setRule = (area, patch) => set({ rules: { ...rules, [area]: { ...rules[area], ...patch } } });
+  const tasksOf = (area) => data.catalog.filter((c) => c.area === area && draft.tasks[c.key]);
+  const onCount = (area) => tasksOf(area).filter((c) => draft.tasks[c.key].mode !== "off").length;
+  const chanState = (c) => {
+    if (!c.channel) return null;
+    const pick = c.channel === "gbp" ? { has: ch.gbp.length > 0, id: ch.gbp.find((x) => x.browser)?.browser, name: "Business Profile" }
+      : c.channel === "social" ? { has: ch.social.length > 0, id: ch.social.find((x) => x.browser)?.browser, name: "social profile" }
+      : c.channel === "website" ? { has: !!ch.website.url, id: ch.website.browser, name: "website" }
+      : { has: true, id: ch[c.channel].browser, name: c.channel === "gsc" ? "Search Console" : "Analytics" };
+    if (!pick.has) return { ok: false, text: `Add the ${pick.name} first` };
+    if (!pick.id) return { ok: false, text: "Needs a Chrome ID" };
+    return profiles.some((p) => p.id === pick.id) ? { ok: true, text: `Works in ${pick.id}` } : { ok: false, text: `${pick.id} is not on a device` };
+  };
+  /* a plain function, not a component: a component declared here would be re-created on every keystroke and lose input focus */
+  const taskList = (area, title, hint) => (
+    <Card className="overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-3">
+        <div className="text-[13.5px] font-semibold text-gray-900">{title}</div>
+        <div className="text-[11.5px] text-gray-500">{hint || <><b>Off</b>: never. <b>Limited</b>: at most the number you set. <b>Open</b>: no limit, and the agent may start it when it judges it is needed. Every task still stops at the token limit.</>}</div>
+      </div>
+      {tasksOf(area).map((c) => <TaskRow key={c.key} c={c} t={draft.tasks[c.key]} used={project.tasks[c.key]?.used || 0} accent={accent} models={data.models} agency={agency} chan={chanState(c)} onChange={(patch) => setTask(c.key, patch)} />)}
+    </Card>
+  );
+  if (agency) return taskList("agency", "Agency tasks");
+  const api = project.api || {};
+  const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
+  const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
+    ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`]];
+  const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          {TABS.map(([k, label, Icon, sub]) => (
+            <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
+              style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
+              <Icon size={18} className="shrink-0" />
+              <span className="min-w-0"><span className="block text-[13px] font-semibold">{label}</span><span className="block truncate text-[11px]" style={{ opacity: tab === k ? 0.8 : 0.55 }}>{sub}</span></span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tab === "settings" && (
+        <>
+          <Card className="p-4">
+            <div className="text-[13.5px] font-semibold text-gray-900">Working channels</div>
+            <div className="mb-3 text-[11.5px] text-gray-500">Where the agent works for {project.name}, and which signed-in Chrome on its computer it uses for each. A Chrome ID is a separate Chrome profile you signed in to once; the agent never signs in itself and can only open that channel's own sites in it.</div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <Tile icon={Globe} accent={accent} title="Website" sub="The site the agent audits and writes for." right={<Ready ok={!!ch.website.url} />}>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Labeled label="Website address"><input className={inputCls} placeholder="https://example.com" value={ch.website.url} onChange={(e) => setOne("website", { url: e.target.value })} /></Labeled>
+                  <Labeled label="Built with"><select className={inputCls} value={ch.website.cms} onChange={(e) => setOne("website", { cms: e.target.value })}>{[["", "Not sure"], ["wordpress", "WordPress"], ["webflow", "Webflow"], ["shopify", "Shopify"], ["wix", "Wix"], ["squarespace", "Squarespace"], ["custom", "Custom built"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Labeled>
+                  <Labeled label="Editor sign-in address (optional)"><input className={inputCls} placeholder="https://example.com/wp-admin" value={ch.website.adminUrl} onChange={(e) => setOne("website", { adminUrl: e.target.value })} /></Labeled>
+                  <Labeled label="Chrome ID signed in to the editor"><ChromeSelect profiles={profiles} value={ch.website.browser} onChange={(v) => setOne("website", { browser: v })} /></Labeled>
+                </div>
+                <div className="mt-2"><Labeled label="Note for the agent (optional)"><input className={inputCls} placeholder="For example: blog posts live under /news/" value={ch.website.note} onChange={(e) => setOne("website", { note: e.target.value })} /></Labeled></div>
+              </Tile>
+
+              <Tile icon={MapPin} accent={accent} title="Google Business Profiles" sub="Every location of this client, and the Chrome ID that manages it." right={<Ready ok={gbpOk} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
+                {ch.gbp.map((g, i) => (
+                  <div key={g.id || i} className="mb-2 rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Labeled label="Business name on Google"><input className={inputCls} placeholder="Northgate Plumbing, Leeds" value={g.name} onChange={(e) => setRow("gbp", i, { name: e.target.value })} /></Labeled>
+                      <Labeled label="Chrome ID that manages it"><ChromeSelect profiles={profiles} value={g.browser} onChange={(v) => setRow("gbp", i, { browser: v })} /></Labeled>
+                    </div>
+                    <div className="mt-2 flex items-end gap-2">
+                      <div className="min-w-0 flex-1"><Labeled label="Profile link (Maps or Business Profile manager)"><input className={inputCls} placeholder="https://www.google.com/maps/place/…" value={g.link} onChange={(e) => setRow("gbp", i, { link: e.target.value })} /></Labeled></div>
+                      <Btn ghost danger onClick={() => delRow("gbp", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
+                    </div>
+                  </div>
+                ))}
+                <Btn ghost onClick={() => setCh({ gbp: [...ch.gbp, { id: "", name: "", link: "", browser: ch.gbp[0]?.browser || "", note: "" }] })}><Plus size={13} /> Add a Business Profile</Btn>
+              </Tile>
+
+              <Tile icon={Search} accent={accent} title="Google Search Console" sub={api.searchConsole ? `Data is read through the connected Google account: ${api.gscSite}` : "Not connected for data yet (Project settings, Data sources)."} right={<Ready ok={!!api.searchConsole} yes="Data connected" no="No data connection" />}>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Labeled label="Property"><input className={inputCls} placeholder="sc-domain:example.com" value={ch.gsc.property} onChange={(e) => setOne("gsc", { property: e.target.value })} /></Labeled>
+                  <Labeled label="Chrome ID for browser tasks"><ChromeSelect profiles={profiles} value={ch.gsc.browser} onChange={(v) => setOne("gsc", { browser: v })} /></Labeled>
+                </div>
+                <div className="mt-1.5 text-[11px] text-gray-400">The Chrome ID is only needed to inspect URLs and request indexing in the browser.</div>
+              </Tile>
+
+              <Tile icon={BarChart3} accent={accent} title="Google Analytics" sub={api.analytics ? `Data is read through the connected Google account: ${api.ga4Property}` : "Not connected for data yet (Project settings, Data sources)."} right={<Ready ok={!!api.analytics} yes="Data connected" no="No data connection" />}>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Labeled label="Property name or ID"><input className={inputCls} placeholder="GA4 · 123456789" value={ch.ga4.property} onChange={(e) => setOne("ga4", { property: e.target.value })} /></Labeled>
+                  <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={ch.ga4.browser} onChange={(v) => setOne("ga4", { browser: v })} /></Labeled>
+                </div>
+              </Tile>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Monitor size={15} style={{ color: accent }} /> Chrome IDs on the agent's computer</div>
+            <div className="mb-2 text-[11.5px] text-gray-500">Create and sign in to them in the agent application, under Settings. One Chrome ID per Google account or social login keeps each client's work in its own signed-in session.</div>
+            {!profiles.length && <div className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">No Chrome ID exists yet. Open the agent application on its computer, go to Settings, add a Chrome ID and sign in to the Google account there.</div>}
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {profiles.map((p) => { const uses = [ch.website.browser === p.id && "Website", ch.gbp.some((x) => x.browser === p.id) && "Business Profile", ch.gsc.browser === p.id && "Search Console", ch.ga4.browser === p.id && "Analytics", ch.social.some((x) => x.browser === p.id) && "Social"].filter(Boolean);
+                return <div key={p.id + p.device} className="rounded-lg border border-gray-200 px-3 py-2"><div className="flex items-center justify-between gap-2"><code className="rounded bg-gray-100 px-1.5 py-0.5 text-[12px] font-semibold text-gray-800">{p.id}</code><span className="text-[11px] text-gray-400">{p.device}</span></div><div className="mt-1 truncate text-[12.5px] text-gray-800">{p.name}</div><div className="text-[11px] text-gray-500">{uses.length ? "Used here for: " + uses.join(", ") : "Not used by this project"}</div></div>; })}
+            </div>
+          </Card>
+          {taskList("general", "Monitoring and reporting")}
+        </>
+      )}
+
+      {tab === "onpage" && (
+        <>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><div className="text-[13.5px] font-semibold text-gray-900">On-page rules and limits</div><div className="text-[11.5px] text-gray-500">These hold for every on-page task on {project.name}. The agent is told them at the start of each one.</div></div>
+              <div className="flex flex-wrap gap-1.5"><Ready ok={!!ch.website.url} yes="Website set" no="Website not set" /><Ready ok={!!api.searchConsole} yes="Search Console data" no="No Search Console data" /></div>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <Labeled label="Changes on the live website"><select className={inputCls} value={rules.onpage.siteChanges} onChange={(e) => setRule("onpage", { siteChanges: e.target.value })}><option value="never">Never. Drafts and recommendations only</option><option value="approval">Only as a task I approve</option></select></Labeled>
+              <Labeled label="Pages worked on per week, at most"><input className={inputCls} inputMode="numeric" value={rules.onpage.maxPagesPerWeek} onChange={(e) => setRule("onpage", { maxPagesPerWeek: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Content language"><input className={inputCls} placeholder="British English" value={rules.onpage.language} onChange={(e) => setRule("onpage", { language: e.target.value })} /></Labeled>
+              <Labeled label="Shortest page or post, in words (0 = no rule)"><input className={inputCls} inputMode="numeric" value={rules.onpage.wordsMin} onChange={(e) => setRule("onpage", { wordsMin: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Longest page or post, in words (0 = no rule)"><input className={inputCls} inputMode="numeric" value={rules.onpage.wordsMax} onChange={(e) => setRule("onpage", { wordsMax: numOnly(e.target.value) })} /></Labeled>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Labeled label="Protected pages, one address per line (never changed, never rewritten)"><textarea className={txtCls} placeholder={"/contact/\n/pricing/"} value={rules.onpage.protectedUrls} onChange={(e) => setRule("onpage", { protectedUrls: e.target.value })} /></Labeled>
+              <Labeled label="Other on-page notes for the agent"><textarea className={txtCls} placeholder="For example: every service page ends with the 24 hour call-out number." value={rules.onpage.notes} onChange={(e) => setRule("onpage", { notes: e.target.value })} /></Labeled>
+            </div>
+          </Card>
+          {taskList("onpage", "On-page tasks")}
+        </>
+      )}
+
+      {tab === "offpage" && (
+        <>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><div className="text-[13.5px] font-semibold text-gray-900">Off-page rules and limits</div><div className="text-[11.5px] text-gray-500">Business Profile, reviews, citations and links for {project.name}.</div></div>
+              <div className="flex flex-wrap gap-1.5"><Ready ok={gbpOk} yes={`${ch.gbp.length} Business Profile${ch.gbp.length === 1 ? "" : "s"} ready`} no={ch.gbp.length ? "Business Profile needs a Chrome ID" : "No Business Profile set"} /></div>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <Labeled label="Review replies"><select className={inputCls} value={rules.offpage.reviewReplies} onChange={(e) => setRule("offpage", { reviewReplies: e.target.value })}><option value="all">Draft a reply to every review</option><option value="positive">Four and five stars only</option><option value="none">Do not draft replies</option></select></Labeled>
+              <Labeled label="Business Profile posts per week, at most"><input className={inputCls} inputMode="numeric" value={rules.offpage.postsPerWeek} onChange={(e) => setRule("offpage", { postsPerWeek: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Outreach prospects per month, at most"><input className={inputCls} inputMode="numeric" value={rules.offpage.outreachPerMonth} onChange={(e) => setRule("offpage", { outreachPerMonth: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Outreach emails are signed as"><input className={inputCls} placeholder="Name, role, business" value={rules.offpage.senderName} onChange={(e) => setRule("offpage", { senderName: e.target.value })} /></Labeled>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Labeled label="Sites never to contact or seek links from, one per line"><textarea className={txtCls} placeholder={"competitor.co.uk\nold-agency-directory.com"} value={rules.offpage.excludedDomains} onChange={(e) => setRule("offpage", { excludedDomains: e.target.value })} /></Labeled>
+              <Labeled label="Other off-page notes for the agent"><textarea className={txtCls} placeholder="For example: always mention the Gas Safe registration in profile posts." value={rules.offpage.notes} onChange={(e) => setRule("offpage", { notes: e.target.value })} /></Labeled>
+            </div>
+            <div className="mt-2 text-[11px] text-gray-400">The agent drafts outreach and review replies; a person sends or approves them. Business Profiles are added under Settings.</div>
+          </Card>
+          {taskList("offpage", "Off-page tasks")}
+        </>
+      )}
+
+      {tab === "social" && (
+        <>
+          <Card className="p-4">
+            <div className="text-[13.5px] font-semibold text-gray-900">Social profiles</div>
+            <div className="mb-3 text-[11.5px] text-gray-500">The profiles of {project.name}. A Chrome ID is needed only if the agent is to publish approved posts in the browser.</div>
+            {ch.social.map((x, i) => (
+              <div key={x.id || i} className="mb-2 grid items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-2.5 md:grid-cols-[150px_minmax(0,1fr)_minmax(0,220px)_auto]">
+                <Labeled label="Platform"><select className={inputCls} value={x.platform} onChange={(e) => setRow("social", i, { platform: e.target.value })}>{(data.platforms || []).map((pf) => <option key={pf.key} value={pf.key}>{pf.label}</option>)}</select></Labeled>
+                <Labeled label="Profile link"><input className={inputCls} placeholder="https://www.facebook.com/yourpage" value={x.link} onChange={(e) => setRow("social", i, { link: e.target.value })} /></Labeled>
+                <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={x.browser} onChange={(v) => setRow("social", i, { browser: v })} /></Labeled>
+                <Btn ghost danger onClick={() => delRow("social", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
+              </div>
+            ))}
+            {!ch.social.length && <div className="mb-2 text-[12px] text-gray-400">No social profile added yet.</div>}
+            <Btn ghost onClick={() => setCh({ social: [...ch.social, { id: "", platform: (data.platforms || [])[ch.social.length % 7]?.key || "facebook", link: "https://", browser: ch.social[0]?.browser || "", note: "" }] })}><Plus size={13} /> Add a social profile</Btn>
+          </Card>
+          <Card className="p-4">
+            <div className="text-[13.5px] font-semibold text-gray-900">Social rules and limits</div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <Labeled label="Posts per week, per platform"><input className={inputCls} inputMode="numeric" value={rules.social.postsPerWeek} onChange={(e) => setRule("social", { postsPerWeek: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Hashtags"><select className={inputCls} value={rules.social.hashtags} onChange={(e) => setRule("social", { hashtags: e.target.value })}><option value="none">None</option><option value="few">Two or three at most</option><option value="many">As many as the platform uses</option></select></Labeled>
+              <Labeled label="Tone"><input className={inputCls} placeholder="Friendly, local, no hard selling" value={rules.social.tone} onChange={(e) => setRule("social", { tone: e.target.value })} /></Labeled>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Labeled label="Topics never to post about, one per line"><textarea className={txtCls} placeholder={"Prices\nCompetitors by name"} value={rules.social.avoidTopics} onChange={(e) => setRule("social", { avoidTopics: e.target.value })} /></Labeled>
+              <Labeled label="Other social notes for the agent"><textarea className={txtCls} placeholder="For example: use photos from real jobs only, never stock images." value={rules.social.notes} onChange={(e) => setRule("social", { notes: e.target.value })} /></Labeled>
+            </div>
+          </Card>
+          {taskList("social", "Social media tasks", "Drafts and plans are safe to leave on. Publishing in the browser is off until you switch it on, always asks first, and is untested against the real platforms.")}
+        </>
+      )}
     </div>
   );
 }

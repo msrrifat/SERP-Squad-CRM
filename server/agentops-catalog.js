@@ -45,8 +45,37 @@ export const CATALOG = [
   t("gbp_update", "Google profile", "Business Profile edits", "Changes profile details such as hours, services or description after approval.", ["google"], { mode: "off", max: 2, per: "month", auto: false, everyDays: 30 }, { write: true }),
   t("gsc_browser", "Google profile", "Search Console in the browser", "Inspects URLs and requests indexing in Search Console after approval.", ["google"], { mode: "off", max: 4, per: "month", auto: false, everyDays: 30 }, { write: true }),
 
+  t("onpage_audit", "Work", "On-page audit of a page", "Checks one page's title, headings, content depth, internal links and structured data against what ranks.", ["web"], { mode: "limited", max: 4, per: "month", auto: false, everyDays: 30 }),
+  t("meta_rewrite", "Work", "Titles and descriptions", "Proposes better titles and meta descriptions for pages with weak click-through.", [], { mode: "limited", max: 2, per: "month", auto: false, everyDays: 30 }, { maxRunTokens: 200000 }),
+  t("internal_links", "Work", "Internal linking", "Finds pages that should link to each other and suggests the anchor text.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30 }),
+  t("site_edit", "Work", "Apply changes on the website", "Makes an approved on-page change in the site's editor, in the browser.", ["browser"], { mode: "off", max: 4, per: "month", auto: false, everyDays: 30 }, { write: true }),
+  t("social_watch", "Social", "Social profile check", "Looks at the public social profiles: last post, how often, what gets a response.", ["web"], { mode: "limited", max: 1, per: "week", auto: false, everyDays: 7, recAuto: true }, { maxRunTokens: 150000 }),
+  t("social_calendar", "Social", "Content calendar", "Plans the month's posts for each platform from the project's services, seasons and results.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30, recAuto: true }, { maxRunTokens: 200000 }),
+  t("social_post", "Social", "Social post drafts", "Writes ready-to-publish posts for each platform. A person publishes them.", ["web"], { mode: "limited", max: 8, per: "month", auto: false, everyDays: 7 }),
+  t("social_publish", "Social", "Publish to social profiles", "Publishes an approved post on a connected social profile, in the browser.", ["browser"], { mode: "off", max: 8, per: "month", auto: false, everyDays: 7 }, { write: true }),
+
   t("custom", "Other", "Custom task", "Anything else: the agent follows the instructions you type.", ["web", "browser"], { mode: "limited", max: 5, per: "week", auto: false, everyDays: 7 }),
   t("prospect_audit", "Other", "Prospect audit", "Audits a prospect's website and local presence and drafts a short proposal.", ["web"], { mode: "limited", max: 5, per: "week", auto: false, everyDays: 7 }, { agencyOnly: true }),
+];
+/* Which tab of a project's Work setup a task type sits under, and which
+   working channel (set up under Work setup → Settings) its browser belongs
+   to. A task with a channel uses the Chrome ID chosen for that channel and
+   may only show that channel's own sites. */
+const AREA = {
+  morning_check: "general", rank_drop: "general", google_updates: "general", competitor_watch: "general", experiment_review: "general", report_draft: "general", monthly_plan: "general", custom: "general",
+  site_health: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
+  profile_guard: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
+  social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
+  prospect_audit: "agency",
+};
+const CHANNEL = { profile_guard: "gbp", gbp_post: "gbp", gbp_review_reply: "gbp", gbp_update: "gbp", gsc_browser: "gsc", site_edit: "website", social_publish: "social" };
+for (const c of CATALOG) { c.area = AREA[c.key] || "general"; c.channel = CHANNEL[c.key] || null; }
+export const AREAS = [
+  { key: "general", label: "Monitoring and reporting" }, { key: "onpage", label: "Onpage SEO" }, { key: "offpage", label: "Offpage SEO" }, { key: "social", label: "Social Media" },
+];
+export const SOCIAL_PLATFORMS = [
+  { key: "facebook", label: "Facebook", hosts: ["facebook.com", "fb.com"] }, { key: "instagram", label: "Instagram", hosts: ["instagram.com"] }, { key: "linkedin", label: "LinkedIn", hosts: ["linkedin.com"] },
+  { key: "x", label: "X (Twitter)", hosts: ["x.com", "twitter.com"] }, { key: "youtube", label: "YouTube", hosts: ["youtube.com", "google.com"] }, { key: "tiktok", label: "TikTok", hosts: ["tiktok.com"] }, { key: "pinterest", label: "Pinterest", hosts: ["pinterest.com"] },
 ];
 export const CATALOG_BY_KEY = Object.fromEntries(CATALOG.map((c) => [c.key, c]));
 
@@ -310,6 +339,84 @@ Execute phase: confirm the profile is this project's business, change only the a
 Prepare phase: list the URLs and the action for each (inspect only, or request indexing) and call request_approval. Requesting indexing is limited by Google each day, so propose at most five URLs.
 
 Execute phase: open Search Console for this project's property. If it asks to sign in, stop and report. Inspect each approved URL, record what Google reports (indexed or not, last crawl, canonical chosen), and request indexing only where approved and only when the page is not indexed or has changed.`,
+
+  onpage_audit: `# On-page audit of a page
+
+Goal: what to change on the page named in the task so it deserves to rank for its target query.
+
+1. Read project_brief and the work setup (rules for on-page work, protected pages). If the page is protected, say so and stop.
+2. Fetch the page. Record its title, meta description, H1, heading outline, word count, internal links in and out, images without alt text, and structured data.
+3. Find its target query: from the task, or the query it ranks for in rank_table or search_console.
+4. Search that query and read the top three results. What do they cover, prove or answer that this page does not?
+5. Check intent: does the page type match what ranks (service page, guide, list, local landing page)?
+
+Report: a short verdict, then the changes in priority order. For each: the element, what it is now, what it should be, and why. Write the proposed title, description and H1 in full. Do not change anything.`,
+
+  meta_rewrite: `# Titles and descriptions
+
+Goal: better titles and meta descriptions for the pages that are seen but not clicked.
+
+1. search_console for 28 days. If it is not connected, say so and finish.
+2. Pick up to ten pages with many impressions, an average position of 10 or better, and a click rate below what that position normally earns.
+3. For each page read its main queries (search_console with the page) and its current title.
+4. Write a new title (under 60 characters, the main query near the front, a reason to click) and a description (under 155 characters, a concrete benefit and a call to action). Follow the project's directions and on-page rules; never promise what the page does not offer.
+
+Report: a table with page, main query, position, impressions, current title, proposed title, proposed description. Nothing is changed by this task.`,
+
+  internal_links: `# Internal linking
+
+Goal: the internal links that would help the pages that matter most.
+
+1. Read project_brief and rank_table: which pages rank between 4 and 20 for valuable queries?
+2. Fetch the sitemap and those target pages. For each target, find three to five other pages on the site that mention its topic but do not link to it.
+3. For each suggested link give the source page, the sentence to link from, and the anchor text. Vary the anchors; never suggest the same exact-match anchor twice for one target.
+4. Note orphan pages (in the sitemap, linked from nowhere you can find) and links to redirected or missing pages.
+
+Report: a table of source page, target page, sentence and anchor, best targets first. Nothing is changed by this task.`,
+
+  site_edit: `# Apply changes on the website
+
+Prepare phase: read the task and the page as it is now (fetch it). Call request_approval with the page address, each element to change, its current value and the exact new value. If the page is on the protected list in the work setup, say so and stop.
+
+Execute phase: use the website browser. If the editor asks to sign in, stop and report. Open the page's editor, change only the approved elements to exactly the approved values, read each one back, then save or update. Do not publish anything else, do not touch plugins, themes, users or settings. After saving, fetch the public page to confirm the change is live, log_change with what was changed, and finish. If the editor does not look as expected, stop before saving and report what you saw.`,
+
+  social_watch: `# Social profile check
+
+Goal: a short picture of how the business's social profiles are doing, from what is publicly visible.
+
+1. Read the work setup for the social profiles of this project. If none are set, say so and finish.
+2. Fetch each profile's public page. Note the date of the last post, roughly how often it posts, follower count if shown, and which recent posts drew a response.
+3. Compare with one or two local competitors from past competitor reports, if their profiles are easy to find.
+
+Report: one line per platform (last post, rhythm, what works), then at most three suggestions. Many platforms hide content from visitors who are not signed in; when a page shows little, say so and do not guess.`,
+
+  social_calendar: `# Content calendar
+
+Goal: next month's posts, planned per platform, grounded in this business.
+
+1. Read project_brief, the work setup (platforms, posts per week, tone, topics to avoid) and past_reports for what was posted or found recently.
+2. Build themes from real material: the services that matter most, the season, recent results or reviews, questions customers ask, work the team actually did.
+3. Lay out the month: for each week, the posts per platform the setup asks for, each with a working title, the angle, the format (photo, short video, text, carousel) and what image or footage is needed from the client.
+4. Keep a healthy mix: helpful and local posts outnumber promotional ones.
+
+Report: the calendar as a table by week and platform, then the list of photos or facts to request from the client. Suggest social_post tasks only for the first week.`,
+
+  social_post: `# Social post drafts
+
+Goal: posts a person can publish as they are.
+
+1. Read the task (which posts, which platforms), project_brief and the work setup: tone, hashtag policy, topics to avoid, and the directions.
+2. Fetch the relevant page on the client's site for facts. Never invent an offer, a price, a result or a quote.
+3. Write each post for its platform: Facebook and LinkedIn conversational with one clear point; Instagram a strong first line and a caption that works without the image; X short. Follow the hashtag policy in the setup. Add a suggested image or video for each.
+4. Where a fact is needed and unknown, leave a clear [CONFIRM: ...] marker.
+
+Report: each post under its platform heading, ready to copy, followed by what needs confirming. Nothing is published by this task.`,
+
+  social_publish: `# Publish to social profiles
+
+Prepare phase: call request_approval with the platform, the exact post text, the link and the image to use (by name; you cannot upload files). If the post needs an image, say that a person has to attach it and propose publishing text-only or leaving it to them.
+
+Execute phase: use the social browser profile for that platform. If it asks to sign in or verify, stop and report. Confirm the page or profile shown is this project's before doing anything. Create the post with exactly the approved text and link, read it back, publish, then log_change with the platform and the post's first line. If the composer does not look as expected, stop before publishing and report.`,
 
   custom: `# Custom task
 
