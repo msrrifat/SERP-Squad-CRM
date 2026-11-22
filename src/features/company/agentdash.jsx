@@ -154,6 +154,7 @@ function LimitsView({ data, accent, act, busy, onChat }) {
   const [draft, setDraft] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [detail, setDetail] = useState(null);
+  const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
   const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
   const sig = project ? JSON.stringify(fromServer(project)) : "";
@@ -190,6 +191,20 @@ function LimitsView({ data, accent, act, busy, onChat }) {
       </Card>
 
       <div className="space-y-4">
+        {project.id !== "_agency" && (
+          <div className="grid items-start gap-4 xl:grid-cols-[348px_minmax(0,1fr)]">
+            <PhoneChat c={pc} project={project} accent={accent} />
+            <div className="space-y-4">
+              <DirectionsCard c={pc} project={project} accent={accent} />
+              <Card className="p-4 text-[12px] leading-5 text-gray-600">
+                <div className="mb-1 text-[13.5px] font-semibold text-gray-900">How the agent remembers this project</div>
+                <div><b>The chat</b>: every message is kept ({pc.chat ? pc.chat.total : 0} so far). The agent sees the recent ones and looks up older ones when it needs them.</div>
+                <div><b>Directions</b>: standing instructions it follows in every task and answer.</div>
+                <div><b>Notes and the change journal</b>: facts it saved and changes that were made (below).</div>
+              </Card>
+            </div>
+          </div>
+        )}
         <Card className="p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -216,7 +231,7 @@ function LimitsView({ data, accent, act, busy, onChat }) {
             <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
             {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
             {project.id !== "_agency" && <Btn ghost onClick={recommended} title="Sets every task type to its recommended limit and schedule. Nothing is saved until you press Save.">Use the recommended schedule</Btn>}
-            {project.id !== "_agency" && <Btn ghost onClick={() => onChat(project.id)}><MessageSquare size={13} /> Chat about this project</Btn>}
+            {project.id !== "_agency" && <Btn ghost onClick={() => onChat(project.id)}><MessageSquare size={13} /> Open the chat full width</Btn>}
             {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes</span>}
           </div>
         </Card>
@@ -437,18 +452,14 @@ function TaskModal({ id, accent, act, onClose }) {
    bubble shows what it is doing. Chat tokens count against the project's
    token limit. */
 const STARTERS = ["How are the rankings doing this week?", "What changed since last month, and why?", "What is the agent working on for this project?", "What should we do next to get more calls?"];
-function ChatView({ data, accent, pid, setPid, goTasks }) {
-  const projects = data.projects.filter((p) => p.id !== "_agency");
-  const project = projects.find((p) => p.id === pid) || projects[0] || null;
-  const id = project?.id || "";
-  const [chat, setChat] = useState(null); const [text, setText] = useState(""); const [err, setErr] = useState(""); const [sending, setSending] = useState(false);
-  const boxRef = useRef(null);
-  /* One held request per open conversation: the server answers the moment the
-     conversation changes (a new message, a progress note, a stop), so the
-     screen is live without asking every second. */
+/* One held request per open conversation: the server answers the moment the
+   conversation or its directions change, so the screen is live without asking
+   every second. Returns the state and the actions. */
+function useProjectChat(chatId) {
+  const [chat, setChat] = useState(null); const [err, setErr] = useState(""); const [sending, setSending] = useState(false);
   useEffect(() => {
     setChat(null); setErr("");
-    if (!id) return undefined;
+    if (!chatId) return undefined;
     let stop = false, v = -1;
     const ctrl = new AbortController();
     const nap = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -456,7 +467,7 @@ function ChatView({ data, accent, pid, setPid, goTasks }) {
       while (!stop) {
         if (document.visibilityState !== "visible") { await nap(1500); continue; }
         try {
-          const r = await fetch("/api/agentops/chat/get", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", "X-SS-Token": tok() }, body: JSON.stringify({ projectId: id, wait: v >= 0, v }) });
+          const r = await fetch("/api/agentops/chat/get", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", "X-SS-Token": tok() }, body: JSON.stringify({ projectId: chatId, wait: v >= 0, v }) });
           const o = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(o.detail || `Request failed (${r.status})`);
           if (stop) return;
@@ -469,18 +480,137 @@ function ChatView({ data, accent, pid, setPid, goTasks }) {
       }
     })();
     return () => { stop = true; ctrl.abort(); };
-  }, [id]);
+  }, [chatId]);
+  const call = useCallback(async (path, body) => { try { const o = await api(path, { projectId: chatId, ...body }); setChat(o); setErr(""); return o; } catch (e) { setErr(String(e.message || e)); return null; } }, [chatId]);
   const pending = !!chat?.pending;
+  const send = useCallback(async (text) => { const msg = String(text || "").trim(); if (!msg || sending || pending) return false; setSending(true); const o = await call("chat/send", { text: msg }); setSending(false); return !!o; }, [call, sending, pending]);
+  return { chat, err, pending, sending, send, call, canSend: !!chat && !chat.blocked && !pending && !sending };
+}
+const agentLine = (a) => (!a ? null : a.listening.length ? { tone: "#15803D", text: `${a.listening.join(", ")} is listening and answers within seconds.`, short: "Agent online, answers in seconds" }
+  : a.outdated.length ? { tone: "#B45309", text: `${a.outdated.join(", ")} is online but runs an agent version without chat. Publish a newer version under Devices & updates.`, short: "Agent needs an update to chat" }
+  : { tone: "#6B7280", text: "No device is online. Your message is answered as soon as the agent is running.", short: "Agent offline, your message will wait" });
+
+function ChatMessages({ c, project, accent, compact }) {
+  const { chat, pending, canSend, send, call } = c;
+  const boxRef = useRef(null);
   const last = chat?.messages[chat.messages.length - 1];
-  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, last?.activity, pending, id]);
-  const call = async (path, body) => { try { const o = await api(path, body); setChat(o); setErr(""); return o; } catch (e) { setErr(String(e.message || e)); return null; } };
-  const send = async (t) => { const msg = (t ?? text).trim(); if (!msg || sending || pending) return; setSending(true); const o = await call("chat/send", { projectId: id, text: msg }); if (o) setText(""); setSending(false); };
-  if (!project) return <Card className="p-6 text-[13px] text-gray-500">Add a project first; each project gets its own conversation with the agent.</Card>;
+  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, last?.activity, pending, project.id]);
   const a = chat?.agent;
-  const avail = !a ? null : a.listening.length ? { tone: "#15803D", text: `${a.listening.join(", ")} is listening and answers within seconds.` }
-    : a.outdated.length ? { tone: "#B45309", text: `${a.outdated.join(", ")} is online but runs an agent version without chat. Publish version 0.3.0 or newer under Devices & updates.` }
-    : { tone: "#6B7280", text: "No device is online. Your message is answered as soon as the agent is running." };
-  const canSend = !!chat && !chat.blocked && !pending && !sending;
+  return (
+    <div ref={boxRef} className={`flex-1 space-y-2.5 overflow-y-auto bg-gray-50 ${compact ? "px-3 py-3" : "px-4 py-4"}`} style={compact ? undefined : { height: "max(300px, calc(100vh - 480px))" }}>
+      {!chat && <div className="py-10 text-center text-[12.5px] text-gray-400">Loading the conversation…</div>}
+      {chat && chat.total > chat.messages.length && <div className="text-center text-[10.5px] text-gray-400">Showing the latest {chat.messages.length} of {chat.total} messages. All of them are kept.</div>}
+      {chat && !chat.messages.length && (
+        <div className="mx-auto max-w-md py-6 text-center">
+          {!compact && <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={20} /></div>}
+          <div className="mt-2 text-[13px] font-semibold text-gray-900">Talk to the agent about {project.name}</div>
+          <div className="mt-1 text-[11.5px] text-gray-500">Ask how the project is doing, tell it what to do, or tell it how you want the work done. Everything you say here is kept as its memory and directions.</div>
+          <div className="mt-3 flex flex-wrap justify-center gap-1.5">{STARTERS.slice(0, compact ? 2 : 4).map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[11.5px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
+        </div>
+      )}
+      {chat?.messages.map((m) => m.system ? (
+        <div key={m.id} className={`text-center text-[11px] ${m.error ? "text-red-700" : "text-gray-400"}`}>{m.text}</div>
+      ) : m.role === "user" ? (
+        <div key={m.id} className="flex justify-end">
+          <div className={compact ? "max-w-[86%]" : "max-w-[78%]"}>
+            <div className="whitespace-pre-wrap rounded-2xl rounded-br-md px-3.5 py-2 text-[13px] leading-5 text-white" style={{ background: accent }}>{m.text}</div>
+            <div className="mt-0.5 text-right text-[10px] text-gray-400">{m.by || "You"} · {relTime(m.at)}{m.status === "cancelled" ? " · stopped" : ""}</div>
+          </div>
+        </div>
+      ) : (
+        <div key={m.id} className="flex justify-start gap-2">
+          {!compact && <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>}
+          <div className={`min-w-0 ${compact ? "max-w-[90%]" : "max-w-[84%]"}`}>
+            <div className={`rounded-2xl rounded-bl-md border px-3.5 py-1.5 ${m.error ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>{renderMd(m.text)}</div>
+            <div className="mt-0.5 text-[10px] text-gray-400">{m.device || "Agent"} · {relTime(m.at)}{m.tokens ? ` · ${fmtTok(m.tokens)} tokens · ${usd(m.costUsd)}` : ""}</div>
+          </div>
+        </div>
+      ))}
+      {pending && (
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-gray-200 bg-white px-3.5 py-2 text-[12.5px] text-gray-600">
+            <span className="flex gap-1">{[0, 1, 2].map((i) => <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-gray-400" style={{ animationDelay: i * 0.2 + "s" }} />)}</span>
+            {last?.status === "queued" ? (a?.listening.length ? "Sending to the agent…" : "Waiting for the agent to come online…") : (last?.activity || "Thinking") + "…"}
+          </div>
+          <button onClick={() => call("chat/stop", {})} className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-gray-500 hover:text-red-700"><Square size={11} /> Stop</button>
+        </div>
+      )}
+    </div>
+  );
+}
+function ChatComposer({ c, project, accent, compact, goTasks }) {
+  const { chat, err, canSend, send } = c;
+  const [text, setText] = useState("");
+  useEffect(() => { setText(""); }, [project.id]);
+  const go = async () => { if (await send(text)) setText(""); };
+  return (
+    <div className={`border-t border-gray-100 bg-white ${compact ? "px-2.5 pb-3 pt-2" : "p-3"}`}>
+      {chat?.blocked && <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{chat.blocked}</div>}
+      {err && <div className="mb-2 text-[11.5px] text-red-700">{err}</div>}
+      <div className="flex items-end gap-2">
+        <textarea aria-label={`Message about ${project.name}`} rows={compact ? 1 : 2} className={compact ? "h-[38px] min-w-0 flex-1 resize-none rounded-full border border-gray-200 bg-gray-50 px-3.5 py-2 text-[13px]" : inputCls + " min-h-[44px] flex-1 resize-none"} placeholder={compact ? "Message the agent…" : `Ask about ${project.name}, or tell the agent what to do…`} value={text} disabled={!!chat?.blocked}
+          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); go(); } }} />
+        {compact
+          ? <button aria-label="Send" disabled={!canSend || !text.trim()} onClick={go} className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-white disabled:opacity-40" style={{ background: accent }}><Send size={15} /></button>
+          : <Btn accent={accent} disabled={!canSend || !text.trim()} onClick={go}><Send size={13} /> Send</Btn>}
+      </div>
+      {!compact && <div className="mt-1.5 text-[11px] text-gray-400">Enter sends, Shift+Enter starts a new line. Work you ask for is queued as a task; see <button className="underline" onClick={goTasks}>Tasks</button> for reports and approvals.</div>}
+    </div>
+  );
+}
+/* the chat as a phone screen: always visible at the top of a project */
+function PhoneChat({ c, project, accent }) {
+  const line = agentLine(c.chat?.agent);
+  return (
+    <div className="relative mx-auto h-[632px] w-[348px] shrink-0 rounded-[42px] bg-[#0B1020] p-[11px] shadow-xl" style={{ boxShadow: "0 14px 34px rgba(15,23,42,.28), inset 0 0 0 2px #2A3350" }}>
+      <div className="absolute left-1/2 top-5 z-10 h-[22px] w-[92px] -translate-x-1/2 rounded-full bg-[#0B1020]" />
+      <div className="flex h-full flex-col overflow-hidden rounded-[32px] bg-gray-50">
+        <div className="flex items-center gap-2.5 border-b border-gray-100 bg-white px-3.5 pb-2.5 pt-10">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]" style={{ background: accent, color: "#fff" }}><Bot size={17} /></span>
+          <div className="min-w-0">
+            <div className="truncate text-[13.5px] font-semibold leading-tight text-gray-900">{project.name}</div>
+            <div className="truncate text-[11px]" style={{ color: line?.tone || "#9CA3AF" }}>{line?.short || "Loading…"}</div>
+          </div>
+        </div>
+        <ChatMessages c={c} project={project} accent={accent} compact />
+        <ChatComposer c={c} project={project} accent={accent} compact />
+      </div>
+    </div>
+  );
+}
+/* standing instructions for a project: saved from the chat or typed here */
+function DirectionsCard({ c, project, accent }) {
+  const [text, setText] = useState("");
+  const list = c.chat?.directions || [];
+  const add = async () => { const o = await c.call("direction", { action: "add", text }); if (o) setText(""); };
+  return (
+    <Card className="p-4">
+      <div className="text-[13.5px] font-semibold text-gray-900">Directions for the agent</div>
+      <div className="text-[11.5px] text-gray-500">How you want this project handled. Tell the agent in the chat and it keeps it here, or type one below. Every task and every answer for {project.name} follows them.</div>
+      <div className="mt-2">
+        {list.map((d, i) => (
+          <div key={d.id} className="flex items-start gap-2 border-t border-gray-100 py-1.5 text-[12.5px] first:border-t-0">
+            <span className="w-4 shrink-0 font-semibold text-gray-400">{i + 1}</span>
+            <span className="min-w-0 flex-1 text-gray-800">{d.text}<span className="text-gray-400"> · {d.source === "chat" ? "from the chat" : `added by ${d.by}`} {relTime(d.at)}</span></span>
+            <button aria-label="Remove direction" title="Remove" onClick={() => c.call("direction", { action: "remove", id: d.id })} className="shrink-0 text-gray-400 hover:text-red-700"><Trash2 size={13} /></button>
+          </div>
+        ))}
+        {c.chat && !list.length && <div className="py-1.5 text-[12px] text-gray-400">None yet. For example: "Focus on emergency keywords first" or "Never mention prices".</div>}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input className={inputCls + " min-w-0 flex-1"} placeholder="Add a direction" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) add(); }} />
+        <Btn accent={accent} disabled={!text.trim()} onClick={add}><Plus size={13} /> Add</Btn>
+      </div>
+    </Card>
+  );
+}
+function ChatView({ data, accent, pid, setPid, goTasks }) {
+  const projects = data.projects.filter((p) => p.id !== "_agency");
+  const project = projects.find((p) => p.id === pid) || projects[0] || null;
+  const id = project?.id || "";
+  const c = useProjectChat(id);
+  if (!project) return <Card className="p-6 text-[13px] text-gray-500">Add a project first; each project gets its own conversation with the agent.</Card>;
+  const avail = agentLine(c.chat?.agent);
   return (
     <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
       <Card className="h-max p-2">
@@ -495,70 +625,23 @@ function ChatView({ data, accent, pid, setPid, goTasks }) {
           </button>
         ))}
       </Card>
-
-      <Card className="flex flex-col overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
-          <div className="min-w-0">
-            <div className="truncate text-[14px] font-semibold text-gray-900">{project.name}</div>
-            {avail && <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: avail.tone }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: avail.tone }} />{avail.text}</div>}
+      <div className="space-y-4">
+        <Card className="flex flex-col overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
+            <div className="min-w-0">
+              <div className="truncate text-[14px] font-semibold text-gray-900">{project.name}</div>
+              {avail && <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: avail.tone }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: avail.tone }} />{avail.text}</div>}
+            </div>
+            <div className="flex items-center gap-3 text-[11.5px] text-gray-500">
+              <span title="Chat counts against this project's token limit.">{fmtTok(project.usage.month)}{project.setting.tokensPerMonth ? ` of ${fmtTok(project.setting.tokensPerMonth)}` : ""} tokens this month</span>
+              {c.chat?.messages.length > 0 && <button className="font-semibold text-gray-500 underline hover:text-gray-800" onClick={async () => { if (await askConfirm({ title: "Delete this conversation?", message: `Every message for ${project.name} is deleted and the agent starts the conversation fresh.`, note: "Directions, saved notes and task reports are kept.", confirmLabel: "Yes, delete the messages", danger: true })) c.call("chat/clear", {}); }}>Delete messages</button>}
+            </div>
           </div>
-          <div className="flex items-center gap-3 text-[11.5px] text-gray-500">
-            <span title="Chat counts against this project's token limit.">{fmtTok(project.usage.month)}{project.setting.tokensPerMonth ? ` of ${fmtTok(project.setting.tokensPerMonth)}` : ""} tokens this month</span>
-            {chat?.messages.length > 0 && <button className="font-semibold text-gray-500 underline hover:text-gray-800" onClick={async () => { if (await askConfirm({ title: "Clear this conversation?", message: `The messages for ${project.name} are deleted and the agent starts fresh.`, note: "Notes the agent saved and its task reports are kept.", confirmLabel: "Yes, clear", danger: true })) call("chat/clear", { projectId: id }); }}>Clear</button>}
-          </div>
-        </div>
-
-        <div ref={boxRef} className="space-y-3 overflow-y-auto bg-gray-50 px-4 py-4" style={{ height: "max(300px, calc(100vh - 480px))" }}>
-          {!chat && <div className="py-10 text-center text-[12.5px] text-gray-400">Loading the conversation…</div>}
-          {chat && !chat.messages.length && (
-            <div className="mx-auto max-w-md py-8 text-center">
-              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={20} /></div>
-              <div className="mt-2 text-[13.5px] font-semibold text-gray-900">Talk to the agent about {project.name}</div>
-              <div className="mt-1 text-[12px] text-gray-500">It reads this project's rankings, Search Console, map grid, its own notes and past reports before it answers, and it can queue tasks for you.</div>
-              <div className="mt-3 flex flex-wrap justify-center gap-1.5">{STARTERS.map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[12px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
-            </div>
-          )}
-          {chat?.messages.map((m) => m.system ? (
-            <div key={m.id} className={`text-center text-[11.5px] ${m.error ? "text-red-700" : "text-gray-400"}`}>{m.text}</div>
-          ) : m.role === "user" ? (
-            <div key={m.id} className="flex justify-end">
-              <div className="max-w-[78%]">
-                <div className="whitespace-pre-wrap rounded-2xl rounded-br-md px-3.5 py-2 text-[13px] leading-5 text-white" style={{ background: accent }}>{m.text}</div>
-                <div className="mt-0.5 text-right text-[10.5px] text-gray-400">{m.by || "You"} · {relTime(m.at)}{m.status === "cancelled" ? " · stopped" : ""}</div>
-              </div>
-            </div>
-          ) : (
-            <div key={m.id} className="flex justify-start gap-2">
-              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>
-              <div className="min-w-0 max-w-[84%]">
-                <div className={`rounded-2xl rounded-bl-md border px-3.5 py-1.5 ${m.error ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>{renderMd(m.text)}</div>
-                <div className="mt-0.5 text-[10.5px] text-gray-400">{m.device || "Agent"} · {relTime(m.at)}{m.tokens ? ` · ${fmtTok(m.tokens)} tokens · ${usd(m.costUsd)}` : ""}</div>
-              </div>
-            </div>
-          ))}
-          {pending && (
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>
-              <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-gray-200 bg-white px-3.5 py-2 text-[12.5px] text-gray-600">
-                <span className="flex gap-1">{[0, 1, 2].map((i) => <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-gray-400" style={{ animationDelay: i * 0.2 + "s" }} />)}</span>
-                {last?.status === "queued" ? (a?.listening.length ? "Sending to the agent…" : "Waiting for the agent to come online…") : (last?.activity || "Thinking") + "…"}
-              </div>
-              <button onClick={() => call("chat/stop", { projectId: id })} className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-gray-500 hover:text-red-700"><Square size={11} /> Stop</button>
-            </div>
-          )}
-        </div>
-
-        <div className="border-t border-gray-100 p-3">
-          {chat?.blocked && <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{chat.blocked}</div>}
-          {err && <div className="mb-2 text-[12px] text-red-700">{err}</div>}
-          <div className="flex items-end gap-2">
-            <textarea aria-label={`Message about ${project.name}`} rows={2} className={inputCls + " min-h-[44px] flex-1 resize-none"} placeholder={`Ask about ${project.name}, or tell the agent what to do…`} value={text} disabled={!!chat?.blocked}
-              onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
-            <Btn accent={accent} disabled={!canSend || !text.trim()} onClick={() => send()}><Send size={13} /> Send</Btn>
-          </div>
-          <div className="mt-1.5 text-[11px] text-gray-400">Enter sends, Shift+Enter starts a new line. Work you ask for is queued as a task; see <button className="underline" onClick={goTasks}>Tasks</button> for reports and approvals.</div>
-        </div>
-      </Card>
+          <ChatMessages c={c} project={project} accent={accent} />
+          <ChatComposer c={c} project={project} accent={accent} goTasks={goTasks} />
+        </Card>
+        <DirectionsCard c={c} project={project} accent={accent} />
+      </div>
     </div>
   );
 }

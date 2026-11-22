@@ -40,10 +40,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0 }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}),
 };
 const cache = {};
 function load(name) {
@@ -321,6 +321,40 @@ function syncPayload() {
   };
 }
 
+/* ---------- directions: standing instructions per project ----------
+   What the manager tells the agent about HOW to work on a project ("never
+   touch the bathroom pages", "write in British English", "emergency keywords
+   first"). They are saved from the chat (or typed in the dashboard), kept
+   until removed, and handed to the agent at the start of every task and every
+   chat answer for that project. */
+const directionsOf = (pid) => load("directions")[pid] || [];
+function addDirection(pid, text, by, source) {
+  const t = clip(String(text || "").replace(/\s+/g, " ").trim(), 500);
+  if (t.length < 4) return null;
+  const list = (load("directions")[pid] ||= []);
+  const same = list.find((d) => d.text.toLowerCase() === t.toLowerCase());
+  if (same) return same;
+  const d = { id: uid("dr_"), text: t, at: now(), by: clip(by || "", 80), source: source || "chat" };
+  list.push(d);
+  if (list.length > 60) list.splice(0, list.length - 60);
+  save("directions");
+  touchChat(pid);
+  return d;
+}
+function removeDirection(pid, which) {
+  const list = load("directions")[pid] || [];
+  const w = String(which || "").trim().toLowerCase();
+  if (!w) return null;
+  let i = list.findIndex((d) => d.id === which);
+  if (i < 0 && /^\d+$/.test(w)) i = +w - 1;
+  if (i < 0 || i >= list.length) i = list.findIndex((d) => d.text.toLowerCase().includes(w));
+  if (i < 0 || i >= list.length) return null;
+  const [gone] = list.splice(i, 1);
+  save("directions");
+  touchChat(pid);
+  return gone;
+}
+
 /* ---------- data the agent can read (always scoped to the task's project) ---------- */
 const UNRANKED = 101;
 const scansOf = (t) => (Array.isArray(t.scans) && t.scans.length ? t.scans.filter((s) => s && +s.t).sort((a, b) => a.t - b.t) : null);
@@ -398,6 +432,7 @@ const SERVER_TOOLS = [
       project: { name: p.name, client: p.client, demoData: p.demo, website: [...new Set(trackingOf(p.id).map((t) => t.domain).filter(Boolean))].slice(0, 3), searchConsoleConnected: !!(google.connectionId && google.gscSite), analyticsConnected: !!google.ga4Property },
       ranking: { ...rankSummary(rows), cities: [...new Set(rows.map((r) => r.city).filter(Boolean))].slice(0, 30) },
       biggestDrops7d: movers.slice(0, 15).map(rowOut), biggestGains7d: movers.slice(-10).reverse().map(rowOut),
+      directionsFromTheManager: directionsOf(p.id).map((d) => d.text),
       notes: (load("memory")[p.id] || []).slice(-25), recentChanges: (load("changes")[p.id] || []).slice(-25),
       today: new Date().toISOString().slice(0, 10),
     };
@@ -479,6 +514,23 @@ const SERVER_TOOLS = [
         ...(t.status === "queued" || t.status === "approved" ? { heldBecause: blockOf(t, null) } : {}), summary: t.result?.summary || t.proposal?.summary || t.error || "" })),
       taskTypes: CATALOG.filter((c) => !c.agencyOnly).map((c) => { const ts = taskSetting(pid, c.key); return { key: c.key, label: c.label, limit: ts.mode === "limited" ? `limited to ${ts.max} per ${ts.per}` : ts.mode, startsByItself: ts.mode !== "off" && ts.auto }; }),
     };
+  }),
+  tool("save_direction", "Save a standing instruction the manager gave for this project: how to work, what to focus on, what never to do, tone, priorities, client preferences. It is shown to you at the start of every future task and every chat answer for this project until it is removed. Write it as one clear sentence in the manager's meaning. Only for instructions the manager actually gave in this chat.", { text: { type: "string", description: "The direction, one sentence." } }, ["text"], (ctx, a) => {
+    if (!ctx.chat) return { error: "Directions are saved only from the chat, when the manager gives one." };
+    const d = addDirection(ctx.task.projectId, a.text, ctx.chat.by, "chat");
+    if (!d) return { error: "That direction is too short to save." };
+    return { ok: true, saved: d.text, directionsNow: directionsOf(ctx.task.projectId).map((x, i) => `${i + 1}. ${x.text}`) };
+  }),
+  tool("remove_direction", "Remove a saved direction when the manager withdraws or replaces it. Pass its number from the list, or a few words of its text.", { which: { type: "string", description: "The number, or part of the text." } }, ["which"], (ctx, a) => {
+    if (!ctx.chat) return { error: "Directions are changed only from the chat." };
+    const gone = removeDirection(ctx.task.projectId, a.which);
+    return gone ? { ok: true, removed: gone.text, directionsNow: directionsOf(ctx.task.projectId).map((x, i) => `${i + 1}. ${x.text}`) } : { error: "No saved direction matches that." };
+  }),
+  tool("chat_history", "Read earlier messages from this project's chat with the manager, older than the recent ones you already see. Every message is kept. Optionally only messages containing a word or phrase. Use it when something was discussed or decided before and you need what was actually said.", { contains: { type: "string", description: "Only messages containing this text (optional)." }, limit: { type: "integer", description: "How many, newest first, default 20, max 60." } }, [], (ctx, a) => {
+    const all = (load("chats")[ctx.task.projectId]?.messages || []).filter((m) => !m.system && m.id !== ctx.task.id);
+    const q = String(a.contains || "").toLowerCase().trim();
+    const hits = q ? all.filter((m) => m.text.toLowerCase().includes(q)) : all;
+    return { totalMessagesKept: all.length, matching: hits.length, messages: hits.slice(-num(a.limit, 1, 60, 20)).reverse().map((m) => ({ who: m.role === "agent" ? "you (the agent)" : m.by || "the manager", when: new Date(m.at).toISOString().slice(0, 16).replace("T", " "), text: clip(m.text, 1500) })) };
   }),
 ];
 function addChange(pid, { what, where, by, taskId }) {
@@ -616,7 +668,17 @@ function changeAdd(admin, body) {
 function projectDetail(body) {
   const pid = body?.projectId;
   if (!projectOf(pid)) return [404, { error: "not_found" }];
-  return [200, { ok: true, notes: (load("memory")[pid] || []).slice(-60).reverse(), changes: (load("changes")[pid] || []).slice(-60).reverse() }];
+  return [200, { ok: true, notes: (load("memory")[pid] || []).slice(-60).reverse(), changes: (load("changes")[pid] || []).slice(-60).reverse(), directions: directionsOf(pid) }];
+}
+function directionEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  if (body.action === "add") {
+    if (!addDirection(p.id, body.text, admin.name, "manual")) return [400, { error: "bad_request", detail: "Write the direction first." }];
+  } else if (body.action === "remove") {
+    if (!removeDirection(p.id, body.id)) return [404, { error: "not_found", detail: "That direction no longer exists." }];
+  } else return [400, { error: "bad_request", detail: "Unknown action." }];
+  return [200, chatState(p.id)];
 }
 /* The agent jar is ~50 MB, so it is streamed straight to disk as a raw body
    (never parsed as JSON): POST /api/agentops/release/upload?version=1.2.3 */
@@ -699,6 +761,7 @@ function agentClaim(d) {
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
+      directions: directionsOf(t.projectId).map((x) => x.text),
     } }];
   }
   save("tasks");
@@ -809,6 +872,8 @@ function agentBoard(d) {
       counts: { waiting: mine.filter((t) => t.status === "queued" || t.status === "approved").length, running: mine.filter((t) => t.status === "running").length, needsApproval: mine.filter((t) => t.status === "needs_approval").length, doneThisMonth: mine.filter((t) => t.status === "done" && monthKey(t.finishedAt || 0) === monthKey()).length },
       last: lastDone ? { title: lastDone.title, summary: clip(lastDone.result?.summary || "", 220), at: lastDone.finishedAt } : null,
       notes: (load("memory")[p.id] || []).slice(-4).reverse(),
+      directions: directionsOf(p.id).map((x) => x.text),
+      chat: { pending: !!pendingOf(p.id), messages: (load("chats")[p.id]?.messages || []).length },
     };
   });
   return [200, {
@@ -825,7 +890,7 @@ function agentBoard(d) {
    that is listening (a long poll that returns the moment a message arrives)
    answers with Claude, reading the same project-scoped CRM tools a task uses.
    Chat tokens count against the project's token limit like any other work. */
-const CHAT_KEEP = 200;
+const CHAT_KEEP = 5000;     // every message is kept as the project's memory; this is only a runaway guard
 const chatOf = (pid) => (load("chats")[pid] ||= { messages: [] });
 const isPending = (m) => m.role === "user" && (m.turn?.status === "queued" || m.turn?.status === "working");
 const pendingOf = (pid) => (load("chats")[pid]?.messages || []).find(isPending) || null;
@@ -874,6 +939,7 @@ function chatState(pid) {
   const online = devs.filter((d) => now() - (d.lastSeen || 0) < 3 * 60e3);
   return {
     ok: true, projectId: pid, v: chatVer[pid] || 0, pending: !!pendingOf(pid), blocked: chatBlock(pid),
+    total: (load("chats")[pid]?.messages || []).length, directions: directionsOf(pid).map((d) => ({ id: d.id, text: d.text, at: d.at, by: d.by, source: d.source })),
     agent: { listening: devs.filter(listening).map((d) => d.name), online: online.map((d) => d.name), outdated: online.filter((d) => !listening(d)).map((d) => d.name) },
     messages: (load("chats")[pid]?.messages || []).slice(-120).map((m) => ({ id: m.id, role: m.role, text: m.text, at: m.at, by: m.by || "", status: m.turn?.status || null, activity: m.turn?.status === "working" ? m.turn.activity || "" : "", tokens: m.usage?.total || 0, costUsd: m.usage?.costUsd || 0, error: !!m.error, system: !!m.system, device: m.device || "" })),
   };
@@ -933,7 +999,7 @@ function claimTurn(d) {
     m.turn = { status: "working", deviceId: d.id, startedAt: now(), activityAt: now(), activity: "", budget: Math.max(20000, Math.min(150000, room.left)), usage: { total: 0, calls: 0, costUsd: 0 } };
     save("chats");
     touchChat(pid);
-    return { id: m.id, projectId: pid, projectName: p.name, clientName: p.client, text: m.text, by: m.by || "", history, model: cfg.global.model, effort: cfg.global.effort, budgetTokens: m.turn.budget, keySource: projectKey ? "project" : claudeKey ? "company" : "device", ...(claudeKey ? { claudeApiKey: claudeKey } : {}) };
+    return { id: m.id, projectId: pid, projectName: p.name, clientName: p.client, text: m.text, by: m.by || "", history, directions: directionsOf(pid).map((x) => x.text), olderMessages: Math.max(0, all.indexOf(m) - history.length), model: cfg.global.model, effort: cfg.global.effort, budgetTokens: m.turn.budget, keySource: projectKey ? "project" : claudeKey ? "company" : "device", ...(claudeKey ? { claudeApiKey: claudeKey } : {}) };
   }
   return null;
 }
@@ -1023,6 +1089,9 @@ export async function agentOpsPost(req, body) {
       case "agent/tool": return agentTool(d, body);
       case "agent/complete": return agentComplete(d, body);
       case "agent/board": return agentBoard(d);
+      case "agent/chat/get": return chatGet(body || {});
+      case "agent/chat/send": return chatSend({ name: `${d.name} (agent's computer)` }, body || {});
+      case "agent/chat/stop": return chatStop({ name: d.name }, body || {});
       case "agent/chat/wait": return agentChatWait(d);
       case "agent/chat/progress": return agentChatProgress(d, body);
       case "agent/chat/usage": return agentChatUsage(d, body);
@@ -1047,6 +1116,7 @@ export async function agentOpsPost(req, body) {
     case "chat/send": return chatSend(admin, body || {});
     case "chat/stop": return chatStop(admin, body || {});
     case "chat/clear": return chatClear(admin, body || {});
+    case "direction": return directionEdit(admin, body || {});
     default: return [404, { error: "not_found" }];
   }
 }
