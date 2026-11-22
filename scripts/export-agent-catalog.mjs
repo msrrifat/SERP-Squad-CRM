@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { AREAS, CATALOG, DEFAULT_PLAYBOOKS, MODELS, SOCIAL_PLATFORMS } from "../server/agentops-catalog.js";
 const out = {
   catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults, area: c.area, channel: c.channel })),
-  models: MODELS, areas: AREAS, platforms: SOCIAL_PLATFORMS.map(({ key, label }) => ({ key, label })),
+  models: MODELS, areas: AREAS, platforms: SOCIAL_PLATFORMS.map(({ key, label, check }) => ({ key, label, checkable: !!check })),
   playbooks: DEFAULT_PLAYBOOKS,
 };
 mkdirSync(new URL("../agent/src/main/resources/", import.meta.url), { recursive: true });

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Eye, Gauge, BarChart3, FileText, Globe, KeyRound, ListTodo, MapPin, MessageSquare, Mic, Monitor, Pause, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Eye, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -138,7 +138,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView data={data} accent={accent} act={act} busy={busy} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -162,7 +162,7 @@ function CapInput({ label, value, onSave }) {
 }
 
 /* ---------------- projects: working limits and token limits ---------------- */
-function LimitsView({ data, accent, act, busy, onChat }) {
+function LimitsView({ data, accent, act, busy, onChat, reload }) {
   const [pid, setPid] = useState(() => data.projects[0]?.id || "");
   const project = data.projects.find((p) => p.id === pid) || data.projects[0];
   const [draft, setDraft] = useState(null);
@@ -250,8 +250,9 @@ function LimitsView({ data, accent, act, busy, onChat }) {
           </div>
         </Card>
 
-        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} tab={project.id === "_agency" ? "settings" : setupTab} setTab={setSetupTab} />
-        <div className={"flex flex-wrap items-center gap-2" + (setupTab === "brand" && !dirty && project.id !== "_agency" ? " hidden" : "")}>
+        <WorkSetup data={data} project={project} draft={draft} set={set} setTask={setTask} accent={accent} tab={project.id === "_agency" ? "settings" : setupTab} setTab={setSetupTab} dirty={dirty} busy={busy} reload={reload}
+          onCheck={(key) => act("check", { projectId: project.id, ...(key ? { key } : {}) })} />
+        <div className={"flex flex-wrap items-center gap-2" + (["brand", "experience"].includes(setupTab) && !dirty && project.id !== "_agency" ? " hidden" : "")}>
           <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
           {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
           {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes in the work setup</span>}
@@ -334,7 +335,7 @@ const Tile = ({ icon: Icon, title, sub, accent, right, children }) => (
 const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
 const txtCls = inputCls + " min-h-[64px] resize-y";
 const numOnly = (v) => +String(v).replace(/[^0-9]/g, "") || 0;
-function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) {
+function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, dirty, busy, reload, onCheck }) {
   const [brandNow, setBrandNow] = useState(null);   // counts after a change in the Brand voice tab, until the next refresh brings them
   const agency = project.id === "_agency";
   const profiles = data.devices.flatMap((d) => (d.profiles || []).map((p) => ({ ...p, device: d.name })));
@@ -366,18 +367,49 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
       {tasksOf(area).map((c) => <TaskRow key={c.key} c={c} t={draft.tasks[c.key]} used={project.tasks[c.key]?.used || 0} accent={accent} models={data.models} agency={agency} chan={chanState(c)} onChange={(patch) => setTask(c.key, patch)} />)}
     </Card>
   );
+  /* while a sign-in check is running on the device, look for its answer every few seconds */
+  const checks = project.setting.checks || {};
+  const checking = Object.values(checks).some((c) => c.state === "checking");
+  useEffect(() => { if (!checking || !reload) return undefined; const t = setInterval(reload, 3000); return () => clearInterval(t); }, [checking, reload]);
   if (agency) return taskList("agency", "Agency tasks");
   const api = project.api || {};
+  const CHECK_TEXT = { ok: ["#15803D", "#DCFCE7", "Signed in"], signin: ["#B45309", "#FEF3C7", "A person has to sign in"], error: ["#B91C1C", "#FEE2E2", "Could not be opened"], checking: ["#1D4ED8", "#DBEAFE", "Checking now"], noanswer: ["#6B7280", "#F3F4F6", "No answer from the device"], nodevice: ["#B45309", "#FEF3C7", "No device has this Chrome ID"] };
+  /* a plain function for the same reason as taskList: the line under a channel that says whether its Chrome ID is really signed in */
+  const checkLine = (key, chromeId, canCheck = true) => {
+    const c = key ? checks[key] : null, [fg, bg, label] = CHECK_TEXT[c?.state] || [];
+    const why = !chromeId ? "Choose a Chrome ID first." : !key ? "Save the changes first." : dirty ? "Save the changes first." : !canCheck ? "This platform cannot be checked automatically." : "";
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-white/60 text-[11.5px] text-gray-600">
+        <Btn ghost disabled={!!why || busy || c?.state === "checking"} onClick={() => onCheck(key)} title={why || "Opens this Chrome ID on the agent's computer and looks whether it is signed in. Nothing is clicked or typed, and no tokens are used."}><ShieldCheck size={13} /> Check sign-in</Btn>
+        {c?.state ? <Chip fg={fg} bg={bg}>{label}</Chip> : <span className="text-gray-400">{why || "Not checked yet"}</span>}
+        {c?.state && c.state !== "checking" && <span className="text-gray-500">{c.state === "signin" ? "Open the agent application, Settings, Chrome IDs, and press Sign in. " : c.state === "error" || c.state === "nodevice" ? c.detail + " " : c.state === "noanswer" ? "Is the agent application running? " : ""}{c.at ? `Checked ${relTime(c.at)}` : ""}{c.device ? ` on ${c.device}` : ""}.</span>}
+        {c?.state === "checking" && <span className="text-gray-500">Chrome is opening on the agent's computer.</span>}
+      </div>
+    );
+  };
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
-    ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)]];
+    ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)],
+    ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
+  const online = data.devices.filter((d) => d.online);
+  const gbpSigned = ch.gbp.some((g) => g.id && checks["gbp:" + g.id]?.state === "ok");
+  const gbpTaskOn = tasksOf("offpage").some((c) => c.channel === "gbp" && draft.tasks[c.key].mode !== "off");
+  const LIVE = [
+    [data.credentials.claude.set || project.ownKey?.set || data.devices.some((d) => d.localKey), "A Claude API key is set", "Add one under API setup."],
+    [online.length > 0, online.length ? `${online[0].name} is online` : "The agent's computer is online", "Start the agent application on its computer."],
+    [draft.enabled, "The agent is switched on for this project", "Switch on \"Agent works on this project\" above and save."],
+    [gbpOk, "The Business Profile has a Chrome ID that a device has", "Add the profile below and choose its Chrome ID."],
+    [gbpSigned, "That Chrome ID is signed in (checked)", "Press Check sign-in under the Business Profile."],
+    [gbpTaskOn, "A Business Profile task is switched on", "Switch one on under Offpage SEO, for example the optimization audit."],
+  ];
+  const liveDone = LIVE.filter((r) => r[0]).length;
   return (
     <div className="space-y-4">
       <div>
         <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           {TABS.map(([k, label, Icon, sub]) => (
             <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
               style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
@@ -391,6 +423,21 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
       {tab === "settings" && (
         <>
           <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-[200px] flex-1"><div className="text-[13.5px] font-semibold text-gray-900">Ready for live work on the Business Profile?</div>
+                <div className="text-[11.5px] text-gray-500">Live work means the agent opens Chrome on its computer, goes to the real profile and works there. Every step below has to be green first.</div></div>
+              <Chip fg={liveDone === LIVE.length ? "#15803D" : "#B45309"} bg={liveDone === LIVE.length ? "#DCFCE7" : "#FEF3C7"}>{liveDone === LIVE.length ? "Ready" : `${liveDone} of ${LIVE.length} done`}</Chip>
+            </div>
+            <ol className="mt-3 grid gap-x-6 gap-y-1.5 md:grid-cols-2">
+              {LIVE.map(([ok, label, fix], i) => (
+                <li key={i} className="flex items-start gap-2 text-[12.5px]">
+                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white" style={{ background: ok ? "#16A34A" : "#D1D5DB" }}>{ok ? <Check size={11} /> : <span className="text-[9px] font-bold">{i + 1}</span>}</span>
+                  <span className={ok ? "text-gray-700" : "text-gray-900"}>{label}{!ok && <span className="block text-[11.5px] text-gray-500">{fix}</span>}</span>
+                </li>
+              ))}
+            </ol>
+          </Card>
+          <Card className="p-4">
             <div className="text-[13.5px] font-semibold text-gray-900">Working channels</div>
             <div className="mb-3 text-[11.5px] text-gray-500">Where the agent works for {project.name}, and which signed-in Chrome on its computer it uses for each. A Chrome ID is a separate Chrome profile you signed in to once; the agent never signs in itself and can only open that channel's own sites in it.</div>
             <div className="grid gap-3 lg:grid-cols-2">
@@ -402,6 +449,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
                   <Labeled label="Chrome ID signed in to the editor"><ChromeSelect profiles={profiles} value={ch.website.browser} onChange={(v) => setOne("website", { browser: v })} /></Labeled>
                 </div>
                 <div className="mt-2"><Labeled label="Note for the agent (optional)"><input className={inputCls} placeholder="For example: blog posts live under /news/" value={ch.website.note} onChange={(e) => setOne("website", { note: e.target.value })} /></Labeled></div>
+                {checkLine("website", ch.website.browser)}
               </Tile>
 
               <Tile icon={MapPin} accent={accent} title="Google Business Profiles" sub="Every location of this client, and the Chrome ID that manages it." right={<Ready ok={gbpOk} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
@@ -415,6 +463,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
                       <div className="min-w-0 flex-1"><Labeled label="Profile link (Maps or Business Profile manager)"><input className={inputCls} placeholder="https://www.google.com/maps/place/…" value={g.link} onChange={(e) => setRow("gbp", i, { link: e.target.value })} /></Labeled></div>
                       <Btn ghost danger onClick={() => delRow("gbp", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
                     </div>
+                    {checkLine(g.id ? "gbp:" + g.id : "", g.browser)}
                   </div>
                 ))}
                 <Btn ghost onClick={() => setCh({ gbp: [...ch.gbp, { id: "", name: "", link: "", browser: ch.gbp[0]?.browser || "", note: "" }] })}><Plus size={13} /> Add a Business Profile</Btn>
@@ -426,6 +475,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
                   <Labeled label="Chrome ID for browser tasks"><ChromeSelect profiles={profiles} value={ch.gsc.browser} onChange={(v) => setOne("gsc", { browser: v })} /></Labeled>
                 </div>
                 <div className="mt-1.5 text-[11px] text-gray-400">The Chrome ID is only needed to inspect URLs and request indexing in the browser.</div>
+                {ch.gsc.browser && checkLine("gsc", ch.gsc.browser)}
               </Tile>
 
               <Tile icon={BarChart3} accent={accent} title="Google Analytics" sub={api.analytics ? `Data is read through the connected Google account: ${api.ga4Property}` : "Not connected for data yet (Project settings, Data sources)."} right={<Ready ok={!!api.analytics} yes="Data connected" no="No data connection" />}>
@@ -433,6 +483,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
                   <Labeled label="Property name or ID"><input className={inputCls} placeholder="GA4 · 123456789" value={ch.ga4.property} onChange={(e) => setOne("ga4", { property: e.target.value })} /></Labeled>
                   <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={ch.ga4.browser} onChange={(v) => setOne("ga4", { browser: v })} /></Labeled>
                 </div>
+                {ch.ga4.browser && checkLine("ga4", ch.ga4.browser)}
               </Tile>
             </div>
           </Card>
@@ -507,6 +558,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
                 <Labeled label="Profile link"><input className={inputCls} placeholder="https://www.facebook.com/yourpage" value={x.link} onChange={(e) => setRow("social", i, { link: e.target.value })} /></Labeled>
                 <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={x.browser} onChange={(v) => setRow("social", i, { browser: v })} /></Labeled>
                 <Btn ghost danger onClick={() => delRow("social", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
+                {x.browser && <div className="md:col-span-4">{checkLine(x.id ? "social:" + x.id : "", x.browser, !!(data.platforms || []).find((pf) => pf.key === x.platform)?.checkable)}</div>}
               </div>
             ))}
             {!ch.social.length && <div className="mb-2 text-[12px] text-gray-400">No social profile added yet.</div>}
@@ -529,7 +581,109 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab }) 
       )}
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
+      {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
     </div>
+  );
+}
+
+/* ---------------- experience: what the agent has learned on a project ---------------- */
+const LESSON_FROM = { task: ["From its own work", "#1D4ED8", "#DBEAFE"], review: ["Experience review", "#1D4ED8", "#DBEAFE"], chat: ["From the chat", "#6D28D9", "#EDE9FE"], approval: ["From an approval", "#B45309", "#FEF3C7"], feedback: ["From feedback", "#B45309", "#FEF3C7"], manager: ["Taught by a person", "#15803D", "#DCFCE7"] };
+const practice = (n) => (n >= 10 ? ["Experienced", "#15803D", "#DCFCE7"] : n >= 3 ? ["Practised", "#1D4ED8", "#DBEAFE"] : n >= 1 ? ["Starting", "#B45309", "#FEF3C7"] : ["Not run yet", "#6B7280", "#F3F4F6"]);
+function LessonRow({ l, busy, onPin, onRemove }) {
+  const [label, fg, bg] = LESSON_FROM[l.source] || ["Learned", "#6B7280", "#F3F4F6"];
+  return (
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+      <div className="min-w-[220px] flex-1">
+        <div className="text-[12.5px] leading-relaxed text-gray-900">{l.text}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+          <Chip>{l.typeLabel || "All tasks"}</Chip><Chip fg={fg} bg={bg}>{label}</Chip>{l.pinned && <Chip fg="#111827" bg="#E5E7EB">Pinned</Chip>}
+          <span>{relTime(l.updatedAt)}{l.by && l.source !== "task" ? ` · ${l.by}` : ""}{l.uses ? ` · given to ${l.uses} task${l.uses === 1 ? "" : "s"}` : ""}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        {onPin && <Btn ghost disabled={busy} onClick={onPin} title={l.pinned ? "Unpin. The agent may then tidy this lesson away in an experience review." : "Pin: always given first, and the agent can never remove it."}><Pin size={13} /> {l.pinned ? "Unpin" : "Pin"}</Btn>}
+        <Btn ghost danger disabled={busy} onClick={onRemove} title="Remove this lesson"><Trash2 size={13} /></Btn>
+      </div>
+    </div>
+  );
+}
+function Experience({ project, data, accent }) {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [text, setText] = useState(""); const [type, setType] = useState(""); const [everywhere, setEverywhere] = useState(false);
+  const run = async (body) => {
+    setBusy(true); setMsg("");
+    try { const o = await api("lesson", { projectId: project.id, ...body }); setSt(o); return o; }
+    catch (e) { setMsg(String(e.message || e)); return null; }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { run({ action: "list" }); }, [project.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!st) return <Card className="p-4 text-[13px] text-gray-500">{msg || "Loading what the agent has learned…"}</Card>;
+  const rows = data.catalog.filter((c) => !c.agencyOnly && st.stats.byType[c.key]).map((c) => ({ c, r: st.stats.byType[c.key] })).filter((x) => x.r.done || x.r.proposals).sort((a, b) => b.r.done - a.r.done);
+  const sum = (k) => Object.values(st.stats.byType).reduce((n, r) => n + (r[k] || 0), 0);
+  const proposals = sum("proposals"), asProposed = sum("asProposed"), good = sum("good"), bad = sum("bad");
+  const add = async () => { const o = await run({ action: "add", text, type, everywhere }); if (o) { setText(""); setEverywhere(false); } };
+  const stat = (label, value, sub) => <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{label}</div><div className="text-[20px] font-semibold text-gray-900">{value}</div><div className="text-[11px] text-gray-500">{sub}</div></div>;
+  return (
+    <>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "14", color: accent }}><GraduationCap size={17} /></span>
+          <div className="min-w-[220px] flex-1">
+            <div className="text-[13.5px] font-semibold text-gray-900">What the agent has learned on {project.name}</div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">The agent writes a lesson when a task teaches it something about this client, and one is written for it every time a person corrects it: an edited proposal, a rejection, feedback on a result. Every later task and chat answer starts with the lessons that apply. The AI model itself does not change; this list is what makes the agent better at this project over time, and you can read, pin, remove or add to it.</div>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {stat("Tasks finished", st.stats.done, "on this project")}
+          {stat("Lessons", st.lessons.length, `of ${st.keep} kept at most`)}
+          {stat("Approved as proposed", proposals ? `${asProposed} of ${proposals}` : "None yet", "proposals a person did not have to change")}
+          {stat("Feedback", good + bad ? `${good} good · ${bad} to improve` : "None yet", "given on finished tasks")}
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden">
+        <div className="border-b border-gray-100 px-4 py-3"><div className="text-[13.5px] font-semibold text-gray-900">Practice by kind of task</div><div className="text-[11.5px] text-gray-500">How often the agent has done each kind of work here, and how its proposals were received. The label only counts finished runs: Starting (1 or 2), Practised (3 to 9), Experienced (10 or more).</div></div>
+        {!rows.length && <div className="px-4 py-4 text-[12px] text-gray-400">No task has finished on this project yet.</div>}
+        {rows.map(({ c, r }) => { const [pl, pfg, pbg] = practice(r.done); return (
+          <div key={c.key} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-gray-50 px-4 py-2 text-[12.5px] last:border-0">
+            <span className="min-w-[200px] flex-1 font-medium text-gray-900">{c.label}</span>
+            <Chip fg={pfg} bg={pbg}>{pl}</Chip>
+            <span className="w-24 text-gray-600">{r.done} finished</span>
+            <span className="w-56 text-gray-600">{r.proposals ? `${r.asProposed} approved as proposed, ${r.edited} edited, ${r.rejected} rejected` : "no proposals"}</span>
+            <span className="w-28 text-gray-500">{r.lastAt ? `last ${relTime(r.lastAt)}` : ""}</span>
+          </div>); })}
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div><div className="text-[13.5px] font-semibold text-gray-900">Lessons for this project</div><div className="text-[11.5px] text-gray-500">Pinned lessons are given first and the agent can never remove them. The others it may merge or tidy away in an experience review.</div></div>
+        <div className="space-y-2">
+          {st.lessons.map((l) => <LessonRow key={l.id} l={l} busy={busy} onPin={() => run({ action: "pin", id: l.id, pinned: !l.pinned })} onRemove={() => run({ action: "remove", id: l.id })} />)}
+          {!st.lessons.length && <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-[12px] text-gray-400">Nothing learned yet. Lessons appear as tasks finish and as you approve, edit, reject or rate the agent's work.</div>}
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <div className="mb-2 text-[12.5px] font-semibold text-gray-900">Teach the agent something yourself</div>
+          <textarea className={inputCls + " resize-y"} rows={2} placeholder="For example: this client's posts get the most calls when they show a finished job, so lead with the result, not the offer." value={text} onChange={(e) => setText(e.target.value)} />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select aria-label="Kind of task" className={inputCls + " max-w-[260px]"} value={type} onChange={(e) => { setType(e.target.value); if (!e.target.value) setEverywhere(false); }}>
+              <option value="">Applies to all tasks</option>{data.catalog.filter((c) => !c.agencyOnly).map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Use this only for how a kind of task is done in general. Do not name a client."><input type="checkbox" checked={everywhere} disabled={!type} onChange={(e) => setEverywhere(e.target.checked)} /> for every project, not just this one</label>
+            <Btn accent={accent} disabled={busy || text.trim().length < 12} onClick={add}><Plus size={13} /> Add lesson</Btn>
+            {msg && <span className="text-[11.5px] text-red-700">{msg}</span>}
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div><div className="text-[13.5px] font-semibold text-gray-900">Learned for every project</div><div className="text-[11.5px] text-gray-500">How a kind of task is done in general, whichever client it is for: how a page or a tool really behaves, what works. Given to every project's tasks of that kind.</div></div>
+        <div className="space-y-2">
+          {st.skills.map((l) => <LessonRow key={l.id} l={l} busy={busy} onRemove={() => run({ action: "remove", id: l.id, everywhere: true })} />)}
+          {!st.skills.length && <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-[12px] text-gray-400">Nothing yet.</div>}
+        </div>
+      </Card>
+    </>
   );
 }
 
@@ -824,6 +978,12 @@ function TasksView({ data, accent, act, busy, onOpen }) {
 
 function TaskModal({ id, accent, act, onClose }) {
   const [t, setT] = useState(null); const [err, setErr] = useState(""); const [details, setDetails] = useState(""); const [note, setNote] = useState("");
+  const [fbNote, setFbNote] = useState(""); const [fbMsg, setFbMsg] = useState("");
+  const rate = async (rating) => {
+    setFbMsg("");
+    try { const o = await api("task/feedback", { id, rating, note: fbNote }); setT(o.task); setFbNote(""); setFbMsg(o.task.feedback.lessonId ? "Saved, and added to what the agent has learned." : "Saved."); }
+    catch (e) { setFbMsg(String(e.message || e)); }
+  };
   const load = useCallback(() => api("task/get", { id }).then((o) => { setT(o.task); setDetails((d) => d || o.task.proposal?.details || ""); }).catch((e) => setErr(String(e.message || e))), [id]);
   useEffect(() => { load(); const i = setInterval(load, 5000); return () => clearInterval(i); }, [load]);
   const doAct = async (action, extra = {}) => { const o = await act("task/action", { id, action, ...extra }); if (o) { await load(); if (action === "cancel" || action === "reject") onClose(); } };
@@ -866,6 +1026,20 @@ function TaskModal({ id, accent, act, onClose }) {
           </div>
         )}
         {t.result?.report && <div><div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Report</div><div className="rounded-xl border border-gray-200 p-3">{renderMd(t.result.report)}</div></div>}
+
+        {["done", "stopped"].includes(t.status) && (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <div className="text-[12.5px] font-semibold text-gray-900">Was this good work?</div>
+            <div className="text-[11.5px] text-gray-500">Your verdict becomes a lesson for the next task of this kind on this project.</div>
+            {t.feedback && <div className="mt-1.5 text-[12px] text-gray-700">{t.feedback.by} rated it <b>{t.feedback.rating === "good" ? "good" : "needs work"}</b> {relTime(t.feedback.at)}{t.feedback.note ? `: ${t.feedback.note}` : ""}</div>}
+            <input className={inputCls + " mt-2"} placeholder="What was good, or what should be different next time" value={fbNote} onChange={(e) => setFbNote(e.target.value)} />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Btn ghost onClick={() => rate("good")}><ThumbsUp size={13} /> Good</Btn>
+              <Btn ghost onClick={() => rate("bad")}><ThumbsDown size={13} /> Needs work</Btn>
+              {fbMsg && <span className="text-[11.5px] text-gray-600" role="status">{fbMsg}</span>}
+            </div>
+          </div>
+        )}
 
         {(t.events || []).length > 0 && (
           <details>
@@ -1211,8 +1385,22 @@ function ApiSetupView({ data, accent, act, busy }) {
         <KeyForm accent={accent} busy={busy} label="Company Claude API key" state={data.credentials.claude}
           onSave={(key) => cred({ action: "set", key })} onTest={(key) => cred({ action: "test", key })} onRemove={() => cred({ action: "remove" })} />
         <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600">
-          The key is stored on the server in a file only the server can read. It is never shown again here and is not part of the workspace data. A device receives it only together with a task it is handed.
+          {data.credentials.locked ? <b className="text-red-700">The keys saved earlier cannot be read on this server (its key file is missing). Enter them again. </b> : null}
+          {data.credentials.storage === "encrypted" ? "The key is stored encrypted on the server; the key that unlocks it is kept outside the data folder, so a copy or backup of the data reveals nothing." : "The key is stored on the server in a file only the server can read."} It is never shown again here and is not part of the workspace data. A device receives it only together with a task it is handed, over an encrypted connection, and does not write it to disk.
         </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Lock size={15} style={{ color: accent }} /> How passwords and keys are kept safe</div>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[12.5px] leading-relaxed text-gray-700">
+          <li><b>The agent never has a password.</b> A person signs in to each Chrome ID on the agent's computer. The sign-in stays in that Chrome profile on that computer; it is not sent to the CRM or to Claude.</li>
+          <li><b>It cannot type or read one.</b> The agent's browser refuses to type on a sign-in page or into a password, code or key field, and never reads what such a field contains.</li>
+          <li><b>A signed-in Chrome ID opens only its channel's sites.</b> Business Profile, Search Console and Analytics each have their own short list. Mail, files, saved passwords, payments and account or security settings cannot be opened.</li>
+          <li><b>Anything that looks like a password or a key is hidden</b> before it is stored or passed on: in chat messages, directions, notes, lessons, task reports and brand documents, and in page text before it reaches Claude.</li>
+          <li><b>Keys are never shown again.</b> This screen shows only the last four characters. Device tokens are stored as a hash and shown once.</li>
+          <li><b>The agent's computer</b> keeps its token, its own key and its Chrome IDs in a folder only that computer's user can open, and talks to the CRM and to Claude over https only.</li>
+        </ul>
+        <div className="mt-2 text-[11.5px] text-gray-500">If you paste a password into the chat by mistake it is hidden before it is saved, but change that password anyway.</div>
       </Card>
 
       <Card className="p-4">

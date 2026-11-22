@@ -43,7 +43,7 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | GBP geo-grid rank tracker (coordinate-targeted Maps scans, ARP/SoLV metrics) | src/features/performance/geogrid.jsx |
 | Branding & Automation (media library, Web 2.0 branded sites, campaign wizard) | src/features/optimization/branding.jsx |
 | App shell, routing, sessions, permission gates, lazy loading | src/App.jsx |
-| Local AI agent control plane (devices, task queue, per-project working limits per task type, per-project work setup (working channels + the Chrome ID signed in to each, rules for on-page / off-page / social, brand voice + brand documents for the agent; Word uploads are read in the browser by src/lib/docxread.js), token limits, approvals, live chat per project kept as memory, per-project directions, API setup, playbook sync, agent releases; Admin-only endpoints `/api/agentops/*`, device endpoints under `/api/agentops/agent/*`) | server/agentops.js, server/agentops-catalog.js (task types + default playbooks), dashboard src/features/company/agentdash.jsx |
+| Local AI agent control plane (devices, task queue, per-project working limits per task type, per-project work setup (working channels + the Chrome ID signed in to each, rules for on-page / off-page / social, brand voice + brand documents for the agent; Word uploads are read in the browser by src/lib/docxread.js), sign-in checks per channel, lessons learned per project and task type (Experience tab) fed back into every task, token limits, approvals, live chat per project kept as memory, per-project directions, API setup, playbook sync, agent releases; Admin-only endpoints `/api/agentops/*`, device endpoints under `/api/agentops/agent/*`) | server/agentops.js, server/agentops-catalog.js (task types + default playbooks), dashboard src/features/company/agentdash.jsx |
 | Local AI agent management screens inside the device application: the same agentdash.jsx, built as one script by `npm run build:agent-ui` (vite.agent.config.js, entry src/agent-app/main.jsx) into agent/src/main/resources/manage/; the application forwards `/api/agentops/*` with the device token and the server allows it only for devices with `canManage`. Rebuild it and the jar after changing agentdash.jsx | vite.agent.config.js, src/agent-app/main.jsx, scripts/export-agent-catalog.mjs |
 | Local AI agent program (Java 17+, Maven; Claude tool loop, Chrome control, sync, self-update, runs as an application: standalone window, tray icon, shortcuts, `demo` mode with a made-up agency). Build: `cd agent && mvn package` | agent/ (see agent/README.md); screens in agent/src/main/resources/ui.html served by LocalUi.java; AppWindow.java, Tray.java, Shortcuts.java, Demo.java |
 | Internal product guide (A–Z manual read by the team tab + AI agent; team-session-only endpoints `/api/product-guide*`) | docs/product-guide/*.md, viewer src/features/company/guide.jsx |
@@ -63,9 +63,14 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
   src/features/company/settings.jsx — it appears in Company Settings → API settings
   automatically. Never build separate credential UIs. One deliberate exception:
   the local AI agent's Claude keys are set in Company Settings → AI agent → API
-  setup (and per device in the agent's own dashboard). They are stored in
-  server/data/agentops/secrets.json, never in the workspace state, because the
+  setup (and per device in the agent's own dashboard). They are stored encrypted in
+  server/data/agentops/secrets.json (master key outside the data folder, see server/README.md), never in the workspace state, because the
   workspace is readable by every signed-in session.
+- **Agent store text is scrubbed**: in server/agentops.js every stored free-text
+  value goes through `clip()` (or `line`/`lines`/`para`, which use it); it masks
+  anything shaped like a password or API key. Never store or forward free text
+  there without it, and never route the agent's own keys through it. The device
+  does the same with `Redact.java` before page text reaches Claude.
 - **Code-splitting**: heavy screens (portal, company settings, reports, PM,
   optimization) are React.lazy'd in src/App.jsx via `lazyOf`. New heavy features
   should follow the same pattern.
