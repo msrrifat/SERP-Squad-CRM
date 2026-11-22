@@ -24,7 +24,7 @@
    Team endpoints need an Admin/owner session (X-SS-Token).
    Device endpoints need a device token (X-Agent-Token).
    ===================================================================== */
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { CATALOG, CATALOG_BY_KEY, DEFAULT_PLAYBOOKS, MODELS, PRICES } from "./agentops-catalog.js";
 
@@ -66,6 +66,73 @@ function logActivity(kind, text, extra = {}) {
   a.unshift({ at: now(), kind, text: clip(text, 400), ...extra });
   if (a.length > 600) a.length = 600;
   save("activity");
+}
+
+/* ---------- the agent's own API credentials ----------
+   The Claude API key the agent works with is set in the AI agent dashboard,
+   separately from Company Settings → API settings. It is kept OUT of the
+   workspace documents (those are readable by every signed-in session): it
+   lives in data/agentops/secrets.json (owner-only file), is never sent back
+   to a browser (only "set, ends in abcd"), and reaches a device only inside
+   the task it is handed, over the device's authenticated connection.
+
+   Which key a task uses, most specific first:
+     1. the project's own key, when one is set;
+     2. the key saved on the device itself, when it has one;
+     3. the company key set here. */
+let secretsCache = null;
+function secrets() {
+  if (secretsCache) return secretsCache;
+  let v = null;
+  try { v = JSON.parse(readFileSync(new URL("secrets.json", DIR), "utf8")); } catch { v = null; }
+  secretsCache = { claude: v?.claude?.key ? v.claude : null, projects: v?.projects && typeof v.projects === "object" ? v.projects : {} };
+  return secretsCache;
+}
+function saveSecrets() {
+  mkdirSync(DIR, { recursive: true });
+  const url = new URL("secrets.json", DIR), tmp = new URL("secrets.json.tmp", DIR);
+  writeFileSync(tmp, JSON.stringify(secretsCache), { mode: 0o600 });
+  renameSync(tmp, url);
+  try { chmodSync(url, 0o600); } catch { /* filesystem without modes */ }
+}
+const maskKey = (rec) => (rec?.key ? { set: true, last4: rec.key.slice(-4), updatedAt: rec.updatedAt || null, by: rec.by || "" } : { set: false });
+const serverKeyFor = (pid) => secrets().projects[pid]?.key || secrets().claude?.key || "";
+/* ask Claude whether it accepts a key: listing models costs nothing */
+async function testClaudeKey(key) {
+  try {
+    const r = await fetch((process.env.AGENTOPS_ANTHROPIC_BASE || "https://api.anthropic.com") + "/v1/models?limit=1", { headers: { "x-api-key": key, "anthropic-version": "2023-06-01" }, signal: AbortSignal.timeout(20000) });
+    if (r.ok) return { valid: true, detail: "Claude accepted this key." };
+    if (r.status === 401) return { valid: false, detail: "Claude rejected this key. It is wrong or was revoked." };
+    if (r.status === 403) return { valid: false, detail: "Claude knows this key but it is not allowed to use the API." };
+    return { valid: null, detail: `Claude answered with error ${r.status}. Try again in a minute.` };
+  } catch { return { valid: null, detail: "Claude could not be reached from the server. Try again in a minute." }; }
+}
+async function credentials(admin, body) {
+  const pid = body?.projectId || null;
+  if (pid && !projectOf(pid)) return [404, { error: "not_found", detail: "Unknown project." }];
+  const sec = secrets();
+  const where = pid ? `for ${projectOf(pid).name}` : "for the company";
+  if (body.action === "set") {
+    const key = String(body.key || "").trim();
+    if (key.length < 20 || key.length > 400 || /\s/.test(key)) return [400, { error: "bad_request", detail: "That does not look like an API key. Paste the whole key, with no spaces." }];
+    const rec = { key, updatedAt: now(), by: admin.name };
+    if (pid) sec.projects[pid] = rec; else sec.claude = rec;
+    saveSecrets();
+    logActivity("settings", `${admin.name} saved a Claude API key ${where} (ends in ${key.slice(-4)}).`);
+    return [200, overview(admin)];
+  }
+  if (body.action === "remove") {
+    if (pid) delete sec.projects[pid]; else sec.claude = null;
+    saveSecrets();
+    logActivity("settings", `${admin.name} removed the Claude API key ${where}.`);
+    return [200, overview(admin)];
+  }
+  if (body.action === "test") {
+    const key = String(body.key || "").trim() || (pid ? sec.projects[pid]?.key : sec.claude?.key) || "";
+    if (!key) return [400, { error: "bad_request", detail: "There is no key to test yet." }];
+    return [200, { ok: true, ...(await testClaudeKey(key)) }];
+  }
+  return [400, { error: "bad_request", detail: "Unknown action." }];
 }
 
 /* ---------- who is asking ---------- */
@@ -150,7 +217,7 @@ function tokenRoom(pid) {
 
 /* ---------- tasks ---------- */
 const ACTIVE = new Set(["queued", "approved", "running", "needs_approval"]);
-const lightTask = (t) => ({ id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0 });
+const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0 });
 function createTask({ projectId, type, title, instructions, source, createdBy, reason }) {
   const cat = CATALOG_BY_KEY[type];
   if (!cat) return { error: "Unknown task type." };
@@ -188,6 +255,10 @@ function blockOf(t, device) {
   if (running.some((x) => x.projectId === t.projectId)) return "Another task is running on this project.";
   if (needsGoogle(t.type) && running.some((x) => needsGoogle(x.type))) return "Another task is using the Google browser profile.";
   if (device && needsGoogle(t.type) && device.googleProfile === false) return "This device has no Google browser profile.";
+  if (!serverKeyFor(t.projectId)) {
+    const devs = device ? [device] : load("devices").filter((d) => !d.revoked);
+    if (devs.length && devs.every((d) => d.localKey === false)) return "No Claude API key is set for the agent. Add one in API setup.";
+  }
   return null;
 }
 function requeueStale() {
@@ -413,9 +484,10 @@ function overview(admin) {
   return {
     ok: true, me: admin.name, catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, group: c.group, desc: c.desc, needs: c.needs || [], write: !!c.write, agencyOnly: !!c.agencyOnly, defaults: c.defaults })), models: MODELS,
     global: cfg.global, playbooksRev: cfg.playbooksRev, companyMonthTokens: companyMonthTokens(),
+    credentials: { claude: maskKey(secrets().claude) },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked };
+      return { ...p, setting: projectSetting(p.id), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, ownKey: maskKey(secrets().projects[p.id]) };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -579,13 +651,14 @@ function agentHello(d, body) {
   d.state = clip(body?.state || "", 120);
   if (body?.googleProfile != null) d.googleProfile = !!body.googleProfile;
   if (body?.updateSkipped != null) d.updateSkipped = clip(body.updateSkipped, 20);
+  if (body?.localKey != null) d.localKey = !!body.localKey;
   if (body?.playbooksRev != null) d.playbooksRev = +body.playbooksRev || 0;
   const syncNow = !!d.syncRequested;
   if (body?.synced) { d.syncRequested = false; d.lastSync = now(); }
   save("devices");
   const cfg = load("config");
   for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = now();
-  return [200, { ok: true, device: { id: d.id, name: d.name, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now() }];
+  return [200, { ok: true, device: { id: d.id, name: d.name, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key }];
 }
 function agentClaim(d) {
   requeueStale();
@@ -602,6 +675,9 @@ function agentClaim(d) {
     const room = tokenRoom(t.projectId);
     t.runBudget = Math.max(20000, Math.min(cat.maxRunTokens || 300000, room.left));
     t.runStartTokens = t.usage.total;
+    const projectKey = secrets().projects[t.projectId]?.key || "";
+    const claudeKey = projectKey || (d.localKey === true ? "" : secrets().claude?.key || "");
+    t.keySource = projectKey ? "project" : claudeKey ? "company" : "device";
     save("tasks");
     logActivity("task", `${d.name} started "${t.title}".`, { taskId: t.id, projectId: t.projectId });
     return [200, { ok: true, playbooksRev: cfg.playbooksRev, task: {
@@ -609,6 +685,7 @@ function agentClaim(d) {
       phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? ts.approval : "none",
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
+      keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
     } }];
   }
   save("tasks");
@@ -720,6 +797,7 @@ export async function agentOpsPost(req, body) {
     case "playbook": return playbookSave(admin, body || {});
     case "change": return changeAdd(admin, body);
     case "project": return projectDetail(body);
+    case "credentials": return credentials(admin, body || {});
     default: return [404, { error: "not_found" }];
   }
 }

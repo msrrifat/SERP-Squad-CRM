@@ -44,7 +44,7 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
 | Branding & Automation (media library, Web 2.0 branded sites, campaign wizard) | src/features/optimization/branding.jsx |
 | App shell, routing, sessions, permission gates, lazy loading | src/App.jsx |
 | Local AI agent control plane (devices, task queue, per-project working limits per task type, token limits, approvals, playbook sync, agent releases; Admin-only endpoints `/api/agentops/*`, device endpoints under `/api/agentops/agent/*`) | server/agentops.js, server/agentops-catalog.js (task types + default playbooks), dashboard src/features/company/agentdash.jsx |
-| Local AI agent program (Java 17+, Maven; Claude tool loop, Chrome control, sync, self-update). Build: `cd agent && mvn package` | agent/ (see agent/README.md) |
+| Local AI agent program (Java 17+, Maven; Claude tool loop, Chrome control, sync, self-update, its own dashboard on 127.0.0.1:7717 with device API setup). Build: `cd agent && mvn package` | agent/ (see agent/README.md); dashboard page agent/src/main/resources/ui.html, served by LocalUi.java |
 | Internal product guide (A–Z manual read by the team tab + AI agent; team-session-only endpoints `/api/product-guide*`) | docs/product-guide/*.md, viewer src/features/company/guide.jsx |
 
 `_archive/serp-squad-monolith-jul5.jsx` is the retired single-file version — never edit it.
@@ -60,7 +60,11 @@ Node lives in `~/.local/node/bin` (added to PATH in ~/.zshrc).
   warns when the tree is dirty or ahead of origin/main.
 - **New API credentials**: add one entry to `API_REGISTRY` in
   src/features/company/settings.jsx — it appears in Company Settings → API settings
-  automatically. Never build separate credential UIs.
+  automatically. Never build separate credential UIs. One deliberate exception:
+  the local AI agent's Claude keys are set in Company Settings → AI agent → API
+  setup (and per device in the agent's own dashboard). They are stored in
+  server/data/agentops/secrets.json, never in the workspace state, because the
+  workspace is readable by every signed-in session.
 - **Code-splitting**: heavy screens (portal, company settings, reports, PM,
   optimization) are React.lazy'd in src/App.jsx via `lazyOf`. New heavy features
   should follow the same pattern.

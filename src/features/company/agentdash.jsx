@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, ListTodo, Monitor, Pause, Play, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Check, Clock, Copy, Download, Gauge, KeyRound, ListTodo, Monitor, Pause, Play, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -72,7 +72,7 @@ export function AgentOpsSection({ company }) {
   }
   const g = data.global;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
-  const VIEWS = [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["devices", "Devices & updates", Monitor], ["playbooks", "Playbooks", BookOpen]];
+  const VIEWS = [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["devices", "Devices & updates", Monitor], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
@@ -109,6 +109,13 @@ export function AgentOpsSection({ company }) {
         </div>
       </Card>
 
+      {!data.credentials.claude.set && !data.projects.some((p) => p.ownKey.set) && !data.devices.some((d) => d.localKey) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
+          <KeyRound size={14} className="shrink-0" /> No Claude API key is set for the agent yet, so no task can start.
+          <button className="font-semibold underline" onClick={() => setView("api")}>Open API setup</button>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-1.5">
         {VIEWS.map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold"
@@ -119,6 +126,7 @@ export function AgentOpsSection({ company }) {
       {view === "limits" && <LimitsView data={data} accent={accent} act={act} busy={busy} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
+      {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
       {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
     </div>
@@ -461,7 +469,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold text-gray-900">{d.name} <span className="font-normal text-gray-500">{d.online ? (d.paused ? "· paused" : "· online") : d.lastSeen ? `· last seen ${relTime(d.lastSeen)}` : "· never connected"}</span></div>
                 <div className="truncate text-[11.5px] text-gray-500">{[d.host, d.os, d.version && "version " + d.version].filter(Boolean).join(" · ") || "Waiting for the first check-in"}</div>
-                <div className="truncate text-[11.5px] text-gray-600">{d.currentTask ? "Working on: " + d.currentTask : d.state || ""}{stale ? " · playbooks not synced yet" : ""}{behind ? (d.updateSkipped === data.release.version ? ` · version ${data.release.version} failed its self-test here and was not installed` : ` · update to ${data.release.version} pending`) : ""}{d.googleProfile === false ? " · no Google browser profile" : ""}</div>
+                <div className="truncate text-[11.5px] text-gray-600">{d.currentTask ? "Working on: " + d.currentTask : d.state || ""}{stale ? " · playbooks not synced yet" : ""}{behind ? (d.updateSkipped === data.release.version ? ` · version ${data.release.version} failed its self-test here and was not installed` : ` · update to ${data.release.version} pending`) : ""}{d.googleProfile === false ? " · no Google browser profile" : ""}{d.localKey ? " · uses its own Claude key" : ""}</div>
               </div>
               <Btn ghost onClick={() => act("device/update", { id: d.id, syncNow: true })} disabled={busy} title="The device syncs playbooks and settings on its next check-in, within a minute."><RefreshCw size={13} /> {d.syncRequested ? "Sync requested" : "Sync now"}</Btn>
               <Btn ghost onClick={() => act("device/update", { id: d.id, paused: !d.paused })} disabled={busy}>{d.paused ? <><Play size={13} /> Resume</> : <><Pause size={13} /> Pause</>}</Btn>
@@ -498,14 +506,86 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
         <ol className="mt-4 list-decimal space-y-1 pl-5 text-[12px] leading-5 text-gray-600">
           <li>On the computer, install Java 21 or newer and put <code>serpsquad-agent.jar</code> in its own folder.</li>
           <li>Register the device above and copy its token.</li>
-          <li>In that folder run <code>java -jar serpsquad-agent.jar setup</code> and paste the token and your Claude API key when asked. The key stays on that computer.</li>
-          <li>Start it with <code>run.bat</code> (Windows) or <code>./run.sh</code>. For Google profile tasks run <code>java -jar serpsquad-agent.jar login-google</code> once and sign in yourself.</li>
+          <li>In that folder run <code>java -jar serpsquad-agent.jar</code>. The agent's own dashboard opens in the browser at <code>http://127.0.0.1:7717</code>. Paste the token there and press Connect.</li>
+          <li>The Claude API key comes from <b>API setup</b> here. A computer can also be given its own key in its dashboard.</li>
+          <li>From then on start it with <code>run.bat</code> (Windows) or <code>./run.sh</code>. For Google profile tasks press "Open Chrome to sign in" in the agent's dashboard and sign in yourself.</li>
         </ol>
       </Card>
 
       <Card className="p-4">
         <div className="text-[13.5px] font-semibold text-gray-900">Recent activity</div>
         <ul className="mt-2 space-y-1">{data.activity.slice(0, 25).map((a, i) => <li key={i} className="text-[12px] text-gray-700"><span className="text-gray-400">{relTime(a.at)}</span> · {a.text}</li>)}{!data.activity.length && <li className="text-[12px] text-gray-400">Nothing yet.</li>}</ul>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------- API setup: the agent's own credentials ----------------
+   Kept apart from Company Settings → API settings on purpose: these keys are
+   stored in a server-side file that is never sent back to a browser, and they
+   reach a device only together with the task it is handed. */
+function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
+  const [key, setKey] = useState(""); const [msg, setMsg] = useState(null);
+  const run = async (fn, okText) => { setMsg({ text: "Working…", tone: "q" }); const o = await fn(); if (!o) { setMsg(null); return; } setMsg({ text: o.detail || okText, tone: o.valid === false ? "no" : o.valid === null ? "q" : "ok" }); return o; };
+  return (
+    <div>
+      <div className="text-[12.5px] text-gray-700">{state.set ? <>Saved, ends in <code className="rounded bg-gray-100 px-1.5 py-0.5 text-[12px]">{state.last4}</code>{state.by ? <span className="text-gray-500"> · by {state.by} {state.updatedAt ? relTime(state.updatedAt) : ""}</span> : null}</> : <span className="text-gray-500">No key saved.</span>}</div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input type="password" autoComplete="off" spellCheck={false} aria-label={label} className={inputCls + " min-w-0 max-w-md flex-1"} placeholder={state.set ? "Paste a new key to replace it" : "sk-ant-…"} value={key} onChange={(e) => setKey(e.target.value)} />
+        <Btn accent={accent} disabled={busy || key.trim().length < 20} onClick={async () => { const o = await run(() => onSave(key.trim()), "Key saved."); if (o) setKey(""); }}><Check size={13} /> Save key</Btn>
+        <Btn ghost disabled={busy || (!state.set && key.trim().length < 20)} onClick={() => run(() => onTest(key.trim()))} title="Asks Claude whether it accepts the key. This costs nothing.">Test</Btn>
+        {state.set && <Btn ghost danger disabled={busy} onClick={async () => { if (await askConfirm({ title: "Remove this key?", message: "The agent stops using it at once.", confirmLabel: "Yes, remove", danger: true })) run(onRemove, "Key removed."); }}>Remove</Btn>}
+      </div>
+      {msg && <div className={`mt-1.5 text-[12px] ${msg.tone === "ok" ? "text-green-700" : msg.tone === "no" ? "text-red-700" : "text-amber-700"}`}>{msg.text}</div>}
+    </div>
+  );
+}
+function ApiSetupView({ data, accent, act, busy }) {
+  const real = data.projects.filter((p) => p.id !== "_agency");
+  const [pid, setPid] = useState("");
+  const withKey = data.projects.filter((p) => p.ownKey.set);
+  const picked = data.projects.find((p) => p.id === pid);
+  const cred = (extra) => act("credentials", extra);
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><KeyRound size={15} style={{ color: accent }} /> Claude API key for the agent</div>
+        <div className="mb-3 text-[11.5px] text-gray-500">The agent's own key, separate from the AI key in API settings, so its usage shows on its own line in the Claude Console. Create one at console.anthropic.com, Settings, API keys.</div>
+        <KeyForm accent={accent} busy={busy} label="Company Claude API key" state={data.credentials.claude}
+          onSave={(key) => cred({ action: "set", key })} onTest={(key) => cred({ action: "test", key })} onRemove={() => cred({ action: "remove" })} />
+        <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600">
+          The key is stored on the server in a file only the server can read. It is never shown again here and is not part of the workspace data. A device receives it only together with a task it is handed.
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[13.5px] font-semibold text-gray-900">Which key a task uses</div>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-[12.5px] text-gray-700">
+          <li>The project's own key, when one is set below.</li>
+          <li>The key saved on the device itself, when it has one (set in the agent's dashboard on that computer).</li>
+          <li>The company key above.</li>
+        </ol>
+        <div className="mt-3 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Devices</div>
+        {!data.devices.length && <div className="mt-1 text-[12px] text-gray-400">No device registered yet.</div>}
+        {data.devices.map((d) => <div key={d.id} className="mt-1 text-[12.5px] text-gray-700"><b>{d.name}</b>: {d.localKey ? "has its own key, used unless a project has one" : d.localKey === false ? (data.credentials.claude.set ? "no key of its own, uses the company key" : "no key of its own") : "not reported yet"}</div>)}
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[13.5px] font-semibold text-gray-900">Own key per project (optional)</div>
+        <div className="mb-3 text-[11.5px] text-gray-500">Give a project its own Claude key when its usage should be billed or tracked separately. Its token limits still apply.</div>
+        {withKey.map((p) => (
+          <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 py-2 text-[12.5px] first:border-t-0">
+            <span><b>{p.name}</b> <span className="text-gray-500">key ends in {p.ownKey.last4} · by {p.ownKey.by} {p.ownKey.updatedAt ? relTime(p.ownKey.updatedAt) : ""}</span></span>
+            <Btn ghost onClick={() => setPid(p.id)}>Change</Btn>
+          </div>
+        ))}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select aria-label="Project" className={selCls + " py-1.5"} value={pid} onChange={(e) => setPid(e.target.value)}>
+            <option value="">Choose a project…</option>{real.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        {picked && <div className="mt-3"><KeyForm key={picked.id} accent={accent} busy={busy} label={`Claude API key for ${picked.name}`} state={picked.ownKey}
+          onSave={(key) => cred({ action: "set", key, projectId: picked.id })} onTest={(key) => cred({ action: "test", key, projectId: picked.id })} onRemove={() => cred({ action: "remove", projectId: picked.id })} /></div>}
       </Card>
     </div>
   );
