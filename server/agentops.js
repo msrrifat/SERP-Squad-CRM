@@ -71,13 +71,13 @@ const cut = (s, n) => { const t = String(s == null ? "" : s); return t.length > 
 const clip = (s, n) => cut(scrub(s), n);
 const num = (v, lo, hi, dflt) => { const n = Math.round(+v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
 
-let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: null };
+let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: null, dfsForProject: () => null };
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
 const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0 }, projects: {}, playbooks: {} }),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25 }, projects: {}, playbooks: {} }),
   devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }),
 };
 const cache = {};
@@ -243,7 +243,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -397,7 +397,7 @@ function taskSetting(pid, type) {
 }
 function projectSetting(pid) {
   const p = load("config").projects[pid] || {};
-  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0), channels: cleanChannels(p.channels), rules: cleanRules(p.rules), checks: pid === AGENCY_PROJECT ? {} : checksOf(pid) };
+  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0), seoUsdPerMonth: seoProjectCap(pid), channels: cleanChannels(p.channels), rules: cleanRules(p.rules), checks: pid === AGENCY_PROJECT ? {} : checksOf(pid) };
 }
 
 /* ---------- work setup: a project's working channels and the rules per work area ----------
@@ -1067,12 +1067,190 @@ function workEdit(admin, body) {
   return bad("Unknown action.");
 }
 
+/* ---------- SEO data from DataForSEO, through its MCP server ----------
+   DataForSEO runs a hosted MCP server (https://mcp.dataforseo.com/v3/mcp). It
+   offers four tools: three that read the API's documentation and one,
+   api_request, that makes an authenticated request to any DataForSEO
+   endpoint: live search results, keyword volumes, competitor and backlink
+   data, on-page checks, business listings. This server is the MCP client. It
+   signs in with the DataForSEO login already kept in the CRM, so the login
+   never reaches the agent's computer or Claude, and it passes the tools on to
+   the agent under its own names (seo_data_*).
+
+   A request costs money on the DataForSEO account, so every one goes through
+   limits here first: the feature has to be switched on for the company, the
+   project has a monthly spend limit in dollars (and the company a total), a
+   task may make only so many requests, only the SEO parts of the API can be
+   called, and the settings that make a single request expensive are capped.
+   What each request cost is read from the answer and kept per project. */
+const DFS_MCP_URL = process.env.AGENTOPS_DFS_MCP_URL || "https://mcp.dataforseo.com/v3/mcp";
+const SEO_APIS = ["serp", "keywords_data", "dataforseo_labs", "backlinks", "on_page", "business_data", "domain_analytics", "content_analysis", "ai_optimization"];
+const SEO_REQUESTS_PER_TASK = 20, SEO_REQUESTS_PER_CHAT = 6, SEO_DOCS_PER_TASK = 30, SEO_RESULT_CHARS = 40000, SEO_GUESS_USD = 0.02;
+const SEO_CAPS = { depth: 100, limit: 200, max_crawl_pages: 100, max_pages: 100, calculate_rectangles: 0 };      // the request fields that multiply what one request costs
+const seoGlobal = () => { const g = load("config").global; return { enabled: g.seoData === true, usdPerMonth: g.seoUsdPerMonth == null ? 25 : Math.max(0, +g.seoUsdPerMonth || 0) }; };
+const seoProjectCap = (pid) => { const v = load("config").projects[pid]?.seoUsdPerMonth; return v == null ? 5 : Math.max(0, +v || 0); };
+const seoUsage = (pid, t = now()) => { const u = load("usage")[monthKey(t)]?.[pid]?.seo; return { usd: u?.usd || 0, calls: u?.calls || 0, guessed: u?.guessed || 0 }; };
+const seoCompanyUsd = () => Object.values(load("usage")[monthKey()] || {}).reduce((s, u) => s + (u.seo?.usd || 0), 0);
+const seoCompanyCalls = () => Object.values(load("usage")[monthKey()] || {}).reduce((s, u) => s + (u.seo?.calls || 0), 0);
+const usd4 = (n) => Math.round(n * 10000) / 10000;
+function seoRecord(pid, usd, guessed) {
+  const all = load("usage"), m = (all[monthKey()] ||= {}), u = (m[pid] ||= { total: 0, days: {}, types: {}, costUsd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), s = (u.seo ||= { usd: 0, calls: 0, guessed: 0 });
+  s.usd = usd4(s.usd + usd); s.calls += 1; if (guessed) s.guessed += 1;
+  save("usage");
+}
+/* why a paid request cannot be made right now (null = it can) */
+function seoBlock(pid) {
+  const g = seoGlobal();
+  if (!g.enabled) return "SEO data from DataForSEO is switched off for the company. It is switched on in the AI agent's API setup.";
+  if (!deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid)) return "No DataForSEO login is set. It is added in Company Settings, API settings.";
+  const cap = seoProjectCap(pid), used = seoUsage(pid).usd;
+  if (cap <= 0) return "This project's DataForSEO spend limit is 0, so no paid request is made for it.";
+  if (used >= cap) return `This project's DataForSEO spend limit for the month is used up ($${used.toFixed(2)} of $${cap.toFixed(2)}).`;
+  if (seoCompanyUsd() >= g.usdPerMonth) return g.usdPerMonth <= 0 ? "The company's DataForSEO spend limit is 0, so no paid request is made." : `The company's DataForSEO spend limit for the month is used up ($${seoCompanyUsd().toFixed(2)} of $${g.usdPerMonth.toFixed(2)}).`;
+  return null;
+}
+
+/* --- a small MCP client: JSON-RPC over HTTP, answers as JSON or as an event stream --- */
+const mcpSessions = new Map();               // which login -> { id, at }
+let mcpSeq = 0;
+async function mcpPost(creds, session, message) {
+  const headers = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Basic " + Buffer.from(`${creds.login}:${creds.password}`).toString("base64"), "MCP-Protocol-Version": "2025-06-18" };
+  if (session?.id) headers["Mcp-Session-Id"] = session.id;
+  let r;
+  try { r = await fetch(DFS_MCP_URL, { method: "POST", headers, body: JSON.stringify(message), signal: AbortSignal.timeout(70000) }); }
+  catch (e) { throw Object.assign(new Error("DataForSEO's MCP server could not be reached: " + cut(e?.message || e, 120)), { kind: "network" }); }
+  if (r.status === 401 || r.status === 403) throw Object.assign(new Error("DataForSEO did not accept the login saved in Company Settings, API settings."), { kind: "auth" });
+  const sid = r.headers.get("mcp-session-id");
+  if (sid && session) session.id = sid;
+  if (message.id == null) return null;                                     // a notification has no answer
+  const text = await r.text();
+  if (!r.ok) throw Object.assign(new Error(`DataForSEO's MCP server answered with error ${r.status}.`), { kind: r.status === 404 || r.status === 400 ? "session" : "server", body: cut(text, 200) });
+  let msg = null;
+  if ((r.headers.get("content-type") || "").includes("text/event-stream")) {
+    for (const chunk of text.split(/\r?\n\r?\n/)) {
+      const data = chunk.split(/\r?\n/).filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+      if (!data) continue;
+      try { const m = JSON.parse(data); if (m.id === message.id) msg = m; } catch { /* not a message */ }
+    }
+  } else { try { msg = JSON.parse(text); } catch { msg = null; } }
+  if (!msg) throw Object.assign(new Error("DataForSEO's MCP server gave an answer that could not be read."), { kind: "server" });
+  if (msg.error) throw Object.assign(new Error("DataForSEO: " + cut(msg.error.message || "request refused", 300)), { kind: "rpc" });
+  return msg.result;
+}
+async function mcpCall(creds, method, params) {
+  const key = sha(creds.login + "\n" + creds.password).slice(0, 24);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let session = mcpSessions.get(key);
+    try {
+      if (!session || now() - session.at > 20 * 60e3) {
+        session = { id: "", at: now() };
+        await mcpPost(creds, session, { jsonrpc: "2.0", id: ++mcpSeq, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "seo-agent-client", version: "1.0" } } });
+        await mcpPost(creds, session, { jsonrpc: "2.0", method: "notifications/initialized" });
+        mcpSessions.set(key, session);
+      }
+      session.at = now();
+      return await mcpPost(creds, session, { jsonrpc: "2.0", id: ++mcpSeq, method, params });
+    } catch (e) {
+      mcpSessions.delete(key);
+      if (e.kind !== "session" || attempt) throw e;                        // an expired session is opened again once
+    }
+  }
+  return null;
+}
+const mcpText = (res) => (Array.isArray(res?.content) ? res.content.filter((c) => c?.type === "text").map((c) => c.text || "").join("\n") : "");
+/* the documentation tools cost nothing; they are still counted, so a task cannot read forever */
+async function seoDocs(ctx, tool, args) {
+  const pid = ctx.task.projectId, g = seoGlobal();
+  if (!g.enabled) return { error: "SEO data from DataForSEO is switched off for the company." };
+  const creds = deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid);
+  if (!creds) return { error: "No DataForSEO login is set. It is added in Company Settings, API settings." };
+  const holder = ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id);
+  if (holder && (holder.seoDocs || 0) >= SEO_DOCS_PER_TASK) return { error: "Thirty documentation look-ups have been made in this task. Work with what you have read." };
+  try {
+    const res = await mcpCall(creds, "tools/call", { name: tool, arguments: args });
+    if (holder) { holder.seoDocs = (holder.seoDocs || 0) + 1; save("tasks"); }
+    const text = mcpText(res);
+    return res?.isError ? { error: cut(text || "DataForSEO could not return that documentation.", 400) } : { documentation: scrub(cut(text, 30000)), ...(text.length > 30000 ? { note: "Cut at 30,000 characters. Ask for one section or one endpoint to see less at a time." } : {}) };
+  } catch (e) { return { error: e.message }; }
+}
+const seoLine = new Map();                  // project -> the paid request in progress
+function seoRequest(ctx, a) {
+  const pid = ctx.task.projectId;
+  const run = (seoLine.get(pid) || Promise.resolve()).then(() => seoRequestNow(ctx, a));
+  seoLine.set(pid, run.catch(() => {}));
+  return run;
+}
+async function seoRequestNow(ctx, a) {
+  const pid = ctx.task.projectId;
+  const why = seoBlock(pid);
+  if (why) return { error: why };
+  const method = String(a.method || "").toUpperCase();
+  if (method !== "GET" && method !== "POST") return { error: "Only GET and POST requests are made." };
+  let path = String(a.path || "").trim();
+  try { if (/^https?:/i.test(path)) { const u = new URL(path); if (u.host !== "api.dataforseo.com") return { error: "Only DataForSEO's own API can be called." }; path = u.pathname + u.search; } } catch { return { error: "That is not an API path." }; }
+  path = path.replace(/\.ai(?=$|\?)/, "");
+  const m = /^\/v3\/([a-z_]+)\//.exec(path);
+  if (!m || !SEO_APIS.includes(m[1]) || /\.\./.test(path)) return { error: `Only these parts of the DataForSEO API can be called: ${SEO_APIS.join(", ")}. The path starts with /v3/ and one of them.` };
+  let data = a.data;
+  if (typeof data === "string") { try { data = JSON.parse(data); } catch { return { error: "data has to be a JSON object or an array of task objects." }; } }
+  if (data != null && typeof data !== "object") return { error: "data has to be a JSON object or an array of task objects." };
+  const jobs = data == null ? [] : Array.isArray(data) ? data : [data];
+  if (jobs.length > 3) return { error: "At most three task objects in one request. Each one is paid for separately." };
+  if (JSON.stringify(jobs).length > 20000) return { error: "The request body is too large." };
+  for (const job of jobs) for (const [k, max] of Object.entries(SEO_CAPS)) if (job && typeof job === "object" && job[k] != null && (+job[k] > max || (max === 0 && job[k] === true))) return { error: max === 0 ? `${k} is not allowed: it makes the request much more expensive.` : `${k} can be ${max} at most here. Ask for less; a second request can fetch the next part.` };
+  const holderNow = () => (ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id));
+  const turnNow = () => (ctx.chat ? (load("chats")[pid]?.messages || []).find((m) => m.id === ctx.task.id && m.turn) || null : null);
+  let holder = holderNow(), turn = turnNow();
+  const limit = ctx.chat ? SEO_REQUESTS_PER_CHAT : SEO_REQUESTS_PER_TASK, made = ctx.chat ? turn?.turn?.seoCalls || 0 : holder?.seoCalls || 0;
+  if (made >= limit) return { error: `${limit} DataForSEO requests have been made in this ${ctx.chat ? "answer" : "task"}, which is the most allowed. Finish with the data you have.` };
+  /* the request is counted before it is sent: one that fails on the way still used its turn */
+  if (holder) { holder.seoCalls = made + 1; save("tasks"); }
+  if (turn) { turn.turn.seoCalls = made + 1; save("chats"); }
+  const creds = deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid);
+  let res;
+  try { res = await mcpCall(creds, "tools/call", { name: "api_request", arguments: { method, path, ...(method === "POST" ? { data: jobs } : {}), noAiMode: a.full_response === true } }); }
+  catch (e) { return { error: e.message }; }
+  holder = holderNow(); turn = turnNow();
+  const text = mcpText(res);
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch { parsed = null; }
+  /* what it cost: DataForSEO states it in the answer; without it a cautious guess is counted */
+  const stated = parsed && typeof parsed === "object" ? (Number.isFinite(+parsed.cost) ? +parsed.cost : Array.isArray(parsed.tasks) && parsed.tasks.some((t) => Number.isFinite(+t?.cost)) ? parsed.tasks.reduce((s, t) => s + (+t?.cost || 0), 0) : null) : null;
+  const free = /\/(locations|languages|categories|available_filters|available_history|errors|tasks_ready|tasks_fixed|id_list)(\/|$|\?)/.test(path) || (method === "GET" && /\/task_get\//.test(path));
+  const cost = stated != null ? Math.max(0, stated) : free || res?.isError ? 0 : SEO_GUESS_USD * Math.max(1, jobs.length);
+  seoRecord(pid, cost, stated == null && cost > 0);
+  if (holder) { holder.seoUsd = usd4((holder.seoUsd || 0) + cost); save("tasks"); }
+  if (turn) { turn.turn.seoUsd = usd4((turn.turn.seoUsd || 0) + cost); save("chats"); }
+  const cap = seoProjectCap(pid), used = seoUsage(pid).usd;
+  const body = scrub(cut(text, SEO_RESULT_CHARS));
+  return { ...(res?.isError ? { error: "DataForSEO refused the request. Read its answer, correct the request with the documentation, and do not repeat it unchanged." } : {}), answer: body, ...(text.length > SEO_RESULT_CHARS ? { note: "The answer was cut at 40,000 characters. Ask for fewer rows or a narrower request." } : {}),
+    costUsd: usd4(cost), ...(stated == null && cost > 0 ? { costNote: "DataForSEO did not state the cost of this request, so a cautious amount was counted." } : {}), spentThisMonthUsd: usd4(used), projectLimitUsd: cap, requestsLeftInThis: limit - made - 1 };
+}
+/* the switch, the company limit, and a free test that the login and the MCP server work */
+async function seoDataEdit(admin, body) {
+  if (body.action === "test") {
+    const creds = deps.dfsForProject(body.projectId || "");
+    if (!creds) return [200, { ok: true, connected: false, detail: "No DataForSEO login is set. Add it in Company Settings, API settings (DataForSEO), then test again." }];
+    try {
+      const res = await mcpCall(creds, "tools/list", {});
+      const names = (res?.tools || []).map((t) => t.name);
+      const need = ["docs_index", "docs_list_sections", "docs_search", "api_request"], missing = need.filter((n) => !names.includes(n));
+      const cfg = load("config"); cfg.global.seoTestedAt = now(); cfg.global.seoTestOk = !missing.length; save("config");
+      return [200, { ok: true, connected: !missing.length, tools: names.slice(0, 20), detail: missing.length ? `Connected, but the server did not offer: ${missing.join(", ")}.` : `Connected to DataForSEO's MCP server. It offers ${names.length} tools. This test cost nothing.` }];
+    } catch (e) {
+      const cfg = load("config"); cfg.global.seoTestedAt = now(); cfg.global.seoTestOk = false; save("config");
+      return [200, { ok: true, connected: false, detail: e.message }];
+    }
+  }
+  return [400, { error: "bad_request", detail: "Unknown action." }];
+}
+
 /* ---------- usage ledger ---------- */
 const monthKey = (t = now()) => new Date(t).toISOString().slice(0, 7);
 const dayKey = (t = now()) => new Date(t).toISOString().slice(8, 10);
 function usageOf(pid, t = now()) {
   const u = load("usage")[monthKey(t)]?.[pid];
-  return { month: u?.total || 0, day: u?.days?.[dayKey(t)] || 0, costUsd: u?.costUsd || 0, input: u?.input || 0, output: u?.output || 0, cacheRead: u?.cacheRead || 0, cacheWrite: u?.cacheWrite || 0, types: u?.types || {} };
+  return { month: u?.total || 0, day: u?.days?.[dayKey(t)] || 0, costUsd: u?.costUsd || 0, input: u?.input || 0, output: u?.output || 0, cacheRead: u?.cacheRead || 0, cacheWrite: u?.cacheWrite || 0, types: u?.types || {}, seo: { usd: u?.seo?.usd || 0, calls: u?.seo?.calls || 0 } };
 }
 const companyMonthTokens = () => Object.values(load("usage")[monthKey()] || {}).reduce((s, u) => s + (u.total || 0), 0);
 function costOf(model, u) {
@@ -1208,7 +1386,7 @@ function syncPayload() {
   ensureDefaultsRev();
   const cfg = load("config");
   return {
-    rev: cfg.playbooksRev, files: playbookFiles(), tools: SERVER_TOOLS.map(({ run, ...t }) => t),
+    rev: cfg.playbooksRev, files: playbookFiles(), tools: SERVER_TOOLS.filter((t) => cfg.global.seoData === true || !t.name.startsWith("seo_data_")).map(({ run, ...t }) => t),
     settings: { pollSeconds: 60, heartbeatSeconds: 60, googleHosts: GOOGLE_HOSTS, model: cfg.global.model, effort: cfg.global.effort,
       catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, needs: c.needs || [], write: !!c.write, maxRunTokens: c.maxRunTokens || 300000 })) },
   };
@@ -1393,6 +1571,12 @@ const SERVER_TOOLS = [
     addChange(ctx.task.projectId, { what: a.what, where: a.where, by: "AI agent", taskId: ctx.task.id });
     return { ok: true };
   }),
+  tool("seo_data_docs_sections", "DataForSEO (live SEO data): list the sections of its API documentation, for example SERP API, Keywords Data API, DataForSEO Labs API, Backlinks API, OnPage API, Business Data API. Free. Use it first when you do not know which part of the API holds what you need.", {}, [], (ctx) => seoDocs(ctx, "docs_list_sections", {})),
+  tool("seo_data_docs_index", "DataForSEO: the index of API endpoints in one section of the documentation, with each endpoint's path. Free. Always give a section; the whole index is very long.", { section: { type: "string", description: "A section name from seo_data_docs_sections, for example \"DataForSEO Labs API\"." } }, ["section"], (ctx, a) => seoDocs(ctx, "docs_index", { section: String(a.section || "") })),
+  tool("seo_data_docs_search", "DataForSEO: read the documentation of one endpoint: its method, the fields of the request and what comes back. Free. Read it before the first request to an endpoint, so the request is right the first time.", { path: { type: "string", description: "The endpoint's path or documentation address, for example serp/google/organic/live/regular." } }, ["path"], (ctx, a) => seoDocs(ctx, "docs_search", { url: String(a.path || ""), needCodeExample: false })),
+  tool("seo_data_request", "DataForSEO: make one request for live SEO data: search results for a query and place, keyword search volume, difficulty and suggestions, a competitor's ranking keywords, backlinks and referring domains, an on-page check of a page, business listings and reviews. THIS COSTS MONEY on the agency's account, from a fraction of a cent to a few cents per request, and the project has a monthly limit: the answer says what the request cost and what is left. Prefer live endpoints, ask only for the rows you need (small limit, depth 10 to 20), never send the same request twice, and stop when you have what the task needs. The data it returns is real: quote it as it is.", { method: { type: "string", enum: ["GET", "POST"] }, path: { type: "string", description: "API path, for example /v3/dataforseo_labs/google/keyword_suggestions/live" },
+    data: { type: "array", description: "For POST: an array with one task object (three at most), with the fields the endpoint's documentation names, for example [{\"keyword\":\"boiler repair\",\"location_name\":\"Leeds,England,United Kingdom\",\"language_code\":\"en\",\"limit\":20}].", items: { type: "object" } },
+    full_response: { type: "boolean", description: "Leave out. True returns DataForSEO's full, much longer answer instead of the compact one made for AI assistants." } }, ["method", "path"], (ctx, a) => seoRequest(ctx, a)),
   tool("log_work", "Record one thing that was done for this project, for its work report: a page you changed or wrote for, a link that was won or built, a citation corrected, a post published or drafted, a review reply, or a distinct piece of research. One entry per thing, a short factual sentence, with the live address where there is one. Do not record plans or proposals as done, and do not repeat a change already logged with log_change.", { section: { type: "string", enum: ["research", "onpage", "offpage", "social"], description: "research = research and planning; onpage = work on the website's pages; offpage = links, citations, Business Profile; social = social media." },
     kind: { type: "string", enum: ["keywords", "competitors", "serp", "rankings", "audit", "plan", "page_change", "content", "meta", "technical", "internal_links", "link_won", "link_built", "citation", "outreach", "gbp_post", "review_reply", "gbp_edit", "post_published", "post_drafted", "calendar", "engagement", "other"] },
     title: { type: "string", description: "What was done, in one short sentence." }, detail: { type: "string", description: "One or two sentences more, if useful." },
@@ -1514,6 +1698,7 @@ function overview(admin) {
     global: cfg.global, playbooksRev: cfg.playbooksRev, companyMonthTokens: companyMonthTokens(),
     credentials: { claude: maskKey(secrets().claude), ...secretsStorage() },
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
+    seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
       return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
@@ -1534,6 +1719,12 @@ function saveConfig(admin, body) {
     if (g.model && MODELS.some((m) => m.id === g.model)) cfg.global.model = g.model;
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
+    if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
+    if (g.seoData != null && !!g.seoData !== (cfg.global.seoData === true)) {
+      cfg.global.seoData = !!g.seoData;
+      cfg.playbooksRev += 1;                               // the agent's tool list changes, so devices sync again
+      logActivity("settings", `${admin.name} switched SEO data from DataForSEO ${cfg.global.seoData ? "on" : "off"} for the agent.`);
+    }
   }
   if (body.projectId) {
     if (!projectOf(body.projectId)) return [404, { error: "not_found", detail: "Unknown project." }];
@@ -1541,6 +1732,7 @@ function saveConfig(admin, body) {
     if (body.enabled != null) p.enabled = !!body.enabled;
     if (body.tokensPerMonth != null) p.tokensPerMonth = num(body.tokensPerMonth, 0, 2e9, 2000000);
     if (body.tokensPerDay != null) p.tokensPerDay = num(body.tokensPerDay, 0, 2e9, 0);
+    if (body.seoUsdPerMonth != null) p.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+body.seoUsdPerMonth || 0) * 100) / 100));
     if (body.channels && typeof body.channels === "object") p.channels = cleanChannels(body.channels);
     if (body.rules && typeof body.rules === "object") p.rules = cleanRules(body.rules);
     if (body.tasks && typeof body.tasks === "object") {
@@ -2154,6 +2346,7 @@ export async function agentOpsPost(req, body) {
     case "brand": return brandEdit(admin, body || {});
     case "knowledge": return knowledgeEdit(admin, body || {});
     case "roster": return rosterEdit(admin, body || {});
+    case "seodata": return seoDataEdit(admin, body || {});
     case "report": return reportGet(body || {});
     case "work": return workEdit(admin, body || {});
     case "logos": return logosGet(body || {});

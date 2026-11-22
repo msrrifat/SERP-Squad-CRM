@@ -28,6 +28,7 @@ async function api(path, body) {
 }
 const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
 const usd = (n) => "$" + (n >= 100 ? n.toFixed(0) : (n || 0).toFixed(2));
+const usd4 = (n) => "$" + (!n ? "0.00" : n >= 0.1 ? n.toFixed(2) : n.toFixed(4));       // small amounts keep their cents and fractions
 const STATUS = {
   queued: ["Waiting", "#6B7280", "#F3F4F6"], approved: ["Approved, waiting", "#1D4ED8", "#DBEAFE"], running: ["Running", "#0E7C66", "#D1FAE5"],
   needs_approval: ["Needs approval", "#B45309", "#FEF3C7"], done: ["Done", "#15803D", "#DCFCE7"], failed: ["Failed", "#B91C1C", "#FEE2E2"],
@@ -317,7 +318,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const topRef = useRef(null), firstPage = useRef(true), seenTick = useRef(tick);
   const logoSrc = React.useContext(LogoCtx)[pid]?.src || "";
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
-  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
+  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, seoUsdPerMonth: p.setting.seoUsdPerMonth ?? 5, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
   const sig = project ? JSON.stringify(fromServer(project)) : "";
   useEffect(() => { if (project && !dirty) setDraft(fromServer(project)); }, [sig, pid, dirty]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -403,7 +404,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const set = (patch) => { setDraft((d) => ({ ...d, ...patch })); setDirty(true); };
   const setTask = (key, patch) => { setDraft((d) => ({ ...d, tasks: { ...d.tasks, [key]: { ...d.tasks[key], ...patch } } })); setDirty(true); };
   const setSetupTab = (tab) => go({ pid, tab });
-  const save = async () => { const o = await act("config", { projectId: project.id, ...draft }); if (o) setDirty(false); };
+  const save = async () => { const o = await act("config", { projectId: project.id, ...draft, seoUsdPerMonth: +draft.seoUsdPerMonth || 0 }); if (o) setDirty(false); };
   const recommended = () => {
     const tasks = { ...draft.tasks };
     for (const c of data.catalog) if (tasks[c.key]) tasks[c.key] = { ...tasks[c.key], mode: c.defaults.mode, max: c.defaults.max, per: c.defaults.per, everyDays: c.defaults.everyDays, auto: !!(c.defaults.auto || c.defaults.recAuto) && c.defaults.mode !== "off" };
@@ -475,6 +476,16 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
               <div className="text-[13px] text-gray-800"><b>{fmtTok(u.month)}</b>{cap ? ` of ${fmtTok(cap)}` : ""} tokens · about {usd(u.costUsd)}</div>
               {cap > 0 && <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full" style={{ width: pct + "%", background: pct >= 100 ? "#DC2626" : pct >= 80 ? "#D97706" : accent }} /></div>}
               <div className="mt-1 text-[11px] text-gray-400">Today {fmtTok(u.day)}. When a limit is reached the agent stops this project until the period ends.</div>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <Labeled label="Live SEO data: spend limit per month, in $ (0 = none)">
+              <input className={inputCls} inputMode="decimal" aria-label="DataForSEO spend limit per month in dollars" value={draft.seoUsdPerMonth} onChange={(e) => set({ seoUsdPerMonth: e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1").slice(0, 8) })} />
+            </Labeled>
+            <div className="sm:col-span-2">
+              <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-gray-400">DataForSEO this month</div>
+              <div className="text-[13px] text-gray-800"><b>{usd4(u.seo?.usd || 0)}</b> of {usd(+draft.seoUsdPerMonth || 0)} in {u.seo?.calls || 0} request{(u.seo?.calls || 0) === 1 ? "" : "s"}</div>
+              <div className="mt-1 text-[11px] text-gray-400">{data.seoData?.enabled ? "Live search results, keyword volumes, competitor and backlink data, billed by DataForSEO per request. At the limit the agent carries on without it until next month." : "Switched off for the company, so the agent makes no paid request. It is switched on under API setup."}</div>
             </div>
           </div>
           {project.id !== "_agency" && (
@@ -1428,6 +1439,7 @@ function TaskModal({ id, accent, act, onClose }) {
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-gray-600">
           <Chip fg={fg} bg={bg}>{sl}</Chip>
           {t.usage.total > 0 && <span>{fmtTok(t.usage.total)} tokens in {t.usage.calls} Claude call{t.usage.calls === 1 ? "" : "s"} · about {usd(t.usage.costUsd)}</span>}
+          {t.seoCalls > 0 && <span>{t.seoCalls} DataForSEO request{t.seoCalls === 1 ? "" : "s"} · {usd4(t.seoUsd || 0)}</span>}
           {t.startedAt && <span className="inline-flex items-center gap-1"><Clock size={12} /> started {relTime(t.startedAt)}</span>}
         </div>
         {t.blockedReason && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">Held: {t.blockedReason}</div>}
@@ -1805,6 +1817,48 @@ function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
     </div>
   );
 }
+/* ---------------- live SEO data: DataForSEO, reached through its MCP server ---------------- */
+function SeoDataCard({ data, accent, act, busy }) {
+  const s = data.seoData || {};
+  const [test, setTest] = useState(null);
+  const [cap, setCap] = useState(String(s.usdPerMonth ?? 25));
+  useEffect(() => { setCap(String(s.usdPerMonth ?? 25)); }, [s.usdPerMonth]);
+  const runTest = async () => {
+    setTest({ running: true });
+    const o = await act("seodata", { action: "test" });
+    setTest(o ? { connected: !!o.connected, detail: o.detail || "" } : { connected: false, detail: "The test could not be run." });
+  };
+  const limit = +s.usdPerMonth || 0, pct = limit > 0 ? Math.min(100, Math.round(((s.monthUsd || 0) / limit) * 100)) : 0;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Search size={15} style={{ color: accent }} /> Live SEO data (DataForSEO)</div>
+        <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={!!s.enabled} label="Agent may use live SEO data" onChange={(v) => act("config", { global: { seoData: v } })} /> {s.enabled ? "On" : "Off"}</label>
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Connects the agent to DataForSEO through its MCP server, so a task can read live search results for a query and place, keyword search volume, difficulty and suggestions, a competitor's ranking keywords, backlinks and referring domains, on-page checks and business listings. The agent asks for it only when the data the CRM already holds cannot answer the task.</div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[12.5px] text-gray-700">
+        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-medium" style={s.login ? { background: "#ECFDF5", color: "#047857" } : { background: "#FEF3C7", color: "#92400E" }}>{s.login ? <Check size={12} /> : <AlertTriangle size={12} />}{s.login ? "DataForSEO login found" : "No DataForSEO login yet"}</span>
+        <span className="min-w-[220px] flex-1 text-[11.5px] text-gray-500">{s.login ? "It is the login saved in the CRM under Company Settings, API settings. The CRM signs in with it; it is never sent to the agent's computer or to Claude." : "Add it in the CRM under Company Settings, API settings (DataForSEO). Nothing else has to be installed."}</span>
+        <Btn ghost disabled={busy || test?.running} onClick={runTest}><RefreshCw size={13} /> {test?.running ? "Testing…" : "Test connection"}</Btn>
+      </div>
+      {test && !test.running && <div className="mt-2 rounded-lg px-3 py-2 text-[12px]" role="status" style={test.connected ? { background: "#ECFDF5", color: "#047857" } : { background: "#FEF2F2", color: "#B91C1C" }}>{test.detail}</div>}
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <Labeled label="Company spend limit per month, in $ (0 = none)">
+          <input className={inputCls} inputMode="decimal" aria-label="Company DataForSEO spend limit per month in dollars" value={cap} onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1").slice(0, 8))} onBlur={() => { if ((+cap || 0) !== limit) act("config", { global: { seoUsdPerMonth: +cap || 0 } }); }} />
+        </Labeled>
+        <div className="sm:col-span-2">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-gray-400">Spent this month, all projects</div>
+          <div className="text-[13px] text-gray-800"><b>{usd4(s.monthUsd || 0)}</b> of {usd(limit)} in {s.monthCalls || 0} request{(s.monthCalls || 0) === 1 ? "" : "s"}</div>
+          {limit > 0 && <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full" style={{ width: pct + "%", background: pct >= 100 ? "#DC2626" : pct >= 80 ? "#D97706" : accent }} /></div>}
+        </div>
+      </div>
+      <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600">
+        <b>Every request is billed by DataForSEO to your account</b>, usually a fraction of a cent to a few cents; reading its documentation and this test are free. Three limits keep the spend in hand: this company limit, each project's own monthly limit on its project page (5 dollars unless you change it), and at most {s.requestsPerTask || 20} requests in one task. The cost of each request is read from DataForSEO's answer and counted here.
+      </div>
+    </Card>
+  );
+}
+
 function ApiSetupView({ data, accent, act, busy }) {
   const real = data.projects.filter((p) => p.id !== "_agency");
   const [pid, setPid] = useState("");
@@ -1823,6 +1877,8 @@ function ApiSetupView({ data, accent, act, busy }) {
           {data.credentials.storage === "encrypted" ? "The key is stored encrypted on the server; the key that unlocks it is kept outside the data folder, so a copy or backup of the data reveals nothing." : "The key is stored on the server in a file only the server can read."} It is never shown again here and is not part of the workspace data. A device receives it only together with a task it is handed, over an encrypted connection, and does not write it to disk.
         </div>
       </Card>
+
+      <SeoDataCard data={data} accent={accent} act={act} busy={busy} />
 
       <Card className="p-4">
         <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Lock size={15} style={{ color: accent }} /> How passwords and keys are kept safe</div>

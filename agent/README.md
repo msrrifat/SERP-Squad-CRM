@@ -184,8 +184,37 @@ Per project:
   proposal. A person approves or edits it in the CRM, and the agent then
   carries out exactly the approved text.
 
+- **Live SEO data spend limit** per month, in dollars (see "Live SEO data"
+  below). 5 dollars unless changed; 0 stops paid requests for the project.
+
 Company-wide: on/off, pause, default model and effort, and one token limit for
-all projects together.
+all projects together. Live SEO data has its own company switch and monthly
+spend limit under API setup.
+
+## Live SEO data (DataForSEO, through its MCP server)
+
+DataForSEO offers a hosted MCP server at `https://mcp.dataforseo.com/v3/mcp`
+with four tools: three read its API documentation and one, `api_request`,
+makes an authenticated request to any DataForSEO endpoint. The CRM server is
+the MCP client (`server/agentops.js`, "SEO data from DataForSEO"). It signs in
+with the DataForSEO login already saved in the CRM, so the login never reaches
+this program or Claude, and it hands the tools to the agent as
+`seo_data_docs_sections`, `seo_data_docs_index`, `seo_data_docs_search` (free)
+and `seo_data_request` (paid).
+
+Nothing is installed on this computer for it and there is nothing to configure
+here: the tools arrive with the other CRM tools when the feature is switched
+on in the CRM (AI agent, API setup), and disappear when it is switched off.
+
+Every request costs money on the DataForSEO account, so the CRM checks each
+one first: the company and project monthly spend limits, at most 20 requests
+in a task and 6 in a chat answer, GET and POST only, only the SEO parts of the
+API (never the account part), at most three task objects, and caps on `depth`,
+`limit` and crawl size. The cost stated in DataForSEO's answer is counted per
+project.
+
+To point a test server at a stand-in instead of DataForSEO, start the CRM
+server with `AGENTOPS_DFS_MCP_URL`.
 
 ## What a task can use
 
@@ -193,6 +222,7 @@ all projects together.
 |---|---|---|
 | CRM tools (project brief, rank table and history, rank compare, Search Console, geo-grid, past reports, remember, change journal, suggest task) | CRM server | Defined by the server and synced, so new ones need no new jar. Always limited to the task's own project |
 | Web search and page fetch | Anthropic's servers | Only for task types marked "Web research" |
+| Live SEO data (`seo_data_*`: search results, keyword volumes, competitors' keywords, backlinks, on-page checks, listings) | CRM server, which asks DataForSEO's MCP server | Only when switched on in the CRM. Paid per request, inside the project's and the company's spend limits |
 | Browser (open, read, click, type, scroll, back) | This computer's Chrome | Pages are read as text with numbered elements |
 
 ### Chrome IDs and working channels

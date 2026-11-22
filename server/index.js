@@ -6010,7 +6010,7 @@ function migrateStorage() {
 }
 migrateStorage();
 /* local AI agent control plane (devices, task queue, working and token limits) — see agentops.js */
-initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery });
+initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject });
 
 http.createServer(async (req, res) => {
   const CORS = { ...corsFor(req), ...SEC_HEADERS };

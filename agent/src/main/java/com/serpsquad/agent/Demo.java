@@ -99,7 +99,7 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L);
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0);
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -684,6 +684,11 @@ final class Demo {
         int studied = 0;
         for (ObjectNode d : knowledge) if (!d.path("digest").asText("").isEmpty()) studied++;
         o.putObject("knowledge").put("docs", knowledge.size()).put("studied", studied);
+        /* live SEO data (DataForSEO): the same fields the CRM reports, with made-up spend */
+        ObjectNode seo = o.putObject("seoData");
+        seo.put("enabled", global.path("seoData").asBoolean(false)).put("usdPerMonth", global.path("seoUsdPerMonth").asDouble(25)).put("login", true).put("testedAt", 0).put("testOk", false).put("requestsPerTask", 20);
+        double seoUsd = 0;
+        int seoCalls = 0;
         ArrayNode ps = o.putArray("projects");
         for (int n = 0; n <= PROJECTS.length + extras.size(); n++) {
             boolean agency = n == PROJECTS.length + extras.size();
@@ -709,6 +714,12 @@ final class Demo {
             }
             long month = i < 0 ? 0 : (Long) PROJECTS[i][4], day = i < 0 ? 0 : (Long) PROJECTS[i][6];
             p.putObject("usage").put("month", month).put("day", day).put("costUsd", Math.round(month * 5.4 / 10000.0) / 100.0).put("input", month * 2 / 10).put("output", month / 10).put("cacheRead", month * 7 / 10).put("cacheWrite", 0).putObject("types");
+            int calls = i < 0 ? 0 : (int) (month / 350_000L);
+            double spent = Math.round(calls * 0.0135 * 10000.0) / 10000.0;
+            ((ObjectNode) p.path("usage")).putObject("seo").put("usd", spent).put("calls", calls);
+            if (!setting.has("seoUsdPerMonth")) setting.put("seoUsdPerMonth", 5.0);
+            seoUsd += spent;
+            seoCalls += calls;
             int waiting = 0;
             for (ObjectNode t : tasks) if (t.path("projectId").asText().equals(pid) && (t.path("status").asText().equals("queued") || t.path("status").asText().equals("approved"))) waiting += 1;
             p.put("waiting", waiting);
@@ -719,6 +730,7 @@ final class Demo {
             List<ObjectNode> ms = chats.getOrDefault(pid, List.of());
             if (ms.isEmpty()) chat.putNull("last"); else { ObjectNode l = ms.get(ms.size() - 1); chat.putObject("last").put("role", l.path("role").asText()).put("at", l.path("at").asLong()).put("text", Json.clip(l.path("text").asText(), 90)); }
         }
+        seo.put("monthUsd", Math.round(seoUsd * 10000.0) / 10000.0).put("monthCalls", seoCalls);
         ObjectNode d = o.putArray("devices").addObject();
         d.put("id", "dev1").put("name", "Office PC").put("createdAt", startedAt - 30 * DAY).put("createdBy", "You").put("lastSeen", now - 12000).put("version", version).put("host", "OFFICE-PC").put("os", "Windows 10").put("paused", false).put("syncRequested", false)
             .put("online", true).put("playbooksRev", playbooksRev).put("googleProfile", true).put("localKey", false).put("canManage", true).put("chatAt", now);
@@ -1241,10 +1253,10 @@ final class Demo {
         String pid = body.path("projectId").asText("");
         switch (p) {
             case "config": {
-                if (body.path("global").isObject()) copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth");
+                if (body.path("global").isObject()) copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth");
                 if (!pid.isEmpty()) {
                     if (!projSetting.containsKey(pid)) return bad(404, "Unknown project.");
-                    copyIf(body, projSetting.get(pid), "enabled", "tokensPerMonth", "tokensPerDay", "channels", "rules");
+                    copyIf(body, projSetting.get(pid), "enabled", "tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "channels", "rules");
                     Iterator<Map.Entry<String, JsonNode>> it = body.path("tasks").fields();
                     while (it.hasNext()) {
                         Map.Entry<String, JsonNode> e = it.next();
@@ -1331,6 +1343,7 @@ final class Demo {
             case "brand": return brandEdit(pid, body);
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
+            case "seodata": { ObjectNode out = Json.obj(); out.put("ok", true).put("connected", true).put("detail", "Demo: nothing was sent to DataForSEO. In the real program this checks the login saved in the CRM against DataForSEO's MCP server, at no cost."); return new Reply(200, out); }
             case "report": return known(pid) ? new Reply(200, reportOf(pid, body)) : bad(404, "Unknown project.");
             case "work": {
                 if (!known(pid)) return bad(404, "Unknown project.");
