@@ -641,9 +641,9 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
         <ol className="mt-4 list-decimal space-y-1 pl-5 text-[12px] leading-5 text-gray-600">
           <li>On the computer, install Java 21 or newer and put <code>serpsquad-agent.jar</code> in its own folder.</li>
           <li>Register the device above and copy its token.</li>
-          <li>In that folder run <code>java -jar serpsquad-agent.jar</code>. The agent's own dashboard opens in the browser at <code>http://127.0.0.1:7717</code>. Paste the token there and press Connect.</li>
-          <li>The Claude API key comes from <b>API setup</b> here. A computer can also be given its own key in its dashboard.</li>
-          <li>From then on start it with <code>run.bat</code> (Windows) or <code>./run.sh</code>. For Google profile tasks press "Open Chrome to sign in" in the agent's dashboard and sign in yourself.</li>
+          <li>In that folder run <code>java -jar serpsquad-agent.jar</code> once. The agent opens as its own application window. Paste the token there and press Connect.</li>
+          <li>The Claude API key comes from <b>API setup</b> here. A computer can also be given its own key under Settings in the application.</li>
+          <li>From then on start it from the <b>SERP Squad Agent</b> shortcut on the Desktop or in the Start menu. Closing the window does not stop it; the icon near the clock reopens the window, pauses or quits. For Google profile tasks press "Open Chrome to sign in" under Settings and sign in yourself.</li>
         </ol>
       </Card>
 

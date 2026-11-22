@@ -788,6 +788,38 @@ function agentComplete(d, body) {
   return [200, { ok: true }];
 }
 
+/* ---------- what a device's own dashboard shows ----------
+   A read-only summary for the application window on the agent's computer:
+   projects with their limits and usage, and the recent tasks. No reports, no
+   keys, nothing that can be changed from there. */
+function agentBoard(d) {
+  requeueStale();
+  const cfg = load("config"), tasks = load("tasks"), devs = load("devices");
+  const devName = (id) => devs.find((x) => x.id === id)?.name || "";
+  const label = (k) => CATALOG_BY_KEY[k]?.label || k;
+  const limitText = (ts) => (ts.mode === "limited" ? `${ts.max} per ${ts.per}` : ts.mode === "open" ? "Open" : "Off");
+  const projects = projectList().map((p) => {
+    const ps = projectSetting(p.id), u = usageOf(p.id), mine = tasks.filter((t) => t.projectId === p.id);
+    const types = CATALOG.filter((c) => !c.agencyOnly).map((c) => ({ c, ts: taskSetting(p.id, c.key) })).filter((x) => x.ts.mode !== "off");
+    const lastDone = mine.filter((t) => t.status === "done").slice(-1)[0];
+    return {
+      id: p.id, name: p.name, client: p.client, demoData: p.demo, enabled: ps.enabled,
+      tokens: { month: u.month, limit: ps.tokensPerMonth, day: u.day, dayLimit: ps.tokensPerDay, costUsd: u.costUsd },
+      taskTypes: types.map((x) => ({ label: x.c.label, group: x.c.group, limit: limitText(x.ts), auto: x.ts.auto ? `every ${x.ts.everyDays} d` : "", used: x.ts.mode === "limited" ? runsInWindow(p.id, x.c.key, PERIOD_MS[x.ts.per]) : null, write: !!x.c.write })),
+      counts: { waiting: mine.filter((t) => t.status === "queued" || t.status === "approved").length, running: mine.filter((t) => t.status === "running").length, needsApproval: mine.filter((t) => t.status === "needs_approval").length, doneThisMonth: mine.filter((t) => t.status === "done" && monthKey(t.finishedAt || 0) === monthKey()).length },
+      last: lastDone ? { title: lastDone.title, summary: clip(lastDone.result?.summary || "", 220), at: lastDone.finishedAt } : null,
+      notes: (load("memory")[p.id] || []).slice(-4).reverse(),
+    };
+  });
+  return [200, {
+    ok: true, at: now(),
+    company: { enabled: cfg.global.enabled, paused: cfg.global.paused, model: cfg.global.model, monthTokens: companyMonthTokens(), monthCostUsd: +Object.values(load("usage")[monthKey()] || {}).reduce((s2, u) => s2 + (u.costUsd || 0), 0).toFixed(2), limit: cfg.global.tokensPerMonth },
+    projects,
+    tasks: tasks.slice(-80).reverse().map((t) => ({ id: t.id, title: t.title, projectId: t.projectId, project: projectOf(t.projectId)?.name || "", type: label(t.type), status: t.status, source: t.source, by: t.createdBy || "", createdAt: t.createdAt, finishedAt: t.finishedAt || null,
+      summary: clip(t.result?.summary || t.proposal?.summary || t.error || "", 240), held: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null, tokens: t.usage?.total || 0, costUsd: t.usage?.costUsd || 0, findings: (t.result?.findings || []).length, device: devName(t.deviceId), mine: t.deviceId === d.id })),
+  }];
+}
+
 /* ---------- live chat per project ----------
    One conversation per project. A person writes in the dashboard; a device
    that is listening (a long poll that returns the moment a message arrives)
@@ -990,6 +1022,7 @@ export async function agentOpsPost(req, body) {
       case "agent/event": return agentEvent(d, body);
       case "agent/tool": return agentTool(d, body);
       case "agent/complete": return agentComplete(d, body);
+      case "agent/board": return agentBoard(d);
       case "agent/chat/wait": return agentChatWait(d);
       case "agent/chat/progress": return agentChatProgress(d, body);
       case "agent/chat/usage": return agentChatUsage(d, body);
