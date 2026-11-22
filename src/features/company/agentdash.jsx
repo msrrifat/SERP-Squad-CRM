@@ -285,7 +285,7 @@ function LimitsView({ data, accent, act, busy, onChat }) {
                       {t.mode !== "off" && project.id !== "_agency" && (
                         <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="The agent queues this task by itself on this schedule.">
                           <input type="checkbox" checked={!!t.auto} onChange={(e) => setTask(c.key, { auto: e.target.checked })} /> starts by itself
-                          {t.auto && <>every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => setTask(c.key, { everyDays: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> d</>}
+                          {t.auto && <>, every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => setTask(c.key, { everyDays: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> d</>}
                         </label>
                       )}
                       {t.mode !== "off" && c.write && (
