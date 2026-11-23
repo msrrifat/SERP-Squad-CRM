@@ -78,7 +78,12 @@ export function AgentOpsSection({ company, app = null }) {
   const [err, setErr] = useState("");
   const [ownView, setOwnView] = useState("limits");
   const view = app?.view || ownView;
-  const setView = (v) => { if (app?.onView) app.onView(v); else setOwnView(v); };
+  /* a project page with unsaved changes registers a question here; leaving the Projects tab asks it first */
+  const leaveGuard = useRef(null);
+  const setView = async (v) => {
+    if (v !== view && view === "limits" && leaveGuard.current && !(await leaveGuard.current())) return;
+    if (app?.onView) app.onView(v); else setOwnView(v);
+  };
   const [busy, setBusy] = useState(false);
   const [openTask, setOpenTask] = useState(null);
   const [chatPid, setChatPid] = useState("");
@@ -196,7 +201,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onOpenTask={setOpenTask} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView leaveGuard={leaveGuard} reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onOpenTask={setOpenTask} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -430,7 +435,7 @@ function PageNav({ canBack, canForward, onBack, onForward }) {
     </div>
   );
 }
-function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData, onOpenTask }) {
+function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData, onOpenTask, leaveGuard }) {
   /* Projects are pages. The list of projects is one page, a project's
      dashboard is another, and so is each tab of its work setup. `trail` is the
      history that Back and Forward walk; choosing something new drops whatever
@@ -461,6 +466,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   /* leaving a project with unsaved changes asks first; moving between the tabs of one project keeps them */
   const mayLeave = async (nextPid) => nextPid === pid || !dirty || (await askConfirm({ title: "Leave without saving?", message: `${project ? project.name : "This project"} has unsaved changes. They will be lost.`, confirmLabel: "Leave without saving", danger: true }));
   const arrive = (nextPid) => { if (nextPid !== pid) { setDirty(false); setDraft(null); } };
+  useEffect(() => { if (!leaveGuard) return undefined; leaveGuard.current = () => mayLeave("\u0000another tab"); return () => { leaveGuard.current = null; }; });
   const go = async (next) => {
     if (next.pid === pid && next.tab === setupTab) return;
     if (!(await mayLeave(next.pid))) return;
@@ -694,7 +700,7 @@ function TaskRow({ c, t, used, accent, models, agency, onChange, chan }) {
         </div>
         {t.mode === "limited" && (
           <span className="flex items-center gap-1 text-[12px] text-gray-600">
-            <input aria-label="Maximum runs" className={numCls + " w-14"} inputMode="numeric" value={t.max} onChange={(e) => onChange({ max: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> per
+            <input aria-label="Maximum runs" className={numCls + " w-14"} inputMode="numeric" value={t.max} onChange={(e) => { const d = e.target.value.replace(/[^0-9]/g, "").slice(0, 3); onChange({ max: d === "" ? "" : Math.max(1, +d) }); }} onBlur={() => { if (t.max === "") onChange({ max: 1 }); }} /> per
             <select aria-label="Period" className={selCls} value={t.per} onChange={(e) => onChange({ per: e.target.value })}><option value="day">day</option><option value="week">week</option><option value="month">month</option></select>
             <span className="text-[11px] text-gray-400">{used} used</span>
           </span>
@@ -702,7 +708,7 @@ function TaskRow({ c, t, used, accent, models, agency, onChange, chan }) {
         {t.mode !== "off" && !agency && (
           <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="The agent queues this task by itself on this schedule.">
             <input type="checkbox" checked={!!t.auto} onChange={(e) => onChange({ auto: e.target.checked })} /> starts by itself
-            {t.auto && <>, every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => onChange({ everyDays: Math.max(1, +e.target.value.replace(/[^0-9]/g, "") || 1) })} /> d</>}
+            {t.auto && <>, every <input aria-label="Days between runs" className={numCls + " w-12"} inputMode="numeric" value={t.everyDays} onChange={(e) => { const d = e.target.value.replace(/[^0-9]/g, "").slice(0, 2); onChange({ everyDays: d === "" ? "" : Math.max(1, +d) }); }} onBlur={() => { if (t.everyDays === "") onChange({ everyDays: 1 }); }} /> d</>}
           </label>
         )}
         {t.mode !== "off" && c.write && (
@@ -1557,9 +1563,11 @@ function ProjectMemory({ project, detail, setDetail, accent }) {
 }
 
 /* ---------------- tasks ---------------- */
+const ACTIVE_UI = ["queued", "approved", "needs_approval", "running"];
 function TasksView({ data, accent, act, busy, onOpen }) {
   const [filter, setFilter] = useState("all");
-  const [form, setForm] = useState({ projectId: data.projects[0]?.id || "", type: "custom", title: "", instructions: "" });
+  const [find, setFind] = useState(""); const [onlyProject, setOnlyProject] = useState("");
+  const [form, setForm] = useState({ projectId: data.projects[0]?.id || "", type: "custom", title: "", instructions: "", priority: "normal", due: "" });
   const types = data.catalog.filter((c) => !!c.agencyOnly === (form.projectId === "_agency"));
   useEffect(() => { if (!types.some((c) => c.key === form.type)) setForm((f) => ({ ...f, type: types[0]?.key || "" })); }, [form.projectId]);   // eslint-disable-line react-hooks/exhaustive-deps
   const cat = data.catalog.find((c) => c.key === form.type);
@@ -1567,8 +1575,10 @@ function TasksView({ data, accent, act, busy, onOpen }) {
   const label = (k) => data.catalog.find((c) => c.key === k)?.label || k;
   const FILTERS = [["all", "All"], ["waiting", "Waiting"], ["needs_approval", "Needs approval"], ["running", "Running"], ["done", "Done"], ["problem", "Failed or stopped"]];
   const match = (t) => filter === "all" || (filter === "waiting" ? ["queued", "approved"].includes(t.status) : filter === "problem" ? ["failed", "stopped"].includes(t.status) : t.status === filter);
-  const rows = data.tasks.filter(match);
-  const add = async () => { const o = await act("task/create", form); if (o) setForm((f) => ({ ...f, title: "", instructions: "" })); };
+  const words = find.trim().toLowerCase();
+  const narrowed = data.tasks.filter((t) => (!onlyProject || t.projectId === onlyProject) && (!words || `${t.title} ${label(t.type)} ${pname(t.projectId)} ${t.summary || ""}`.toLowerCase().includes(words)));
+  const rows = narrowed.filter(match);
+  const add = async () => { const o = await act("task/create", { projectId: form.projectId, type: form.type, title: form.title, instructions: form.instructions, priority: form.priority, dueAt: form.due ? new Date(form.due + "T23:59:59").getTime() : 0 }); if (o) setForm((f) => ({ ...f, title: "", instructions: "", priority: "normal", due: "" })); };
 
   return (
     <div className="space-y-4">
@@ -1580,13 +1590,25 @@ function TasksView({ data, accent, act, busy, onOpen }) {
           <Labeled label="Title (optional)"><input className={inputCls} value={form.title} placeholder={cat?.label} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Labeled>
         </div>
         <div className="mt-3"><Labeled label="Instructions (the keyword, page or goal this is about)"><textarea className={inputCls + " h-20"} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} placeholder={cat?.desc} /></Labeled></div>
-        <div className="mt-3 flex items-center gap-3"><Btn accent={accent} onClick={add} disabled={busy || !form.projectId || !form.type}><Plus size={13} /> Add task</Btn><span className="text-[11.5px] text-gray-500">It starts when a device is free and the project's limits allow it.</span></div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-[12.5px] text-gray-700">Priority
+            <select className={selCls} aria-label="Priority" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}><option value="high">High: before other waiting tasks</option><option value="normal">Normal</option><option value="low">Low: after the others</option></select>
+          </label>
+          <label className="flex items-center gap-2 text-[12.5px] text-gray-700">Due (optional)
+            <input type="date" className={selCls} aria-label="Due date" value={form.due} min={dayInput(Date.now())} onChange={(e) => setForm({ ...form, due: e.target.value })} />
+          </label>
+          <Btn accent={accent} onClick={add} disabled={busy || !form.projectId || !form.type}><Plus size={13} /> Add task</Btn><span className="text-[11.5px] text-gray-500">It starts when a device is free and the project's limits allow it. A task past its due date shows under Alerts.</span>
+        </div>
       </Card>
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center gap-1.5 border-b border-gray-100 px-4 py-3">
-          {FILTERS.map(([k, l]) => { const n = k === "all" ? data.tasks.length : data.tasks.filter((t) => (k === "waiting" ? ["queued", "approved"].includes(t.status) : k === "problem" ? ["failed", "stopped"].includes(t.status) : t.status === k)).length;
+          {FILTERS.map(([k, l]) => { const n = k === "all" ? narrowed.length : narrowed.filter((t) => (k === "waiting" ? ["queued", "approved"].includes(t.status) : k === "problem" ? ["failed", "stopped"].includes(t.status) : t.status === k)).length;
             return <button key={k} onClick={() => setFilter(k)} className="rounded-full border px-2.5 py-1 text-[11.5px] font-semibold" style={filter === k ? { background: accent, color: "#fff", borderColor: accent } : { color: "#4B5563", borderColor: "#E5E7EB" }}>{l} {n}</button>; })}
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            <select className={selCls} aria-label="Show tasks of one project" value={onlyProject} onChange={(e) => setOnlyProject(e.target.value)}><option value="">All projects</option>{data.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+            <input className={selCls + " w-44"} type="search" aria-label="Find a task" placeholder="Find a task…" value={find} onChange={(e) => setFind(e.target.value)} />
+          </span>
         </div>
         {!rows.length && <div className="px-4 py-8 text-center text-[12.5px] text-gray-400">No tasks here yet.</div>}
         {rows.map((t) => { const [sl, fg, bg] = STATUS[t.status] || [t.status, "#6B7280", "#F3F4F6"];
@@ -1594,7 +1616,7 @@ function TasksView({ data, accent, act, busy, onOpen }) {
             <button key={t.id} onClick={() => onOpen(t.id)} className="grid w-full items-center gap-x-3 gap-y-1 border-t border-gray-100 px-4 py-2.5 text-left hover:bg-gray-50 md:grid-cols-[130px_minmax(0,1fr)_auto]">
               <span><Chip fg={fg} bg={bg}>{sl}</Chip></span>
               <span className="min-w-0">
-                <span className="block truncate text-[13px] font-medium text-gray-900">{t.title}</span>
+                <span className="block truncate text-[13px] font-medium text-gray-900">{t.title}{t.priority === "high" && ACTIVE_UI.includes(t.status) && <span className="ml-2 align-middle"><Chip fg="#B91C1C" bg="#FEE2E2">High priority</Chip></span>}{t.priority === "low" && ACTIVE_UI.includes(t.status) && <span className="ml-2 align-middle"><Chip>Low priority</Chip></span>}{t.dueAt > 0 && ACTIVE_UI.includes(t.status) && <span className="ml-2 align-middle"><Chip fg={t.dueAt < Date.now() ? "#B91C1C" : "#374151"} bg={t.dueAt < Date.now() ? "#FEE2E2" : "#F3F4F6"}>Due {dayText(t.dueAt)}</Chip></span>}</span>
                 <span className="block truncate text-[11.5px] text-gray-500">{pname(t.projectId)} · {label(t.type)} · {t.source === "auto" ? "started by schedule" : t.source === "agent" ? "suggested by the agent" : `added by ${t.createdBy || "the team"}`} · {relTime(t.createdAt)}</span>
                 {(t.blockedReason || t.summary) && <span className={`block truncate text-[11.5px] ${t.blockedReason ? "text-amber-700" : "text-gray-600"}`}>{t.blockedReason ? "Held: " + t.blockedReason : t.summary}</span>}
               </span>
@@ -1609,6 +1631,7 @@ function TasksView({ data, accent, act, busy, onOpen }) {
 function TaskModal({ id, accent, act, onClose }) {
   const [t, setT] = useState(null); const [err, setErr] = useState(""); const [details, setDetails] = useState(""); const [note, setNote] = useState("");
   const [fbNote, setFbNote] = useState(""); const [fbMsg, setFbMsg] = useState("");
+  const [edit, setEdit] = useState(null);
   const rate = async (rating) => {
     setFbMsg("");
     try { const o = await api("task/feedback", { id, rating, note: fbNote }); setT(o.task); setFbNote(""); setFbMsg(o.task.feedback.lessonId ? "Saved, and added to what the agent has learned." : "Saved."); }
@@ -1619,8 +1642,11 @@ function TaskModal({ id, accent, act, onClose }) {
   const doAct = async (action, extra = {}) => { const o = await act("task/action", { id, action, ...extra }); if (o) { await load(); if (action === "cancel" || action === "reject") onClose(); } };
   if (!t) return <Modal title="Task" onClose={onClose} wide><div className="text-[13px] text-gray-500">{err || "Loading…"}</div></Modal>;
   const [sl, fg, bg] = STATUS[t.status] || [t.status, "#6B7280", "#F3F4F6"];
+  /* a click beside the dialog closes it: not without asking when a proposal was edited or a change is half typed */
+  const unsaved = (t.status === "needs_approval" && (details.trim() !== String(t.proposal?.details || "").trim() || note.trim() !== "")) || !!edit;
+  const close = async () => { if (unsaved && !(await askConfirm({ title: "Close without saving?", message: "What you typed in this task is not saved yet and will be lost.", confirmLabel: "Close anyway" }))) return; onClose(); };
   return (
-    <Modal title={t.title} sub={`${t.projectName} · ${t.type.replace(/_/g, " ")}`} onClose={onClose} wide>
+    <Modal title={t.title} sub={`${t.projectName} · ${t.type.replace(/_/g, " ")}`} onClose={close} wide>
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-gray-600">
           <Chip fg={fg} bg={bg}>{sl}</Chip>
@@ -1686,7 +1712,21 @@ function TaskModal({ id, accent, act, onClose }) {
             <ol className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-lg bg-gray-50 p-2.5 font-mono text-[11px] text-gray-600">{t.events.map((e, i) => <li key={i}><span className="text-gray-400">{new Date(e.at).toLocaleTimeString()}</span> {e.text}</li>)}</ol>
           </details>
         )}
+        {edit && (
+          <div className="rounded-xl border border-gray-200 p-3">
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Change this task before it starts</div>
+            <input className={inputCls + " mt-2"} aria-label="Title" value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+            <textarea className={inputCls + " mt-2 h-24"} aria-label="Instructions" placeholder="Instructions" value={edit.instructions} onChange={(e) => setEdit({ ...edit, instructions: e.target.value })} />
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-[12.5px] text-gray-700">
+              <label className="flex items-center gap-2">Priority <select className={selCls} value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })}><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label>
+              <label className="flex items-center gap-2">Due <input type="date" className={selCls} value={edit.due} onChange={(e) => setEdit({ ...edit, due: e.target.value })} /></label>
+              <Btn accent={accent} onClick={async () => { await doAct("edit", { title: edit.title, instructions: edit.instructions, priority: edit.priority, dueAt: edit.due ? new Date(edit.due + "T23:59:59").getTime() : 0 }); setEdit(null); }}><Check size={13} /> Save</Btn>
+              <Btn ghost onClick={() => setEdit(null)}>Close</Btn>
+            </div>
+          </div>
+        )}
         <div className="flex gap-2 border-t border-gray-100 pt-3">
+          {!edit && ["queued", "failed", "stopped", "cancelled"].includes(t.status) && <Btn ghost onClick={() => setEdit({ title: t.title, instructions: t.instructions || "", priority: t.priority || "normal", due: t.dueAt ? dayInput(t.dueAt) : "" })}><PencilLine size={13} /> Change</Btn>}
           {["queued", "approved", "running"].includes(t.status) && <Btn ghost danger onClick={async () => { if (await askConfirm({ title: "Cancel this task?", message: `"${t.title}" will be cancelled.`, confirmLabel: "Yes, cancel it", danger: true })) doAct("cancel"); }}>Cancel task</Btn>}
           {["failed", "stopped", "cancelled"].includes(t.status) && <Btn accent={accent} onClick={() => doAct("retry")}><RefreshCw size={13} /> Run again</Btn>}
         </div>
@@ -2227,6 +2267,45 @@ function Proof({ task }) {
     </div>
   );
 }
+/* what the agent used this month, by kind of task, by model and by project */
+function UsageCard({ data, accent }) {
+  const u = data.usageSummary;
+  if (!u) return null;
+  const c = u.claude, types = u.types || [], top = Math.max(1, ...types.map((x) => x.total));
+  const monthName = new Date(u.month + "-15T00:00:00Z").toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+  const Row = ({ name, total, calls, cost, share }) => (
+    <div className="flex items-center gap-3 border-t border-gray-100 py-1.5 text-[12.5px] first:border-t-0">
+      <span className="min-w-0 flex-1 truncate text-gray-800">{name}</span>
+      <span className="hidden h-1.5 w-24 overflow-hidden rounded-full bg-gray-100 xl:block"><span className="block h-full rounded-full" style={{ width: Math.round(share * 100) + "%", background: accent }} /></span>
+      <span className="w-20 text-right text-gray-600">{fmtTok(total)}</span>
+      <span className="w-16 text-right text-gray-500">{calls == null ? "" : `${calls} call${calls === 1 ? "" : "s"}`}</span>
+      <span className="w-16 text-right font-medium text-gray-800">{cost == null ? "–" : usd(cost)}</span>
+    </div>
+  );
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><BarChart3 size={15} style={{ color: accent }} /> What the agent used in {monthName}</div>
+        <div className="text-[12px] text-gray-500"><b className="text-gray-900">{fmtTok(c.month)}</b> tokens in {c.calls} call{c.calls === 1 ? "" : "s"} · about <b className="text-gray-900">{usd(c.costUsd)}</b>{u.seo?.calls ? <> · DataForSEO {usd4(u.seo.usd)}</> : null}</div>
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Token counts are the ones Claude returns with every call; the cost is an estimate from list prices. The cost per kind of task is kept from the version that added this card, so earlier calls of this month show in the tokens only.</div>
+      {!c.month ? <div className="mt-3 text-[12.5px] text-gray-500">Nothing used yet this month.</div> : (
+        <div className="mt-3 grid gap-5 lg:grid-cols-2">
+          <div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">By kind of task</div>
+            <div className="mt-1">{types.map((x) => <Row key={x.type} name={x.label} total={x.total} calls={x.calls} cost={x.costUsd || null} share={x.total / top} />)}</div>
+          </div>
+          <div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">By model</div>
+            <div className="mt-1">{c.models.length ? c.models.map((m) => <Row key={m.id} name={m.label} total={m.total} calls={m.calls} cost={m.costUsd} share={m.total / Math.max(1, c.month)} />) : <div className="py-1.5 text-[12px] text-gray-400">No call recorded by model yet.</div>}</div>
+            <div className="mt-4 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">By project (highest cost first)</div>
+            <div className="mt-1">{u.projects.map((x) => <Row key={x.id} name={x.name} total={x.tokens} calls={null} cost={x.costUsd} share={x.tokens / Math.max(1, c.month)} />)}</div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 /* what the independent second check said about a plan */
 function CheckNote({ check }) {
   if (!check) return null;
@@ -2318,6 +2397,7 @@ function ApiSetupView({ data, accent, act, busy }) {
         </div>
       </Card>
 
+      <UsageCard data={data} accent={accent} />
       <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2533,7 +2613,9 @@ function KnowledgeView({ data, accent, goTasks }) {
 
 function PlaybooksView({ data, accent, act }) {
   const [open, setOpen] = useState(null); const [text, setText] = useState(""); const [meta, setMeta] = useState(null); const [msg, setMsg] = useState("");
-  const edit = async (key) => { try { const o = await api("playbook", { key, get: true }); setMeta(o); setText(o.text); setOpen(key); setMsg(""); } catch (e) { setMsg(String(e.message || e)); } };
+  const [versions, setVersions] = useState([]);
+  const edit = async (key) => { try { const o = await api("playbook", { key, get: true }); setMeta(o); setText(o.text); setOpen(key); setMsg(""); setVersions([]); api("playbook", { key, history: true }).then((h) => setVersions(h.versions || [])).catch(() => { /* the editor works without the list */ }); } catch (e) { setMsg(String(e.message || e)); } };
+  const restore = async (v) => { if (await askConfirm({ title: "Put this version back?", message: `The playbook goes back to the version of ${new Date(v.updatedAt).toLocaleString()} and is synced to every device. The text it has now is kept as an earlier version.`, confirmLabel: "Yes, put it back" })) { const o = await act("playbook", { key: open, restore: v.n }); if (o) setOpen(null); } };
   const save = async () => { const o = await act("playbook", { key: open, text }); if (o) setOpen(null); };
   const reset = async () => { if (await askConfirm({ title: "Reset this playbook?", message: "Your edits are replaced by the built-in text.", confirmLabel: "Yes, reset" })) { const o = await act("playbook", { key: open, reset: true }); if (o) setOpen(null); } };
   const label = useMemo(() => Object.fromEntries(data.playbooks.map((p) => [p.key, p.label])), [data.playbooks]);
@@ -2558,6 +2640,19 @@ function PlaybooksView({ data, accent, act }) {
             {meta?.edited && <Btn ghost onClick={reset}>Reset to built-in</Btn>}
             <span className="text-[11.5px] text-gray-400">{text.length.toLocaleString()} characters</span>
           </div>
+          {versions.length > 0 && (
+            <details className="mt-3 rounded-lg border border-gray-200 px-3 py-2 text-[12px] text-gray-700">
+              <summary className="cursor-pointer font-semibold">Earlier versions ({versions.length})</summary>
+              <div className="mt-1 text-[11.5px] text-gray-500">Every edited version is kept, the last ten. If a change made the agent worse, put the earlier text back.</div>
+              {versions.map((v) => (
+                <div key={v.n} className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
+                  <span className="min-w-0 flex-1">{new Date(v.updatedAt).toLocaleString()}{v.by ? ` · ${v.by}` : ""} · {v.chars.toLocaleString()} characters</span>
+                  <Btn ghost onClick={() => setText(v.text)} title="Shows this version in the box above without saving it.">Look at it</Btn>
+                  <Btn ghost onClick={() => restore(v)}>Put it back</Btn>
+                </div>
+              ))}
+            </details>
+          )}
         </Modal>
       )}
     </Card>

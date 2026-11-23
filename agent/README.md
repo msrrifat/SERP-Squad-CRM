@@ -201,6 +201,28 @@ Company-wide: on/off, pause, default model and effort, and one token limit for
 all projects together. Live SEO data has its own company switch and monthly
 spend limit under API setup.
 
+## Running the queue
+
+- **Priority and due date.** A task added by hand can be High, Normal or
+  Low and can carry a due date. Work is handed out in this order: approved
+  changes first, then by priority, then what a person asked for before what
+  the agent started itself, then the nearest due date, then the oldest. A
+  task past its due date shows under Alerts.
+- **Changing a waiting task.** Its title, instructions, priority and due
+  date can be changed until it starts (**Change** in the task).
+- **One automatic second try.** A run that only reads or proposes and fails
+  for a reason that may pass (a page that did not load, a stuck run) goes
+  back in the queue and is tried once more after ten minutes; the task says
+  so while it waits. A task that was making a change is never retried by
+  itself, and neither is a failure that would only repeat (a refusal, a
+  rejected request).
+- **Cost by kind of task.** API setup shows the month's tokens, calls and
+  estimated cost by kind of task, by model and by project.
+- **Playbook versions.** Every edited version is kept, the last ten; an
+  earlier one can be looked at and put back from the playbook's editor.
+- **Finding tasks.** The task list can be narrowed to one project and
+  searched.
+
 ## AI search visibility as a number, and two more kinds of work
 
 - **AI search visibility** (Work setup, **AI search**). Two numbers, never

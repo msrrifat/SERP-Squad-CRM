@@ -89,7 +89,15 @@ final class Config {
         n.put("uiPort", uiPort);
         n.put("openDashboard", openDashboard);
         n.put("paused", paused);
-        Files.writeString(file(), Json.pretty(n), StandardCharsets.UTF_8);
+        /* Written beside the real file, made owner-only while still empty, filled,
+           then moved into place: the token and the key are never in a file others
+           can read, and a crash in the middle leaves the old settings intact. */
+        java.nio.file.Path tmp = file().resolveSibling(file().getFileName() + ".tmp");
+        Files.writeString(tmp, "", StandardCharsets.UTF_8);
+        Secure.ownerOnly(tmp, false);
+        Files.writeString(tmp, Json.pretty(n), StandardCharsets.UTF_8);
+        try { Files.move(tmp, file(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE); }
+        catch (java.nio.file.AtomicMoveNotSupportedException e) { Files.move(tmp, file(), java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
         Secure.ownerOnly(file(), false);
     }
 

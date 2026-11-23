@@ -836,6 +836,14 @@ final class Demo {
         int studied = 0;
         for (ObjectNode d : knowledge) if (!d.path("digest").asText("").isEmpty()) studied++;
         o.putObject("knowledge").put("docs", knowledge.size()).put("studied", studied);
+        /* the month's usage by kind of task, model and project */
+        long allTokens = 0;
+        for (Object[] pr : PROJECTS) allTokens += (Long) pr[4];
+        ObjectNode us = usageSummary(allTokens);
+        ArrayNode kinds = us.putArray("types");
+        Object[][] demoKinds = { { "morning_check", "Daily check", 0.31 }, { "rank_drop", "Rank-drop diagnosis", 0.2 }, { "content_draft", "Content drafts", 0.17 }, { "gbp_post", "Business Profile post", 0.12 }, { "chat", "Chat", 0.11 }, { "competitor_watch", "Competitor watch", 0.09 } };
+        for (Object[] k : demoKinds) kinds.addObject().put("type", (String) k[0]).put("label", (String) k[1]).put("total", Math.round(allTokens * (Double) k[2])).put("calls", (int) Math.round(allTokens / 14000.0 * (Double) k[2])).put("costUsd", Math.round(allTokens * 5.4 / 10000.0 * (Double) k[2]) / 100.0);
+        o.set("usageSummary", us);
         /* what needs a person, the email alerts and the schedule, in the shape the CRM sends */
         o.set("attention", attention());
         ObjectNode al = o.putObject("alerts");

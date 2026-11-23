@@ -1397,6 +1397,9 @@ function usageSummary() {
       models: Object.entries(models).map(([id, m]) => ({ id, label: MODELS.find((x) => x.id === id)?.label || (id === "other" ? "Other model" : id), total: m.total, calls: m.calls, costUsd: +m.costUsd.toFixed(2) })).sort((a, b) => b.total - a.total).slice(0, 6),
       lastMonth: { tokens: sum(prev, (u) => u.total), costUsd: +sum(prev, (u) => u.costUsd).toFixed(2) },
     },
+    /* by kind of task (the cost per kind is kept from the version that added it; earlier calls are in the token count only) */
+    types: (() => { const by = {}; for (const u of Object.values(rows)) for (const [k, t] of Object.entries(u.types || {})) { const x = (by[k] ||= { total: 0, calls: 0, costUsd: 0 }); x.total += t.total || 0; x.calls += t.calls || 0; x.costUsd += t.costUsd || 0; }
+      return Object.entries(by).map(([k, t]) => ({ type: k, label: k === "chat" ? "Chat" : CATALOG_BY_KEY[k]?.label || k, total: t.total, calls: t.calls, costUsd: +t.costUsd.toFixed(2) })).sort((a, b) => b.total - a.total).slice(0, 14); })(),
     seo: { enabled: g.enabled, login: !!deps.dfsForProject(""), usd: usd4(seoCompanyUsd()), calls: seoCompanyCalls(), limit: g.usdPerMonth, days: seoDays, lastMonthUsd: usd4(sum(prev, (u) => u.seo?.usd)) },
     projects: Object.entries(rows).map(([pid, u]) => ({ id: pid, name: nameOf(pid), tokens: u.total || 0, costUsd: +(u.costUsd || 0).toFixed(2), seoUsd: usd4(u.seo?.usd || 0), seoCalls: u.seo?.calls || 0 }))
       .filter((x) => x.tokens > 0 || x.seoCalls > 0).sort((a, b) => b.costUsd + b.seoUsd - (a.costUsd + a.seoUsd) || b.tokens - a.tokens).slice(0, 6),
@@ -1420,14 +1423,16 @@ function tokenRoom(pid) {
 
 /* ---------- tasks ---------- */
 const ACTIVE = new Set(["queued", "approved", "running", "needs_approval"]);
-const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null, evidence: (t.evidence || []).length, check: t.proposal?.check?.verdict || t.result?.check?.verdict || null });
-function createTask({ projectId, type, title, instructions, source, createdBy, reason }) {
+const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, priority: t.priority || "normal", dueAt: t.dueAt || 0, retryAt: t.retryAt || 0, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null, evidence: (t.evidence || []).length, check: t.proposal?.check?.verdict || t.result?.check?.verdict || null });
+const PRIORITY = { high: 0, normal: 1, low: 2 };
+const dueOf = (v) => { const n = +v; return Number.isFinite(n) && n > Date.UTC(2020, 0, 1) && n < Date.UTC(2100, 0, 1) ? Math.round(n) : 0; };
+function createTask({ projectId, type, title, instructions, source, createdBy, reason, priority, dueAt }) {
   const cat = CATALOG_BY_KEY[type];
   if (!cat) return { error: "Unknown task type." };
   if (!projectOf(projectId)) return { error: "Unknown project." };
   if (cat.agencyOnly && projectId !== AGENCY_PROJECT) return { error: `${cat.label} is an agency-level task.` };
   const tasks = load("tasks");
-  const t = { id: uid("at_"), projectId, type, title: clip(title || cat.label, 160), instructions: clip(instructions || "", 6000), reason: clip(reason || "", 500), phase: "run", status: "queued", source: source || "manual", createdAt: now(), createdBy: createdBy || "", attempts: 0,
+  const t = { id: uid("at_"), projectId, type, title: clip(title || cat.label, 160), instructions: clip(instructions || "", 6000), reason: clip(reason || "", 500), phase: "run", status: "queued", source: source || "manual", createdAt: now(), createdBy: createdBy || "", attempts: 0, priority: PRIORITY[priority] != null ? priority : "normal", dueAt: dueOf(dueAt),
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0, costUsd: 0 }, events: [] };
   tasks.push(t);
   /* keep the file bounded: past 1500, drop the oldest finished tasks. Working
@@ -1456,6 +1461,7 @@ function blockOf(t, device) {
   if (!cat) return "Unknown task type.";
   if (!onAgentList(t.projectId)) return "This project is not on the agent's list. Add it under Projects.";
   if (projectOf(t.projectId)?.raw?.archived) return "This project is archived in the CRM.";
+  if (t.retryAt && now() < t.retryAt) return `The last run failed (${cut(t.lastError || "no reason given", 140)}). It is tried once more in ${Math.max(1, Math.ceil((t.retryAt - now()) / 60e3))} minute${Math.ceil((t.retryAt - now()) / 60e3) === 1 ? "" : "s"}.`;
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
   if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, ts.per) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
@@ -1584,6 +1590,7 @@ function attention() {
     if (t.status === "needs_approval") add("approval", "act", `approval:${t.id}:${t.proposal?.at || 0}`, `Approve or reject: "${t.title}"`, `${pn}. ${t.proposal?.check?.verdict === "fail" ? `The second check found ${t.proposal.check.issues.length || "a"} problem${t.proposal.check.issues.length === 1 ? "" : "s"} in this plan. ` : ""}${t.proposal?.summary || ""}`, { ...ex, at: t.proposal?.at || t.createdAt });
     else if ((t.status === "failed" || t.status === "stopped") && now() - (t.finishedAt || 0) < 3 * 864e5) add("failed", t.interrupted ? "act" : "warn", `failed:${t.id}:${t.finishedAt || 0}`, t.interrupted ? `Check what is live, then run again: "${t.title}"` : `"${t.title}" ${t.status === "failed" ? "failed" : "was stopped"}`, `${pn}. ${t.error || ""}`, { ...ex, at: t.finishedAt });
   }
+  for (const t of tasks) if (t.dueAt && t.dueAt < now() && (t.status === "queued" || t.status === "approved" || t.status === "needs_approval")) add("offline", "warn", `due:${t.id}:${t.dueAt}`, `"${t.title}" is past its due date`, `${name(t.projectId)}. Due ${new Date(t.dueAt).toISOString().slice(0, 10)}, still ${t.status === "needs_approval" ? "waiting for approval" : "waiting to start"}.`, { projectId: t.projectId, project: name(t.projectId), taskId: t.id, at: t.dueAt });
   /* work that has waited six hours for a reason only a person can remove (one line per reason and project) */
   const held = new Map();
   for (const t of tasks) {
@@ -2386,7 +2393,7 @@ function deviceUpdate(admin, body) {
   return [200, overview(admin)];
 }
 function taskCreate(admin, body) {
-  const r = createTask({ projectId: body?.projectId, type: body?.type, title: body?.title, instructions: body?.instructions, source: "manual", createdBy: admin.name });
+  const r = createTask({ projectId: body?.projectId, type: body?.type, title: body?.title, instructions: body?.instructions, priority: body?.priority, dueAt: body?.dueAt, source: "manual", createdBy: admin.name });
   if (r.error) return [400, { error: "bad_request", detail: r.error }];
   pokeDevices();
   return [200, overview(admin)];
@@ -2395,7 +2402,12 @@ function taskAction(admin, body) {
   const t = load("tasks").find((x) => x.id === body?.id);
   if (!t) return [404, { error: "not_found" }];
   const a = body.action;
-  if (a === "cancel" && ACTIVE.has(t.status)) { t.status = "cancelled"; t.finishedAt = now(); t.error = `Cancelled by ${admin.name}.`; }
+  if (a === "edit" && (t.status === "queued" || t.status === "failed" || t.status === "stopped" || t.status === "cancelled")) {
+    if (body.title != null) t.title = clip(body.title, 160) || t.title;
+    if (body.instructions != null) t.instructions = clip(body.instructions, 6000);
+    if (body.priority != null && PRIORITY[body.priority] != null) t.priority = body.priority;
+    if (body.dueAt != null) t.dueAt = dueOf(body.dueAt);
+  } else if (a === "cancel" && ACTIVE.has(t.status)) { t.status = "cancelled"; t.finishedAt = now(); t.error = `Cancelled by ${admin.name}.`; }
   else if (a === "retry" && ["failed", "cancelled", "stopped"].includes(t.status)) {
     /* a proposal nobody decided in time is asked for afresh; an approved change goes back to being made (the agent is told when an earlier run was cut off) */
     if (t.phase !== "execute" || !t.approval) { t.phase = "run"; t.proposal = null; }
@@ -2433,7 +2445,12 @@ function playbookSave(admin, body) {
   /* every edited version is kept (the last ten), so a change that made the agent worse can be taken back */
   const keep = () => { if (cfg.playbooks[key]) { const h = ((cfg.playbookHistory ||= {})[key] ||= []); h.unshift({ ...cfg.playbooks[key] }); h.length = Math.min(h.length, 10); } };
   if (body.history) return [200, { ok: true, key, versions: (cfg.playbookHistory?.[key] || []).map((v, i) => ({ n: i, updatedAt: v.updatedAt, by: v.by || "", chars: (v.text || "").length, text: v.text || "" })) }];
-  if (body.reset) { keep(); delete cfg.playbooks[key]; }
+  if (body.restore != null) {
+    const v = cfg.playbookHistory?.[key]?.[+body.restore];
+    if (!v?.text) return [404, { error: "not_found", detail: "That version no longer exists." }];
+    keep();
+    cfg.playbooks[key] = { text: v.text, updatedAt: now(), by: admin.name };
+  } else if (body.reset) { keep(); delete cfg.playbooks[key]; }
   else {
     const text = scrub(String(body.text || ""));          // a playbook goes to every device and to Claude: nothing shaped like a password or a key is kept in one
     if (text.trim().length < 20) return [400, { error: "bad_request", detail: "The playbook is too short." }];
@@ -2577,7 +2594,7 @@ function agentClaim(d) {
   requeueStale();
   const tasks = load("tasks");
   if (tasks.some((t) => t.status === "running" && t.deviceId === d.id)) return [200, { ok: true, task: null, reason: "This device already has a running task." }];
-  const waiting = tasks.filter((t) => t.status === "approved" || t.status === "queued").sort((a, b) => (a.status === "approved" ? 0 : 1) - (b.status === "approved" ? 0 : 1) || (a.source === "manual" ? 0 : 1) - (b.source === "manual" ? 0 : 1) || a.createdAt - b.createdAt);
+  const waiting = tasks.filter((t) => t.status === "approved" || t.status === "queued").sort((a, b) => (a.status === "approved" ? 0 : 1) - (b.status === "approved" ? 0 : 1) || (PRIORITY[a.priority] ?? 1) - (PRIORITY[b.priority] ?? 1) || (a.source === "manual" ? 0 : 1) - (b.source === "manual" ? 0 : 1) || (a.dueAt || 4e12) - (b.dueAt || 4e12) || a.createdAt - b.createdAt);
   let firstReason = "";
   for (const t of waiting) {
     const why = blockOf(t, d);
@@ -2637,7 +2654,7 @@ function recordUsage(pid, type, body) {
   for (const k of Object.keys(u)) row[k] += u[k];
   row.total += total; row.costUsd = +(row.costUsd + cost).toFixed(5);
   row.days[dayKey()] = (row.days[dayKey()] || 0) + total;
-  const ty = (row.types[type] ||= { total: 0, calls: 0 }); ty.total += total; ty.calls += 1;
+  const ty = (row.types[type] ||= { total: 0, calls: 0 }); ty.total += total; ty.calls += 1; ty.costUsd = +((ty.costUsd || 0) + cost).toFixed(5);
   const mid = /^[a-z0-9][a-z0-9.\-]{2,60}$/i.test(String(body.model || "")) ? String(body.model) : "other";
   const mo = ((row.models ||= {})[mid] ||= { total: 0, calls: 0, costUsd: 0 }); mo.total += total; mo.calls += 1; mo.costUsd = +(mo.costUsd + cost).toFixed(5);
   save("usage");
@@ -2720,7 +2737,14 @@ function agentComplete(d, body) {
     logActivity("task", `"${t.title}" stopped: ${t.error}`, { taskId: t.id, projectId: t.projectId });
   } else {
     t.status = "failed"; t.finishedAt = now(); t.error = clip(body.error || "The task failed.", 800);
-    logActivity("task", `"${t.title}" failed: ${t.error}`, { taskId: t.id, projectId: t.projectId });
+    /* Looking and proposing can be done again, and a failure is often passing (a page that did
+       not load, a stuck run). So such a task gets one more try by itself after ten minutes.
+       Never a task that was making a change, and never a failure that would only repeat. */
+    const again = !t.autoRetried && t.phase !== "execute" && !t.interrupted && !CATALOG_BY_KEY[t.type]?.system && !/declined this task|rejected the request|does not know the model|Claude API error 4/i.test(t.error);
+    if (again) {
+      t.autoRetried = true; t.lastError = t.error; t.status = "queued"; t.finishedAt = null; t.deviceId = null; t.retryAt = now() + 10 * 60e3; t.error = "";
+      logActivity("task", `"${t.title}" failed and will be tried once more in ten minutes: ${t.lastError}`, { taskId: t.id, projectId: t.projectId });
+    } else logActivity("task", `"${t.title}" failed: ${t.error}`, { taskId: t.id, projectId: t.projectId });
   }
   save("tasks");
   return [200, { ok: true }];
