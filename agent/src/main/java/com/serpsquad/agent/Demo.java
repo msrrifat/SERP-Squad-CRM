@@ -571,6 +571,78 @@ final class Demo {
 
     private ObjectNode dfsOwn = Json.obj().put("set", false);
 
+    private final ArrayNode guides = demoGuides();
+
+    private static ArrayNode demoGuides() {
+        ArrayNode g = Json.arr();
+        long now = System.currentTimeMillis();
+        g.addObject().put("id", "gd_demo1").put("title", "How we reply to reviews").put("scope", "types").put("area", "").put("on", true).put("updatedAt", now - 3 * DAY).put("by", "Sam Whitfield").put("createdAt", now - 40 * DAY)
+            .put("text", "- Thank the reviewer by first name.\n- Mention the job they had done, in the client's own words.\n- Never mention prices, and never offer anything in return for a review.\n- A review of three stars or fewer: apologise once, give the office number, and say nothing else.\n- Three sentences at most.")
+            .putArray("types").add("gbp_review_reply");
+        g.addObject().put("id", "gd_demo2").put("title", "House style for everything we write").put("scope", "all").put("area", "").put("on", true).put("updatedAt", now - 11 * DAY).put("by", "Sam Whitfield").put("createdAt", now - 60 * DAY)
+            .put("text", "British spelling. Short sentences. No exclamation marks. Say what the customer gets before what the business does. Never write \"leading\", \"trusted\" or \"best in class\" without a fact next to it.")
+            .putArray("types");
+        for (JsonNode x : g) ((ObjectNode) x).putArray("history");
+        return g;
+    }
+
+    private String guideWhere(JsonNode g) {
+        if ("all".equals(g.path("scope").asText())) return "Every task and the chat";
+        if ("area".equals(g.path("scope").asText())) return "All " + g.path("area").asText("") + " tasks";
+        List<String> names = new ArrayList<>();
+        for (JsonNode k : g.path("types")) names.add(label(k.asText()));
+        return names.isEmpty() ? "No task type chosen" : String.join(", ", names);
+    }
+
+    private ObjectNode guideView(JsonNode g, boolean full) {
+        ObjectNode v = Json.obj();
+        v.put("id", g.path("id").asText()).put("title", g.path("title").asText()).put("scope", g.path("scope").asText()).put("area", g.path("area").asText("")).put("on", g.path("on").asBoolean(true)).put("where", guideWhere(g))
+            .put("chars", g.path("text").asText("").length()).put("updatedAt", g.path("updatedAt").asLong()).put("by", g.path("by").asText("")).put("createdAt", g.path("createdAt").asLong()).put("versions", g.path("history").size());
+        v.set("types", g.path("types").deepCopy());
+        if (full) v.put("text", g.path("text").asText(""));
+        return v;
+    }
+
+    private ArrayNode guidesView() { ArrayNode a = Json.arr(); for (JsonNode g : guides) a.add(guideView(g, false)); return a; }
+
+    private Reply guideEdit(JsonNode body) {
+        String a = body.path("action").asText("list"), id = body.path("id").asText("");
+        ObjectNode g = null;
+        for (JsonNode x : guides) if (x.path("id").asText().equals(id)) g = (ObjectNode) x;
+        long now = System.currentTimeMillis();
+        if (!a.equals("list") && !a.equals("add") && g == null) return bad(404, "That guide no longer exists.");
+        if (a.equals("get")) { ObjectNode o = Json.obj(); o.put("ok", true); o.set("guide", guideView(g, true)); return new Reply(200, o); }
+        if (a.equals("history")) {
+            ObjectNode o = Json.obj(); o.put("ok", true).put("id", id); ArrayNode vs = o.putArray("versions"); int n = 0;
+            for (JsonNode v : g.path("history")) vs.addObject().put("n", n++).put("updatedAt", v.path("updatedAt").asLong()).put("by", v.path("by").asText("")).put("chars", v.path("text").asText("").length()).put("title", v.path("title").asText("")).put("text", v.path("text").asText(""));
+            return new Reply(200, o);
+        }
+        if (a.equals("add") || a.equals("save")) {
+            String title = body.path("title").asText("").trim(), text = body.path("text").asText("").trim(), scope = body.path("scope").asText("all");
+            if (title.length() < 3) return bad(400, "Give the guide a title.");
+            if (text.length() < 20) return bad(400, "The guide is too short. Write what the agent should do, in full sentences.");
+            if (text.length() > 12000) return bad(400, "Keep one guide under 12,000 characters. Split it into two guides.");
+            if (scope.equals("types") && body.path("types").size() == 0) return bad(400, "Choose at least one kind of task the guide applies to.");
+            if (g == null) { g = guides.addObject(); g.put("id", "gd_demo" + (guides.size() + 2)).put("on", true).put("createdAt", now); g.putArray("history"); }
+            else if (!g.path("text").asText("").equals(text)) ((ArrayNode) g.get("history")).insert(0, Json.obj().put("text", g.path("text").asText("")).put("title", g.path("title").asText("")).put("updatedAt", g.path("updatedAt").asLong()).put("by", g.path("by").asText("")));
+            g.put("title", title).put("text", text).put("scope", scope).put("area", scope.equals("area") ? body.path("area").asText("onpage") : "").put("updatedAt", now).put("by", "Office PC (agent's computer)");
+            g.set("types", scope.equals("types") ? body.path("types").deepCopy() : Json.arr());
+        } else if (a.equals("toggle")) g.put("on", body.path("on").asBoolean(!g.path("on").asBoolean(true)));
+        else if (a.equals("restore")) {
+            JsonNode v = g.path("history").path(body.path("n").asInt(-1));
+            if (!v.isObject()) return bad(404, "That version no longer exists.");
+            String old = g.path("text").asText("");
+            g.put("text", v.path("text").asText("")).put("updatedAt", now);
+            ((ArrayNode) g.get("history")).remove(body.path("n").asInt());
+            ((ArrayNode) g.get("history")).insert(0, Json.obj().put("text", old).put("title", g.path("title").asText("")).put("updatedAt", now).put("by", ""));
+        } else if (a.equals("remove")) { for (int i = 0; i < guides.size(); i++) if (guides.get(i) == g) { guides.remove(i); break; } }
+        if (!a.equals("list")) playbooksRev += 1;
+        ObjectNode o = Json.obj();
+        o.put("ok", true).put("max", 40).put("maxChars", 12000);
+        o.set("guides", guidesView());
+        return new Reply(200, o);
+    }
+
     private final Map<String, ArrayNode> resSources = new HashMap<>();
     private final Map<String, ObjectNode> resRepo = new HashMap<>();
 
@@ -1083,6 +1155,7 @@ final class Demo {
         for (ObjectNode t : lightTasks(pos, running)) ts.add(t);
         ArrayNode act = o.putArray("activity");
         for (ObjectNode a : activity) act.add(a);
+        o.set("guides", guidesView());
         ArrayNode pb = o.putArray("playbooks");
         Iterator<String> names = catalogFile.path("playbooks").fieldNames();
         while (names.hasNext()) {
@@ -1667,6 +1740,7 @@ final class Demo {
                 out.put("ok", true).set("task", full);
                 return new Reply(200, out);
             }
+            case "guide": return guideEdit(body);
             case "playbook": {
                 String key = body.path("key").asText("");
                 String def = catalogFile.path("playbooks").path(key).asText("");

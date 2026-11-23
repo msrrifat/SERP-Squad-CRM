@@ -372,7 +372,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "guide", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -2123,11 +2123,99 @@ setTimeout(pruneEvidence, 90e3).unref?.();
 /* ---------- playbooks, settings and the CRM tool list synced to devices ---------- */
 const PLAYBOOK_KEYS = ["_rules", "_chat", ...CATALOG.map((c) => c.key)];
 const PLAYBOOK_LABEL = (k) => (k === "_rules" ? "Agent rules (all tasks)" : k === "_chat" ? "Chat (talking about a project)" : CATALOG_BY_KEY[k].label);
+/* ---------- the agency's own guides ----------
+   Text the manager writes and keeps up to date: how the agency wants a kind
+   of work done. A guide applies to every task and the chat, to one area of
+   work, or to chosen kinds of task. It travels with the playbooks: where it
+   applies, its text is added under the playbook the device receives, so the
+   agent reads it as part of its instructions for exactly those tasks, on any
+   version of the agent program. Editing a playbook never shows or changes a
+   guide, and the other way round. The last ten versions of each are kept. */
+const GUIDE_MAX = 40, GUIDE_CHARS = 12000, GUIDE_TOTAL = 40000;
+const GUIDE_AREAS = [...AREAS.map((a) => a.key), "agency"];
+const guidesOf = (cfg = load("config")) => (Array.isArray(cfg.guides) ? cfg.guides : (cfg.guides = []));
+/* the playbook files a guide's text is added to */
+function guideTargets(g) {
+  if (g.scope === "all") return ["_rules", "_chat"];
+  if (g.scope === "area") return CATALOG.filter((c) => c.area === g.area).map((c) => c.key);
+  return (g.types || []).filter((k) => CATALOG_BY_KEY[k]);
+}
+const guideWhere = (g) => (g.scope === "all" ? "Every task and the chat" : g.scope === "area" ? `All ${g.area === "agency" ? "agency-level" : AREAS.find((a) => a.key === g.area)?.label || g.area} tasks` : (g.types || []).filter((k) => CATALOG_BY_KEY[k]).map((k) => CATALOG_BY_KEY[k].label).join(", ") || "No task type chosen");
+function guidesBlock(key, list) {
+  const mine = list.filter((g) => g.on !== false && guideTargets(g).includes(key));
+  if (!mine.length) return "";
+  return "\n\n---\n\n# Guides from the agency\n\nWritten by the manager for this kind of work. Follow them. Where a guide and the text above differ, the guide wins; where a guide and a project's own brand voice or a direction for that one project differ, the project's instruction wins.\n\n"
+    + mine.map((g) => `## ${g.title}\n\n${g.text.trim()}`).join("\n\n");
+}
+const guideView = (g, full) => ({ id: g.id, title: g.title, scope: g.scope, area: g.area || "", types: g.types || [], on: g.on !== false, where: guideWhere(g), chars: g.text.length, updatedAt: g.updatedAt, by: g.by || "", createdAt: g.createdAt || g.updatedAt, versions: (g.history || []).length, ...(full ? { text: g.text } : {}) });
+function guideEdit(admin, body) {
+  const cfg = load("config"), list = guidesOf(cfg), bad = (detail) => [400, { error: "bad_request", detail }];
+  const view = () => [200, { ok: true, max: GUIDE_MAX, maxChars: GUIDE_CHARS, guides: list.map((g) => guideView(g, false)) }];
+  const a = body.action || "list";
+  if (a === "list") return view();
+  const g = body.id ? list.find((x) => x.id === body.id) : null;
+  if (a !== "add" && !g) return [404, { error: "not_found", detail: "That guide no longer exists." }];
+  if (a === "get") return [200, { ok: true, guide: guideView(g, true) }];
+  if (a === "history") return [200, { ok: true, id: g.id, versions: (g.history || []).map((v, i) => ({ n: i, updatedAt: v.updatedAt, by: v.by || "", chars: (v.text || "").length, title: v.title || g.title, text: v.text || "" })) }];
+  /* the room left under every playbook this guide would be added to */
+  const fits = (cand) => {
+    for (const key of cand.on === false ? [] : guideTargets(cand)) {
+      const total = list.filter((x) => x.id !== cand.id && x.on !== false && guideTargets(x).includes(key)).reduce((n, x) => n + x.text.length, 0) + cand.text.length;
+      if (total > GUIDE_TOTAL) return `With this guide, the guides for "${PLAYBOOK_LABEL(key)}" would be ${total.toLocaleString("en-US")} characters long; the limit is ${GUIDE_TOTAL.toLocaleString("en-US")}, because the agent reads all of them in every task of that kind. Shorten it, or switch off or narrow another guide.`;
+    }
+    return "";
+  };
+  let what = "";
+  if (a === "add" || a === "save") {
+    if (a === "add" && list.length >= GUIDE_MAX) return bad(`${GUIDE_MAX} guides can be kept. Remove one first.`);
+    const title = line(body.title ?? g?.title ?? "", 100);
+    if (title.length < 3) return bad("Give the guide a title.");
+    if (list.some((x) => x.id !== g?.id && x.title.toLowerCase() === title.toLowerCase())) return bad("Another guide already has that title.");
+    const text = scrub(String(body.text ?? g?.text ?? "").replace(/\r\n?/g, "\n")).trim();           // a guide goes to every device and to Claude: nothing shaped like a password or a key is kept in one
+    if (text.length < 20) return bad("The guide is too short. Write what the agent should do, in full sentences.");
+    if (text.length > GUIDE_CHARS) return bad(`Keep one guide under ${GUIDE_CHARS.toLocaleString("en-US")} characters (this one has ${text.length.toLocaleString("en-US")}). Split it into two guides.`);
+    const scope = ["all", "area", "types"].includes(body.scope) ? body.scope : g?.scope || "";
+    if (!scope) return bad("Choose where the guide applies.");
+    const area = scope === "area" ? String(body.area ?? g?.area ?? "") : "", types = scope === "types" ? [...new Set((Array.isArray(body.types) ? body.types : g?.types || []).map(String))].filter((k) => CATALOG_BY_KEY[k]).slice(0, CATALOG.length) : [];
+    if (scope === "area" && !GUIDE_AREAS.includes(area)) return bad("Choose the area of work the guide applies to.");
+    if (scope === "types" && !types.length) return bad("Choose at least one kind of task the guide applies to.");
+    const next = { id: g?.id || uid("gd_"), title, text, scope, area, types, on: g ? g.on !== false : true, updatedAt: now(), by: admin.name, createdAt: g?.createdAt || now(), history: g?.history || [] };
+    const why = fits(next);
+    if (why) return bad(why);
+    if (g) {
+      if (g.text !== text || g.title !== title) { next.history = [{ text: g.text, title: g.title, updatedAt: g.updatedAt, by: g.by || "" }, ...(g.history || [])].slice(0, 10); }
+      else { next.updatedAt = g.updatedAt; next.by = g.by; }
+      Object.assign(g, next);
+    } else list.push(next);
+    what = `${g ? "changed" : "added"} the guide "${title}" (${guideWhere(next).toLowerCase()})`;
+  } else if (a === "toggle") {
+    const on = body.on === true || (body.on == null && g.on === false);
+    if (on) { const why = fits({ ...g, on: true }); if (why) return bad(why); }
+    g.on = on;
+    what = `switched the guide "${g.title}" ${on ? "on" : "off"}`;
+  } else if (a === "restore") {
+    const v = g.history?.[+body.n];
+    if (!v?.text) return [404, { error: "not_found", detail: "That version no longer exists." }];
+    const why = fits({ ...g, text: v.text });
+    if (why) return bad(why);
+    g.history = [{ text: g.text, title: g.title, updatedAt: g.updatedAt, by: g.by || "" }, ...g.history.filter((_, i) => i !== +body.n)].slice(0, 10);
+    g.text = v.text; g.updatedAt = now(); g.by = admin.name;
+    what = `put an earlier version of the guide "${g.title}" back`;
+  } else if (a === "remove") {
+    list.splice(list.indexOf(g), 1);
+    what = `removed the guide "${g.title}"`;
+  } else return bad("Unknown action.");
+  cfg.playbooksRev += 1; cfg.rev += 1;
+  save("config");
+  logActivity("settings", `${admin.name} ${what}. Devices pick it up on their next sync.`);
+  pokeDevices();
+  return view();
+}
 function playbookFiles() {
-  const cfg = load("config");
+  const cfg = load("config"), guides = guidesOf(cfg);
   const files = [];
   for (const key of PLAYBOOK_KEYS) {
-    const text = cfg.playbooks[key]?.text ?? DEFAULT_PLAYBOOKS[key] ?? "";
+    const text = (cfg.playbooks[key]?.text ?? DEFAULT_PLAYBOOKS[key] ?? "") + guidesBlock(key, guides);
     files.push({ name: key + ".md", sha256: sha(text), text });
   }
   return files;
@@ -2561,6 +2649,7 @@ function overview(admin) {
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
     activity: load("activity").slice(0, 60),
+    guides: guidesOf(cfg).map((g) => guideView(g, false)),
     playbooks: PLAYBOOK_KEYS.map((k) => ({ key: k, label: PLAYBOOK_LABEL(k), edited: !!cfg.playbooks[k], updatedAt: cfg.playbooks[k]?.updatedAt || null })),
     release: load("releases").current, releases: load("releases").list.slice(0, 8),
   };
@@ -3530,6 +3619,7 @@ export async function agentOpsPost(req, body) {
     case "task/action": return taskAction(admin, body || {});
     case "task/get": return taskGet(body);
     case "playbook": return playbookSave(admin, body || {});
+    case "guide": return guideEdit(admin, body || {});
     case "change": return changeAdd(admin, body);
     case "project": return projectDetail(body);
     case "credentials": return credentials(admin, body || {});

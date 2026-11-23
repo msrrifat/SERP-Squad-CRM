@@ -220,6 +220,15 @@ spend limit under API setup.
   estimated cost by kind of task, by model and by project.
 - **Playbook versions.** Every edited version is kept, the last ten; an
   earlier one can be looked at and put back from the playbook's editor.
+- **Your own guides.** At the top of Playbooks the agency writes its own
+  guides and keeps them up to date: a title, the text, and where it applies
+  (every task and the chat, one area of work, or chosen kinds of task). The
+  CRM adds each guide's text under the playbooks it applies to, in the files
+  this program syncs, so the agent reads it as part of its instructions for
+  exactly those tasks and no new version of the program is needed. A guide
+  wins over the built-in playbook; a project's own brand voice and directions
+  win over a guide. Guides can be switched off, keep their last ten versions,
+  and never store anything shaped like a password or a key.
 - **Finding tasks.** The task list can be narrowed to one project and
   searched.
 

@@ -211,7 +211,7 @@ export function AgentOpsSection({ company, app = null }) {
       {view === "alerts" && <AlertsView data={data} accent={accent} act={act} busy={busy} onOpenTask={setOpenTask} goProject={() => setView("limits")} />}
       {view === "knowledge" && <KnowledgeView data={data} accent={accent} goTasks={() => setView("tasks")} />}
       {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
-      {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
+      {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} setData={setData} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
     </div>
     </LogoCtx.Provider>
@@ -3021,7 +3021,108 @@ function KnowledgeView({ data, accent, goTasks }) {
   );
 }
 
-function PlaybooksView({ data, accent, act }) {
+/* ---------- your own guides: text the manager writes and keeps up to date, added to the playbooks it applies to ---------- */
+const GUIDE_AREAS = [["onpage", "Onpage SEO"], ["offpage", "Offpage SEO"], ["social", "Social Media"], ["general", "Monitoring and reporting"], ["agency", "Agency-level tasks"]];
+function GuidesCard({ data, accent, setData }) {
+  const guides = data.guides || [];
+  const [open, setOpen] = useState(null);      // the guide in the editor: { id?, title, text, scope, area, types }
+  const [was, setWas] = useState(null); const [versions, setVersions] = useState([]); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const run = async (body) => {
+    setBusy(true); setErr("");
+    try { const o = await api("guide", body); if (o.guides) setData((d) => ({ ...d, guides: o.guides })); return o; } catch (e) { setErr(String(e.message || e)); return null; } finally { setBusy(false); }
+  };
+  const start = () => { const g = { title: "", text: "", scope: "all", area: "onpage", types: [] }; setOpen(g); setWas(g); setVersions([]); setErr(""); };
+  const edit = async (id) => {
+    const o = await run({ action: "get", id });
+    if (!o) return;
+    const g = { id, title: o.guide.title, text: o.guide.text, scope: o.guide.scope, area: o.guide.area || "onpage", types: o.guide.types || [] };
+    setOpen(g); setWas(g); setVersions([]);
+    api("guide", { action: "history", id }).then((h) => setVersions(h.versions || [])).catch(() => { /* the editor works without the list */ });
+  };
+  const dirty = open && JSON.stringify(open) !== JSON.stringify(was);
+  const close = async () => { if (dirty && !(await askConfirm({ title: "Close without saving?", message: "Your changes to this guide will be lost.", confirmLabel: "Close without saving", danger: true }))) return; setOpen(null); setErr(""); };
+  const save = async () => { const o = await run({ action: open.id ? "save" : "add", ...open }); if (o) { setOpen(null); setNote(open.id ? "Saved. Every device picks the new text up at its next sync, within a minute when it is online." : "Added. The agent follows it from its next task."); } };
+  const toggle = async (g) => { await run({ action: "toggle", id: g.id, on: !g.on }); };
+  const remove = async (g) => { if (await askConfirm({ title: "Remove this guide?", message: `"${g.title}" and its earlier versions are deleted. The agent stops following it at its next sync.`, confirmLabel: "Remove", danger: true })) await run({ action: "remove", id: g.id }); };
+  const restore = async (v) => { if (await askConfirm({ title: "Put this version back?", message: `The guide goes back to its text of ${new Date(v.updatedAt).toLocaleString()}. The text it has now is kept as an earlier version.`, confirmLabel: "Yes, put it back" })) { const o = await run({ action: "restore", id: open.id, n: v.n }); if (o) { setOpen(null); setNote("The earlier version is back in use."); } } };
+  const groups = useMemo(() => { const m = new Map(); for (const c of data.catalog) { if (!m.has(c.group)) m.set(c.group, []); m.get(c.group).push(c); } return [...m.entries()]; }, [data.catalog]);
+  const flip = (k) => setOpen((g) => ({ ...g, types: g.types.includes(k) ? g.types.filter((x) => x !== k) : [...g.types, k] }));
+  const ready = open && open.title.trim().length >= 3 && open.text.trim().length >= 20 && open.text.length <= 12000 && (open.scope !== "types" || open.types.length > 0);
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
+        <div className="min-w-[240px] flex-1">
+          <div className="text-[13.5px] font-semibold text-gray-900">Your own guides</div>
+          <div className="text-[11.5px] leading-5 text-gray-500">Write how your agency wants a kind of work done, and keep it up to date. Each guide applies to every task, to one area of work, or to the kinds of task you choose, and the agent reads it as part of its instructions for exactly those tasks. Where a guide and a built-in playbook differ, your guide wins. A project's own brand voice and directions still come first for that project.</div>
+        </div>
+        <Btn accent={accent} onClick={start} disabled={guides.length >= 40}><Plus size={13} /> New guide</Btn>
+      </div>
+      {err && !open && <div className="border-b border-gray-100 bg-red-50 px-4 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {note && <div className="border-b border-gray-100 bg-emerald-50 px-4 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+      {!guides.length && <div className="px-4 py-4 text-[12.5px] text-gray-500">No guide yet. Examples of what belongs here: how you want review replies worded, your checklist for a location page, the order of a monthly report, link sources you never use.</div>}
+      {guides.map((g) => (
+        <div key={g.id} className="flex flex-wrap items-center gap-3 border-t border-gray-100 px-4 py-2.5 first:border-t-0">
+          <button type="button" onClick={() => edit(g.id)} className="min-w-0 flex-1 text-left">
+            <span className="block truncate text-[13px] font-medium text-gray-900" style={{ opacity: g.on ? 1 : 0.5 }}>{g.title}</span>
+            <span className="block truncate text-[11.5px] text-gray-500">{g.where} · {g.chars.toLocaleString()} characters · updated {relTime(g.updatedAt)}{g.by ? ` by ${g.by}` : ""}{g.versions ? ` · ${g.versions} earlier version${g.versions === 1 ? "" : "s"}` : ""}</span>
+          </button>
+          <label className="flex items-center gap-2 text-[12px] text-gray-600"><Switch on={g.on} label={`Use the guide ${g.title}`} onChange={() => toggle(g)} /> {g.on ? "In use" : "Off"}</label>
+          <Btn ghost disabled={busy} onClick={() => edit(g.id)}><PencilLine size={13} /> Edit</Btn>
+          <Btn ghost danger disabled={busy} onClick={() => remove(g)}>Remove</Btn>
+        </div>
+      ))}
+      {open && (
+        <Modal title={open.id ? "Edit guide" : "New guide"} sub="Plain text or Markdown. Write it as you would brief a senior colleague: what to do, what never to do, and an example where it helps." onClose={close} wide>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Labeled label="Title"><input className={inputCls} value={open.title} maxLength={100} placeholder="How we reply to reviews" onChange={(e) => setOpen({ ...open, title: e.target.value })} /></Labeled>
+            <Labeled label="Where it applies">
+              <select className={inputCls} value={open.scope} onChange={(e) => setOpen({ ...open, scope: e.target.value })}>
+                <option value="all">Every task and the chat</option><option value="area">One area of work</option><option value="types">The kinds of task I choose</option>
+              </select>
+            </Labeled>
+          </div>
+          {open.scope === "area" && (
+            <div className="mt-3"><Labeled label="Area of work"><select className={inputCls} value={open.area} onChange={(e) => setOpen({ ...open, area: e.target.value })}>{GUIDE_AREAS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Labeled>
+              <div className="mt-1 text-[11.5px] text-gray-500">Applies to: {data.catalog.filter((c) => c.area === open.area).map((c) => c.label).join(", ") || "no task type"}.</div></div>
+          )}
+          {open.scope === "types" && (
+            <div className="mt-3 max-h-44 overflow-auto rounded-lg border border-gray-200 p-2.5">
+              {groups.map(([group, list]) => (
+                <div key={group} className="mb-2 last:mb-0">
+                  <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{group}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">{list.map((c) => <button key={c.key} type="button" aria-pressed={open.types.includes(c.key)} onClick={() => flip(c.key)} className="rounded-full border px-2.5 py-1 text-[11.5px] font-medium" style={open.types.includes(c.key) ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#E5E7EB", color: "#374151" }}>{c.label}</button>)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea className={inputCls + " mt-3 h-[42vh] font-mono text-[12px] leading-5"} value={open.text} aria-label="The guide's text" placeholder={"Write the guide here.\n\nFor example:\n- Thank the reviewer by first name.\n- Never mention prices or offer anything in return.\n- Three sentences at most."} onChange={(e) => setOpen({ ...open, text: e.target.value })} />
+          {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Btn accent={accent} onClick={save} disabled={busy || !ready || !dirty}><Check size={13} /> {open.id ? "Save and sync to devices" : "Add guide"}</Btn>
+            <Btn ghost onClick={close}>Cancel</Btn>
+            <span className="text-[11.5px]" style={{ color: open.text.length > 12000 ? "#B91C1C" : "#9CA3AF" }}>{open.text.length.toLocaleString()} of 12,000 characters</span>
+            <span className="text-[11.5px] text-gray-400">Anything that looks like a password or a key is removed when you save.</span>
+          </div>
+          {versions.length > 0 && (
+            <details className="mt-3 rounded-lg border border-gray-200 px-3 py-2 text-[12px] text-gray-700">
+              <summary className="cursor-pointer font-semibold">Earlier versions ({versions.length})</summary>
+              <div className="mt-1 text-[11.5px] text-gray-500">Every changed version is kept, the last ten.</div>
+              {versions.map((v) => (
+                <div key={v.n} className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
+                  <span className="min-w-0 flex-1">{new Date(v.updatedAt).toLocaleString()}{v.by ? ` · ${v.by}` : ""} · {v.chars.toLocaleString()} characters</span>
+                  <Btn ghost onClick={() => setOpen({ ...open, text: v.text })} title="Shows this version in the box above without saving it.">Look at it</Btn>
+                  <Btn ghost onClick={() => restore(v)}>Put it back</Btn>
+                </div>
+              ))}
+            </details>
+          )}
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
+function PlaybooksView({ data, accent, act, setData }) {
   const [open, setOpen] = useState(null); const [text, setText] = useState(""); const [meta, setMeta] = useState(null); const [msg, setMsg] = useState("");
   const [versions, setVersions] = useState([]);
   const edit = async (key) => { try { const o = await api("playbook", { key, get: true }); setMeta(o); setText(o.text); setOpen(key); setMsg(""); setVersions([]); api("playbook", { key, history: true }).then((h) => setVersions(h.versions || [])).catch(() => { /* the editor works without the list */ }); } catch (e) { setMsg(String(e.message || e)); } };
@@ -3030,10 +3131,12 @@ function PlaybooksView({ data, accent, act }) {
   const reset = async () => { if (await askConfirm({ title: "Reset this playbook?", message: "Your edits are replaced by the built-in text.", confirmLabel: "Yes, reset" })) { const o = await act("playbook", { key: open, reset: true }); if (o) setOpen(null); } };
   const label = useMemo(() => Object.fromEntries(data.playbooks.map((p) => [p.key, p.label])), [data.playbooks]);
   return (
+    <div className="space-y-4">
+    <GuidesCard data={data} accent={accent} setData={setData} />
     <Card className="overflow-hidden">
       <div className="border-b border-gray-100 px-4 py-3">
-        <div className="text-[13.5px] font-semibold text-gray-900">Playbooks</div>
-        <div className="text-[11.5px] text-gray-500">The instructions the agent follows for each task type. Edit them here and every device picks up the change on its next sync (revision {data.playbooksRev}).</div>
+        <div className="text-[13.5px] font-semibold text-gray-900">Built-in playbooks</div>
+        <div className="text-[11.5px] text-gray-500">The instructions the agent follows for each task type. Edit them here and every device picks up the change on its next sync (revision {data.playbooksRev}). Your own guides above are added to these where they apply; they are not shown in the text here.</div>
         {msg && <div className="mt-1 text-[11.5px] text-red-700">{msg}</div>}
       </div>
       {data.playbooks.map((p) => (
@@ -3066,5 +3169,6 @@ function PlaybooksView({ data, accent, act }) {
         </Modal>
       )}
     </Card>
+    </div>
   );
 }

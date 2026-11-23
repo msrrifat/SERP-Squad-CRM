@@ -58,6 +58,10 @@ Rules the server enforces:
   "carrying on after the computer restarted" in the file for the exact conditions.
 - Task claims now carry `resources`, `repo` and `seoTools` for the device that may use them.
 
+- `POST /api/agentops/guide` (`list`, `get`, `add`, `save`, `toggle`, `restore`, `history`, `remove`): the
+  agency's own guides (kept in the agent's `config.json` under `guides`, 40 at most, 12,000 characters each,
+  40,000 per playbook they are added to). `playbookFiles()` appends them to the synced playbooks they apply to.
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |
