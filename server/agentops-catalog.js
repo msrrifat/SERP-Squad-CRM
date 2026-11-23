@@ -243,8 +243,9 @@ Goal: notice changes on the Google Business Profile that nobody on the team made
 2. Open the Business Profile manager in the Google browser profile. If it asks to sign in, stop and report.
 3. Read, without changing anything: business name, category, hours, phone, website, address or service area, and any banner about pending or applied edits, suspension or verification.
 4. Read the newest reviews and questions: count, rating, any unanswered.
+5. New reviews are work for today. When your tools include suggest_task, read project_tasks first, then suggest one gbp_review_reply task for the reviews of the last 30 days that have no reply and no open review-reply task: title "Reply to new reviews: <first names>", instructions naming each reviewer, the date, the stars and the first words of the review. One task for all of them, never one each, and none when every review has a reply.
 
-Report: what differs from the last recorded state, pending Google edits, unanswered reviews and questions. Save the current state with remember so the next run can compare. Do not click anything that changes the profile.`,
+Report: what differs from the last recorded state, pending Google edits, unanswered reviews and questions, and whether a review-reply task was suggested. Save the current state with remember so the next run can compare. Do not click anything that changes the profile.`,
 
   gsc_opportunities: `# Search Console opportunities
 

@@ -201,6 +201,39 @@ Company-wide: on/off, pause, default model and effort, and one token limit for
 all projects together. Live SEO data has its own company switch and monthly
 spend limit under API setup.
 
+## Alerts, the agency's time zone, working hours and triggers
+
+All of it is set in the CRM (AI agent, **Alerts**) or in the application's
+own Alerts page on a computer that manages settings.
+
+- **Needs a person.** A list worked out from what is true right now:
+  proposals waiting for approval, tasks that failed or were stopped (and
+  approved changes that were cut off), limits at 80% and at 100%, a Chrome ID
+  that asks for a sign-in, work that waits while no computer checks in or
+  that is held for a reason only a person can remove, a website that does
+  not answer, an update a computer could not install. A line drops off by
+  itself when it stops being true; everything but a proposal can be
+  dismissed. The application's Overview shows the same list.
+- **Email alerts.** One email for everything new, at most every ten
+  minutes, to the addresses typed there or else to the owner and the Admins.
+  Nothing is mailed twice. It goes out through the email account saved in
+  the CRM under Company Settings, API settings, Email SMTP.
+- **Time zone.** Days, weeks (from Monday) and months are the agency's: a
+  daily limit, "1 per day" and the monthly token limit turn over at midnight
+  there. "4 per month" means this calendar month, not the last 30 days, and
+  a daily task is due once per calendar day, so it no longer drifts later.
+- **Working hours.** When set, work the agent starts by itself (scheduled
+  tasks, its own follow-ups, triggers) only begins inside them. A task
+  started by hand and a change a person approved run at any time.
+- **Triggers** (per project, off until switched on, inside that project's
+  working limits): a tracked keyword that was in the top 20 falls by the set
+  number of positions in a new scan (queues a rank-drop diagnosis that names
+  it; demo-data projects are skipped); the website stops answering (the CRM
+  asks for the home page every 15 minutes with no Claude call; two failures
+  in a row raise an alert and queue a site health check). The Business
+  Profile guard also suggests one review-reply task for reviews without a
+  reply, so running it daily gets replies drafted within a day.
+
 ## Live SEO data (DataForSEO, through its MCP server)
 
 DataForSEO offers a hosted MCP server at `https://mcp.dataforseo.com/v3/mcp`

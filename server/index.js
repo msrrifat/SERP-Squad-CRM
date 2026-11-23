@@ -6010,7 +6010,11 @@ function migrateStorage() {
 }
 migrateStorage();
 /* local AI agent control plane (devices, task queue, working and token limits) — see agentops.js */
-initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject });
+initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject,
+  /* alerts from the agent go out through the agency's own email account (API settings, Email SMTP) */
+  mailReady: () => { const m = storedSmtp(); return !!(m?.host && m.user); },
+  mail: (to, subject, text) => { const m = storedSmtp(); if (!m?.host || !m.user) throw new Error("No email account is set up."); return sendMail(m, to, subject, text); },
+  appUrl: APP_ORIGINS.find((x) => /^https:\/\//.test(x)) || "" });
 
 http.createServer(async (req, res) => {
   const CORS = { ...corsFor(req), ...SEC_HEADERS };

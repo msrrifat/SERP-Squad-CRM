@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bell, Sparkles, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, LogoUpload, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -131,7 +131,8 @@ export function AgentOpsSection({ company, app = null }) {
   }
   const g = data.global;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
-  const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["devices", "Devices & updates", Monitor], ["knowledge", `Knowledge${data.knowledge?.docs ? ` (${data.knowledge.docs})` : ""}`, Library], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
+  const attention = data.attention || [], waitingOnYou = attention.filter((x) => x.level === "act").length;
+  const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["alerts", `Alerts${waitingOnYou ? ` (${waitingOnYou})` : ""}`, Bell], ["devices", "Devices & updates", Monitor], ["knowledge", `Knowledge${data.knowledge?.docs ? ` (${data.knowledge.docs})` : ""}`, Library], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
   const monthCost = data.projects.reduce((s, p) => s + (p.usage.costUsd || 0), 0);
 
   return (
@@ -178,6 +179,14 @@ export function AgentOpsSection({ company, app = null }) {
         </div>
       )}
 
+      {waitingOnYou > 0 && view !== "alerts" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-900">
+          <Bell size={14} className="shrink-0" />
+          <span className="min-w-0 flex-1"><b>{waitingOnYou === 1 ? "One thing is waiting for you." : `${waitingOnYou} things are waiting for you.`}</b> {attention.find((x) => x.level === "act")?.title}{waitingOnYou > 1 ? ", and more." : ""}</span>
+          <button className="font-semibold underline" onClick={() => setView("alerts")}>Show {waitingOnYou === 1 ? "it" : "them"}</button>
+        </div>
+      )}
+
       <div className={app ? "hidden" : "flex flex-wrap gap-1.5"}>
         {VIEWS.map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold"
@@ -189,12 +198,115 @@ export function AgentOpsSection({ company, app = null }) {
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
+      {view === "alerts" && <AlertsView data={data} accent={accent} act={act} busy={busy} onOpenTask={setOpenTask} goProject={() => setView("limits")} />}
       {view === "knowledge" && <KnowledgeView data={data} accent={accent} goTasks={() => setView("tasks")} />}
       {view === "api" && <ApiSetupView data={data} accent={accent} act={act} busy={busy} />}
       {view === "playbooks" && <PlaybooksView data={data} accent={accent} act={act} />}
       {openTask && <TaskModal id={openTask} accent={accent} act={act} onClose={() => setOpenTask(null)} />}
     </div>
     </LogoCtx.Provider>
+  );
+}
+
+/* ---------------- alerts and schedule: what needs a person, how they are told, and when the agent works ---------------- */
+const ALERT_KINDS_UI = [["approval", "A proposal is waiting for approval"], ["failed", "A task failed, was stopped, or was cut off while making a change"], ["limit", "A token or spend limit is nearly used (80%) or reached"], ["signin", "A person has to sign in again in a Chrome ID"], ["offline", "Work is waiting and no agent computer is running, or tasks are held"], ["site", "A client's website stopped answering"]];
+const DAYS_UI = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]];
+const ZONES = ["UTC", "Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin", "Europe/Madrid", "Europe/Athens", "America/St_Johns", "America/Halifax", "America/Toronto", "America/New_York", "America/Chicago", "America/Winnipeg", "America/Denver", "America/Edmonton", "America/Phoenix", "America/Los_Angeles", "America/Vancouver", "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Dhaka", "Asia/Singapore", "Asia/Manila", "Asia/Tokyo", "Australia/Perth", "Australia/Sydney", "Pacific/Auckland"];
+function AlertsView({ data, accent, act, busy, onOpenTask, goProject }) {
+  const items = data.attention || [], a = data.alerts || {}, sch = data.schedule || {}, wh = sch.workHours || { on: false, from: 8, to: 18, days: [1, 2, 3, 4, 5] };
+  const [to, setTo] = useState(a.to || "");
+  useEffect(() => { setTo(a.to || ""); }, [a.to]);
+  const [test, setTest] = useState(null);
+  const zones = ZONES.includes(sch.timeZone) || !sch.timeZone ? ZONES : [sch.timeZone, ...ZONES];
+  const setAlerts = (patch) => act("config", { global: { alerts: patch } });
+  const setHours = (patch) => act("config", { global: { workHours: { ...wh, ...patch } } });
+  const sendTest = async () => { setTest({ running: true }); const o = await act("alerts", { action: "test" }); setTest(o?.alertTest || { ok: false, detail: "The test could not be sent." }); };
+  const hours = Array.from({ length: 25 }, (_, h) => h);
+  const hh = (h) => String(h % 24).padStart(2, "0") + ":00";
+  const act1 = items.filter((x) => x.level === "act"), warn = items.filter((x) => x.level !== "act");
+  const Row = ({ x }) => (
+    <div className="flex items-start gap-3 border-t border-gray-100 py-2.5 first:border-t-0">
+      <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: x.level === "act" ? "#DC2626" : "#D97706" }} aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium text-gray-900">{x.title}</div>
+        {x.detail && <div className="mt-0.5 break-words text-[12px] leading-5 text-gray-600">{x.detail}</div>}
+        <div className="mt-0.5 text-[11px] text-gray-400">{relTime(x.at)}</div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {x.taskId && <Btn ghost onClick={() => onOpenTask(x.taskId)}>Open</Btn>}
+        {!x.taskId && x.projectId && <Btn ghost onClick={goProject}>Projects</Btn>}
+        {x.kind !== "approval" && <Btn ghost disabled={busy} title="Take this off the list. It comes back only if it happens again." onClick={() => act("alerts", { action: "ack", key: x.key })}>Dismiss</Btn>}
+      </div>
+    </div>
+  );
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Bell size={15} style={{ color: accent }} /> Needs a person</div>
+          {warn.length + act1.filter((x) => x.kind !== "approval").length > 1 && <Btn ghost disabled={busy} onClick={() => act("alerts", { action: "ack", keys: items.filter((x) => x.kind !== "approval").map((x) => x.key) })}>Dismiss all that can be dismissed</Btn>}
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Worked out from what is true right now: a proposal you decide, a limit you raise or a sign-in you fix drops off this list by itself. A proposal cannot be dismissed, only approved or rejected.</div>
+        {!items.length && <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2.5 text-[12.5px] text-emerald-800">Nothing is waiting for you.</div>}
+        {act1.length > 0 && <div className="mt-3"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-red-700">Waiting for you ({act1.length})</div>{act1.map((x) => <Row key={x.key} x={x} />)}</div>}
+        {warn.length > 0 && <div className="mt-3"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-amber-700">Worth knowing ({warn.length})</div>{warn.map((x) => <Row key={x.key} x={x} />)}</div>}
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><MessageSquare size={15} style={{ color: accent }} /> Email alerts</div>
+          <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={!!a.email} label="Send email alerts" onChange={(v) => setAlerts({ email: v })} /> {a.email ? "On" : "Off"}</label>
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">One email for everything new, at most every ten minutes, so twenty proposals are one message. Nothing is mailed twice. It is sent from the email account saved in the CRM under Company Settings, API settings, Email SMTP.</div>
+        {!a.mailReady && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">No email account is set up in the CRM yet, so no alert can be sent. Add it under Company Settings, API settings, Email SMTP. The list above works without it.</div>}
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <Labeled label="Send to (leave empty for the owner and the Admins)">
+            <input className={inputCls} aria-label="Email addresses for alerts, separated by commas" placeholder={a.admins ? `The owner and Admins (${a.admins} address${a.admins === 1 ? "" : "es"})` : "name@agency.com, second@agency.com"} value={to} onChange={(e) => setTo(e.target.value)} onBlur={() => { if (to.trim() !== (a.to || "")) setAlerts({ to }); }} />
+          </Labeled>
+          <div className="flex items-end gap-2">
+            <Btn ghost disabled={busy || test?.running || !a.mailReady} onClick={sendTest}><RefreshCw size={13} /> {test?.running ? "Sending…" : "Send a test email"}</Btn>
+            <span className="pb-1.5 text-[11.5px] text-gray-500">{a.recipients ? `Goes to ${a.recipients} address${a.recipients === 1 ? "" : "es"}.` : "No address yet."}</span>
+          </div>
+        </div>
+        {test && !test.running && <div className="mt-2 rounded-lg px-3 py-2 text-[12px]" role="status" style={test.ok ? { background: "#ECFDF5", color: "#047857" } : { background: "#FEF2F2", color: "#B91C1C" }}>{test.detail}</div>}
+        <div className="mt-3 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Email me when</div>
+        <div className="mt-1.5 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+          {ALERT_KINDS_UI.map(([k, label]) => <label key={k} className="flex items-center gap-2 text-[12.5px] text-gray-700"><Switch on={a[k] !== false} label={label} onChange={(v) => setAlerts({ [k]: v })} /> {label}</label>)}
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Clock size={15} style={{ color: accent }} /> Time zone and working hours</div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Days, weeks and months (daily limits, "1 per day", the monthly token limit) turn over at midnight in this time zone. It is {sch.localTime || "–"} there now.</div>
+        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+          <Labeled label="Agency time zone">
+            <select className={inputCls} aria-label="Agency time zone" value={sch.timeZone || "UTC"} onChange={(e) => act("config", { global: { timeZone: e.target.value } })}>{zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}</select>
+          </Labeled>
+          <div className="sm:col-span-2">
+            <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={!!wh.on} label="Limit when the agent starts work by itself" onChange={(v) => setHours({ on: v })} /> Only start work by itself between</label>
+            <div className={"mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-gray-700" + (wh.on ? "" : " opacity-50")}>
+              <select className={selCls} aria-label="Working hours from" disabled={!wh.on} value={wh.from} onChange={(e) => setHours({ from: +e.target.value })}>{hours.slice(0, 24).map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
+              and
+              <select className={selCls} aria-label="Working hours to" disabled={!wh.on} value={wh.to} onChange={(e) => setHours({ to: +e.target.value })}>{hours.slice(1).map((h) => <option key={h} value={h}>{h === 24 ? "24:00" : hh(h)}</option>)}</select>
+              on
+              {DAYS_UI.map(([d, label]) => { const on = wh.days.includes(d); return <button key={d} type="button" disabled={!wh.on} aria-pressed={on} onClick={() => { const days = on ? wh.days.filter((x) => x !== d) : [...wh.days, d]; if (days.length) setHours({ days }); }} className="rounded-md border px-2 py-1 text-[11.5px] font-semibold" style={on ? { background: accent, color: "#fff", borderColor: accent } : { background: "#fff", color: "#6B7280", borderColor: "#E5E7EB" }}>{label}</button>; })}
+            </div>
+            <div className="mt-2 text-[11.5px] leading-5 text-gray-500">This holds for scheduled tasks, the agent's own follow-ups and work started by a trigger. A task you add by hand, and a change you approved, run at any time. A window that ends before it starts (22:00 to 06:00) runs overnight.{sch.offNow ? " Right now it is outside these hours." : ""}</div>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Sparkles size={15} style={{ color: accent }} /> Work that starts because something happened</div>
+        <div className="mt-1 text-[12px] leading-5 text-gray-600">Besides the calendar, three things can start a task. The first two are switched on per project, on the project's page under <b>Projects &amp; limits</b>. All of them stay inside that project's working limits and token limits.</div>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[12px] leading-5 text-gray-600">
+          <li><b>A keyword fell.</b> After a rank scan, a keyword that was in the top 20 and fell by the number of positions you set queues a rank-drop diagnosis that names it. Projects on demo data are skipped.</li>
+          <li><b>The website stopped answering.</b> The CRM asks for the home page every 15 minutes (no Claude call, no tokens). Two failures in a row raise an alert and queue a site health check.</li>
+          <li><b>A new review.</b> The Business Profile guard reads the newest reviews in the signed-in Chrome window and suggests one review-reply task for the reviews that have no reply. Set the guard to run every day and replies are drafted within a day of a review.</li>
+        </ul>
+        <div className="mt-2 text-[11.5px] text-gray-500">Switched on now: keyword drops for {data.projects.filter((p) => p.setting?.triggers?.rankDrop).length} of {data.projects.filter((p) => p.id !== "_agency").length} projects, the website check for {data.projects.filter((p) => p.setting?.triggers?.siteDown).length}.</div>
+      </Card>
+    </div>
   );
 }
 
@@ -334,7 +446,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const topRef = useRef(null), firstPage = useRef(true), seenTick = useRef(tick);
   const logoSrc = React.useContext(LogoCtx)[pid]?.src || "";
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
-  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, seoUsdPerMonth: p.setting.seoUsdPerMonth ?? 5, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
+  const fromServer = (p) => ({ enabled: p.setting.enabled, tokensPerMonth: p.setting.tokensPerMonth, tokensPerDay: p.setting.tokensPerDay, seoUsdPerMonth: p.setting.seoUsdPerMonth ?? 5, triggers: { rankDrop: false, rankDropBy: 5, siteDown: false, ...(p.setting.triggers || {}) }, channels: p.setting.channels, rules: p.setting.rules, tasks: Object.fromEntries(Object.entries(p.tasks).map(([k, t]) => [k, { mode: t.mode, max: t.max, per: t.per, auto: t.auto, everyDays: t.everyDays, approval: t.approval, model: t.model }])) });
   /* keep the form in step with the server unless there are unsaved edits */
   const sig = project ? JSON.stringify(fromServer(project)) : "";
   useEffect(() => { if (project && !dirty) setDraft(fromServer(project)); }, [sig, pid, dirty]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -504,6 +616,24 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
               <div className="mt-1 text-[11px] text-gray-400">{data.seoData?.enabled ? "Live search results, keyword volumes, competitor and backlink data, billed by DataForSEO per request. At the limit the agent carries on without it until next month." : "Switched off for the company, so the agent makes no paid request. It is switched on under API setup."}</div>
             </div>
           </div>
+          {project.id !== "_agency" && draft.triggers && (
+            <div className="mt-4 rounded-lg border border-gray-200 p-3">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Start work by itself when something happens</div>
+              <div className="mt-2 space-y-2 text-[12.5px] text-gray-700">
+                <label className="flex flex-wrap items-center gap-2">
+                  <Switch on={!!draft.triggers.rankDrop} label="Queue a rank-drop diagnosis when a keyword falls" onChange={(v) => set({ triggers: { ...draft.triggers, rankDrop: v } })} />
+                  a tracked keyword that was in the top 20 falls by
+                  <input className={numCls + " w-14"} inputMode="numeric" aria-label="Positions a keyword has to fall" value={draft.triggers.rankDropBy} onChange={(e) => set({ triggers: { ...draft.triggers, rankDropBy: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) } })} />
+                  positions or more in a scan: queue a rank-drop diagnosis that names it
+                </label>
+                <label className="flex flex-wrap items-center gap-2">
+                  <Switch on={!!draft.triggers.siteDown} label="Check that the website answers" onChange={(v) => set({ triggers: { ...draft.triggers, siteDown: v } })} />
+                  the website stops answering (the CRM asks for the home page every 15 minutes, no tokens): raise an alert and queue a site health check
+                </label>
+              </div>
+              <div className="mt-2 text-[11px] leading-5 text-gray-400">{project.demo && draft.triggers.rankDrop ? "This project is on demo data, so the keyword trigger does nothing until it tracks real rankings. " : ""}Both stay inside the working limits of Rank-drop diagnosis and Site health check below, and wait while those are switched off. The website is the address under Work setup, Settings.</div>
+            </div>
+          )}
           {project.id !== "_agency" && (
             <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] text-gray-600">
               <span className="min-w-[200px] flex-1">{project.manual ? <>Added by hand: this project is not in the CRM, so it has no rank tracking, Search Console data or reports.{project.website ? ` Website: ${project.website}` : ""}</> : "Imported from the CRM: its name, logo, rankings and data come from the project there."}</span>

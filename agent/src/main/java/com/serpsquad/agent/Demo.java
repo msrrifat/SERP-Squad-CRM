@@ -99,7 +99,7 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0);
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London");
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -555,6 +555,29 @@ final class Demo {
 
     // ---------- the read-only board (Overview's project list) ----------
 
+    private final ObjectNode alerts = Json.obj().put("email", true).put("to", "").put("approval", true).put("failed", true).put("limit", true).put("signin", true).put("offline", true).put("site", true);
+    private final ObjectNode workHours = Json.obj().put("on", true).put("from", 8).put("to", 18);
+    { workHours.putArray("days").add(1).add(2).add(3).add(4).add(5); }
+    private final java.util.Set<String> dismissed = new java.util.HashSet<>();
+
+    /** A made-up "needs a person" list, in the shape the CRM sends: one of each kind that matters. */
+    private ArrayNode attention() {
+        long now = System.currentTimeMillis();
+        ArrayNode out = Json.arr();
+        String first = (String) PROJECTS[0][1], second = (String) PROJECTS[1][1], third = (String) PROJECTS[2][1];
+        Object[][] items = {
+            { "demo:approval", "approval", "act", "Approve or reject: \"Business Profile post: winter boiler service\"", first + ". One post about winter boiler servicing, with a Call now button.", now - 42 * 60000L, PROJECTS[0][0] },
+            { "demo:signin", "signin", "act", "Sign in again for " + second, "Chrome ID CH-7K2P on Front desk PC asked for a sign-in (\"Sign in - Google Accounts\"). Open the application there, Settings, Chrome IDs, Sign in.", now - 3 * 3600000L, PROJECTS[1][0] },
+            { "demo:failed", "failed", "warn", "\"Citation and link monitor\" was stopped", third + ". This task used its token budget for one run.", now - 5 * 3600000L, PROJECTS[2][0] },
+            { "demo:limit", "limit", "warn", first + " has used 84% of its monthly token limit", "", now - 26 * 3600000L, PROJECTS[0][0] },
+        };
+        for (Object[] it : items) {
+            if (dismissed.contains((String) it[0])) continue;
+            out.addObject().put("key", (String) it[0]).put("kind", (String) it[1]).put("level", (String) it[2]).put("title", (String) it[3]).put("detail", (String) it[4]).put("at", (Long) it[5]).put("projectId", (String) it[6]);
+        }
+        return out;
+    }
+
     /** API usage for the Overview, in the shape the CRM sends: the month's tokens spread over the days so far, by model, the made-up DataForSEO spend, and the projects that used most. */
     private ObjectNode usageSummary(long monthTokens) {
         ObjectNode us = Json.obj();
@@ -615,6 +638,7 @@ final class Demo {
         for (Object[] p : PROJECTS) monthTokens += (Long) p[4];
         b.putObject("company").put("enabled", global.path("enabled").asBoolean(true)).put("paused", paused()).put("model", global.path("model").asText()).put("monthTokens", monthTokens).put("monthCostUsd", Math.round(monthTokens * 5.4 / 10000.0) / 100.0).put("limit", global.path("tokensPerMonth").asLong(0));
         b.set("usage", usageSummary(monthTokens));
+        b.set("attention", attention());
         ArrayNode ps = b.putArray("projects");
         for (int i = 0; i < PROJECTS.length; i++) {
             Object[] p = PROJECTS[i];
@@ -734,6 +758,17 @@ final class Demo {
         int studied = 0;
         for (ObjectNode d : knowledge) if (!d.path("digest").asText("").isEmpty()) studied++;
         o.putObject("knowledge").put("docs", knowledge.size()).put("studied", studied);
+        /* what needs a person, the email alerts and the schedule, in the shape the CRM sends */
+        o.set("attention", attention());
+        ObjectNode al = o.putObject("alerts");
+        al.setAll(alerts);
+        al.put("mailReady", true).put("recipients", alerts.path("to").asText("").isBlank() ? 2 : alerts.path("to").asText("").split("[\\s,;]+").length).put("admins", 2);
+        ObjectNode sch = o.putObject("schedule");
+        java.time.ZonedDateTime local;
+        try { local = java.time.ZonedDateTime.now(java.time.ZoneId.of(global.path("timeZone").asText("UTC"))); } catch (Exception e) { local = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC); }
+        sch.put("timeZone", global.path("timeZone").asText("UTC")).put("localTime", local.getDayOfWeek().getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + " " + String.format("%02d:%02d", local.getHour(), local.getMinute()));
+        sch.set("workHours", workHours);
+        sch.putNull("offNow");
         /* live SEO data (DataForSEO): the same fields the CRM reports, with made-up spend */
         ObjectNode seo = o.putObject("seoData");
         seo.put("enabled", global.path("seoData").asBoolean(false)).put("usdPerMonth", global.path("seoUsdPerMonth").asDouble(25)).put("login", true).put("testedAt", 0).put("testOk", false).put("requestsPerTask", 20);
@@ -768,6 +803,7 @@ final class Demo {
             double spent = Math.round(calls * 0.0135 * 10000.0) / 10000.0;
             ((ObjectNode) p.path("usage")).putObject("seo").put("usd", spent).put("calls", calls);
             if (!setting.has("seoUsdPerMonth")) setting.put("seoUsdPerMonth", 5.0);
+            if (!setting.has("triggers")) setting.putObject("triggers").put("rankDrop", i == 0).put("rankDropBy", 5).put("siteDown", i >= 0 && i < 2);
             seoUsd += spent;
             seoCalls += calls;
             int waiting = 0;
@@ -1303,10 +1339,14 @@ final class Demo {
         String pid = body.path("projectId").asText("");
         switch (p) {
             case "config": {
-                if (body.path("global").isObject()) copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth");
+                if (body.path("global").isObject()) {
+                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone");
+                    if (body.path("global").path("alerts").isObject()) alerts.setAll((ObjectNode) body.path("global").path("alerts"));
+                    if (body.path("global").path("workHours").isObject()) workHours.setAll((ObjectNode) body.path("global").path("workHours"));
+                }
                 if (!pid.isEmpty()) {
                     if (!projSetting.containsKey(pid)) return bad(404, "Unknown project.");
-                    copyIf(body, projSetting.get(pid), "enabled", "tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "channels", "rules");
+                    copyIf(body, projSetting.get(pid), "enabled", "tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "channels", "rules", "triggers");
                     Iterator<Map.Entry<String, JsonNode>> it = body.path("tasks").fields();
                     while (it.hasNext()) {
                         Map.Entry<String, JsonNode> e = it.next();
@@ -1393,6 +1433,16 @@ final class Demo {
             case "brand": return brandEdit(pid, body);
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
+            case "alerts": {
+                if ("ack".equals(body.path("action").asText(""))) {
+                    if (body.path("keys").isArray()) for (JsonNode k : body.path("keys")) dismissed.add(k.asText(""));
+                    dismissed.add(body.path("key").asText(""));
+                    return new Reply(200, overview());
+                }
+                ObjectNode out = overview();
+                out.putObject("alertTest").put("ok", true).put("sent", 2).put("detail", "Demo: no email was sent. In the real program a test goes to the addresses shown here.");
+                return new Reply(200, out);
+            }
             case "seodata": { ObjectNode out = Json.obj(); out.put("ok", true).put("connected", true).put("detail", "Demo: nothing was sent to DataForSEO. In the real program this checks the login saved in the CRM against DataForSEO's MCP server, at no cost."); return new Reply(200, out); }
             case "report": return known(pid) ? new Reply(200, reportOf(pid, body)) : bad(404, "Unknown project.");
             case "work": {

@@ -24,7 +24,7 @@
    Team endpoints need an Admin/owner session (X-SS-Token).
    Device endpoints need a device token (X-Agent-Token).
    ===================================================================== */
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync, readdirSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, appendFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync, readdirSync, copyFileSync } from "node:fs";
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { homedir } from "node:os";
@@ -72,14 +72,14 @@ const cut = (s, n) => { const t = String(s == null ? "" : s); return t.length > 
 const clip = (s, n) => cut(scrub(s), n);
 const num = (v, lo, hi, dflt) => { const n = Math.round(+v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
 
-let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: null, dfsForProject: () => null };
+let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: null, dfsForProject: () => null, mail: null, mailReady: () => false, appUrl: "" };
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25 }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC" }, projects: {}, playbooks: {} }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -319,7 +319,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -473,7 +473,12 @@ function taskSetting(pid, type) {
 }
 function projectSetting(pid) {
   const p = load("config").projects[pid] || {};
-  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0), seoUsdPerMonth: seoProjectCap(pid), channels: cleanChannels(p.channels), rules: cleanRules(p.rules), checks: pid === AGENCY_PROJECT ? {} : checksOf(pid) };
+  return { enabled: !!p.enabled, tokensPerMonth: num(p.tokensPerMonth, 0, 2e9, 2000000), tokensPerDay: num(p.tokensPerDay, 0, 2e9, 0), seoUsdPerMonth: seoProjectCap(pid), channels: cleanChannels(p.channels), rules: cleanRules(p.rules), checks: pid === AGENCY_PROJECT ? {} : checksOf(pid), triggers: triggersOf(pid) };
+}
+/* what may start work by itself for a project, besides the calendar: both are off until switched on */
+function triggersOf(pid) {
+  const t = load("config").projects[pid]?.triggers || {};
+  return { rankDrop: t.rankDrop === true, rankDropBy: num(t.rankDropBy, 2, 50, 5), siteDown: t.siteDown === true };
 }
 
 /* ---------- work setup: a project's working channels and the rules per work area ----------
@@ -817,6 +822,7 @@ function checkRequest(admin, body) {
 }
 function pendingChecks(d) {
   const cfg = load("config"), out = [];
+  if (String(d.state || "").startsWith("working")) return out;      // asked again at its next check-in, when the task is over
   for (const p of projectList()) {
     const checks = cfg.projects[p.id]?.checks;
     if (!checks) continue;
@@ -1324,8 +1330,47 @@ async function seoDataEdit(admin, body) {
 }
 
 /* ---------- usage ledger ---------- */
-const monthKey = (t = now()) => new Date(t).toISOString().slice(0, 7);
-const dayKey = (t = now()) => new Date(t).toISOString().slice(8, 10);
+/* Days, weeks and months are counted in the agency's own time zone (set under
+   Alerts & schedule), so "today" and a daily limit turn over at the agency's
+   midnight, not at UTC's. */
+const TZ_FMT = {};
+function tzName() {
+  const z = String(load("config").global.timeZone || "UTC");
+  if (TZ_FMT[z] === undefined) { try { TZ_FMT[z] = new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }); } catch { TZ_FMT[z] = null; } }
+  return TZ_FMT[z] ? z : "UTC";
+}
+function zoned(t = now()) {
+  const z = tzName(), f = TZ_FMT[z] || (TZ_FMT.UTC ||= new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }));
+  const o = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return { y: +o.year, m: o.month, d: o.day, h: +o.hour % 24, min: +o.minute, dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(o.weekday) };
+}
+const monthKey = (t = now()) => { const z = zoned(t); return `${z.y}-${z.m}`; };
+const dayKey = (t = now()) => zoned(t).d;
+/* the agency's calendar day as a number, to count whole days between two moments */
+const dayNo = (t = now()) => { const z = zoned(t); return Math.floor(Date.UTC(z.y, +z.m - 1, +z.d) / 864e5); };
+/* when the current day, week (from Monday) or month began, in the agency's time zone */
+function periodStart(per) {
+  const z = zoned(), today = now() - ((z.h * 60 + z.min) * 60e3 + (now() % 60e3));
+  return per === "day" ? today : per === "week" ? today - ((z.dow + 6) % 7) * 864e5 : today - (+z.d - 1) * 864e5;
+}
+/* ---------- working hours ----------
+   When set, work the agent starts by itself (scheduled tasks, its own
+   follow-ups, triggers) only begins inside these hours. What a person starts
+   by hand, and a change a person approved, runs at any time. */
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function workHours() {
+  const w = load("config").global.workHours || {};
+  const days = (Array.isArray(w.days) ? w.days : [1, 2, 3, 4, 5]).map((d) => +d).filter((d) => d >= 0 && d <= 6);
+  return { on: w.on === true, from: num(w.from, 0, 23, 8), to: num(w.to, 0, 24, 18), days: days.length ? [...new Set(days)].sort() : [1, 2, 3, 4, 5] };
+}
+function offHours() {
+  const w = workHours();
+  if (!w.on) return null;
+  const z = zoned(), inHours = w.from === w.to ? true : w.from < w.to ? z.h >= w.from && z.h < w.to : z.h >= w.from || z.h < w.to;
+  if (w.days.includes(z.dow) && inHours) return null;
+  const hh = (h) => String(h % 24).padStart(2, "0") + ":00";
+  return `Outside the agent's working hours (${hh(w.from)} to ${hh(w.to)}, ${w.days.map((d) => DAY_NAMES[d]).join(" ")}, ${tzName()}). A task you start by hand runs at any time.`;
+}
 function usageOf(pid, t = now()) {
   const u = load("usage")[monthKey(t)]?.[pid];
   return { month: u?.total || 0, day: u?.days?.[dayKey(t)] || 0, costUsd: u?.costUsd || 0, input: u?.input || 0, output: u?.output || 0, cacheRead: u?.cacheRead || 0, cacheWrite: u?.cacheWrite || 0, types: u?.types || {}, seo: { usd: u?.seo?.usd || 0, calls: u?.seo?.calls || 0 } };
@@ -1397,7 +1442,8 @@ function createTask({ projectId, type, title, instructions, source, createdBy, r
   save("tasks");
   return { task: t };
 }
-const runsInWindow = (pid, type, ms) => load("tasks").filter((t) => t.projectId === pid && t.type === type && t.firstStartedAt && now() - t.firstStartedAt < ms).length;
+/* "4 per month" means this calendar month, "1 per day" means today: counted from when the day, the week (Monday) or the month began in the agency's time zone */
+const runsInWindow = (pid, type, per) => { const from = periodStart(per); return load("tasks").filter((t) => t.projectId === pid && t.type === type && t.firstStartedAt && t.firstStartedAt >= from).length; };
 const hasChrome = (d, id) => (d.profiles || []).some((p) => p.id === id);
 
 /* why a task cannot start right now (null = it can) */
@@ -1412,7 +1458,8 @@ function blockOf(t, device) {
   if (projectOf(t.projectId)?.raw?.archived) return "This project is archived in the CRM.";
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
-  if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, PERIOD_MS[ts.per]) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
+  if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, ts.per) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
+  if (t.source !== "manual" && t.phase !== "execute") { const off = offHours(); if (off) return off; }
   const room = tokenRoom(t.projectId);
   if (room.left <= 0) return `Token limit reached: ${room.why}.`;
   const running = load("tasks").filter((x) => x.status === "running" && x.id !== t.id);
@@ -1481,6 +1528,7 @@ function tickAgentSchedule() {
     const cfg = load("config");
     if (!cfg.global.enabled) return;
     requeueStale();
+    if (offHours()) return;                  // nothing is started by the schedule outside working hours; it catches up when they begin
     const tasks = load("tasks");
     for (const p of projectList()) {
       if (!projectSetting(p.id).enabled) continue;
@@ -1491,7 +1539,7 @@ function tickAgentSchedule() {
         const mine = tasks.filter((t) => t.projectId === p.id && t.type === cat.key);
         if (mine.some((t) => ACTIVE.has(t.status))) continue;
         const lastAuto = Math.max(0, ...mine.filter((t) => t.source === "auto").map((t) => t.createdAt));
-        if (now() - lastAuto < ts.everyDays * 864e5 - 30 * 60e3) continue;
+        if (lastAuto && dayNo() - dayNo(lastAuto) < ts.everyDays) continue;
         createTask({ projectId: p.id, type: cat.key, title: `${cat.label}: ${p.name}`, source: "auto", createdBy: "schedule" });
       }
     }
@@ -1499,6 +1547,203 @@ function tickAgentSchedule() {
 }
 setInterval(tickAgentSchedule, 5 * 60e3).unref?.();
 setTimeout(tickAgentSchedule, 20e3).unref?.();
+
+/* ---------- what needs a person, and telling them ----------
+   The list is worked out from the live state every time it is asked for, so
+   it can never show something that is no longer true: an approval that was
+   decided, a limit that was raised, a sign-in that was fixed simply drop off.
+   Only two things are remembered (alerts.json): what a person closed, and
+   what was already sent by email, so nothing is mailed twice.
+   Levels: "act" = nothing more happens until a person does something,
+   "warn" = worth knowing today. */
+const ALERT_KINDS = ["approval", "failed", "limit", "signin", "offline", "site"];
+const ALERT_LABEL = { approval: "A proposal is waiting for approval", failed: "A task failed or was stopped", limit: "A token or spend limit is nearly used or reached", signin: "A person has to sign in again in a Chrome ID", offline: "Work is waiting and no agent computer is running, or it is held", site: "A client's website does not answer" };
+function alertCfg() {
+  const a = load("config").global.alerts || {};
+  return { email: a.email === true, to: String(a.to || ""), ...Object.fromEntries(ALERT_KINDS.map((k) => [k, a[k] !== false])) };
+}
+function adminEmails() {
+  const team = deps.readDocCached("core", null)?.company?.team || [];
+  return [...new Set(team.filter((m) => m && (m.isOwner || m.role === "Admin") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(m.email || ""))).map((m) => String(m.email).toLowerCase()))];
+}
+/* the addresses typed under Alerts, or else the owner and the Admins */
+const alertRecipients = () => { const typed = alertCfg().to.split(/[\s,;]+/).filter(Boolean); return typed.length ? typed : adminEmails(); };
+/* tests write the emails to a file instead of sending them */
+const MAIL_TEST_FILE = process.env.AGENTOPS_MAIL_TEST_FILE || "";
+const mailReady = () => !!MAIL_TEST_FILE || (!!deps.mail && deps.mailReady());
+const sendAlert = async (to, subject, text) => (MAIL_TEST_FILE ? appendFileSync(MAIL_TEST_FILE, JSON.stringify({ to, subject, text }) + "\n") : deps.mail(to, subject, text));
+const pctOf = (used, limit) => (limit > 0 ? Math.round((used / limit) * 100) : 0);
+function attention() {
+  const cfg = load("config"), tasks = load("tasks"), st = load("alerts"), out = [];
+  const name = (pid) => (pid === AGENCY_PROJECT ? "Agency" : projectOf(pid)?.name || "A project");
+  const add = (kind, level, key, title, detail, extra = {}) => { if (!st.acked[key]) out.push({ key, kind, level, title: cut(title, 200), detail: cut(detail || "", 400), at: extra.at || now(), ...extra }); };
+  for (const r of storeRestored) add("failed", "act", `store:${r.file}:${r.at}`, r.from ? `The agent's data file ${r.file} was damaged and was put back from the backup of ${r.from}` : `The agent's data file ${r.file} was damaged and no backup of it existed`, r.from ? "Anything saved in it after that backup is gone. The damaged file was kept on the server beside it." : "It starts empty. The damaged file was kept on the server beside it.", { at: r.at });
+  if (!cfg.global.enabled) return out;      // switched off: nothing is expected to happen, so nothing is asked of anyone
+  for (const t of tasks) {
+    const pn = name(t.projectId), ex = { projectId: t.projectId, project: pn, taskId: t.id };
+    if (t.status === "needs_approval") add("approval", "act", `approval:${t.id}:${t.proposal?.at || 0}`, `Approve or reject: "${t.title}"`, `${pn}. ${t.proposal?.summary || ""}`, { ...ex, at: t.proposal?.at || t.createdAt });
+    else if ((t.status === "failed" || t.status === "stopped") && now() - (t.finishedAt || 0) < 3 * 864e5) add("failed", t.interrupted ? "act" : "warn", `failed:${t.id}:${t.finishedAt || 0}`, t.interrupted ? `Check what is live, then run again: "${t.title}"` : `"${t.title}" ${t.status === "failed" ? "failed" : "was stopped"}`, `${pn}. ${t.error || ""}`, { ...ex, at: t.finishedAt });
+  }
+  /* work that has waited six hours for a reason only a person can remove (one line per reason and project) */
+  const held = new Map();
+  for (const t of tasks) {
+    if ((t.status !== "queued" && t.status !== "approved") || now() - t.createdAt < 6 * 36e5) continue;
+    const why = blockOf(t, null);
+    if (!why || /^Working limit reached|^Another task|^Outside the agent's working hours|^Token limit reached|is using Chrome ID/.test(why)) continue;
+    const k = t.projectId + "|" + why;
+    held.set(k, { why, pid: t.projectId, n: (held.get(k)?.n || 0) + 1, at: Math.min(held.get(k)?.at || now(), t.createdAt) });
+  }
+  for (const [k, h] of held) add("offline", "act", `held:${sha(k).slice(0, 16)}:${dayNo()}`, `${h.n} task${h.n === 1 ? " is" : "s are"} held for ${name(h.pid)}`, h.why, { projectId: h.pid, project: name(h.pid), at: h.at });
+  const devs = load("devices").filter((d) => !d.revoked), waiting = tasks.filter((t) => t.status === "queued" || t.status === "approved").length;
+  if (waiting && devs.length && !devs.some((d) => now() - (d.lastSeen || 0) < 15 * 60e3) && !offHours()) add("offline", "warn", `offline:${dayNo()}`, `${waiting} task${waiting === 1 ? " is" : "s are"} waiting and no agent computer has checked in for 15 minutes`, "Start the agent's application on its computer, or check that computer's connection.", {});
+  for (const d of devs) if (d.updateSkipped) add("offline", "warn", `update:${d.id}:${d.updateSkipped}`, `${d.name} could not install version ${d.updateSkipped}`, "Press Sync for update in the application on that computer to try once more.", {});
+  /* limits: 80% is a warning, reached means the project (or the company) has stopped */
+  const m = monthKey();
+  const level = (used, limit, key, what, who, extra) => { const pc = pctOf(used, limit); if (pc >= 100) add("limit", "act", `limit100:${key}:${m}`, `${who} reached its ${what}`, "The agent has stopped there until the limit is raised or the month ends.", extra); else if (pc >= 80) add("limit", "warn", `limit80:${key}:${m}`, `${who} has used ${pc}% of its ${what}`, "", extra); };
+  if (cfg.global.tokensPerMonth > 0) level(companyMonthTokens(), cfg.global.tokensPerMonth, "company", "monthly token limit", "The company", {});
+  if (seoGlobal().enabled && seoGlobal().usdPerMonth > 0) level(seoCompanyUsd(), seoGlobal().usdPerMonth, "seo", "monthly DataForSEO spend limit", "The company", {});
+  for (const p of projectList()) {
+    const ps = projectSetting(p.id);
+    if (!ps.enabled) continue;
+    const u = usageOf(p.id), ex = { projectId: p.id, project: p.name };
+    if (ps.tokensPerMonth > 0) level(u.month, ps.tokensPerMonth, "p:" + p.id, "monthly token limit", p.name, ex);
+    if (ps.tokensPerDay > 0 && u.day >= ps.tokensPerDay) add("limit", "warn", `day:${p.id}:${m}-${dayKey()}`, `${p.name} reached today's token limit`, "The agent carries on there tomorrow.", ex);
+    for (const [key, c] of Object.entries(ps.checks || {})) if (c?.state === "signin") add("signin", "act", `signin:${p.id}:${key}:${c.at || 0}`, `Sign in again for ${p.name}`, `Chrome ID ${cfg.projects[p.id]?.checks?.[key]?.profileId || c.profileId || ""} on ${c.device || "the agent's computer"} asked for a sign-in${c.title ? ` ("${c.title}")` : ""}. Open the application there, Settings, Chrome IDs, Sign in.`, { ...ex, at: c.at });
+    const site = st.sites[p.id];
+    if (triggersOf(p.id).siteDown && site?.state === "down") add("site", "act", `site:${p.id}:${site.since}`, `${p.name}: the website does not answer`, `${site.url} has failed every check since ${new Date(site.since).toISOString().slice(0, 16).replace("T", " ")} UTC (${site.detail || "no answer"}).`, { ...ex, at: site.since });
+  }
+  const rank = { act: 0, warn: 1 };
+  return out.sort((a, b) => rank[a.level] - rank[b.level] || b.at - a.at).slice(0, 60);
+}
+function pruneAlerts(st) {
+  const old = now() - 45 * 864e5;
+  for (const bag of [st.emailed, st.acked]) for (const [k, at] of Object.entries(bag)) if (at < old) delete bag[k];
+}
+/* one email for everything new, at most every ten minutes: twenty proposals are one message, not twenty */
+let mailing = false;
+async function tickAlerts() {
+  if (mailing) return;
+  mailing = true;
+  try {
+    const a = alertCfg(), st = load("alerts");
+    if (!a.email || !mailReady() || now() - (st.lastEmailAt || 0) < 10 * 60e3) return;
+    const to = alertRecipients();
+    const fresh = attention().filter((x) => a[x.kind] !== false && !st.emailed[x.key]);
+    if (!to.length || !fresh.length) return;
+    const act = fresh.filter((x) => x.level === "act"), warn = fresh.filter((x) => x.level !== "act");
+    const lines = (list) => list.map((x) => `- ${x.title}${x.detail ? `\n  ${x.detail}` : ""}`).join("\n");
+    const subject = (fresh.length === 1 ? `AI agent: ${cut(fresh[0].title, 110)}` : `AI agent: ${fresh.length} things need you${act.length ? ` (${act.length} waiting for you)` : ""}`).replace(/[\r\n]+/g, " ");
+    const text = [act.length ? `Waiting for you:\n${lines(act)}` : "", warn.length ? `Worth knowing:\n${lines(warn)}` : "", deps.appUrl ? `Open the CRM, Company Settings, AI agent: ${deps.appUrl}` : "", "You get this because email alerts are switched on under AI agent, Alerts & schedule."].filter(Boolean).join("\n\n");
+    let sent = 0;
+    for (const addr of to) { try { await sendAlert(addr, subject, scrub(text)); sent += 1; } catch (e) { console.log("[agentops] alert email:", String(e?.message || e).slice(0, 160)); } }
+    st.lastEmailAt = now();                      // also after a failure, so a broken mail account is tried every ten minutes, not every minute
+    if (sent) { for (const x of fresh) st.emailed[x.key] = now(); logActivity("alert", `An email about ${fresh.length} thing${fresh.length === 1 ? "" : "s"} that need${fresh.length === 1 ? "s" : ""} a person went to ${sent} address${sent === 1 ? "" : "es"}.`); }
+    pruneAlerts(st);
+    save("alerts");
+  } catch (e) { console.log("[agentops] alerts:", String(e?.message || e).slice(0, 160)); } finally { mailing = false; }
+}
+setInterval(tickAlerts, 60e3).unref?.();
+async function alertsEdit(admin, body) {
+  const st = load("alerts");
+  if (body.action === "ack") {
+    const keys = (Array.isArray(body.keys) ? body.keys : [body.key]).map((k) => String(k || "")).filter((k) => k && k.length < 200).slice(0, 100);
+    for (const k of keys) st.acked[k] = now();
+    pruneAlerts(st);
+    save("alerts");
+  } else if (body.action === "test") {
+    if (!mailReady()) return [400, { error: "not_configured", detail: "No email account is set up. Add it in Company Settings, API settings, Email SMTP." }];
+    const to = alertRecipients();
+    if (!to.length) return [400, { error: "bad_request", detail: "There is no address to send to. Type one, or give the owner or an Admin an email address in Team." }];
+    const failed = [];
+    for (const addr of to) { try { await sendAlert(addr, "AI agent: test of the email alerts", "This is a test. Alerts from the AI agent will arrive like this.\n\n" + (deps.appUrl ? `The CRM: ${deps.appUrl}` : "")); } catch (e) { failed.push(`${addr}: ${cut(String(e?.message || e), 100)}`); } }
+    return [200, { ...overview(admin), alertTest: { ok: failed.length === 0, sent: to.length - failed.length, detail: failed.length ? `Not sent to ${failed.join("; ")}` : `Sent to ${to.join(", ")}.` } }];
+  } else return [400, { error: "bad_request" }];
+  return [200, overview(admin)];
+}
+
+/* ---------- work that starts because something happened ----------
+   Two triggers, both off for a project until switched on (Projects, the
+   project's page):
+   • a keyword fell: after a scan, when a keyword that was in the top 20 fell
+     by the set number of positions or more, a rank-drop diagnosis is queued
+     for it (within that task type's own working limit);
+   • the website stopped answering: the server itself asks for the home page
+     every 15 minutes, with no Claude call. Two failures in a row raise an
+     alert and queue a site health check.
+   Demo-data projects are skipped for rankings: made-up scans are not news. */
+const isPublicHost = (h) => { const x = String(h || "").toLowerCase().replace(/^\[|\]$/g, ""); return !!x && x.includes(".") && !/^(localhost|.*\.local|.*\.internal|.*\.localhost)$/.test(x) && !/^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(x) && !x.includes(":"); };
+const TRIGGER_TEST = process.env.AGENTOPS_TRIGGER_TEST === "1";      // the tests' sites live on this computer
+function siteUrlOf(pid) {
+  const w = cleanChannels(load("config").projects[pid]?.channels).website?.url || projectOf(pid)?.website || "";
+  try { const u = new URL(w); return /^https?:$/.test(u.protocol) && (TRIGGER_TEST || isPublicHost(u.hostname)) ? u.href : ""; } catch { return ""; }
+}
+async function checkSite(url) {
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000), headers: { "User-Agent": "Mozilla/5.0 (compatible; site-availability-check)", Accept: "text/html,*/*" } });
+    try { await r.body?.cancel(); } catch { /* nothing to release */ }
+    return r.status >= 500 ? { up: false, detail: `the server answered with error ${r.status}` } : { up: true, detail: `answered ${r.status}` };      // a 403 or 404 still means the site is up
+  } catch (e) { return { up: false, detail: /timeout|aborted/i.test(String(e?.name || e)) ? "no answer within 15 seconds" : "the connection failed" }; }
+}
+let watching = false;
+async function tickTriggers() {
+  if (watching) return;
+  watching = true;
+  try {
+    const cfg = load("config");
+    if (!cfg.global.enabled) return;
+    const st = load("alerts"), tasks = load("tasks");
+    let changed = false;
+    for (const p of projectList()) {
+      if (!projectSetting(p.id).enabled) continue;
+      const tr = triggersOf(p.id);
+      /* a keyword fell */
+      if (tr.rankDrop && !p.demo && taskSetting(p.id, "rank_drop").mode !== "off") {
+        const mark = ((st.marks[p.id] ||= {}).rankScan ||= 0), fell = [];
+        let newest = mark;
+        for (const t of trackingOf(p.id)) {
+          if (t.paused) continue;
+          const sc = scansOf(t);
+          if (!sc || sc.length < 2) continue;
+          const last = sc[sc.length - 1], prev = sc[sc.length - 2];
+          newest = Math.max(newest, last.t);
+          if (last.t <= mark || prev.p == null || last.p == null) continue;
+          if (prev.p <= 20 && last.p - prev.p >= tr.rankDropBy) fell.push({ kw: t.keyword, city: t.city || "", from: prev.p, to: last.p, at: last.t });
+        }
+        if (newest > mark) { st.marks[p.id].rankScan = newest; changed = true; }
+        if (fell.length && mark > 0 && !tasks.some((t) => t.projectId === p.id && t.type === "rank_drop" && ACTIVE.has(t.status))) {
+          fell.sort((a, b) => (b.to - b.from) - (a.to - a.from));
+          const top = fell.slice(0, 6), say = (f) => `"${f.kw}"${f.city ? ` (${f.city})` : ""} from ${shown(f.from)} to ${shown(f.to)}`;
+          const r = createTask({ projectId: p.id, type: "rank_drop", source: "auto", createdBy: "a ranking drop", title: `Rank-drop diagnosis: ${cut(top[0].kw, 70)}${fell.length > 1 ? ` and ${fell.length - 1} more` : ""}`,
+            instructions: `The latest scan shows ${fell.length === 1 ? "this keyword" : "these keywords"} fell by ${tr.rankDropBy} positions or more:\n${top.map((f) => "- " + say(f)).join("\n")}${fell.length > top.length ? `\n(and ${fell.length - top.length} more: read them with rank_table)` : ""}\nFind the likely cause for each and say what to do.`, reason: "Started by itself because a tracked keyword fell." });
+          if (!r.error) logActivity("task", `A rank-drop diagnosis was queued for ${p.name}: ${fell.length} keyword${fell.length === 1 ? "" : "s"} fell in the latest scan.`, { projectId: p.id, taskId: r.task.id });
+        }
+      }
+      /* the website stopped answering */
+      if (tr.siteDown) {
+        const url = siteUrlOf(p.id), site = (st.sites[p.id] ||= { state: "unknown", fails: 0, since: 0, checkedAt: 0, url: "", detail: "" });
+        if (!url || now() - site.checkedAt < (TRIGGER_TEST ? 2000 : 14 * 60e3)) continue;
+        const r = await checkSite(url);
+        site.checkedAt = now(); site.url = cut(url, 200); site.detail = r.detail; changed = true;
+        if (r.up) {
+          if (site.state === "down") logActivity("alert", `${p.name}: the website answers again (${url}).`, { projectId: p.id });
+          site.state = "up"; site.fails = 0; site.since = now();
+        } else {
+          site.fails += 1;
+          if (site.fails >= 2 && site.state !== "down") {
+            site.state = "down"; site.since = now();
+            logActivity("alert", `${p.name}: the website does not answer (${url}: ${r.detail}).`, { projectId: p.id });
+            if (taskSetting(p.id, "site_health").mode !== "off" && !load("tasks").some((t) => t.projectId === p.id && t.type === "site_health" && (ACTIVE.has(t.status) || now() - t.createdAt < 12 * 36e5))) {
+              createTask({ projectId: p.id, type: "site_health", source: "auto", createdBy: "the website check", title: `Site health check: ${p.name} is not answering`, instructions: `The server's own check could not load ${url} twice in a row (${r.detail}). Check whether the site is down for visitors, which pages are affected and what the error is, and say who has to act (the host, the developer, the domain).`, reason: "Started by itself because the website stopped answering." });
+            }
+          }
+        }
+      }
+    }
+    if (changed) save("alerts");
+  } catch (e) { console.log("[agentops] triggers:", String(e?.message || e).slice(0, 160)); } finally { watching = false; }
+}
+setInterval(tickTriggers, TRIGGER_TEST ? 3000 : 5 * 60e3).unref?.();
+setTimeout(tickTriggers, 30e3).unref?.();
 
 /* ---------- playbooks, settings and the CRM tool list synced to devices ---------- */
 const PLAYBOOK_KEYS = ["_rules", "_chat", ...CATALOG.map((c) => c.key)];
@@ -1851,6 +2096,7 @@ function overview(admin) {
     credentials: { claude: maskKey(secrets().claude), ...secretsStorage() },
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
     usageSummary: usageSummary(),
+    attention: attention(), alerts: { ...alertCfg(), mailReady: mailReady(), recipients: alertRecipients().length, admins: adminEmails().length }, schedule: { timeZone: tzName(), workHours: workHours(), offNow: offHours(), localTime: (() => { const z = zoned(); return `${DAY_NAMES[z.dow]} ${String(z.h).padStart(2, "0")}:${String(z.min).padStart(2, "0")}`; })() },
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
@@ -1877,6 +2123,22 @@ function saveConfig(admin, body) {
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
     if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
+    if (g.timeZone != null) {
+      const z = String(g.timeZone).trim().slice(0, 60);
+      try { new Intl.DateTimeFormat("en-CA", { timeZone: z }); } catch { return [400, { error: "bad_request", detail: "That is not a time zone name. Use one like Europe/London or America/Toronto." }]; }
+      if (z !== cfg.global.timeZone) { cfg.global.timeZone = z; logActivity("settings", `${admin.name} set the agent's time zone to ${z}.`); }
+    }
+    if (g.workHours && typeof g.workHours === "object") {
+      cfg.global.workHours = { ...(cfg.global.workHours || {}), ...g.workHours };
+      cfg.global.workHours = workHours();
+      logActivity("settings", `${admin.name} ${cfg.global.workHours.on ? "set" : "switched off"} the agent's working hours.`);
+    }
+    if (g.alerts && typeof g.alerts === "object") {
+      const a = { ...alertCfg(), ...g.alerts }, to = String(a.to || "").split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+      const wrong = to.find((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+      if (wrong) return [400, { error: "bad_request", detail: `"${cut(wrong, 60)}" is not an email address.` }];
+      cfg.global.alerts = { email: a.email === true, to: to.slice(0, 12).join(", "), ...Object.fromEntries(ALERT_KINDS.map((k) => [k, a[k] !== false])) };
+    }
     if (g.seoData != null && !!g.seoData !== (cfg.global.seoData === true)) {
       cfg.global.seoData = !!g.seoData;
       cfg.playbooksRev += 1;                               // the agent's tool list changes, so devices sync again
@@ -1894,6 +2156,7 @@ function saveConfig(admin, body) {
     if (body.tokensPerMonth != null) p.tokensPerMonth = num(body.tokensPerMonth, 0, 2e9, 2000000);
     if (body.tokensPerDay != null) p.tokensPerDay = num(body.tokensPerDay, 0, 2e9, 0);
     if (body.seoUsdPerMonth != null) p.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+body.seoUsdPerMonth || 0) * 100) / 100));
+    if (body.triggers && typeof body.triggers === "object") p.triggers = { ...triggersOf(body.projectId), ...Object.fromEntries(Object.entries(body.triggers).filter(([k]) => ["rankDrop", "siteDown"].includes(k)).map(([k, v]) => [k, v === true])), ...(body.triggers.rankDropBy != null ? { rankDropBy: num(body.triggers.rankDropBy, 2, 50, 5) } : {}) };
     if (body.channels && typeof body.channels === "object") p.channels = cleanChannels(body.channels);
     if (body.rules && typeof body.rules === "object") p.rules = cleanRules(body.rules);
     if (body.tasks && typeof body.tasks === "object") {
@@ -2281,7 +2544,7 @@ function agentBoard(d) {
     return {
       id: p.id, name: p.name, client: p.client, demoData: p.demo, enabled: ps.enabled,
       tokens: { month: u.month, limit: ps.tokensPerMonth, day: u.day, dayLimit: ps.tokensPerDay, costUsd: u.costUsd },
-      taskTypes: types.map((x) => ({ label: x.c.label, group: x.c.group, limit: limitText(x.ts), auto: x.ts.auto ? `every ${x.ts.everyDays} d` : "", used: x.ts.mode === "limited" ? runsInWindow(p.id, x.c.key, PERIOD_MS[x.ts.per]) : null, write: !!x.c.write })),
+      taskTypes: types.map((x) => ({ label: x.c.label, group: x.c.group, limit: limitText(x.ts), auto: x.ts.auto ? `every ${x.ts.everyDays} d` : "", used: x.ts.mode === "limited" ? runsInWindow(p.id, x.c.key, x.ts.per) : null, write: !!x.c.write })),
       counts: { waiting: mine.filter((t) => t.status === "queued" || t.status === "approved").length, running: mine.filter((t) => t.status === "running").length, needsApproval: mine.filter((t) => t.status === "needs_approval").length, doneThisMonth: mine.filter((t) => t.status === "done" && monthKey(t.finishedAt || 0) === monthKey()).length },
       last: lastDone ? { title: lastDone.title, summary: clip(lastDone.result?.summary || "", 220), at: lastDone.finishedAt } : null,
       notes: (load("memory")[p.id] || []).slice(-4).reverse(),
@@ -2293,6 +2556,7 @@ function agentBoard(d) {
     ok: true, at: now(),
     company: { enabled: cfg.global.enabled, paused: cfg.global.paused, model: cfg.global.model, monthTokens: companyMonthTokens(), monthCostUsd: +Object.values(load("usage")[monthKey()] || {}).reduce((s2, u) => s2 + (u.costUsd || 0), 0).toFixed(2), limit: cfg.global.tokensPerMonth },
     usage: usageSummary(),
+    attention: attention().slice(0, 12),
     projects,
     tasks: tasks.slice(-80).reverse().map((t) => ({ id: t.id, title: t.title, projectId: t.projectId, project: projectOf(t.projectId)?.name || "", type: label(t.type), status: t.status, source: t.source, by: t.createdBy || "", createdAt: t.createdAt, finishedAt: t.finishedAt || null,
       summary: clip(t.result?.summary || t.proposal?.summary || t.error || "", 240), held: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null, tokens: t.usage?.total || 0, costUsd: t.usage?.costUsd || 0, findings: (t.result?.findings || []).length, device: devName(t.deviceId), mine: t.deviceId === d.id })),
@@ -2549,6 +2813,7 @@ export async function agentOpsPost(req, body) {
     case "knowledge": return knowledgeEdit(admin, body || {});
     case "roster": return rosterEdit(admin, body || {});
     case "seodata": return seoDataEdit(admin, body || {});
+    case "alerts": return alertsEdit(admin, body || {});
     case "report": return reportGet(body || {});
     case "work": return workEdit(admin, body || {});
     case "logos": return logosGet(body || {});

@@ -198,6 +198,7 @@
     <button data-v="overview" class="on"><svg viewBox="0 0 24 24"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span class="t">Overview</span></button>
     <button data-v="projects"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="t">Projects</span></button>
     <button data-v="tasks"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg><span class="t">Tasks</span><span class="n vhide" id="navApprove"></span></button>
+    <button data-v="alerts" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0112 0c0 6 2 7 2 7H4s2-1 2-7z"/><path d="M10 20a2 2 0 004 0"/></svg><span class="t">Alerts</span><span class="n vhide" id="navAlerts"></span></button>
     <button data-v="chat" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg><span class="t">Chat</span></button>
     <button data-v="knowledge" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 012 2v13a2 2 0 00-2-2H4z"/><path d="M20 5h-6a2 2 0 00-2 2v13a2 2 0 012-2h6z"/></svg><span class="t">Knowledge</span></button>
     <button data-v="playbooks" class="vhide" data-manage><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M5 17a3 3 0 013-3h11"/></svg><span class="t">Playbooks</span></button>
@@ -234,6 +235,10 @@
     <div class="view van on" id="v-overview">
       <div class="vgrid g2">
         <div class="stack">
+          <section class="card vhide" id="needCard">
+            <h2>Needs a person</h2>
+            <div id="needBox"></div>
+          </section>
           <section class="card" id="nowCard">
             <h2>Now</h2>
             <div id="now"></div>
@@ -441,9 +446,9 @@
   const say = (id, text, cls) => { const el = $(id); el.textContent = text || ""; el.className = "msg " + (cls || ""); };
   const STATUS = { queued: "Waiting", approved: "Approved, waiting", running: "Running", needs_approval: "Needs approval", done: "Done", failed: "Failed", stopped: "Stopped", cancelled: "Cancelled", released: "Returned to queue" };
   const PILL = { working: "Working", idle: "Idle, waiting for work", paused: "Paused", blocked: "Blocked", offline: "Cannot reach the CRM", setup: "Not connected yet", stopped: "Agent not running" };
-  const PAGES = { overview: ["Overview", "What the agent is doing on this computer"], projects: ["Projects", "Chat, directions, token limits and working limits for each project"], tasks: ["Tasks", "Give the agent work, approve it, see what it found"], chat: ["Chat", "Talk to the agent about a project"], knowledge: ["Knowledge", "Documents the agent studies and applies to every project"], playbooks: ["Playbooks", "The instructions the agent follows for each kind of task"], keys: ["API keys", "The Claude keys the agent works with"], activity: ["Activity", "The agent's own log on this computer"], settings: ["Settings", "Connection, this computer's key, Chrome IDs"] };
+  const PAGES = { overview: ["Overview", "What the agent is doing on this computer"], projects: ["Projects", "Chat, directions, token limits and working limits for each project"], tasks: ["Tasks", "Give the agent work, approve it, see what it found"], alerts: ["Alerts", "What needs a person, email alerts, time zone and working hours"], chat: ["Chat", "Talk to the agent about a project"], knowledge: ["Knowledge", "Documents the agent studies and applies to every project"], playbooks: ["Playbooks", "The instructions the agent follows for each kind of task"], keys: ["API keys", "The Claude keys the agent works with"], activity: ["Activity", "The agent's own log on this computer"], settings: ["Settings", "Connection, this computer's key, Chrome IDs"] };
   /* which of the management screens (the same ones the CRM shows) a sidebar entry opens */
-  const MANAGE = { projects: "limits", tasks: "tasks", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", keys: "api" }, BACK = { limits: "projects", tasks: "tasks", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", api: "keys" };
+  const MANAGE = { projects: "limits", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", keys: "api" }, BACK = { limits: "projects", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", api: "keys" };
   let updAsked = 0;      // when "Sync for update" was last pressed in this window
   let mgr = null, manageKnown = null, navTick = 0;      // navTick moves every time a sidebar entry is pressed, so pressing Projects again returns to the list of projects
   const canManage = () => !!(last && last.manage && window.SerpSquadManage);
@@ -627,12 +632,23 @@
     }
     h += "</div>";
     if (u.projects.length) h += '<div class="prov"><div class="provhead"><b>By project this month</b><span>highest cost first</span></div>' + u.projects.map((x) => '<div class="row"><span>' + esc(x.name) + "</span><span>" + fmtTok(x.tokens) + " tokens · " + usd(x.costUsd) + (x.seoCalls ? " · DataForSEO " + usd4(x.seoUsd) : "") + "</span></div>").join("") + "</div>";
-    h += '<div class="hint" style="margin:12px 0 0">Token counts are the ones Claude returns with every call. The Claude cost is an estimate from list prices; the invoice is in the Claude Console. DataForSEO amounts are the ones it states with each answer.</div>';
+    h += '<div class="hint" style="margin:12px 0 0">Token counts are the ones Claude returns with every call. The Claude cost is an estimate from list prices; the invoice is in the Claude Console. DataForSEO amounts are the ones it states with each answer. Days and months are the agency\'s (its time zone is set under Alerts).</div>';
     $("usageBox").innerHTML = h;
+  }
+  /* what is waiting for a person, as the CRM works it out (approvals, failed tasks, limits, sign-ins, a website that does not answer) */
+  function renderNeeds(b) {
+    const list = (b && b.attention) || [], act = list.filter((x) => x.level === "act").length;
+    $("needCard").classList.toggle("vhide", !list.length);
+    const badge = $("navAlerts"); badge.textContent = act || ""; badge.classList.toggle("vhide", !act);
+    if (!list.length) return;
+    $("needBox").innerHTML = list.slice(0, 6).map((x) => '<div class="note"><div style="display:flex;gap:8px;align-items:flex-start"><span style="margin-top:6px;flex:none;width:8px;height:8px;border-radius:50%;background:' + (x.level === "act" ? "#DC2626" : "#D97706") + '"></span><div style="min-width:0"><b style="font-weight:600">' + esc(x.title) + "</b>" + (x.detail ? '<div class="hint" style="margin:2px 0 0">' + esc(x.detail) + "</div>" : "") + "</div></div></div>").join("")
+      + (list.length > 6 ? '<div class="hint" style="margin:8px 0 0">And ' + (list.length - 6) + " more.</div>" : "")
+      + '<div class="btns" style="margin-top:10px">' + (canManage() ? '<button class="b" data-go="alerts">Open Alerts</button>' : '<span class="hint" style="margin:0">Open the CRM, AI agent, Alerts to act on these.</span>') + "</div>";
   }
   function renderBoard() {
     const b = board, now = last ? last.now : Date.now();
     renderBot();
+    renderNeeds(b);
     renderUsage(b);
     const bad = b && b.ok === false ? (b.detail || "The project list could not be loaded.") : "";
     ["boardMsgP", "boardMsgT"].forEach((id) => { $(id).textContent = bad; $(id).classList.toggle("vhide", !bad || (last && !last.configured)); });
