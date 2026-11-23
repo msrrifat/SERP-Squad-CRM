@@ -809,10 +809,9 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   };
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)],
-    ["resources", "Resources", FolderInput, `${project.resources || 0} media source${project.resources === 1 ? "" : "s"}${project.repo ? " · code repository" : ""}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
+    ["resources", "Resources", FolderInput, `${project.resources || 0} photo and media source${project.resources === 1 ? "" : "s"}${project.repo ? " · code repository" : ""}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
     ["visibility", "AI search", Sparkles, project.visibility ? `named in ${project.visibility.share}% of ${project.visibility.asked} answers` : "not checked yet"],
-    ["photos", "Photos", ImageIcon, `${project.photos || 0} photo${project.photos === 1 ? "" : "s"} to publish`],
     ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`],
     ["report", "Report", ClipboardList, `${project.workItems || 0} thing${project.workItems === 1 ? "" : "s"} done`]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
@@ -1006,7 +1005,6 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
       {tab === "resources" && <Resources key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "visibility" && <AiVisibility key={project.id} project={project} accent={accent} reload={reload} onOpenTask={onOpenTask} />}
-      {tab === "photos" && <Photos key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "experience" && <ProjectStatus key={"st" + project.id} project={project} accent={accent} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
       {tab === "report" && <Reports key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} reload={reload} />}
@@ -2128,10 +2126,10 @@ function Resources({ project, accent, reload }) {
     <div className="space-y-4">
       <Card className="p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div className="text-[13.5px] font-semibold text-gray-900">Pictures, video and other media for {project.name}</div>
+          <div className="text-[13.5px] font-semibold text-gray-900">Photos, video and other media for {project.name}</div>
           <Chip>{v.sources.length} of {v.max}</Chip>
         </div>
-        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Point the agent at the folders that hold this client's media: a folder on the agent's computer, or a Google Drive folder shared with "Anyone with the link". It uses them for blog posts, page work, Business Profile photos and the pictures in link-building content. For each one, say what it is for and what it must not be used for: the agent is given those notes with every task and looks at a picture before it chooses it. The files stay where they are; only the place and your notes are kept in the CRM.</div>
+        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Nothing is uploaded here. Point the agent at the folders that hold this client's photos and media: a folder on the agent's computer, or a Google Drive folder shared with "Anyone with the link". It uses them for blog posts, page work, Business Profile photos and the pictures in link-building content. For each one, say what it is for and what it must not be used for: the agent is given those notes with every task and looks at a picture before it chooses it. The files stay where they are; only the place and your notes are kept in the CRM.</div>
         {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
         {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
         <div className="mt-3 space-y-3">
@@ -2193,6 +2191,8 @@ function Resources({ project, accent, reload }) {
           </div>
         )}
       </Card>
+
+      {(project.photos || 0) > 0 && <Photos key={"ph" + project.id} project={project} accent={accent} reload={reload} />}
 
       <Card className="p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -2526,28 +2526,12 @@ function AiVisibility({ project, accent, reload, onOpenTask }) {
     </div>
   );
 }
-/* ---------------- photos the agent may publish for a project ---------------- */
-/* a picture is made smaller in the browser before it is sent: the long side at most `max` pixels, as a JPEG */
-function shrinkImage(file, max, quality) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file), img = new window.Image();
-    img.onload = () => {
-      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight)), w = Math.max(1, Math.round(img.naturalWidth * k)), h = Math.max(1, Math.round(img.naturalHeight * k));
-      const c = document.createElement("canvas"); c.width = w; c.height = h;
-      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      resolve(c.toDataURL("image/jpeg", quality));
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`${file.name} could not be read as a picture.`)); };
-    img.src = url;
-  });
-}
+/* ---------------- photos uploaded to the CRM before pictures came from folders and Drive links (Resources) ---------------- */
 function Photos({ project, accent, reload }) {
   const [state, setState] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [big, setBig] = useState(null);
-  const pick = useRef(null);
   const run = useCallback(async (body, doing = "") => {
     setBusy(doing || "working"); setErr("");
     try { const o = await api("media", { projectId: project.id, ...body }); if (o.photos) setState(o); return o; }
@@ -2555,31 +2539,17 @@ function Photos({ project, accent, reload }) {
     finally { setBusy(""); }
   }, [project.id]);
   useEffect(() => { run({ action: "list" }); }, [run]);
-  const add = async (files) => {
-    let added = 0;
-    for (const f of [...files].slice(0, 12)) {
-      if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { setErr(`${f.name} is not a JPEG, PNG or WebP picture.`); continue; }
-      try {
-        const dataUrl = await shrinkImage(f, 2000, 0.86), thumb = await shrinkImage(f, 220, 0.7);
-        if (await run({ action: "add", name: f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").slice(0, 80), dataUrl, thumb }, `Adding ${f.name}…`)) added += 1;
-      } catch (e) { setErr(String(e.message || e)); }
-    }
-    if (added && reload) reload();
-  };
   const photos = state?.photos || [];
   return (
     <Card className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-[220px] flex-1">
-          <div className="text-[13.5px] font-semibold text-gray-900">Photos the agent may publish</div>
-          <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Real photos of this client's work, team, vehicles or premises. When the agent publishes a Business Profile post (or anything else that takes a picture) it chooses one that fits and was not used recently, and attaches it. It can upload these and nothing else from its computer. Say what each photo shows: the agent only knows the name and your note.</div>
+          <div className="text-[13.5px] font-semibold text-gray-900">Photos uploaded to the CRM earlier</div>
+          <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Photos are no longer uploaded: the agent takes them from the folders and Google Drive links above. These were uploaded before that and the agent may still use them, with the note under each telling it what the photo shows. Remove the ones you no longer want used; when the last one is removed this list disappears.</div>
         </div>
-        <input ref={pick} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" aria-label="Choose photos to add" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
-        <Btn accent={accent} disabled={!!busy || photos.length >= (state?.max || 60)} onClick={() => pick.current?.click()}><Upload size={13} /> Add photos</Btn>
       </div>
       {busy && busy !== "working" && <div className="mt-2 text-[12px] text-gray-500">{busy}</div>}
       {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
-      {state && !photos.length && <div className="mt-3 rounded-lg border border-dashed border-gray-300 px-4 py-6 text-center text-[12.5px] text-gray-500">No photos yet. Without one the agent publishes posts with text only and says so in its report.</div>}
       {photos.length > 0 && (
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {photos.map((x) => (
@@ -2599,7 +2569,7 @@ function Photos({ project, accent, reload }) {
           ))}
         </div>
       )}
-      {state && <div className="mt-3 text-[11px] text-gray-400">{photos.length} of {state.max} photos. Each is made smaller in your browser before it is sent (long side 2,000 pixels).</div>}
+      {state && <div className="mt-3 text-[11px] text-gray-400">{photos.length} photo{photos.length === 1 ? "" : "s"} uploaded earlier.</div>}
       {big && <Modal title={big.name} onClose={() => setBig(null)}><img src={big.dataUrl} alt={big.note || big.name} className="mx-auto max-h-[70vh] rounded-lg" />{big.note && <div className="mt-2 text-[12.5px] text-gray-600">{big.note}</div>}</Modal>}
     </Card>
   );

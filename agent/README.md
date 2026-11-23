@@ -262,17 +262,20 @@ with no names and no costs.
 
 ## Photos, seeing a page as a picture, and proof
 
-- **Photos.** Each project has its own photos (Work setup, **Photos**): real
-  pictures of the client's work, team or premises, each with a note on what
-  it shows. They are made smaller in the browser before they are sent (long
-  side 2,000 pixels, 2 MB at most, 60 per project). The agent lists them
-  with the `photos` tool and attaches one with `browser_upload`, giving the
-  number of the page's file field or of the button that opens the file
-  chooser. The program answers the chooser itself, so no window opens on the
-  screen. The device fetches that one file for that one task and removes it
-  when the task ends. Nothing else on the computer can be uploaded, and
-  nothing is uploaded in a run that only looks. The photo records which task
-  used it, so the agent can avoid repeating one.
+- **Photos.** Photos are not uploaded to the CRM any more. A project's
+  photos are a folder on this computer or a Google Drive folder shared by
+  link, listed under Work setup, **Resources** with a note on what they are
+  for (see "Media sources" below). The agent lists a source with
+  `resources_list`, looks at a candidate with `resource_look`, and attaches
+  it with `browser_upload` (source and file), giving the number of the
+  page's file field or of the button that opens the file chooser. The
+  program answers the chooser itself, so no window opens on the screen.
+  Nothing outside the listed sources can be attached, and nothing is
+  attached in a run that only looks. The agent keeps a list of the pictures
+  it published in the project's working folder (`media-used.md`) so it does
+  not repeat one. Photos that were uploaded before 24 Nov 2026 stay usable
+  (the `photos` tool, `browser_upload` with `photo_id`) and are shown under
+  Resources until they are removed.
 - **Seeing a page.** `browser_look` returns the visible page as a JPEG next
   to the tool's answer, for the times the text reading is not enough (a
   visual editor, a photo, a layout). It costs more tokens than a reading, and
@@ -753,6 +756,11 @@ text that contains something that looks like a password or a key is not
 saved.
 
 ## Media sources (the Resources tab)
+
+Photos are not uploaded to the CRM. The Photos tab of earlier versions is
+gone: a project's photos are a folder or a Drive folder listed here. Photos
+that were uploaded before stay usable (the `photos` tool, `browser_upload`
+with `photo_id`) and are shown under the sources until they are removed.
 
 In the CRM, Work setup, Resources lists where a project's pictures, video
 and other media are: a folder on this computer, or a Google Drive folder

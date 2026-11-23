@@ -2577,7 +2577,7 @@ const SERVER_TOOLS = [
     const sum = visRunSummary(run);
     return { ok: true, logged: results.length, namedIn: `${sum.named} of ${sum.asked}`, sharePercent: sum.share, ...(off ? { note: `${off} result${off === 1 ? " was" : "s were"} for a question that is not on the project's list. They are kept, but the list is what makes checks comparable.` } : {}) };
   }),
-  tool("photos", "List the photos the team uploaded for this project, which you may attach to a post or a profile (browser_upload takes a photo's id). Each has a name, the team's note on what it shows, and when it was last used. Choose one that fits what you are writing about and was not used recently. If the list is empty, publish without a photo and say so in the report.", {}, [], (ctx) => {
+  tool("photos", "List the photos that were uploaded to the CRM for this project in the past (new photos are not uploaded any more: they are in the project's media sources, see resources_list). You may attach one to a post or a profile (browser_upload takes a photo's id). Each has a name, the team's note on what it shows, and when it was last used. Choose one that fits what you are writing about and was not used recently. If the list is empty, publish without a photo and say so in the report.", {}, [], (ctx) => {
     if (ctx.task.projectId === AGENCY_PROJECT) return { photos: [] };
     return { photos: photosOf(ctx.task.projectId).map((x) => ({ id: x.id, name: x.name, whatItShows: x.note || "(no note)", added: new Date(x.addedAt).toISOString().slice(0, 10), timesUsed: (x.used || []).length, lastUsed: (x.used || []).length ? new Date(x.used[x.used.length - 1].at).toISOString().slice(0, 10) : "never" })) };
   }),
