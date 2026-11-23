@@ -27,8 +27,16 @@ final class ToolBox {
     private final CrmClient crm;
     private final SyncStore store;
     private final Browser browser;          // null when this task type has none
-    private final boolean browserReadOnly;  // a run that only looks: the proposal before an approval, or any check in a signed-in window
+    private boolean browserReadOnly;        // a run that only looks: the proposal before an approval, or any check in a signed-in window
     private final boolean canRequestApproval;
+    /**
+     * "Act without asking" with the second check on: the run starts as one that
+     * only looks, the agent hands in its exact plan, an independent check
+     * reads it, and only when that passes may this same run act. When it does
+     * not pass, the plan goes to a person instead.
+     */
+    private final boolean checkedAuto;
+    private boolean cleared = false;
     private final Path shotsDir;
     private final List<String> crmToolNames = new ArrayList<>();
 
@@ -44,7 +52,8 @@ final class ToolBox {
         boolean write = task.path("write").asBoolean(false);
         boolean ask = "ask".equals(task.path("approval").asText(""));
         boolean execute = "execute".equals(task.path("phase").asText(""));
-        this.canRequestApproval = write && ask && !execute;
+        this.checkedAuto = write && !ask && !execute && "auto".equals(task.path("approval").asText("")) && task.path("secondCheck").path("on").asBoolean(false);
+        this.canRequestApproval = (write && ask && !execute) || checkedAuto;
         /* In a Chrome window a person signed in to, only a task that is there to
            make a change (and, where approval is asked, has it) may type, choose
            or press a button that changes something. A check or an audit there
@@ -55,7 +64,17 @@ final class ToolBox {
         if (browser != null) browser.setLookOnly(browserReadOnly);
     }
 
-    boolean canRequestApproval() { return canRequestApproval; }
+    boolean canRequestApproval() { return canRequestApproval && !cleared; }
+
+    boolean checkedAuto() { return checkedAuto; }
+
+    /** The second check passed the plan: from here this run may act, on exactly that plan. */
+    void clearToAct() {
+        cleared = true;
+        approval = null;
+        browserReadOnly = false;
+        if (browser != null) browser.setLookOnly(false);
+    }
 
     boolean lookOnly() { return browser != null && browserReadOnly; }
 
@@ -117,13 +136,14 @@ final class ToolBox {
                 : "Click a numbered element from the latest page reading, then return the new page.", require(schema("ref", "integer", "The element number shown in square brackets."), "ref")));
             out.add(tool("browser_scroll", "Scroll the page and return what is now visible. On a long page the reading follows the scroll position.", require(schema("direction", "string", "down, up, top or bottom."), "direction")));
             out.add(tool("browser_back", "Go back one page.", schema()));
-            if (!browserReadOnly) {
+            if (!browserReadOnly || checkedAuto) {
                 out.add(tool("browser_type", "Type text into a numbered text field (replaces what is there). Never for passwords or codes.", require(schema("ref", "integer", "The element number.", "text", "string", "The text to enter.", "press_enter", "boolean", "Press Enter afterwards."), "ref", "text")));
                 out.add(tool("browser_select", "Choose an option in a numbered drop-down list by its visible text, then return the new page.", require(schema("ref", "integer", "The element number of the list.", "option", "string", "The option's text, as the page reading shows it."), "ref", "option")));
             }
         }
         if (canRequestApproval) {
-            out.add(tool("request_approval", "End the prepare phase: hand your exact proposal to a person. Nothing has been changed yet. Put the exact text or values to be applied in details, so they can be approved or edited.",
+            out.add(tool("request_approval", checkedAuto ? "Hand in your exact plan before changing anything. An independent second check reads it. If it passes, you are told so and carry out exactly that plan in this same run. If it does not, the plan goes to a person and this run ends. Put the exact text or values to be applied in details."
+                : "End the prepare phase: hand your exact proposal to a person. Nothing has been changed yet. Put the exact text or values to be applied in details, so they can be approved or edited.",
                 require(schema("summary", "string", "One or two sentences on what you propose.", "details", "string", "The exact content and steps to carry out once approved."), "summary", "details")));
         }
         ObjectNode fin = schema("summary", "string", "Two sentences: what you found or did.", "report", "string", "The full report in Markdown, conclusion first.");
@@ -150,6 +170,7 @@ final class ToolBox {
                     return new Outcome("Recorded. The task is complete.", false);
                 case "request_approval":
                     if (!canRequestApproval) return new Outcome("Approval is not part of this task. Use finish_task.", true);
+                    if (cleared) return new Outcome("Your plan was already checked and cleared. Carry it out, then call finish_task.", true);
                     approval = input;
                     return new Outcome("Sent for approval. Stop here.", false);
                 case "browser_open": return new Outcome(needBrowser().open(input.path("url").asText("")), false);

@@ -6037,7 +6037,12 @@ http.createServer(async (req, res) => {
   };
   if (req.method === "OPTIONS") { const px = PIXEL_ROUTES.includes((req.url || "").split("?")[0]); res.writeHead(204, px ? { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } : corsFor(req)); return res.end(); }
   const ip = req.socket.remoteAddress || "?";
-  if (rateLimited(ip, "all", 240, 60e3)) return send(429, { error: "rate_limited", detail: "Too many requests — slow down." });
+  /* The agent's computers have their own allowance: a working agent makes many
+     small calls (each step, each tool, each token report), and those must
+     neither be refused because a dashboard in the same office is busy nor
+     use up what that dashboard needs. Both are still counted per address. */
+  const fromAgent = (req.url || "").startsWith("/api/agentops/agent/");
+  if (rateLimited(ip, fromAgent ? "agent" : "all", fromAgent ? 600 : 240, 60e3)) return send(429, { error: "rate_limited", detail: "Too many requests — slow down." });
   if (req.url.startsWith("/api/auth/") && rateLimited(ip, "auth", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many authentication attempts — try again later." });
   if ((req.url === "/api/app/login" || req.url === "/api/app/2fa") && rateLimited(ip, "applogin", 20, 10 * 60e3)) return send(429, { error: "rate_limited", detail: "Too many sign-in attempts — try again in a few minutes." });
   if (req.url.startsWith("/api/pixel/verify") && rateLimited(ip, "pixel", 30, 60e3)) return send(429, { error: "rate_limited" });

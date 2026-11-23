@@ -16,6 +16,7 @@ const tok = () => { try { return localStorage.getItem("ss_token") || ""; } catch
    server, which forwards to the CRM with the device's token; the page proves
    itself with the header that application hands in. */
 let EXTRA_HEADERS = {};
+let SECOND_CHECK = true;      // whether a plan is read by a second check before the agent acts on it alone (company setting)
 const auth = () => ({ "X-SS-Token": tok(), ...EXTRA_HEADERS });
 async function api(path, body) {
   const r = await fetch("/api/agentops/" + path, body === undefined
@@ -130,6 +131,7 @@ export function AgentOpsSection({ company, app = null }) {
     return <Card className="p-6 text-[13px] text-gray-500">{err ? <span className="text-red-700">{app ? err : /forbidden|Admin/i.test(err) ? "The AI agent panel is for the owner and Admins." : err}</span> : "Loading the AI agent panel…"}</Card>;
   }
   const g = data.global;
+  SECOND_CHECK = g.secondCheck !== false;
   const needsApproval = data.tasks.filter((t) => t.status === "needs_approval").length;
   const attention = data.attention || [], waitingOnYou = attention.filter((x) => x.level === "act").length;
   const VIEWS = app ? [] : [["limits", "Projects & limits", Gauge], ["tasks", `Tasks${needsApproval ? ` (${needsApproval} to approve)` : ""}`, ListTodo], ["chat", "Chat", MessageSquare], ["alerts", `Alerts${waitingOnYou ? ` (${waitingOnYou})` : ""}`, Bell], ["devices", "Devices & updates", Monitor], ["knowledge", `Knowledge${data.knowledge?.docs ? ` (${data.knowledge.docs})` : ""}`, Library], ["api", "API setup", KeyRound], ["playbooks", "Playbooks", BookOpen]];
@@ -704,8 +706,11 @@ function TaskRow({ c, t, used, accent, models, agency, onChange, chan }) {
           </label>
         )}
         {t.mode !== "off" && c.write && (
-          <select aria-label="Approval" className={selCls} value={t.approval} onChange={(e) => onChange({ approval: e.target.value })} title="Ask first: the agent prepares the change and waits for your approval.">
-            <option value="ask">Ask before changing</option><option value="auto">Act without asking</option>
+          <select aria-label="Approval" className={selCls} value={t.approval} onChange={(e) => onChange({ approval: e.target.value })}
+            title={SECOND_CHECK ? "Ask first: the agent prepares the change and waits for your approval. Act after a second check: an independent check reads the exact plan; if it passes the agent carries it out, if not the plan comes to you." : "Ask first: the agent prepares the change and waits for your approval. The second check is switched off (API setup), so acting alone means with no check at all."}>
+            <option value="ask">Ask before changing</option>
+            <option value="auto">{SECOND_CHECK ? "Act after a second check" : "Act without asking"}</option>
+            {c.key === "gbp_review_reply" && <option value="auto_positive">{SECOND_CHECK ? "4 and 5 star reviews after a second check, ask for the rest" : "4 and 5 star reviews without asking, ask for the rest"}</option>}
           </select>
         )}
         {t.mode !== "off" && (
@@ -1604,10 +1609,17 @@ function TaskModal({ id, accent, act, onClose }) {
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
             <div className="flex items-center gap-1.5 text-[13px] font-semibold text-amber-900"><ShieldCheck size={15} /> The agent is asking for approval</div>
             <div className="mt-1 text-[12.5px] text-amber-900">{t.proposal?.summary}</div>
+            <CheckNote check={t.proposal?.check} />
             <div className="mt-2 text-[11px] text-amber-800">Nothing has been changed yet. Edit the text below if needed; the agent carries out exactly what you approve.</div>
             <textarea className={inputCls + " mt-2 h-40 font-mono text-[12px]"} value={details} onChange={(e) => setDetails(e.target.value)} />
             <input className={inputCls + " mt-2"} placeholder="Note to the agent (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
             <div className="mt-2 flex gap-2"><Btn accent="#15803D" onClick={() => doAct("approve", { details, note })}><Check size={13} /> Approve</Btn><Btn ghost danger onClick={() => doAct("reject", { note })}>Reject</Btn></div>
+          </div>
+        )}
+        {t.result?.check && !t.approval && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-emerald-900"><ShieldCheck size={15} /> Carried out without a person's approval, after the second check passed this plan</div>
+            <div className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-white/70 p-2 font-mono text-[12px] text-gray-800">{t.result.plan}</div>
           </div>
         )}
         {t.approval && <div className="text-[12px] text-gray-600">{t.approval.decision === "approved" ? "Approved" : "Rejected"} by {t.approval.by} {relTime(t.approval.at)}{t.approval.note ? `: ${t.approval.note}` : ""}</div>}
@@ -1971,6 +1983,37 @@ function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
   );
 }
 /* ---------------- live SEO data: DataForSEO, reached through its MCP server ---------------- */
+/* what the independent second check said about a plan */
+function CheckNote({ check }) {
+  if (!check) return null;
+  const tone = check.verdict === "pass" ? ["#ECFDF5", "#047857"] : check.verdict === "fail" ? ["#FEF2F2", "#B91C1C"] : ["#FFFBEB", "#92400E"];
+  return (
+    <div className="mt-2 rounded-lg px-3 py-2 text-[12px]" style={{ background: tone[0], color: tone[1] }}>
+      <div className="font-semibold">{check.verdict === "pass" ? "Second check: no problems found in this plan." : check.verdict === "fail" ? `Second check: ${check.issues?.length || "a"} problem${(check.issues?.length || 0) === 1 ? "" : "s"} found in this plan.` : "The second check could not be completed, so nothing was checked."}</div>
+      {(check.issues || []).length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{check.issues.map((x, i) => <li key={i}>{x.where ? <><span className="font-medium">{x.where}</span>: </> : null}{x.problem}</li>)}</ul>}
+      {check.verdict === "unchecked" && check.note && <div className="mt-0.5">{check.note}</div>}
+      <div className="mt-1 opacity-70">It reads the plan against the brand facts, the directions and the limits of this kind of task. It does not see the live page. The decision is yours.</div>
+    </div>
+  );
+}
+function SecondCheckCard({ data, accent, act, busy }) {
+  const g = data.global, on = g.secondCheck !== false;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><ShieldCheck size={15} style={{ color: accent }} /> Second check before a change</div>
+        <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={on} label="Second check before a change" onChange={(v) => act("config", { global: { secondCheck: v } })} /> {on ? "On" : "Off"}</label>
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Before a post, a review reply, a profile edit or a website change goes ahead, a separate Claude call reads the agent's exact plan against the client's business facts, the brand voice, your directions and the limits of that kind of task. Where a task type is set to <b>Ask before changing</b>, what it finds is shown with the proposal. Where it is set to <b>Act after a second check</b>, the agent only carries the plan out when the check passes; otherwise the plan comes to you. It costs one short call per plan and counts against the project's tokens.</div>
+      <div className="mt-3 flex flex-wrap items-center gap-3 text-[12.5px] text-gray-700">
+        <label className="flex items-center gap-2">Model for the check
+          <select className={selCls} aria-label="Model for the second check" disabled={busy || !on} value={g.checkModel || "claude-sonnet-5-5"} onChange={(e) => act("config", { global: { checkModel: e.target.value } })}>{data.models.map((m) => <option key={m.id} value={m.id} title={m.note}>{m.label}</option>)}</select>
+        </label>
+        {!on && <span className="text-[11.5px] text-amber-700">Off: a task type set to act alone does so with no check at all.</span>}
+      </div>
+    </Card>
+  );
+}
 function SeoDataCard({ data, accent, act, busy }) {
   const s = data.seoData || {};
   const [test, setTest] = useState(null);
@@ -2031,6 +2074,7 @@ function ApiSetupView({ data, accent, act, busy }) {
         </div>
       </Card>
 
+      <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
       <SeoDataCard data={data} accent={accent} act={act} busy={busy} />
 
       <Card className="p-4">

@@ -201,6 +201,40 @@ Company-wide: on/off, pause, default model and effort, and one token limit for
 all projects together. Live SEO data has its own company switch and monthly
 spend limit under API setup.
 
+## The second check, and acting without a person's approval
+
+Every task type that changes something live has an approval setting, per
+project (Projects, the project's page, Work setup):
+
+- **Ask before changing** (the default). The agent prepares the exact plan
+  and waits. With the second check on, what it found is shown with the
+  proposal.
+- **Act after a second check.** The run starts as one that only looks. The
+  agent hands in its exact plan with request_approval; a separate Claude
+  call (no tools, its own model, set under API setup) reads that plan
+  against the client's business facts, the brand voice, the manager's
+  directions and the limits of that kind of task. If it passes, the browser
+  is released and the same run carries out exactly that plan. If it does not
+  pass, or its answer cannot be read, nothing is changed and the plan goes
+  to a person with the problems found. A "pass" that still lists a problem
+  counts as a fail.
+- **4 and 5 star reviews after a second check, ask for the rest** (review
+  replies only). The run may answer only reviews of 4 or 5 stars; for lower
+  ones it queues a follow-up task that always asks a person, whatever the
+  setting.
+
+The check does not see the live page: it judges the plan, not the result.
+It costs one short call per plan, counted in the task's tokens. A change
+made without a person is kept with the plan that was passed, and the
+activity log says nobody approved it. The switch and the model are under
+API setup (**Second check before a change**). With the switch off, "act
+alone" means with no check at all, and the screens say so.
+
+Together with "starts by itself, every N days" on the same row, this is the
+autopilot: a Business Profile post every 7 days, replies to good reviews
+within a day (run the Business Profile guard daily), each one read by the
+second check first.
+
 ## Alerts, the agency's time zone, working hours and triggers
 
 All of it is set in the CRM (AI agent, **Alerts**) or in the application's

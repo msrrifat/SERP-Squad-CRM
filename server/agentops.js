@@ -78,7 +78,7 @@ export function initAgentOps(d) { deps = { ...deps, ...d }; }
 /* ---------- storage: one small JSON file per collection ---------- */
 const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC" }, projects: {}, playbooks: {} }),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5" }, projects: {}, playbooks: {} }),
   devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }),
 };
 const cache = {};
@@ -467,7 +467,7 @@ function taskSetting(pid, type) {
     per: PERIOD_MS[saved.per] ? saved.per : (d.per || "week"),
     auto: saved.auto == null ? !!d.auto : !!saved.auto,
     everyDays: num(saved.everyDays, 1, 90, d.everyDays || 7),
-    approval: saved.approval === "auto" || saved.approval === "ask" ? saved.approval : "ask",
+    approval: saved.approval === "auto" || saved.approval === "ask" || (saved.approval === "auto_positive" && type === "gbp_review_reply") ? saved.approval : "ask",
     model: MODELS.some((m) => m.id === saved.model) ? saved.model : "",
   };
 }
@@ -1420,7 +1420,7 @@ function tokenRoom(pid) {
 
 /* ---------- tasks ---------- */
 const ACTIVE = new Set(["queued", "approved", "running", "needs_approval"]);
-const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null });
+const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null, check: t.proposal?.check?.verdict || t.result?.check?.verdict || null });
 function createTask({ projectId, type, title, instructions, source, createdBy, reason }) {
   const cat = CATALOG_BY_KEY[type];
   if (!cat) return { error: "Unknown task type." };
@@ -1581,7 +1581,7 @@ function attention() {
   if (!cfg.global.enabled) return out;      // switched off: nothing is expected to happen, so nothing is asked of anyone
   for (const t of tasks) {
     const pn = name(t.projectId), ex = { projectId: t.projectId, project: pn, taskId: t.id };
-    if (t.status === "needs_approval") add("approval", "act", `approval:${t.id}:${t.proposal?.at || 0}`, `Approve or reject: "${t.title}"`, `${pn}. ${t.proposal?.summary || ""}`, { ...ex, at: t.proposal?.at || t.createdAt });
+    if (t.status === "needs_approval") add("approval", "act", `approval:${t.id}:${t.proposal?.at || 0}`, `Approve or reject: "${t.title}"`, `${pn}. ${t.proposal?.check?.verdict === "fail" ? `The second check found ${t.proposal.check.issues.length || "a"} problem${t.proposal.check.issues.length === 1 ? "" : "s"} in this plan. ` : ""}${t.proposal?.summary || ""}`, { ...ex, at: t.proposal?.at || t.createdAt });
     else if ((t.status === "failed" || t.status === "stopped") && now() - (t.finishedAt || 0) < 3 * 864e5) add("failed", t.interrupted ? "act" : "warn", `failed:${t.id}:${t.finishedAt || 0}`, t.interrupted ? `Check what is live, then run again: "${t.title}"` : `"${t.title}" ${t.status === "failed" ? "failed" : "was stopped"}`, `${pn}. ${t.error || ""}`, { ...ex, at: t.finishedAt });
   }
   /* work that has waited six hours for a reason only a person can remove (one line per reason and project) */
@@ -1980,7 +1980,7 @@ const SERVER_TOOLS = [
     if (holder) { holder.workLogged = (holder.workLogged || 0) + 1; save("tasks"); }
     return { ok: true, recorded: it.title, section: it.section };
   }),
-  tool("suggest_task", "Propose a follow-up task for this project (for example a rank-drop diagnosis for one keyword). It starts by itself only when that task type is open or within its working limit; otherwise it waits for a person.", { type: { type: "string", description: "Task type key, one of: " + CATALOG.filter((c) => !c.agencyOnly).map((c) => c.key).join(", ") }, title: { type: "string" }, instructions: { type: "string", description: "Exactly what to do, with the keyword, page or date it concerns." }, reason: { type: "string", description: "Why it is worth doing, in one sentence." } }, ["type", "title", "instructions"], (ctx, a) => {
+  tool("suggest_task", "Propose a follow-up task for this project (for example a rank-drop diagnosis for one keyword). It starts by itself only when that task type is open or within its working limit; otherwise it waits for a person.", { type: { type: "string", description: "Task type key, one of: " + CATALOG.filter((c) => !c.agencyOnly).map((c) => c.key).join(", ") }, title: { type: "string" }, instructions: { type: "string", description: "Exactly what to do, with the keyword, page or date it concerns." }, reason: { type: "string", description: "Why it is worth doing, in one sentence." }, needs_approval: { type: "boolean", description: "True when this follow-up must be approved by a person even where its task type is set to act alone." } }, ["type", "title", "instructions"], (ctx, a) => {
     const cat = CATALOG_BY_KEY[a.type];
     if (!cat || cat.agencyOnly) return { error: "Unknown task type key." };
     const open = load("tasks").filter((t) => t.projectId === ctx.task.projectId && t.source === "agent" && ACTIVE.has(t.status)).length;
@@ -1993,7 +1993,9 @@ const SERVER_TOOLS = [
     /* asked for in the chat = the person's own request, so it is queued in their name */
     const r = createTask({ projectId: ctx.task.projectId, type: a.type, title: a.title, instructions: a.instructions, reason: a.reason, source: ctx.chat ? "manual" : "agent", createdBy: ctx.chat ? `${ctx.chat.by} (chat)` : "AI agent" });
     if (r.error) return { error: r.error };
-    if (!ctx.chat) { r.task.depth = depth; save("tasks"); }
+    if (!ctx.chat) r.task.depth = depth;
+    if (a.needs_approval === true) r.task.askAlways = true;
+    save("tasks");
     if (!projectSetting(ctx.task.projectId).enabled) return { ok: true, queued: true, willStart: "no: the agent is not enabled for this project yet. A person has to switch on \"Agent works on this project\" in Projects & limits" };
     return { ok: true, queued: true, willStart: ts.mode === "open" ? "yes, this task type is open" : ts.mode === "limited" ? "when it fits the working limit" : "no, this task type is off for the project; a person has to switch it on in Projects & limits" };
   }),
@@ -2121,6 +2123,8 @@ function saveConfig(admin, body) {
     if (g.paused != null) cfg.global.paused = !!g.paused;
     if (g.model && MODELS.some((m) => m.id === g.model)) cfg.global.model = g.model;
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
+    if (g.secondCheck != null && !!g.secondCheck !== (cfg.global.secondCheck !== false)) { cfg.global.secondCheck = !!g.secondCheck; logActivity("settings", `${admin.name} switched the second check before a change ${cfg.global.secondCheck ? "on" : "off"}.`); }
+    if (g.checkModel && MODELS.some((m) => m.id === g.checkModel)) cfg.global.checkModel = g.checkModel;
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
     if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
     if (g.timeZone != null) {
@@ -2169,7 +2173,7 @@ function saveConfig(admin, body) {
         if (PERIOD_MS[s.per]) cur.per = s.per;
         if (s.auto != null) cur.auto = !!s.auto;
         if (s.everyDays != null) cur.everyDays = num(s.everyDays, 1, 90, 7);
-        if (s.approval === "ask" || s.approval === "auto") cur.approval = s.approval;
+        if (s.approval === "ask" || s.approval === "auto" || (s.approval === "auto_positive" && type === "gbp_review_reply")) cur.approval = s.approval;
         if (s.model != null) cur.model = MODELS.some((m) => m.id === s.model) ? s.model : "";
       }
     }
@@ -2412,7 +2416,9 @@ function agentClaim(d) {
     logActivity("task", `${d.name} started "${t.title}".`, { taskId: t.id, projectId: t.projectId });
     return [200, { ok: true, playbooksRev: cfg.playbooksRev, task: {
       id: t.id, projectId: t.projectId, projectName: p.name, clientName: p.client, type: t.type, label: cat.label, title: t.title, instructions: t.instructions, reason: t.reason || "",
-      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? ts.approval : "none",
+      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
+      ...(cat.write && !t.askAlways && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
+      ...(cat.write ? { secondCheck: { on: cfg.global.secondCheck !== false, model: MODELS.some((m) => m.id === cfg.global.checkModel) ? cfg.global.checkModel : "claude-sonnet-5-5" } } : {}),
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
       ...(again ? { interrupted: "An earlier run of this approved change was cut off, so part of it may already be live. Before changing anything, open the page or profile and check what is already there. Do only what is still missing, never the same thing twice, and say in the report what you found already done." } : {}),
@@ -2427,6 +2433,15 @@ function agentClaim(d) {
   }
   save("tasks");
   return [200, { ok: true, task: null, reason: firstReason || "Nothing is waiting." }];
+}
+/* what an "act alone, within limits" setting allows, told to the agent and to the second check alike */
+const POLICY = { auto_positive: { gbp_review_reply: "Only reviews of 4 or 5 stars may be answered in this run. Do not draft or post a reply to a review of 3 stars or fewer here. For those, call suggest_task once with type gbp_review_reply and needs_approval true, naming each such review (reviewer, date, stars, first words), so a person approves those replies. If no 4 or 5 star review is without a reply, finish without changing anything." } };
+/* the independent check a device ran on a plan before it was carried out or shown to a person */
+function cleanCheck(c) {
+  if (!c || typeof c !== "object") return null;
+  const verdict = ["pass", "fail"].includes(c.verdict) ? c.verdict : "unchecked";
+  const issues = (Array.isArray(c.issues) ? c.issues : []).slice(0, 6).map((x) => ({ where: clip(x?.where || "", 160), problem: clip(x?.problem || "", 400) })).filter((x) => x.problem);
+  return { verdict, issues, model: clip(c.model || "", 60), note: clip(c.note || "", 300), at: now() };
 }
 const myRunning = (d, id) => load("tasks").find((t) => t.id === id && t.status === "running" && t.deviceId === d.id) || null;
 /* one Claude call's tokens into the project's ledger (tasks and chat alike) */
@@ -2502,10 +2517,11 @@ function agentComplete(d, body) {
   t.silent = null;
   const findings = (Array.isArray(body.findings) ? body.findings : []).slice(0, 40).map((f) => ({ severity: ["high", "medium", "low", "info"].includes(f?.severity) ? f.severity : "info", title: clip(f?.title || "", 200), detail: clip(f?.detail || "", 1500), action: clip(f?.action || "", 600) })).filter((f) => f.title);
   if (st === "needs_approval") {
-    t.status = "needs_approval"; t.proposal = { summary: clip(body.summary || "", 600), details: clip(body.details || body.report || "", 12000), at: now() };
-    logActivity("approval", `"${t.title}" is waiting for approval.`, { taskId: t.id, projectId: t.projectId });
+    t.status = "needs_approval"; t.proposal = { summary: clip(body.summary || "", 600), details: clip(body.details || body.report || "", 12000), at: now(), check: cleanCheck(body.check) };
+    logActivity("approval", t.proposal.check?.verdict === "fail" ? `"${t.title}" is waiting for approval: the second check found ${t.proposal.check.issues.length || "a"} problem${t.proposal.check.issues.length === 1 ? "" : "s"} in the plan.` : `"${t.title}" is waiting for approval.`, { taskId: t.id, projectId: t.projectId });
   } else if (st === "done") {
-    t.status = "done"; t.finishedAt = now(); t.result = { summary: clip(body.summary || "", 800), report: clip(body.report || "", 60000), findings };
+    t.status = "done"; t.finishedAt = now(); t.result = { summary: clip(body.summary || "", 800), report: clip(body.report || "", 60000), findings, ...(cleanCheck(body.check) ? { check: cleanCheck(body.check), plan: clip(body.plan || "", 12000) } : {}) };
+    if (t.result.check?.verdict === "pass" && !t.approval) logActivity("task", `"${t.title}" was carried out without a person's approval, after the second check passed its plan.`, { taskId: t.id, projectId: t.projectId });
     if (CATALOG_BY_KEY[t.type]?.report && t.projectId !== AGENCY_PROJECT) addWork(t.projectId, taskWork(t));
     logActivity("task", `${d.name} finished "${t.title}".`, { taskId: t.id, projectId: t.projectId });
   } else if (st === "released") {

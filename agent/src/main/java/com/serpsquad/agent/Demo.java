@@ -99,7 +99,7 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London");
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5");
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -338,6 +338,10 @@ final class Demo {
     private void seedTasks() {
         ObjectNode post = task("p1", "gbp_post", "Business Profile post: winter boiler servicing", "needs_approval", "manual", "You", 96, 17000, "");
         post.putObject("proposal").put("summary", "One post drafted about winter boiler servicing.").put("details", "Post text:\nIs your boiler ready for winter? Northgate's Gas Safe engineers service boilers across Leeds, with same-week appointments and a clear fixed price before any work starts. Call us today for emergency and boiler repairs, 24 hours a day.\n\nButton: Call now\nLink: https://northgateplumbing.example/boiler-servicing/").put("at", System.currentTimeMillis() - 94 * MIN);
+        /* what the second check found in that plan, the way a real one is shown */
+        ObjectNode demoCheck = ((ObjectNode) post.get("proposal")).putObject("check");
+        demoCheck.put("verdict", "fail").put("model", "claude-sonnet-5-5");
+        demoCheck.putArray("issues").addObject().put("where", "a clear fixed price before any work starts").put("problem", "The business facts do not say that prices are fixed before work starts, so this promise is not supported.");
         task("p2", "content_brief", "Brief: emergency dentist page", "queued", "agent", "AI agent", 58, 0, "").put("reason", "Seven striking-distance queries point to it.");
         task("p2", "gbp_review_reply", "Reply to three new reviews", "queued", "manual", "You (chat)", 44, 0, "");
         task("p6", "competitor_watch", "Competitor watch", "queued", "auto", "schedule", 30, 0, "");
@@ -1340,7 +1344,7 @@ final class Demo {
         switch (p) {
             case "config": {
                 if (body.path("global").isObject()) {
-                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone");
+                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel");
                     if (body.path("global").path("alerts").isObject()) alerts.setAll((ObjectNode) body.path("global").path("alerts"));
                     if (body.path("global").path("workHours").isObject()) workHours.setAll((ObjectNode) body.path("global").path("workHours"));
                 }
