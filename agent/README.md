@@ -399,6 +399,30 @@ and never sent to a browser, to this program or to Claude.
 | Live SEO data (`seo_data_*`: search results, keyword volumes, competitors' keywords, backlinks, on-page checks, listings) | CRM server, which asks DataForSEO's MCP server | Only when switched on in the CRM. Paid per request, inside the project's and the company's spend limits |
 | Browser (open, read, click, type, scroll, back) | This computer's Chrome | Pages are read as text with numbered elements |
 
+### Business Profile rules
+
+In the CRM, Work setup has a **Business Profile** tab: the project's
+profiles, their tasks, and one rule for each kind of change on a profile
+(business name, address and service area, phone, website and booking links,
+hours, special hours, categories, description, services, products, photos,
+posts, review replies, questions and answers, attributes). Each rule is
+**Not allowed**, **Only with my approval** or **Allowed**, with an optional
+note on how that part may be changed. Name, address, phone and categories
+start as not allowed; website and hours as only with approval.
+
+- The rules are part of the work setup every Business Profile task receives,
+  and the second check reads them with the plan.
+- The CRM itself does not start a task whose whole purpose is not allowed
+  (posts, review replies, or edits when every kind of edit is not allowed).
+- Where posts or review replies need approval, the CRM hands the task out as
+  one that asks a person, whatever the task type is set to. A profile edit
+  task acts alone only when some part is plainly allowed and the second
+  check is on; a part that needs approval is then stopped by the second
+  check, which sends the plan to a person.
+- Not allowed and approval for single fields inside one edit rest on the
+  agent's instructions and the second check reading the plan. The program
+  does not recognise which field of Google's editor a click belongs to.
+
 ### Chrome IDs and working channels
 
 A **Chrome ID** (for example `CH-7K2Q`) is a separate Chrome profile under

@@ -556,9 +556,55 @@ function cleanChannels(c = {}) {
     social: (Array.isArray(c.social) ? c.social : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("so_").slice(0, 11), platform: oneOf(x?.platform, SOCIAL_PLATFORMS.map((p) => p.key), "facebook"), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.link),
   };
 }
+/* ---------- Business Profile rules ----------
+   One rule per kind of change on a Google Business Profile: not allowed, only
+   with a person's approval of the exact change, or allowed (the task type's
+   own approval setting then decides). A note beside a part limits how that
+   part may be changed. The name, address, phone number and categories start
+   as "not allowed": a wrong edit there can send the profile into Google's
+   re-verification. The website and the hours start as "only with approval".
+   These rules are given to every Business Profile task and to the second
+   check, block a task type whose whole purpose is not allowed, and force a
+   person's approval where a part asks for it. */
+const GBP_PARTS = [["name", "Business name"], ["address", "Address and service area"], ["phone", "Phone number"], ["website", "Website address and booking links"], ["hours", "Business hours"], ["specialHours", "Special hours (holidays)"],
+  ["categories", "Categories"], ["description", "Business description"], ["services", "Services and their descriptions"], ["products", "Products"], ["photos", "Photos and videos"], ["posts", "Posts"], ["reviews", "Review replies"],
+  ["qa", "Questions and answers"], ["attributes", "Attributes (payment, accessibility and the like)"]];
+const GBP_START = { name: "never", address: "never", phone: "never", categories: "never", website: "ask", hours: "ask", specialHours: "ask" };
+const GBP_MODES = ["never", "ask", "allowed"];
+/* the parts a "Business Profile edits" task changes (posts and review replies have task types of their own) */
+const GBP_EDIT = GBP_PARTS.map(([k]) => k).filter((k) => k !== "posts" && k !== "reviews");
+function cleanGbpRules(g, off = {}) {
+  const had = g && typeof g === "object", x = had ? g : {};
+  return {
+    parts: Object.fromEntries(GBP_PARTS.map(([k]) => [k, { mode: oneOf(x.parts?.[k]?.mode, GBP_MODES, !had && k === "reviews" && off.reviewReplies === "none" ? "never" : GBP_START[k] || "allowed"), note: line(x.parts?.[k]?.note, 300) }])),
+    /* which reviews, and how many posts: these two limits were kept with the off-page rules before the Business Profile had its own */
+    reviewReplies: oneOf(x.reviewReplies ?? (off.reviewReplies === "positive" ? "positive" : "all"), ["all", "positive"], "all"),
+    postsPerWeek: num(x.postsPerWeek ?? off.postsPerWeek, 0, 50, 1),
+    notes: lines(x.notes, 1500),
+  };
+}
+/* does this kind of Business Profile task need a person's approval because of the rules, whatever its own setting says? */
+function gbpNeedsPerson(pid, type) {
+  if (pid === AGENCY_PROJECT || !["gbp_post", "gbp_review_reply", "gbp_update"].includes(type)) return false;
+  const g = rulesOf(pid).gbp.parts;
+  if (type === "gbp_post") return g.posts.mode === "ask";
+  if (type === "gbp_review_reply") return g.reviews.mode === "ask";
+  const modes = GBP_EDIT.map((k) => g[k].mode);
+  /* an edit run may act alone only on parts that are allowed; with the second check off nothing would stop it at a part that asks for approval */
+  return !modes.includes("allowed") || (modes.includes("ask") && load("config").global.secondCheck === false);
+}
+function gbpBlocked(pid, type) {
+  if (pid === AGENCY_PROJECT) return "";
+  const g = rulesOf(pid).gbp.parts;
+  if (type === "gbp_post" && g.posts.mode === "never") return "Posts are set to \"Not allowed\" in this project's Business Profile rules.";
+  if (type === "gbp_review_reply" && g.reviews.mode === "never") return "Review replies are set to \"Not allowed\" in this project's Business Profile rules.";
+  if (type === "gbp_update" && GBP_EDIT.every((k) => g[k].mode === "never")) return "Every kind of profile edit is set to \"Not allowed\" in this project's Business Profile rules.";
+  return "";
+}
 function cleanRules(r = {}) {
   const on = r.onpage || {}, off = r.offpage || {}, so = r.social || {};
   return {
+    gbp: cleanGbpRules(r.gbp, off),
     onpage: { siteChanges: oneOf(on.siteChanges, ["never", "approval"], "never"), maxPagesPerWeek: num(on.maxPagesPerWeek, 0, 200, 3), wordsMin: num(on.wordsMin, 0, 20000, 0), wordsMax: num(on.wordsMax, 0, 20000, 0), language: line(on.language, 80), protectedUrls: lines(on.protectedUrls), notes: lines(on.notes, 1500) },
     offpage: { reviewReplies: oneOf(off.reviewReplies, ["all", "positive", "none"], "all"), postsPerWeek: num(off.postsPerWeek, 0, 50, 1), outreachPerMonth: num(off.outreachPerMonth, 0, 500, 10), senderName: line(off.senderName, 120), excludedDomains: lines(off.excludedDomains), notes: lines(off.notes, 1500) },
     social: { postsPerWeek: num(so.postsPerWeek, 0, 100, 3), hashtags: oneOf(so.hashtags, ["none", "few", "many"], "few"), tone: line(so.tone, 200), avoidTopics: lines(so.avoidTopics, 1000), notes: lines(so.notes, 1500) },
@@ -606,7 +652,7 @@ function browserFor(pid, cat) {
 }
 const platformLabel = (k) => SOCIAL_PLATFORMS.find((p) => p.key === k)?.label || k;
 /* what the agent is told about where and how to work, for one area of work */
-function setupLines(pid, area) {
+function setupLines(pid, area, profile = false) {
   const ch = channelsOf(pid), r = rulesOf(pid), out = [];
   if (ch.website.url) out.push(`Website: ${ch.website.url}${ch.website.cms ? ` (${ch.website.cms})` : ""}${ch.website.note ? `. ${ch.website.note}` : ""}`);
   if (area === "offpage" || area === "general") for (const g of ch.gbp) out.push(`Google Business Profile: ${g.name || g.link}${g.link && g.name ? ` (${g.link})` : ""}${g.note ? `. ${g.note}` : ""}`);
@@ -622,10 +668,20 @@ function setupLines(pid, area) {
     if (o.protectedUrls) out.push(`Protected pages, never propose or make changes to them: ${o.protectedUrls.split("\n").join(", ")}`);
     if (o.notes) out.push(`On-page notes: ${o.notes.split("\n").join(" ")}`);
   }
-  if (area === "offpage") {
+  if (profile) {
+    const g = r.gbp, by = (m) => GBP_PARTS.filter(([k]) => g.parts[k].mode === m).map(([, l]) => l);
+    out.push("Business Profile rules, one per kind of change on the profile. They hold for every task, whatever its instructions or an approved plan say.");
+    if (by("never").length) out.push(`NOT ALLOWED, never propose or make these changes (when a task asks for one, say that it is not allowed and leave it): ${by("never").join("; ")}.`);
+    if (by("ask").length) out.push(`ONLY WITH A PERSON'S APPROVAL of the exact change, never in a run that acts alone (a second check does not pass a plan that includes one, so that a person decides): ${by("ask").join("; ")}.`);
+    if (by("allowed").length) out.push(`Allowed, within the approval setting of the task: ${by("allowed").join("; ")}.`);
+    for (const [k, l] of GBP_PARTS) if (g.parts[k].note) out.push(`${l}, the manager's note: ${g.parts[k].note}`);
+    out.push(g.parts.reviews.mode === "never" ? "Do not draft review replies." : g.reviewReplies === "positive" ? "Draft replies to reviews of four and five stars only; flag lower ratings for a person." : "Draft replies to every new review; negative ones need extra care.");
+    if (g.postsPerWeek && g.parts.posts.mode !== "never") out.push(`At most ${g.postsPerWeek} Business Profile post(s) per week.`);
+    if (g.notes) out.push(`Business Profile notes: ${g.notes.split("\n").join(" ")}`);
+    if (r.offpage.notes) out.push(`Off-page notes: ${r.offpage.notes.split("\n").join(" ")}`);      // written before the profile had rules of its own, and often about it
+  }
+  if (area === "offpage" && !profile) {
     const o = r.offpage;
-    out.push(o.reviewReplies === "none" ? "Do not draft review replies." : o.reviewReplies === "positive" ? "Draft replies to reviews of four and five stars only; flag lower ratings for a person." : "Draft replies to every new review; negative ones need extra care.");
-    if (o.postsPerWeek) out.push(`At most ${o.postsPerWeek} Business Profile post(s) per week.`);
     out.push(`Outreach: at most ${o.outreachPerMonth} prospect(s) per month; drafts only, a person sends.${o.senderName ? ` Sign emails as ${o.senderName}.` : ""}`);
     if (o.excludedDomains) out.push(`Never propose links from or contact: ${o.excludedDomains.split("\n").join(", ")}`);
     if (o.notes) out.push(`Off-page notes: ${o.notes.split("\n").join(" ")}`);
@@ -1517,6 +1573,7 @@ function blockOf(t, device) {
   if (t.retryAt && now() < t.retryAt) return `The last run failed (${cut(t.lastError || "no reason given", 140)}). It is tried once more in ${Math.max(1, Math.ceil((t.retryAt - now()) / 60e3))} minute${Math.ceil((t.retryAt - now()) / 60e3) === 1 ? "" : "s"}.`;
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
+  if (cat.channel === "gbp") { const no = gbpBlocked(t.projectId, t.type); if (no) return no; }
   if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, ts.per) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
   if (t.source !== "manual" && t.phase !== "execute") { const off = offHours(); if (off) return off; }
   const room = tokenRoom(t.projectId);
@@ -2358,7 +2415,7 @@ const SERVER_TOOLS = [
       ranking: { ...rankSummary(rows), cities: [...new Set(rows.map((r) => r.city).filter(Boolean))].slice(0, 30) },
       biggestDrops7d: movers.slice(0, 15).map(rowOut), biggestGains7d: movers.slice(-10).reverse().map(rowOut),
       directionsFromTheManager: directionsOf(p.id).map((d) => d.text),
-      workSetup: Object.fromEntries(AREAS.map((a) => [a.label, setupLines(p.id, a.key)])),
+      workSetup: { ...Object.fromEntries(AREAS.map((a) => [a.label, setupLines(p.id, a.key)])), "Google Business Profile": setupLines(p.id, "offpage", true) },
       brandVoice: brandBlock(p.id, false) || "Nothing is set for this project's brand voice.",
       lessonsLearned: lessonsFor(p.id, ctx.task.type || null),
       agencyKnowledge: knowledgeBlock(CATALOG_BY_KEY[ctx.task.type]?.area || null) || "The agency has not added knowledge documents yet.",
@@ -2988,8 +3045,8 @@ function claimPayload(t, d) {
     const repo = t.projectId === AGENCY_PROJECT ? null : load("repos")[t.projectId];
     return {
       id: t.id, projectId: t.projectId, projectName: p.name, clientName: p.client, type: t.type, label: cat.label, title: t.title, instructions: t.instructions, reason: t.reason || "",
-      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
-      ...(cat.write && !t.askAlways && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
+      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways || gbpNeedsPerson(t.projectId, t.type) ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
+      ...(cat.write && !t.askAlways && !gbpNeedsPerson(t.projectId, t.type) && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
       ...(cat.write ? { secondCheck: { on: cfg.global.secondCheck !== false, model: MODELS.some((m) => m.id === cfg.global.checkModel) ? cfg.global.checkModel : "claude-sonnet-5-5" } } : {}),
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
@@ -2997,7 +3054,7 @@ function claimPayload(t, d) {
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
       vision: cfg.global.vision !== false, photos: t.projectId === AGENCY_PROJECT ? 0 : photosOf(t.projectId).length,
       directions: directionsOf(t.projectId).map((x) => x.text),
-      setup: setupLines(t.projectId, cat.area),
+      setup: setupLines(t.projectId, cat.area, cat.channel === "gbp"),
       brand: brandBlock(t.projectId, !!cat.writes),
       lessons: t.projectId === AGENCY_PROJECT ? [] : lessonsFor(t.projectId, t.type, { count: true }),
       knowledge: t.type === "knowledge_study" ? "" : [knowledgeBlock(cat.area === "agency" ? "general" : cat.area), statusBlock(t.projectId)].filter(Boolean).join("\n\n"),

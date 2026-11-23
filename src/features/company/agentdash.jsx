@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Bell, Sparkles, Image as ImageIcon, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Store, Bell, Sparkles, Image as ImageIcon, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, LogoUpload, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -752,6 +752,14 @@ const Tile = ({ icon: Icon, title, sub, accent, right, children }) => (
     {children && <div className="mt-3">{children}</div>}
   </div>
 );
+/* one rule per kind of change on a Google Business Profile (the same list the server keeps) */
+const GBP_PARTS = [["name", "Business name", "The name shown on Google. A change can trigger Google's re-verification."], ["address", "Address and service area", "Street address, or the areas served."], ["phone", "Phone number", "Primary and additional numbers."],
+  ["website", "Website address and booking links", "The website link, appointment and menu links."], ["hours", "Business hours", "The regular opening hours."], ["specialHours", "Special hours (holidays)", "Hours for holidays and one-off days."],
+  ["categories", "Categories", "Primary and additional categories."], ["description", "Business description", "The 750-character \"From the business\" text."], ["services", "Services and their descriptions", "Adding services, and writing or changing their descriptions."],
+  ["products", "Products", "Adding products with name, description and photo."], ["photos", "Photos and videos", "Adding pictures to the profile (taken from the project's Resources)."], ["posts", "Posts", "Publishing updates, offers and events."],
+  ["reviews", "Review replies", "Answering customer reviews."], ["qa", "Questions and answers", "Answering questions asked on the profile."], ["attributes", "Attributes", "Payment methods, accessibility, amenities and the like."]];
+const GBP_START = { name: "never", address: "never", phone: "never", categories: "never", website: "ask", hours: "ask", specialHours: "ask" };
+const GBP_MODES = [["never", "Not allowed", "#B91C1C", "#FEE2E2"], ["ask", "Only with my approval", "#92400E", "#FEF3C7"], ["allowed", "Allowed", "#15803D", "#DCFCE7"]];
 const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
 const txtCls = inputCls + " min-h-[64px] resize-y";
 const numOnly = (v) => +String(v).replace(/[^0-9]/g, "") || 0;
@@ -765,7 +773,12 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const setRow = (key, i, patch) => setCh({ [key]: ch[key].map((x, k) => (k === i ? { ...x, ...patch } : x)) });
   const delRow = (key, i) => setCh({ [key]: ch[key].filter((_, k) => k !== i) });
   const setRule = (area, patch) => set({ rules: { ...rules, [area]: { ...rules[area], ...patch } } });
-  const tasksOf = (area) => data.catalog.filter((c) => c.area === area && draft.tasks[c.key]);
+  const onProfile = (c) => c.channel === "gbp";
+  const tasksOf = (area) => data.catalog.filter((c) => (area === "gbp" ? onProfile(c) : c.area === area && !onProfile(c)) && draft.tasks[c.key]);
+  const gr = { parts: {}, reviewReplies: "all", postsPerWeek: 1, notes: "", ...(rules.gbp || {}) };
+  const partOf = (k) => ({ mode: GBP_START[k] || "allowed", note: "", ...(gr.parts[k] || {}) });
+  const setPart = (k, patch) => setRule("gbp", { ...gr, parts: { ...gr.parts, [k]: { ...partOf(k), ...patch } } });
+  const partCount = (m) => GBP_PARTS.filter(([k]) => partOf(k).mode === m).length;
   const onCount = (area) => tasksOf(area).filter((c) => draft.tasks[c.key].mode !== "off").length;
   const chanState = (c) => {
     if (!c.channel) return null;
@@ -809,7 +822,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   };
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)],
-    ["resources", "Resources", FolderInput, `${project.resources || 0} photo and media source${project.resources === 1 ? "" : "s"}${project.repo ? " · code repository" : ""}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
+    ["resources", "Resources", FolderInput, `${project.resources || 0} photo and media source${project.resources === 1 ? "" : "s"}${project.repo ? " · code repository" : ""}`],
+    ["gbp", "Business Profile", Store, `${ch.gbp.length} profile${ch.gbp.length === 1 ? "" : "s"} · ${partCount("never")} kind${partCount("never") === 1 ? "" : "s"} of change not allowed`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
     ["visibility", "AI search", Sparkles, project.visibility ? `named in ${project.visibility.share}% of ${project.visibility.asked} answers` : "not checked yet"],
     ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`],
@@ -817,14 +831,14 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
   const online = data.devices.filter((d) => d.online);
   const gbpSigned = ch.gbp.some((g) => g.id && checks["gbp:" + g.id]?.state === "ok");
-  const gbpTaskOn = tasksOf("offpage").some((c) => c.channel === "gbp" && draft.tasks[c.key].mode !== "off");
+  const gbpTaskOn = tasksOf("gbp").some((c) => draft.tasks[c.key].mode !== "off");
   const LIVE = [
     [data.credentials.claude.set || project.ownKey?.set || data.devices.some((d) => d.localKey), "A Claude API key is set", "Add one under API setup."],
     [online.length > 0, online.length ? `${online[0].name} is online` : "The agent's computer is online", "Start the agent application on its computer."],
     [draft.enabled, "The agent is switched on for this project", "Switch on \"Agent works on this project\" above and save."],
     [gbpOk, "The Business Profile has a Chrome ID that a device has", "Add the profile below and choose its Chrome ID."],
     [gbpSigned, "That Chrome ID is signed in (checked)", "Press Check sign-in under the Business Profile."],
-    [gbpTaskOn, "A Business Profile task is switched on", "Switch one on under Offpage SEO, for example the optimization audit."],
+    [gbpTaskOn, "A Business Profile task is switched on", "Switch one on in the task list on this tab, for example the optimization audit."],
   ];
   const liveDone = LIVE.filter((r) => r[0]).length;
   return (
@@ -845,21 +859,6 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       {tab === "settings" && (
         <>
           <Card className="p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="min-w-[200px] flex-1"><div className="text-[13.5px] font-semibold text-gray-900">Ready for live work on the Business Profile?</div>
-                <div className="text-[11.5px] text-gray-500">Live work means the agent opens Chrome on its computer, goes to the real profile and works there. Every step below has to be green first.</div></div>
-              <Chip fg={liveDone === LIVE.length ? "#15803D" : "#B45309"} bg={liveDone === LIVE.length ? "#DCFCE7" : "#FEF3C7"}>{liveDone === LIVE.length ? "Ready" : `${liveDone} of ${LIVE.length} done`}</Chip>
-            </div>
-            <ol className="mt-3 grid gap-x-6 gap-y-1.5 md:grid-cols-2">
-              {LIVE.map(([ok, label, fix], i) => (
-                <li key={i} className="flex items-start gap-2 text-[12.5px]">
-                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white" style={{ background: ok ? "#16A34A" : "#D1D5DB" }}>{ok ? <Check size={11} /> : <span className="text-[9px] font-bold">{i + 1}</span>}</span>
-                  <span className={ok ? "text-gray-700" : "text-gray-900"}>{label}{!ok && <span className="block text-[11.5px] text-gray-500">{fix}</span>}</span>
-                </li>
-              ))}
-            </ol>
-          </Card>
-          <Card className="p-4">
             <div className="text-[13.5px] font-semibold text-gray-900">Working channels</div>
             <div className="mb-3 text-[11.5px] text-gray-500">Where the agent works for {project.name}, and which signed-in Chrome on its computer it uses for each. A Chrome ID is a separate Chrome profile you signed in to once; the agent never signs in itself and can only open that channel's own sites in it.</div>
             <div className="grid gap-3 lg:grid-cols-2">
@@ -874,21 +873,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
                 {checkLine("website", ch.website.browser)}
               </Tile>
 
-              <Tile icon={MapPin} accent={accent} title="Google Business Profiles" sub="Every location of this client, and the Chrome ID that manages it." right={<Ready ok={gbpOk} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
-                {ch.gbp.map((g, i) => (
-                  <div key={g.id || i} className="mb-2 rounded-lg border border-gray-100 bg-gray-50 p-2.5">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <Labeled label="Business name on Google"><input className={inputCls} placeholder="Northgate Plumbing, Leeds" value={g.name} onChange={(e) => setRow("gbp", i, { name: e.target.value })} /></Labeled>
-                      <Labeled label="Chrome ID that manages it"><ChromeSelect profiles={profiles} value={g.browser} onChange={(v) => setRow("gbp", i, { browser: v })} /></Labeled>
-                    </div>
-                    <div className="mt-2 flex items-end gap-2">
-                      <div className="min-w-0 flex-1"><Labeled label="Profile link (Maps or Business Profile manager)"><input className={inputCls} placeholder="https://www.google.com/maps/place/…" value={g.link} onChange={(e) => setRow("gbp", i, { link: e.target.value })} /></Labeled></div>
-                      <Btn ghost danger onClick={() => delRow("gbp", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
-                    </div>
-                    {checkLine(g.id ? "gbp:" + g.id : "", g.browser)}
-                  </div>
-                ))}
-                <Btn ghost onClick={() => setCh({ gbp: [...ch.gbp, { id: "", name: "", link: "", browser: ch.gbp[0]?.browser || "", note: "" }] })}><Plus size={13} /> Add a Business Profile</Btn>
+              <Tile icon={Store} accent={accent} title="Google Business Profiles" sub="The profiles, their rules and their tasks have a tab of their own." right={<Ready ok={gbpOk} yes={`${ch.gbp.length} ready`} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
+                <Btn ghost onClick={() => setTab("gbp")}><Store size={13} /> Open the Business Profile tab</Btn>
               </Tile>
 
               <Tile icon={Search} accent={accent} title="Google Search Console" sub={api.searchConsole ? `Data is read through the connected Google account: ${api.gscSite}` : "Not connected for data yet (Project settings, Data sources)."} right={<Ready ok={!!api.searchConsole} yes="Data connected" no="No data connection" />}>
@@ -946,16 +932,79 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
         </>
       )}
 
+      {tab === "gbp" && (
+        <>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-[200px] flex-1"><div className="text-[13.5px] font-semibold text-gray-900">Ready for live work on the Business Profile?</div>
+                <div className="text-[11.5px] text-gray-500">Live work means the agent opens Chrome on its computer, goes to the real profile and works there. Every step below has to be green first.</div></div>
+              <Chip fg={liveDone === LIVE.length ? "#15803D" : "#B45309"} bg={liveDone === LIVE.length ? "#DCFCE7" : "#FEF3C7"}>{liveDone === LIVE.length ? "Ready" : `${liveDone} of ${LIVE.length} done`}</Chip>
+            </div>
+            <ol className="mt-3 grid gap-x-6 gap-y-1.5 md:grid-cols-2">
+              {LIVE.map(([ok, label, fix], i) => (
+                <li key={i} className="flex items-start gap-2 text-[12.5px]">
+                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white" style={{ background: ok ? "#16A34A" : "#D1D5DB" }}>{ok ? <Check size={11} /> : <span className="text-[9px] font-bold">{i + 1}</span>}</span>
+                  <span className={ok ? "text-gray-700" : "text-gray-900"}>{label}{!ok && <span className="block text-[11.5px] text-gray-500">{fix}</span>}</span>
+                </li>
+              ))}
+            </ol>
+          </Card>
+          <Card className="p-4">
+            <div className="text-[13.5px] font-semibold text-gray-900">Business Profiles of {project.name}</div>
+            <div className="mb-3 text-[11.5px] text-gray-500">Every location of this client on Google, and the signed-in Chrome on the agent's computer that manages it.</div>
+              <Tile icon={MapPin} accent={accent} title="Profiles" sub="Add one per location." right={<Ready ok={gbpOk} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
+                {ch.gbp.map((g, i) => (
+                  <div key={g.id || i} className="mb-2 rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Labeled label="Business name on Google"><input className={inputCls} placeholder="Northgate Plumbing, Leeds" value={g.name} onChange={(e) => setRow("gbp", i, { name: e.target.value })} /></Labeled>
+                      <Labeled label="Chrome ID that manages it"><ChromeSelect profiles={profiles} value={g.browser} onChange={(v) => setRow("gbp", i, { browser: v })} /></Labeled>
+                    </div>
+                    <div className="mt-2 flex items-end gap-2">
+                      <div className="min-w-0 flex-1"><Labeled label="Profile link (Maps or Business Profile manager)"><input className={inputCls} placeholder="https://www.google.com/maps/place/…" value={g.link} onChange={(e) => setRow("gbp", i, { link: e.target.value })} /></Labeled></div>
+                      <Btn ghost danger onClick={() => delRow("gbp", i)} title="Remove this profile"><Trash2 size={13} /></Btn>
+                    </div>
+                    {checkLine(g.id ? "gbp:" + g.id : "", g.browser)}
+                  </div>
+                ))}
+                <Btn ghost onClick={() => setCh({ gbp: [...ch.gbp, { id: "", name: "", link: "", browser: ch.gbp[0]?.browser || "", note: "" }] })}><Plus size={13} /> Add a Business Profile</Btn>
+              </Tile>
+          </Card>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-[13.5px] font-semibold text-gray-900">What the agent may change on the profile</div>
+              <div className="flex flex-wrap gap-1.5">{GBP_MODES.map(([m, label, fg, bg]) => <Chip key={m} fg={fg} bg={bg}>{partCount(m)} {label.toLowerCase()}</Chip>)}</div>
+            </div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">One rule for each kind of change. <b>Not allowed</b>: the agent never proposes or makes it, whatever a task says, and a task whose whole purpose is not allowed does not start. <b>Only with my approval</b>: you see the exact change and approve it every time, even where the task type is set to act by itself. <b>Allowed</b>: the task type's own setting below decides whether it asks first (by default it does). The note beside a rule tells the agent how that part may be changed. These rules are given to the agent with every Business Profile task and to the second check that reads its plan.</div>
+            <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200">
+              {GBP_PARTS.map(([k, label, hint]) => { const x = partOf(k); return (
+                <div key={k} className="grid items-center gap-2 px-3 py-2.5 lg:grid-cols-[1.1fr_auto_1.3fr]">
+                  <div className="min-w-0"><div className="text-[13px] font-medium text-gray-900">{label}</div><div className="text-[11.5px] text-gray-500">{hint}</div></div>
+                  <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={`${label}: what the agent may do`}>
+                    {GBP_MODES.map(([m, text, fg, bg]) => <button key={m} type="button" role="radio" aria-checked={x.mode === m} onClick={() => setPart(k, { mode: m })} className="whitespace-nowrap rounded-lg border px-2.5 py-1 text-[11.5px] font-semibold" style={x.mode === m ? { background: bg, borderColor: fg, color: fg } : { borderColor: "#E5E7EB", color: "#6B7280", background: "#fff" }}>{text}</button>)}
+                  </div>
+                  <input className={inputCls + " !py-1.5 text-[12px]"} aria-label={`Note for the agent about ${label}`} maxLength={300} disabled={x.mode === "never"} placeholder={x.mode === "never" ? "Not allowed, so no note is needed" : k === "services" ? "For example: only services listed on the website; descriptions under 300 characters, no prices" : k === "photos" ? "For example: at most three a week, finished jobs only" : k === "hours" ? "For example: never change Sunday; it stays closed" : "How this may be changed (optional)"} value={x.note} onChange={(e) => setPart(k, { note: e.target.value })} />
+                </div>
+              ); })}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Labeled label="Which reviews get a reply"><select className={inputCls} disabled={partOf("reviews").mode === "never"} value={gr.reviewReplies} onChange={(e) => setRule("gbp", { ...gr, reviewReplies: e.target.value })}><option value="all">Every new review</option><option value="positive">Four and five stars only (lower ratings are flagged for a person)</option></select></Labeled>
+              <Labeled label="Posts per week, at most"><input className={inputCls} inputMode="numeric" disabled={partOf("posts").mode === "never"} value={gr.postsPerWeek} onChange={(e) => setRule("gbp", { ...gr, postsPerWeek: numOnly(e.target.value) })} /></Labeled>
+              <div className="md:col-span-2"><Labeled label="Other notes about this Business Profile for the agent"><textarea className={txtCls} placeholder="For example: always mention the Gas Safe registration in posts. The profile is a service-area business: never show the street address." value={gr.notes} onChange={(e) => setRule("gbp", { ...gr, notes: e.target.value })} /></Labeled></div>
+            </div>
+            <div className="mt-2 text-[11px] text-gray-400">Press Save changes to keep the rules. They apply from the agent's next task.</div>
+          </Card>
+          {taskList("gbp", "Business Profile tasks")}
+        </>
+      )}
+
       {tab === "offpage" && (
         <>
           <Card className="p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div><div className="text-[13.5px] font-semibold text-gray-900">Off-page rules and limits</div><div className="text-[11.5px] text-gray-500">Business Profile, reviews, citations and links for {project.name}.</div></div>
-              <div className="flex flex-wrap gap-1.5"><Ready ok={gbpOk} yes={`${ch.gbp.length} Business Profile${ch.gbp.length === 1 ? "" : "s"} ready`} no={ch.gbp.length ? "Business Profile needs a Chrome ID" : "No Business Profile set"} /></div>
+              <div><div className="text-[13.5px] font-semibold text-gray-900">Off-page rules and limits</div><div className="text-[11.5px] text-gray-500">Citations, links and outreach for {project.name}. The Google Business Profile has its own tab.</div></div>
+              <div className="flex flex-wrap gap-1.5"><Btn ghost onClick={() => setTab("gbp")}><Store size={13} /> Business Profile tab</Btn></div>
             </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
-              <Labeled label="Review replies"><select className={inputCls} value={rules.offpage.reviewReplies} onChange={(e) => setRule("offpage", { reviewReplies: e.target.value })}><option value="all">Draft a reply to every review</option><option value="positive">Four and five stars only</option><option value="none">Do not draft replies</option></select></Labeled>
-              <Labeled label="Business Profile posts per week, at most"><input className={inputCls} inputMode="numeric" value={rules.offpage.postsPerWeek} onChange={(e) => setRule("offpage", { postsPerWeek: numOnly(e.target.value) })} /></Labeled>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
               <Labeled label="Outreach prospects per month, at most"><input className={inputCls} inputMode="numeric" value={rules.offpage.outreachPerMonth} onChange={(e) => setRule("offpage", { outreachPerMonth: numOnly(e.target.value) })} /></Labeled>
               <Labeled label="Outreach emails are signed as"><input className={inputCls} placeholder="Name, role, business" value={rules.offpage.senderName} onChange={(e) => setRule("offpage", { senderName: e.target.value })} /></Labeled>
             </div>
@@ -963,7 +1012,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
               <Labeled label="Sites never to contact or seek links from, one per line"><textarea className={txtCls} placeholder={"competitor.co.uk\nold-agency-directory.com"} value={rules.offpage.excludedDomains} onChange={(e) => setRule("offpage", { excludedDomains: e.target.value })} /></Labeled>
               <Labeled label="Other off-page notes for the agent"><textarea className={txtCls} placeholder="For example: always mention the Gas Safe registration in profile posts." value={rules.offpage.notes} onChange={(e) => setRule("offpage", { notes: e.target.value })} /></Labeled>
             </div>
-            <div className="mt-2 text-[11px] text-gray-400">The agent drafts outreach and review replies; a person sends or approves them. Business Profiles are added under Settings.</div>
+            <div className="mt-2 text-[11px] text-gray-400">The agent drafts outreach; a person sends it.</div>
           </Card>
           {taskList("offpage", "Off-page tasks")}
         </>

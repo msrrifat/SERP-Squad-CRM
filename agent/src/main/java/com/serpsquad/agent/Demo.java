@@ -303,6 +303,12 @@ final class Demo {
     private ObjectNode demoRules(int i) {
         ObjectNode r = Json.obj();
         r.putObject("onpage").put("siteChanges", i == 0 ? "approval" : "never").put("maxPagesPerWeek", 3).put("wordsMin", i == 1 ? 600 : 0).put("wordsMax", i == 1 ? 1400 : 0).put("language", i == 1 || i == 0 ? "British English" : "").put("protectedUrls", i == 0 ? "/contact/\n/bathrooms/" : "").put("notes", i == 0 ? "Every service page ends with the 24 hour call-out number." : "");
+        ObjectNode gb = r.putObject("gbp");
+        gb.put("reviewReplies", i == 1 ? "positive" : "all").put("postsPerWeek", 1).put("notes", i == 0 ? "Always mention the Gas Safe registration in posts." : "");
+        ObjectNode parts = gb.putObject("parts");
+        String[][] start = { { "name", "never" }, { "address", "never" }, { "phone", "never" }, { "website", "ask" }, { "hours", "ask" }, { "specialHours", "ask" }, { "categories", "never" }, { "description", "allowed" }, { "services", "allowed" },
+            { "products", "allowed" }, { "photos", "allowed" }, { "posts", "allowed" }, { "reviews", "allowed" }, { "qa", "allowed" }, { "attributes", "allowed" } };
+        for (String[] x : start) parts.putObject(x[0]).put("mode", x[1]).put("note", i == 0 && x[0].equals("services") ? "Only services listed on the website. Descriptions under 300 characters, no prices." : i == 0 && x[0].equals("photos") ? "At most three a week, finished jobs only." : "");
         r.putObject("offpage").put("reviewReplies", i == 1 ? "positive" : "all").put("postsPerWeek", 1).put("outreachPerMonth", 10).put("senderName", i == 0 ? "Sam, Northgate Plumbing & Heating" : "").put("excludedDomains", i == 0 ? "rival-plumbers.example" : "").put("notes", "");
         r.putObject("social").put("postsPerWeek", i == 1 ? 2 : 3).put("hashtags", "few").put("tone", i == 1 ? "Calm and reassuring" : "Friendly and local").put("avoidTopics", i == 1 ? "Prices\nBefore and after photos of patients" : "").put("notes", "");
         return r;

@@ -62,6 +62,12 @@ Rules the server enforces:
   agency's own guides (kept in the agent's `config.json` under `guides`, 40 at most, 12,000 characters each,
   40,000 per playbook they are added to). `playbookFiles()` appends them to the synced playbooks they apply to.
 
+- Work setup rules gained `rules.gbp` (saved through `POST /api/agentops/config` like the other rules): one
+  mode per part of a Business Profile (`never`, `ask`, `allowed`) with a note, which reviews are answered,
+  posts per week, notes. `setupLines(pid, area, profile)` hands them to Business Profile tasks;
+  `gbpBlocked` and `gbpNeedsPerson` are what the server enforces itself. The older
+  `rules.offpage.reviewReplies` and `postsPerWeek` are read once as the starting values.
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |
