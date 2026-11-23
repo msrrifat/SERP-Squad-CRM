@@ -453,6 +453,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
   const [find, setFind] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(null);     // { error } while a hand-made project's details are being changed
+  const [copying, setCopying] = useState(null);     // { fromId, parts, error, done } while settings are being copied from another project
   const topRef = useRef(null), firstPage = useRef(true), seenTick = useRef(tick);
   const logoSrc = React.useContext(LogoCtx)[pid]?.src || "";
   const pc = useProjectChat(project && project.id !== "_agency" ? project.id : "");
@@ -652,6 +653,35 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
               <Btn ghost danger disabled={busy} onClick={removeProject} title="Takes the project off the agent's list. Its settings, chat, brand voice and lessons are kept and come back if you add it again."><Trash2 size={13} /> Take off the agent's list</Btn>
             </div>
           )}
+          {copying && (
+            <Modal title={`Copy settings to ${project.name}`} sub="Set this project up the way another one is set up. Only how the agent works is copied, never what belongs to the client." onClose={() => setCopying(null)}>
+              {copying.done ? (
+                <>
+                  <div className="rounded-lg bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800" role="status">Copied: {copying.done.join("; ")}.</div>
+                  <div className="mt-2 text-[12px] leading-5 text-gray-600">Still to do for {project.name}: its website address, Business Profile, social profiles and their Chrome IDs (Settings and Business Profile tabs), its brand voice, and its resources. The agent stays switched {draft?.enabled ? "on" : "off"} for this project as it was.</div>
+                  <div className="mt-3"><Btn accent={accent} onClick={() => setCopying(null)}>Done</Btn></div>
+                </>
+              ) : (
+                <>
+                  <Labeled label="Copy from">
+                    <select className={inputCls} value={copying.fromId} onChange={(e) => setCopying({ ...copying, fromId: e.target.value, error: "" })}><option value="">Choose a project…</option>{data.projects.filter((x) => x.id !== project.id && x.id !== "_agency").map((x) => <option key={x.id} value={x.id}>{x.name}{x.client ? ` (${x.client})` : ""}</option>)}</select>
+                  </Labeled>
+                  <div className="mt-3 text-[9px] font-semibold uppercase tracking-wider text-gray-400">What to copy</div>
+                  <div className="mt-1 space-y-1.5">
+                    {[["limits", "Working limits and schedules of every task type", "Which task types are on, how often, whether they start by themselves, and how each asks for approval."], ["rules", "On-page, off-page and social rules with their notes", "Not the protected pages and not the name outreach is signed with: those stay this project's own."], ["profileRules", "Business Profile rules", "What may be changed on the profile, with the note beside each rule."], ["websiteNotes", "Website notes", "The list of notes about the website. Check them afterwards: some may be about the other site only."], ["smm", "SMM management software", "The tool, its address and Chrome ID. Not the client's workspace name."], ["budget", "Token and spend limits, and the triggers", "Monthly and daily token limits, the DataForSEO spend limit, what starts work by itself."], ["directions", "Directions for the agent", "The standing directions you gave for the other project. Off by default: they are often about that one client."]].map(([k, label, hint]) => (
+                      <label key={k} className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 px-2.5 py-2">
+                        <input type="checkbox" className="mt-0.5" checked={copying.parts.includes(k)} onChange={(e) => setCopying({ ...copying, parts: e.target.checked ? [...copying.parts, k] : copying.parts.filter((x) => x !== k) })} />
+                        <span><span className="block text-[12.5px] font-medium text-gray-900">{label}</span><span className="block text-[11.5px] text-gray-500">{hint}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600"><b>Never copied:</b> the website address, Business Profiles, social profile links, Search Console and Analytics, the Chrome IDs chosen for them, brand voice, resources and photos, the code repository, what the agent knows about the client, its lessons and its reports. What this project has now in the parts you tick is replaced.</div>
+                  {copying.error && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{copying.error}</div>}
+                  <div className="mt-3 flex gap-2"><Btn accent={accent} disabled={busy || !copying.fromId || !copying.parts.length} onClick={async () => { try { const o = await api("project/copy", { fromId: copying.fromId, toId: project.id, parts: copying.parts }); setDirty(false); setData(o); setCopying({ ...copying, done: o.copied || [] }); } catch (e) { setCopying({ ...copying, error: String(e.message || e) }); } }}><Copy size={13} /> Copy to {project.name}</Btn><Btn ghost onClick={() => setCopying(null)}>Cancel</Btn></div>
+                </>
+              )}
+            </Modal>
+          )}
           {editing && (
             <Modal title={`Edit ${project.name}`} sub="Details of a project that was added by hand." onClose={() => setEditing(null)} wide>
               <ManualProjectForm accent={accent} busy={busy} error={editing.error} saveLabel="Save details" initial={{ name: project.name, client: project.client, website: project.website, accent: project.accent, logo: logoSrc || null }} onCancel={() => setEditing(null)}
@@ -662,6 +692,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
             <Btn accent={accent} onClick={save} disabled={!dirty || busy}><Check size={13} /> Save changes</Btn>
             {dirty && <Btn ghost onClick={() => setDirty(false)}>Discard</Btn>}
             {project.id !== "_agency" && <Btn ghost onClick={recommended} title="Sets every task type to its recommended limit and schedule. Nothing is saved until you press Save.">Use the recommended schedule</Btn>}
+            {project.id !== "_agency" && <Btn ghost disabled={dirty || busy} title={dirty ? "Save or discard your changes first." : "Sets this project up the way another one is set up."} onClick={() => setCopying({ fromId: "", parts: ["limits", "rules", "profileRules", "websiteNotes", "smm", "budget"], error: "", done: null })}><Copy size={13} /> Copy settings from another project</Btn>}
             {project.id !== "_agency" && <Btn ghost onClick={() => onChat(project.id)}><MessageSquare size={13} /> Open the chat full width</Btn>}
             {dirty && <span className="text-[11.5px] text-amber-700">Unsaved changes</span>}
           </div>
@@ -773,6 +804,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const setRow = (key, i, patch) => setCh({ [key]: ch[key].map((x, k) => (k === i ? { ...x, ...patch } : x)) });
   const delRow = (key, i) => setCh({ [key]: ch[key].filter((_, k) => k !== i) });
   const setRule = (area, patch) => set({ rules: { ...rules, [area]: { ...rules[area], ...patch } } });
+  const smm = ch.smm || {};
+  const setSmm = (patch) => setCh({ smm: { on: false, name: "", url: "", browser: "", workspace: "", notes: "", ...smm, ...patch } });
   const onProfile = (c) => c.channel === "gbp";
   const tasksOf = (area) => data.catalog.filter((c) => (area === "gbp" ? onProfile(c) : c.area === area && !onProfile(c)) && draft.tasks[c.key]);
   const gr = { parts: {}, reviewReplies: "all", postsPerWeek: 1, notes: "", ...(rules.gbp || {}) };
@@ -1033,6 +1066,26 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
 
       {tab === "social" && (
         <>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-[220px] flex-1">
+                <div className="text-[13.5px] font-semibold text-gray-900">SMM management software</div>
+                <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">If your agency manages and schedules social posts from one tool (Buffer, Hootsuite, Metricool, Publer and the like), set it up here. With it switched on, the agent publishes and schedules this client's approved posts in that tool instead of on each platform, in the workspace you name. It cannot connect or disconnect accounts, change the plan or touch another client's workspace.</div>
+              </div>
+              <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={!!smm.on} label="Publish through the SMM management software" onChange={(v) => setSmm({ on: v })} /> {smm.on ? "On" : "Off"}</label>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <Labeled label="Name of the tool"><input className={inputCls} maxLength={60} placeholder="Metricool" value={smm.name || ""} onChange={(e) => setSmm({ name: e.target.value })} /></Labeled>
+              <Labeled label="Its address"><input className={inputCls} maxLength={200} placeholder="https://app.metricool.com/" value={smm.url || ""} onChange={(e) => setSmm({ url: e.target.value })} /></Labeled>
+              <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={smm.browser || ""} onChange={(v) => setSmm({ browser: v })} /></Labeled>
+              <Labeled label="This client in the tool (workspace, brand or profile group)"><input className={inputCls} maxLength={120} placeholder={project.name} value={smm.workspace || ""} onChange={(e) => setSmm({ workspace: e.target.value })} /></Labeled>
+              <div className="md:col-span-2"><Labeled label="Notes for the agent about the tool"><textarea className={txtCls} placeholder={"For example: schedule posts for 9:30 in the morning. Use the queue, never \"Publish now\". Instagram posts always need a picture."} value={smm.notes || ""} onChange={(e) => setSmm({ notes: e.target.value })} /></Labeled></div>
+            </div>
+            {smm.on && !smm.url && <div className="mt-2 text-[12px] text-amber-800">Give the tool's address (https) before switching it on. Google, Microsoft, Apple, Facebook and payment sites cannot be set up as a tool.</div>}
+            {dirty && (smm.url || smm.on) && <div className="mt-2 text-[11.5px] text-gray-500">Press <b>Save changes</b> to keep the tool's settings.</div>}
+            {!agency && <SignInRelay name={smm.name} url={smm.url} profileId={smm.browser} accent={accent} />}
+            {smm.on && checkLine("smm", smm.browser)}
+          </Card>
           <Card className="p-4">
             <div className="text-[13.5px] font-semibold text-gray-900">Social profiles</div>
             <div className="mb-3 text-[11.5px] text-gray-500">The profiles of {project.name}. A Chrome ID is needed only if the agent is to publish approved posts in the browser.</div>
@@ -2152,6 +2205,56 @@ function DfsLogin({ data, accent, act, busy }) {
 }
 
 /* ---------------- what the agent knows about a project (it starts every task and chat from this) ---------------- */
+/* ---------- a tool's sign-in: typed here once, kept only on the agent's computer ---------- */
+function siteOfUrl(u) {
+  try { const h = new URL(u).hostname.toLowerCase(), parts = h.split("."); const three = parts.length > 2 && parts[parts.length - 1].length === 2 && ["co", "com", "org", "net", "ac", "gov", "edu"].includes(parts[parts.length - 2]); return parts.slice(three ? -3 : -2).join("."); } catch { return ""; }
+}
+function SignInRelay({ name, url, profileId, accent }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const [open, setOpen] = useState(false); const [loginUrl, setLoginUrl] = useState(""); const [user, setUser] = useState(""); const [password, setPassword] = useState(""); const [waiting, setWaiting] = useState(0);
+  const run = useCallback(async (body, quiet) => {
+    if (!quiet) { setBusy(true); setErr(""); }
+    try { const o = await api("signin", body); setV(o); return o; } catch (e) { if (!quiet) setErr(String(e.message || e)); return null; } finally { if (!quiet) setBusy(false); }
+  }, []);
+  useEffect(() => { run({ action: "list" }, true); }, [run]);
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(async () => { const o = await run({ action: "list" }, true); if (Date.now() > waiting || (o && !o.waiting.length)) setWaiting(0); }, 3000);
+    return () => clearInterval(t);
+  }, [waiting, run]);
+  const site = siteOfUrl(url);
+  if (!site || !profileId) return <div className="mt-2 text-[11.5px] text-gray-400">Give the tool's address and choose its Chrome ID first; then its sign-in can be handed to the agent's computer here.</div>;
+  const holders = (v?.devices || []).filter((d) => (d.signins || []).some((x) => x.site === site));
+  const targets = (v?.devices || []).filter((d) => (d.profiles || []).includes(profileId));
+  const pending = (v?.waiting || []).some((x) => x.site === site);
+  const last = targets.map((d) => d.last).find((l) => l && l.site === site && !l.ok && !l.removed);
+  const send = async () => { const o = await run({ action: "add", name: name || site, loginUrl: loginUrl.trim() || url, user, password, profileId }); setPassword(""); if (o) { setUser(""); setOpen(false); setWaiting(Date.now() + 90000); setNote("Handed over. The agent's computer keeps it; the CRM does not."); } };
+  const remove = async (d) => { if (!(await askConfirm({ title: "Delete the saved sign-in?", message: `${d.name} deletes its saved sign-in for ${site}. The agent can then only use the tool while the Chrome ID is still signed in.`, confirmLabel: "Delete it", danger: true }))) return; const o = await run({ action: "remove", deviceId: d.id, site }); if (o) setWaiting(Date.now() + 60000); };
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[12.5px] font-semibold text-gray-900">Sign-in for {name || site}</div>
+        {holders.length ? <Chip fg="#15803D" bg="#DCFCE7">Saved on {holders.map((d) => d.name).join(", ")}</Chip> : pending ? <Chip fg="#92400E" bg="#FEF3C7">Being handed over…</Chip> : <Chip>No sign-in saved</Chip>}
+      </div>
+      <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">The user name and password are passed once to the computer that has this Chrome ID, which keeps them encrypted and types them into the tool's own sign-in page when the tool has signed it out. The CRM does not store them, they are not shown again, and they are never given to Claude. A tool that asks for a code or a captcha still needs a person.</div>
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+      {last && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">The computer could not keep the sign-in {relTime(last.at)}: {last.detail || "no reason given"}</div>}
+      {!targets.length && v && <div className="mt-2 text-[12px] text-amber-800">No computer reports Chrome ID {profileId} right now. Start the agent's application on its computer.</div>}
+      {open ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div className="sm:col-span-2"><Labeled label="The tool's sign-in page"><input className={inputCls} value={loginUrl} maxLength={200} placeholder={url} onChange={(e) => setLoginUrl(e.target.value)} /></Labeled></div>
+          <Labeled label="User name or email"><input className={inputCls} autoComplete="off" spellCheck={false} value={user} maxLength={200} onChange={(e) => setUser(e.target.value)} /></Labeled>
+          <Labeled label="Password"><input className={inputCls} type="password" autoComplete="new-password" spellCheck={false} value={password} maxLength={300} onChange={(e) => setPassword(e.target.value)} /></Labeled>
+          <div className="flex flex-wrap gap-2 sm:col-span-2"><Btn accent={accent} disabled={busy || !user.trim() || password.length < 4 || !targets.length} onClick={send}><KeyRound size={13} /> Hand it to {targets.map((d) => d.name).join(", ") || "the agent's computer"}</Btn><Btn ghost onClick={() => { setOpen(false); setPassword(""); }}>Cancel</Btn></div>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-center gap-2"><Btn ghost disabled={busy || !!waiting} onClick={() => { setOpen(true); setNote(""); }}><KeyRound size={13} /> {holders.length ? "Replace the sign-in" : "Enter the sign-in"}</Btn>{holders.map((d) => <Btn key={d.id} ghost danger disabled={busy || !!waiting} onClick={() => remove(d)}>Delete it from {d.name}</Btn>)}</div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- a website built from code: its repository, and how the agent gets in ---------- */
 function RepoSetup({ project, accent, reload }) {
   const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
@@ -2407,6 +2510,57 @@ function ProjectStatus({ project, accent }) {
 }
 
 /* ---------------- reports: the work that was done, and how the rankings moved ---------------- */
+/* ---------- working documents: the folder where the agent saves what people open ---------- */
+function WorkDocs({ project, accent }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const [form, setForm] = useState(null); const [waiting, setWaiting] = useState(0);
+  const run = useCallback(async (body, quiet) => {
+    if (!quiet) { setBusy(true); setErr(""); }
+    try { const o = await api("output", { projectId: project.id, ...body }); setV(o); return o; } catch (e) { if (!quiet) setErr(String(e.message || e)); return null; } finally { if (!quiet) setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run({ action: "get" }, true); }, [run]);
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(async () => { const o = await run({ action: "get" }, true); if (Date.now() > waiting || (o && !o.output?.asking)) setWaiting(0); }, 3000);
+    return () => clearInterval(t);
+  }, [waiting, run]);
+  useEffect(() => { if (v && form === null) setForm(v.output ? { folder: v.output.folder, deviceId: v.output.deviceId, driveUrl: v.output.driveUrl, note: v.output.note } : { folder: "", deviceId: v.devices.length === 1 ? v.devices[0].id : "", driveUrl: "", note: "" }); }, [v, form]);
+  if (!v || !form) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading the working documents…"}</Card>;
+  const o = v.output, changed = !o || form.folder !== o.folder || form.deviceId !== o.deviceId || (form.driveUrl || "") !== (o.driveUrl || "") || (form.note || "") !== (o.note || "");
+  const choose = async () => { setErr(""); try { const r = await LOCAL_APP.chooseFolder(); if (r?.path) setForm((x) => ({ ...x, folder: r.path })); } catch (e) { setErr(String(e.message || e)); } };
+  const save = async () => { const r = await run({ action: "save", ...form }); if (r) { setForm(null); setNote("Saved. The agent keeps its working documents there from its next task."); } };
+  const remove = async () => { if (!(await askConfirm({ title: "Stop keeping working documents?", message: "The agent no longer saves Excel and Word files for this project. The files already in the folder are not touched.", confirmLabel: "Stop", danger: true }))) return; const r = await run({ action: "remove" }); if (r) setForm(null); };
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[13.5px] font-semibold text-gray-900">Working documents</div>
+        {o ? <Chip fg={o.check?.ok === false ? "#B91C1C" : "#15803D"} bg={o.check?.ok === false ? "#FEE2E2" : "#DCFCE7"}>{o.check?.ok === false ? "Folder cannot be written" : "Folder set"}</Chip> : <Chip>Not set</Chip>}
+      </div>
+      <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">A folder where the agent saves what people open and work with: keyword research and prospect lists as Excel sheets, content plans and audits as Word documents. It adds to an existing sheet instead of starting a second one, and names the file in its report. <b>To have them in Google Drive:</b> choose a folder inside Google Drive for desktop on the agent's computer. The files then appear in your Drive by themselves and open there as Google Sheets and Docs. Paste that folder's Drive link below so the team can open it from here.</div>
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Labeled label="Folder on the agent's computer (its full path)">
+          <div className="flex gap-2"><input className={inputCls} value={form.folder} maxLength={380} placeholder="G:\My Drive\Clients\Northgate\Agent work" onChange={(e) => setForm({ ...form, folder: e.target.value })} />{LOCAL_APP?.chooseFolder && <Btn ghost onClick={choose}><span className="flex items-center gap-1.5 whitespace-nowrap"><FolderInput size={13} /> Choose folder…</span></Btn>}</div>
+        </Labeled>
+        <Labeled label="On which computer">
+          <select className={inputCls} value={form.deviceId} onChange={(e) => setForm({ ...form, deviceId: e.target.value })}><option value="">Choose…</option>{v.devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
+        </Labeled>
+        <Labeled label="Google Drive link of that folder (optional)"><input className={inputCls} value={form.driveUrl} maxLength={300} placeholder="https://drive.google.com/drive/folders/…" onChange={(e) => setForm({ ...form, driveUrl: e.target.value })} /></Labeled>
+        <Labeled label="What to keep there (optional note for the agent)"><input className={inputCls} value={form.note} maxLength={600} placeholder="Keyword research in one sheet per month. Plans as documents. English only." onChange={(e) => setForm({ ...form, note: e.target.value })} /></Labeled>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Btn accent={accent} disabled={busy || !changed || !form.folder.trim() || !form.deviceId} onClick={save}>{o ? "Save changes" : "Save folder"}</Btn>
+        {o && <Btn ghost disabled={busy || !!waiting || o.asking} onClick={async () => { const r = await run({ action: "check" }); if (r) setWaiting(Date.now() + 45000); }}><RefreshCw size={13} /> Check the folder</Btn>}
+        {o?.driveUrl && <a className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-[12.5px] font-semibold text-gray-700 hover:bg-gray-50" href={o.driveUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open the folder in Google Drive</a>}
+        {o && <Btn ghost danger disabled={busy} onClick={remove}>Remove</Btn>}
+        {o?.asking ? <span className="text-[12px] text-gray-500">Asking {o.deviceName}…</span> : o?.check ? <span className="text-[12px]" style={{ color: o.check.ok ? "#15803D" : "#B91C1C" }}>{o.check.device} {relTime(o.check.at)}: {o.check.detail}</span> : null}
+      </div>
+      <div className="mt-2 text-[11px] leading-5 text-gray-400">The agent does not sign in to Google Drive itself: its Google sign-ins are barred from opening Drive, so that they can never be used to read your files. Google Drive for desktop does the syncing. Without it the files simply stay in the folder on that computer.</div>
+    </Card>
+  );
+}
+
 function Reports({ project, accent, onOpenTask, reload }) {
   const [sub, setSub] = useState("work");
   return (
@@ -2417,6 +2571,7 @@ function Reports({ project, accent, onOpenTask, reload }) {
             style={sub === k ? { background: accent, color: "#fff", borderColor: accent } : { background: "#fff", color: "#374151", borderColor: "#E5E7EB" }}><Icon size={13} />{label}</button>
         ))}
       </div>
+      {sub === "work" && <WorkDocs key={"wd" + project.id} project={project} accent={accent} />}
       {sub === "work" ? <WorkReport project={project} accent={accent} onOpenTask={onOpenTask} /> : <RankingReport project={project} accent={accent} onOpenTask={onOpenTask} reload={reload} />}
     </div>
   );
@@ -2778,7 +2933,7 @@ function SeoToolsCard({ data, accent, act, busy }) {
         <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><KeyRound size={15} style={{ color: accent }} /> SEO tools the agent may use, signed in</div>
         <Chip>{saved.length} set up</Chip>
       </div>
-      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Paid tools your agency has an account with (a backlink index, a keyword tool, a site crawler). Each is opened in a Chrome ID that is signed in to it, on the agent's computer, and the agent may read reports and search there for any project. It cannot change the account, spend exports or open billing pages. <b>The user name and password are not entered here.</b> Save them in the agent's own application on that computer (Settings, Saved sign-ins): they stay there, encrypted, and the program types them into the tool's sign-in page itself when the tool has signed out. They are never sent to the CRM or to Claude. A tool that asks for a code or a captcha still needs a person.</div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Paid tools your agency has an account with (a backlink index, a keyword tool, a site crawler). Each is opened in a Chrome ID that is signed in to it, on the agent's computer, and the agent may read reports and search there for any project. It cannot change the account, spend exports or open billing pages. Once a tool is saved, its sign-in can be entered under it: it is passed once to the agent's computer, which keeps it encrypted and types it into the tool's sign-in page itself when the tool has signed out. The CRM does not store it and it is never given to Claude. (It can also be saved directly in the agent's own application, under Settings, Saved sign-ins.) A tool that asks for a code or a captcha still needs a person.</div>
       <div className="mt-3 space-y-2">
         {list.map((x, i) => (
           <div key={x.id || "new" + i} className="grid gap-2 rounded-xl border border-gray-200 p-2.5 md:grid-cols-[1fr_1.4fr_1fr_auto]">
@@ -2786,6 +2941,7 @@ function SeoToolsCard({ data, accent, act, busy }) {
             <input className={inputCls} aria-label="Address of the tool" placeholder="https://app.example.com/" maxLength={200} value={x.url || ""} onChange={(e) => set(i, "url", e.target.value)} />
             <select className={inputCls} aria-label="Chrome ID signed in to it" value={x.profileId || ""} onChange={(e) => set(i, "profileId", e.target.value)}><option value="">Chrome ID…</option>{profiles.map((p) => <option key={p.device + p.id} value={p.id}>{p.id} · {p.name} ({p.device})</option>)}</select>
             <Btn ghost danger onClick={() => setRows(list.filter((_, j) => j !== i))}>Remove</Btn>
+            {x.id && x.url && x.profileId && <div className="md:col-span-4"><SignInRelay name={x.name} url={x.url} profileId={x.profileId} accent={accent} /></div>}
             <input className={inputCls + " md:col-span-4"} aria-label="What the agent should use it for" placeholder="What the agent should use it for, for example: referring domains and lost links of the client and its competitors" maxLength={500} value={x.useFor || ""} onChange={(e) => set(i, "useFor", e.target.value)} />
           </div>
         ))}

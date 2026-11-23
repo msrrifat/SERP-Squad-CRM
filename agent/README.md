@@ -878,9 +878,50 @@ Apple, Facebook, payment sites and code hosts cannot be saved. This protects
 the passwords from the file being read on its own; it does not protect them
 from someone who can use this computer's user account.
 
+## Working documents (Excel and Word files)
+
+In the CRM, a project's Report tab has **Working documents**: a folder on
+this computer for what people open and work with. With it set, a task has
+`work_file_save` (a **sheet** from rows, saved as `.xlsx`, or a **doc** from
+simple Markdown, saved as `.docx`), `work_files_list` and `work_file_read`.
+The files are plain Office Open XML written by this program (`Office.java`,
+no library): Excel, Word, Google Sheets and Docs, Numbers, Pages and
+LibreOffice open them. A sheet has a bold header that stays in view, numbers
+are stored as numbers, and rows are added to an existing sheet with
+`append`; an existing file is never replaced unless the agent says
+`replace`. Text that looks like a password or a key is not saved, and a name
+cannot leave the folder.
+
+To have the documents in Google Drive, choose a folder inside **Google Drive
+for desktop** on this computer: Drive does the syncing, and the Drive link
+of that folder is kept in the CRM so the team can open it. The program does
+not sign in to Drive itself; the signed-in Chrome windows are barred from
+drive.google.com on purpose.
+
+## An SMM management tool
+
+On a project's Social Media tab an agency can set the tool it manages and
+schedules social posts with (name, address, Chrome ID, the client's
+workspace in it, notes). With it switched on, the task type *Publish to
+social profiles* works in that tool's Chrome ID, limited to the tool's own
+site, and the playbook tells the agent to work in exactly the client's
+workspace and never to change accounts, plans or settings there. When the
+tool asks for a sign-in, the program signs in itself with the sign-in saved
+on this computer, as for the SEO tools.
+
+A tool's sign-in can now also be entered in the CRM (under the SMM tool, and
+under each SEO tool): the CRM holds it in memory only until this computer
+takes it at its next check-in, then forgets it; this computer seals it in
+`data/signins.json`. The CRM is told only which sites a sign-in is saved
+for.
+
 ## Not built yet
 
 - Several tasks at once on one computer.
+- Creating native Google Sheets or Docs directly in Drive (it would need a
+  Google sign-in for Drive, which the agent's windows are barred from, or an
+  API route that Google only allows for Workspace shared drives or approved
+  apps). Working documents in a Drive for desktop folder cover this.
 
 - The agent changing the CRM's own code (planned as pull requests for review).
 - Sending outreach email. It drafts; a person sends.

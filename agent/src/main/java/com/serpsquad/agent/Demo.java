@@ -578,6 +578,14 @@ final class Demo {
 
     private ObjectNode dfsOwn = Json.obj().put("set", false);
 
+    private final java.util.Set<String> demoSignins = new java.util.LinkedHashSet<>(List.of("ahrefs.example"));
+    private final Map<String, ObjectNode> demoOutput = new HashMap<>();
+    private boolean demoOutputGone = false;
+
+    private static String siteOf(String url) {
+        try { String h = java.net.URI.create(url).getHost(); String[] p = h.split("\\."); return p.length <= 2 ? h : p[p.length - 2] + "." + p[p.length - 1]; } catch (Exception e) { return url; }
+    }
+
     private final ArrayNode guides = demoGuides();
 
     private static ArrayNode demoGuides() {
@@ -1752,6 +1760,61 @@ final class Demo {
                 return new Reply(200, out);
             }
             case "guide": return guideEdit(body);
+            case "signin": {
+                String a = body.path("action").asText("list");
+                if (a.equals("add")) { if (body.path("user").asText("").isBlank() || body.path("password").asText("").length() < 4) return bad(400, "Enter the user name and the password."); demoSignins.add(siteOf(body.path("loginUrl").asText(""))); }
+                else if (a.equals("remove")) demoSignins.remove(body.path("site").asText(""));
+                ObjectNode o = Json.obj();
+                o.put("ok", true).putArray("waiting");
+                ObjectNode d = o.putArray("devices").addObject();
+                d.put("id", "dev_demo").put("name", "Office PC").put("online", true).putNull("last");
+                ArrayNode pr = d.putArray("profiles"); for (String[] c : CHROME) pr.add(c[0]);
+                ArrayNode sg = d.putArray("signins"); for (String site : demoSignins) sg.addObject().put("name", site).put("site", site);
+                return new Reply(200, o);
+            }
+            case "output": {
+                if (!known(pid)) return bad(404, "Unknown project.");
+                String a = body.path("action").asText("get");
+                long now = System.currentTimeMillis();
+                if (a.equals("save")) {
+                    if (body.path("folder").asText("").trim().length() < 3) return bad(400, "Give the folder's full path on the agent's computer, for example C:\\Clients\\Northgate\\Agent work or a folder inside Google Drive for desktop.");
+                    ObjectNode o = Json.obj();
+                    o.put("folder", body.path("folder").asText("").trim()).put("deviceId", "dev_demo").put("deviceName", "Office PC").put("driveUrl", body.path("driveUrl").asText("").trim()).put("note", body.path("note").asText("")).put("asking", false).put("by", "Office PC (agent's computer)").put("at", now).putNull("check");
+                    demoOutput.put(pid, o);
+                } else if (a.equals("remove")) demoOutput.remove(pid);
+                else if (a.equals("check") && demoOutput.containsKey(pid)) demoOutput.get(pid).putObject("check").put("ok", true).put("files", 6).put("detail", "Demo: the folder can be written to. It holds 6 items.").put("at", now).put("device", "Office PC");
+                else if (!demoOutput.containsKey(pid) && pid.equals(PROJECTS[0][0]) && !demoOutputGone) {
+                    ObjectNode o = Json.obj();
+                    o.put("folder", "G:\\My Drive\\Clients\\Northgate Plumbing\\Agent work").put("deviceId", "dev_demo").put("deviceName", "Office PC").put("driveUrl", "https://drive.google.com/drive/folders/1DemoFolderForWorkingDocuments00").put("note", "Keyword research in one sheet per month. Plans as documents.").put("asking", false).put("by", "Sam Whitfield").put("at", now - 6 * DAY)
+                        .putObject("check").put("ok", true).put("files", 6).put("detail", "The folder can be written to. It holds 6 items.").put("at", now - 3 * HOUR).put("device", "Office PC");
+                    demoOutput.put(pid, o);
+                }
+                if (a.equals("remove") && pid.equals(PROJECTS[0][0])) demoOutputGone = true;
+                ObjectNode v = Json.obj();
+                v.put("ok", true).put("projectId", pid);
+                v.putArray("devices").addObject().put("id", "dev_demo").put("name", "Office PC").put("online", true);
+                if (demoOutput.containsKey(pid)) v.set("output", demoOutput.get(pid).deepCopy()); else v.putNull("output");
+                return new Reply(200, v);
+            }
+            case "project/copy": {
+                String from = body.path("fromId").asText(""), to = body.path("toId").asText("");
+                if (!projSetting.containsKey(from) || !projSetting.containsKey(to) || from.equals(to)) return bad(400, "Choose a different project to copy from.");
+                ObjectNode src = projSetting.get(from), dst = projSetting.get(to);
+                ArrayNode done = Json.arr();
+                for (JsonNode k : body.path("parts")) {
+                    String part = k.asText("");
+                    if (part.equals("limits") && src.has("tasks")) { dst.set("tasks", src.get("tasks").deepCopy()); done.add("working limits and schedules"); }
+                    else if (part.equals("budget")) { for (String f : new String[] { "tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "triggers" }) if (src.has(f)) dst.set(f, src.get(f).deepCopy()); done.add("token and spend limits"); }
+                    else if (part.equals("rules") && src.has("rules")) { ObjectNode r = dst.path("rules").isObject() ? (ObjectNode) dst.get("rules") : dst.putObject("rules"); for (String f : new String[] { "onpage", "offpage", "social" }) if (src.path("rules").has(f)) r.set(f, src.path("rules").get(f).deepCopy()); done.add("on-page, off-page and social rules with their notes"); }
+                    else if (part.equals("profileRules") && src.path("rules").has("gbp")) { ObjectNode r = dst.path("rules").isObject() ? (ObjectNode) dst.get("rules") : dst.putObject("rules"); r.set("gbp", src.path("rules").get("gbp").deepCopy()); done.add("Business Profile rules"); }
+                    else if (part.equals("websiteNotes") && src.path("channels").path("website").has("notes") && dst.path("channels").path("website").isObject()) { ((ObjectNode) dst.path("channels").path("website")).set("notes", src.path("channels").path("website").get("notes").deepCopy()); done.add(src.path("channels").path("website").path("notes").size() + " website notes"); }
+                    else if (part.equals("smm") && src.path("channels").has("smm") && dst.path("channels").isObject()) { ((ObjectNode) dst.get("channels")).set("smm", src.path("channels").get("smm").deepCopy()); done.add("the SMM management tool"); }
+                    else if (part.equals("directions")) done.add("0 directions");
+                }
+                ObjectNode o = overview();
+                o.set("copied", done);
+                return new Reply(200, o);
+            }
             case "playbook": {
                 String key = body.path("key").asText("");
                 String def = catalogFile.path("playbooks").path(key).asText("");

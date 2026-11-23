@@ -182,6 +182,12 @@ final class TaskRunner {
                 .append("direct".equals(repo.path("mode").asText("")) ? "An approved change is delivered straight to that branch." : "An approved change is delivered to a branch of its own, for a person to review and merge.").append('\n');
             if (!repo.path("notes").asText("").isBlank()) m.append("Notes on the repository from the manager: ").append(repo.path("notes").asText("")).append('\n');
         }
+        if (task.path("output").isObject()) {
+            m.append("\nWorking documents: this project has a folder for the documents people open (work_file_save, work_files_list, work_file_read).");
+            if (!task.path("output").path("driveUrl").asText("").isBlank()) m.append(" It is kept in Google Drive: ").append(task.path("output").path("driveUrl").asText("")).append(" .");
+            if (!task.path("output").path("note").asText("").isBlank()) m.append(" The manager's note on it: ").append(task.path("output").path("note").asText("").replaceAll("\\s+", " "));
+            m.append('\n');
+        }
         if (task.path("seoTools").size() > 0) {
             m.append("\nSEO tools the agency has an account with (open one with seo_tool_open; there you read and search only):\n");
             for (JsonNode t : task.path("seoTools")) m.append("- ").append(t.path("name").asText("")).append(t.path("useFor").asText("").isBlank() ? "" : ": " + t.path("useFor").asText("").replaceAll("\\s+", " ")).append('\n');

@@ -42,6 +42,7 @@ final class LocalTools {
     private final Path files;                 // <home>/work/<project>/files
     private final Path driveCache;            // <home>/work/<project>/drive
     private final Repo repo;                  // null when the project has no repository on this computer
+    private final Path output;                // where working documents go (may lie inside Google Drive for desktop); null when none is set
     private final boolean vision;
     private final Map<String, Set<String>> driveSeen = new HashMap<>();     // per source: the Drive ids listed in this run (folders and files)
     private final Map<String, String> driveNames = new HashMap<>();         // Drive id -> file name
@@ -58,6 +59,8 @@ final class LocalTools {
         this.driveCache = root.resolve("drive");
         this.repo = task.path("repo").isObject() && Repo.validUrl(task.path("repo").path("url").asText("")) ? new Repo(cfg, pid).with(vault, task.path("repo").path("method").asText("key")) : null;
         this.vision = task.path("vision").asBoolean(false);
+        String out = task.path("output").path("folder").asText("");
+        this.output = out.isBlank() ? null : home(out);
         try {
             Files.createDirectories(files);
             Path about = root.resolve("About this folder.txt");
@@ -96,6 +99,17 @@ final class LocalTools {
         out.add(def("files_list", "List what is in this project's working folder on the computer you run on: your own notes, inventories and drafts from earlier runs. Look here before fetching or working something out again.", schema("folder", "string", "A sub-folder, or leave out for the top.")));
         out.add(def("file_read", "Read a text file from the project's working folder.", require(schema("path", "string", "The file's path as files_list shows it.", "from", "integer", "Character to start from, for a long file."), "path")));
         out.add(def("file_write", "Save a text file in the project's working folder for later runs (Markdown, text, CSV, JSON, HTML). Replaces the file unless append is true. Never put a password or a key in a file.", require(schema("path", "string", "For example pages/inventory.md or competitors/aire-valley.md.", "text", "string", "The file's content.", "append", "boolean", "Add to the end instead of replacing."), "path", "text")));
+        if (output != null) {
+            out.add(def("work_files_list", "List the working documents already saved for this project (the folder people open: keyword research, plans, audit tables).", schema("folder", "string", "A sub-folder, or leave out for the top.")));
+            ObjectNode ws = schema("name", "string", "The file's name without an ending, for example Keyword research or Content plan 2026-12. A sub-folder may be given: Audits/Site audit 2026-11.", "kind", "string", "sheet for a table (saved as an Excel file) or doc for a written document (saved as a Word file).",
+                "text", "string", "For a doc: the content in simple Markdown (# headings, - bullet lines, | tables |, **bold**).", "sheet_name", "string", "For a sheet: the name of the tab (optional).",
+                "append", "boolean", "For a sheet that exists: add these rows under the ones already there instead of replacing them.", "replace", "boolean", "Replace a file of this name that already exists.");
+            ObjectNode rows = ((ObjectNode) ws.get("properties")).putObject("rows");
+            rows.put("type", "array").put("description", "For a sheet: the rows, each a list of cell values. The first row is the header.");
+            rows.putObject("items").put("type", "array").putObject("items").put("type", "string");
+            out.add(def("work_file_save", "Save a working document for the team to open: a sheet (Excel) or a doc (Word). Use it for results people will read or work with. A file is never replaced unless you say replace, and rows are added to an existing sheet with append.", require(ws, "name", "kind")));
+            out.add(def("work_file_read", "Read a working document back: a sheet as rows (cells divided by tabs), a document as text.", require(schema("name", "string", "The file as work_files_list showed it.", "from", "integer", "Character to start from, for a long file."), "name")));
+        }
         if (hasResources()) {
             out.add(def("resources_list", "List the pictures, videos and other media in one of this project's media sources (named in the task message).", require(schema("source", "string", "The source's number or name from the task message.", "folder", "string", "A sub-folder as an earlier listing showed it, or leave out for the top."), "source")));
             if (vision) out.add(def("resource_look", "See one picture from a media source, to judge whether it fits what you need it for. Look before you choose a picture.", require(schema("source", "string", "The source's number or name.", "file", "string", "The file as resources_list showed it."), "source", "file")));
@@ -121,6 +135,9 @@ final class LocalTools {
                 case "files_list": return ok(filesList(in.path("folder").asText("")));
                 case "file_read": return ok(fileRead(in.path("path").asText(""), in.path("from").asInt(0)));
                 case "file_write": return ok(fileWrite(in.path("path").asText(""), in.path("text").asText(""), in.path("append").asBoolean(false)));
+                case "work_files_list": return ok(workList(in.path("folder").asText("")));
+                case "work_file_save": return ok(workSave(in));
+                case "work_file_read": return ok(workRead(in.path("name").asText(""), in.path("from").asInt(0)));
                 case "resources_list": return ok(resourcesList(in.path("source").asText(""), in.path("folder").asText("")));
                 case "resource_look": return look(in.path("source").asText(""), in.path("file").asText(""));
                 case "repo_sync": return ok(needRepo().sync(task.path("repo").path("url").asText(""), task.path("repo").path("branch").asText("main")));
@@ -217,6 +234,114 @@ final class LocalTools {
             Files.move(tmp, f, StandardCopyOption.REPLACE_EXISTING);
         }
         return "Saved " + files.relativize(f).toString().replace('\\', '/') + " (" + size(Files.size(f)) + ").";
+    }
+
+    // ---------- working documents ----------
+
+    private Path needOutput() throws IOException {
+        if (output == null) throw new IOException("No folder for working documents is set for this project.");
+        if (!Files.isDirectory(output)) {
+            try { Files.createDirectories(output); } catch (IOException e) { throw new IOException("The folder for working documents (" + output + ") is not on this computer and could not be made. Ask the manager to check it under Report, Working documents."); }
+        }
+        return output;
+    }
+
+    private String driveNote() {
+        String d = task.path("output").path("driveUrl").asText("");
+        return d.isBlank() ? "" : " The folder is kept in Google Drive, so the file appears there once this computer has synced: " + d;
+    }
+
+    private String workList(String folder) throws IOException {
+        Path root = needOutput(), dir = inside(root, folder);
+        if (!Files.isDirectory(dir)) return "There is no folder \"" + folder + "\" among the working documents.";
+        StringBuilder out = new StringBuilder();
+        int n = 0;
+        try (Stream<Path> s = Files.list(dir)) {
+            for (Path f : (Iterable<Path>) s.sorted()::iterator) {
+                String nm = f.getFileName().toString();
+                if (nm.startsWith(".") || nm.startsWith("~$") || nm.endsWith(".part")) continue;
+                if (++n > 300) { out.append("… and more. List a sub-folder.\n"); break; }
+                String rel = root.toAbsolutePath().normalize().relativize(f.toAbsolutePath().normalize()).toString().replace('\\', '/');
+                if (Files.isDirectory(f)) out.append("folder  ").append(rel).append("/\n");
+                else out.append(rel).append("  (").append(size(Files.size(f))).append(", changed ").append(java.time.LocalDate.ofInstant(Files.getLastModifiedTime(f).toInstant(), java.time.ZoneId.systemDefault())).append(")\n");
+            }
+        }
+        return n == 0 ? "No working documents are saved yet." : out.toString();
+    }
+
+    private String workSave(JsonNode in) throws IOException {
+        Path root = needOutput();
+        String kind = in.path("kind").asText("").trim().toLowerCase();
+        if (!kind.equals("sheet") && !kind.equals("doc")) throw new IOException("Say what to save: kind \"sheet\" for a table or \"doc\" for a written document.");
+        String name = in.path("name").asText("").trim().replace('\\', '/').replaceAll("\\.(xlsx|docx|csv|md|txt)$", "");
+        name = java.util.Arrays.stream(name.split("/")).map((x) -> x.replaceAll("[^\\p{L}\\p{N} ._()&,+-]", " ").replaceAll("\\s+", " ").trim()).filter((x) -> !x.isEmpty() && !x.equals(".") && !x.equals("..")).collect(java.util.stream.Collectors.joining("/"));
+        if (name.isEmpty() || name.length() > 140) throw new IOException("Give the file a short, clear name.");
+        Path f = inside(root, name + (kind.equals("sheet") ? ".xlsx" : ".docx"));
+        boolean exists = Files.exists(f), append = in.path("append").asBoolean(false), replace = in.path("replace").asBoolean(false);
+        String rel = root.toAbsolutePath().normalize().relativize(f).toString().replace('\\', '/');
+        if (treeSize(root) > 2L * 1024 * 1024 * 1024) throw new IOException("The folder for working documents holds more than 2 GB. Ask the manager to tidy it.");
+        if (kind.equals("doc")) {
+            String text = in.path("text").asText("");
+            if (text.trim().length() < 20) throw new IOException("Give the document's content in text.");
+            if (text.length() > 400_000) throw new IOException("That is too long for one document. Split it.");
+            if (Redact.hasSecret(text)) throw new IOException("The content contains something that looks like a password or a key, so it is not saved. Leave it out.");
+            if (exists && !replace) throw new IOException("A document named \"" + rel + "\" already exists. Choose another name (for example with the date), or say replace: true to replace it.");
+            Office.writeDocument(f, text);
+            return (exists ? "Replaced " : "Saved ") + rel + " (a Word document, " + size(Files.size(f)) + ")." + driveNote();
+        }
+        List<List<String>> rows = new ArrayList<>();
+        for (JsonNode r : in.path("rows")) {
+            List<String> row = new ArrayList<>();
+            if (r.isArray()) for (JsonNode c : r) { if (row.size() >= 80) break; String v = c.isNull() ? "" : c.asText(""); row.add(v.length() > 4000 ? v.substring(0, 4000) : v); }
+            else row.add(r.asText(""));
+            rows.add(row);
+            if (rows.size() > 20000) throw new IOException("A sheet takes at most 20,000 rows in one call. Save it in parts with append.");
+        }
+        if (rows.isEmpty()) throw new IOException("Give the sheet's rows: a list of rows, each a list of cell values, the first row being the header.");
+        for (List<String> row : rows) for (String c : row) if (Redact.hasSecret(c)) throw new IOException("A cell contains something that looks like a password or a key, so the sheet is not saved. Leave it out.");
+        int added = rows.size();
+        String tab = in.path("sheet_name").asText("");
+        if (exists && append) {
+            if (tab.isBlank()) tab = Office.sheetName(f);       // rows added to a sheet keep the tab's name
+            List<List<String>> have = Office.readSheet(f);
+            if (!have.isEmpty() && !rows.isEmpty() && have.get(0).equals(rows.get(0))) { rows.remove(0); added -= 1; }      // the same header sent again is not written twice
+            have.addAll(rows);
+            if (have.size() > 200000) throw new IOException("That sheet would pass 200,000 rows. Start a new one.");
+            rows = have;
+        } else if (exists && !replace) {
+            throw new IOException("A sheet named \"" + rel + "\" already exists. Say append: true to add rows to it, replace: true to replace it, or choose another name.");
+        }
+        Office.writeSheet(f, rows, tab);
+        return (exists && append ? "Added " + added + " row" + (added == 1 ? "" : "s") + " to " : exists ? "Replaced " : "Saved ") + rel + " (an Excel sheet, " + rows.size() + " rows with the header, " + size(Files.size(f)) + ")." + driveNote();
+    }
+
+    private String workRead(String name, int from) throws IOException {
+        Path root = needOutput(), f = inside(root, name);
+        if (!Files.isRegularFile(f)) throw new IOException("There is no working document \"" + Json.clip(name, 120) + "\". See work_files_list.");
+        if (Files.size(f) > 30_000_000) throw new IOException("That file is too large to read here.");
+        String e = ext(f.getFileName().toString());
+        if (e.equals("xlsx")) return window(Office.asText(Office.readSheet(f)), from, "call work_file_read again with");
+        if (e.equals("docx")) return window(Office.readDocument(f), from, "call work_file_read again with");
+        if (TEXT.contains(e)) return window(Files.readString(f, StandardCharsets.UTF_8), from, "call work_file_read again with");
+        throw new IOException("A ." + e + " file cannot be read here. Sheets (.xlsx), documents (.docx) and text files can.");
+    }
+
+    /** How many working documents a folder holds, for the "Check" button in the CRM. */
+    static ObjectNode checkOutput(String folder) {
+        ObjectNode out = Json.obj();
+        try {
+            Path root = home(folder);
+            if (!Files.isDirectory(root)) Files.createDirectories(root);
+            Path probe = root.resolve(".serpsquad-agent-check");
+            Files.writeString(probe, "ok");
+            Files.deleteIfExists(probe);
+            long n;
+            try (Stream<Path> st = Files.list(root)) { n = st.filter((f) -> !f.getFileName().toString().startsWith(".")).count(); }
+            out.put("ok", true).put("files", n).put("detail", "The folder can be written to. It holds " + n + " item" + (n == 1 ? "" : "s") + ".");
+        } catch (Exception e) {
+            out.put("ok", false).put("detail", "The folder cannot be written to on this computer: " + Json.clip(String.valueOf(e.getMessage()), 200));
+        }
+        return out;
     }
 
     // ---------- media sources ----------

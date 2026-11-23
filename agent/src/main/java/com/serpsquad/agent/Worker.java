@@ -133,6 +133,7 @@ final class Worker {
         b.set("browserProfiles", profiles.view());
         b.put("updateSkipped", updater.skipped());
         b.put("localKey", !cfg.anthropicApiKey.isBlank());
+        b.set("signins", vault.names());        // which tools a sign-in is saved for here: names and sites only
         if (taskThread != null && progressAt > 0) b.put("idleSeconds", Math.max(0, (System.currentTimeMillis() - progressAt) / 1000));   // lets the CRM tell a working run from a stuck one
         if (synced) b.put("synced", true);
         return b;
@@ -421,6 +422,14 @@ final class Worker {
                     body.put("ok", true);
                 } else if ("resource".equals(kind)) {
                     body.setAll(LocalTools.checkSource(a.path("source")));
+                } else if ("output".equals(kind)) {
+                    body.setAll(LocalTools.checkOutput(a.path("folder").asText("")));
+                } else if ("signin".equals(kind)) {
+                    /* a tool's sign-in typed in the CRM: sealed here, never logged, never sent back */
+                    try { vault.add(a.path("name").asText(""), a.path("loginUrl").asText(""), a.path("user").asText(""), a.path("password").asText("")); body.put("ok", true); Log.info("A sign-in for " + Json.clip(a.path("name").asText("a tool"), 60) + " was handed over by the CRM and is kept sealed on this computer."); }
+                    catch (IllegalArgumentException | IllegalStateException e) { body.put("ok", false).put("detail", Json.clip(e.getMessage(), 200)); }
+                } else if ("signinRemove".equals(kind)) {
+                    body.put("ok", vault.removeSite(a.path("site").asText("")));
                 } else continue;
             } catch (Repo.RepoException e) {
                 body.put("ok", false).put("detail", Json.clip(e.getMessage(), 280));
@@ -479,7 +488,7 @@ final class Worker {
             taskBrowser = b;
             tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
             tools.local = new LocalTools(cfg, task, vault);
-            if (task.path("seoTools").size() > 0) tools.sites = toolSites(task);
+            if (task.path("seoTools").size() > 0 || task.path("browser").path("signIn").asBoolean(false)) tools.sites = toolSites(task);
             TaskRunner runner = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher);
             runner.checkpoint = new Checkpoint(cfg.dataDir(), task.path("id").asText("task"));
             runner.resume = resume;
@@ -500,12 +509,12 @@ final class Worker {
         } finally {
             taskThread = null;
             Thread.interrupted();           // the watchdog's interrupt ends with the task; the loop goes on
+            if (tools != null) tools.cleanUp();      // first of all: the files fetched for this task are gone before anything slower happens
+            Checkpoint.forget(cfg.dataDir(), task.path("id").asText("task"));      // the run ended here, whatever its outcome: nothing is left to carry on
             if (b != null) b.close();
             taskBrowser = null;
             for (Browser t : toolBrowsers) { try { t.close(); } catch (Throwable ignored) { /* closed with the program at the latest */ } }
             toolBrowsers.clear();
-            Checkpoint.forget(cfg.dataDir(), task.path("id").asText("task"));      // the run ended here, whatever its outcome: nothing is left to carry on
-            if (tools != null) tools.cleanUp();
             if (stalled) { outcome[0] = "failed"; outcome[1] = "The run stood still for too long and was ended."; }
             remember(cur, outcome[0], outcome[1]);
             current = null;

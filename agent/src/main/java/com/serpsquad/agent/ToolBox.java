@@ -223,7 +223,16 @@ final class ToolBox {
                     if (cleared) return new Outcome("Your plan was already checked and cleared. Carry it out, then call finish_task.", true);
                     approval = input;
                     return new Outcome("Sent for approval. Stop here.", false);
-                case "browser_open": return new Outcome(needBrowser().open(input.path("url").asText("")), false);
+                case "browser_open": {
+                    String page = needBrowser().open(input.path("url").asText(""));
+                    /* a tool whose sign-in is saved on this computer (an SMM management tool): the program signs in itself, the agent never sees the sign-in */
+                    if (!inTool() && browser == ownBrowser && sites != null && task.path("browser").path("signIn").asBoolean(false) && page.contains("SIGN-IN REQUIRED")) {
+                        ObjectNode tool = Json.obj();
+                        tool.put("name", task.path("browser").path("label").asText("the tool")).put("url", task.path("browser").path("startUrl").asText(""));
+                        page = sites.signIn(browser, tool);
+                    }
+                    return new Outcome(page, false);
+                }
                 case "browser_read": return new Outcome(needBrowser().read(), false);
                 case "browser_click": return new Outcome(needBrowser().click(input.path("ref").asInt(-1)), false);
                 case "browser_scroll": return new Outcome(needBrowser().scroll(input.path("direction").asText("down")), false);

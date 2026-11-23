@@ -175,6 +175,21 @@ final class Vault {
         Redact.alsoHide(pass);
     }
 
+    /** Which tools this computer holds a sign-in for: the name and the site, nothing else. This is what the CRM is told. */
+    synchronized ArrayNode names() {
+        ArrayNode out = Json.arr();
+        for (JsonNode x : load()) out.addObject().put("name", x.path("name").asText("")).put("site", x.path("site").asText(""));
+        return out;
+    }
+
+    synchronized boolean removeSite(String site) throws Exception {
+        ArrayNode items = load();
+        boolean any = false;
+        for (int i = items.size() - 1; i >= 0; i--) if (items.get(i).path("site").asText("").equals(site)) { items.remove(i); any = true; }
+        if (any) save(items);
+        return any;
+    }
+
     synchronized boolean remove(String id) throws Exception {
         ArrayNode items = load();
         for (int i = 0; i < items.size(); i++) if (items.get(i).path("id").asText("").equals(id)) { items.remove(i); save(items); return true; }

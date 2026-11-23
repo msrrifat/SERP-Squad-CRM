@@ -74,6 +74,15 @@ Rules the server enforces:
   it at its next check-in, and never writes it to a file, a log or an answer to a browser; `token-remove` has
   the device delete it.
 
+- `channels.smm` (name, https address, Chrome ID, workspace, notes, on): the SMM management tool of a project;
+  `browserFor` sends the social publishing task there. `POST /api/agentops/signin` (`list`, `add`, `remove`):
+  a tool's sign-in is held in memory (`signinRelay`, ten minutes at most) until the device with that Chrome ID
+  takes it, never written to a file or a log; devices report which sites they hold a sign-in for.
+- `POST /api/agentops/project/copy` (`fromId`, `toId`, `parts`): copies working limits, rules and notes, website
+  notes, the SMM tool, limits and directions from one project to another; never the client's own channels.
+- `POST /api/agentops/output` (`get`, `save`, `check`, `remove`): the folder for a project's working documents
+  (`data/agentops/outputs.json`: a path on a named device, an optional Drive folder link, a note).
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |

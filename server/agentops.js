@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json", resources: "resources.json", repos: "repos.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json", resources: "resources.json", repos: "repos.json", outputs: "outputs.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true, crmRead: true, resume: true, seoTools: [] }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}), resources: () => ({}), repos: () => ({}),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}), resources: () => ({}), repos: () => ({}), outputs: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -372,7 +372,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "guide", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "guide", "signin", "output", "project/copy", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -546,6 +546,20 @@ const line = (v, n = 300) => clip(String(v == null ? "" : v).replace(/\s+/g, " "
 const lines = (v, n = 2000) => clip(String(v == null ? "" : v).split(/\r?\n/).map((x) => x.trim()).filter(Boolean).join("\n"), n);
 const chrome = (v) => (CHROME_ID.test(String(v || "")) ? String(v) : "");
 const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
+/* A social media management tool (the kind that schedules posts for many profiles from one place). When a
+   project uses one, publishing goes through it instead of through each platform: the agent works in the
+   Chrome ID signed in to the tool, on the tool's own site only. Its sign-in is never kept here (see signinRelay). */
+function toolUrl(raw) {
+  let u; try { u = new URL(String(raw || "").trim()); } catch { return ""; }
+  const local = process.env.AGENTOPS_TOOL_TEST === "1" && u.hostname === "127.0.0.1";       // tests only
+  if ((u.protocol !== "https:" && !local) || TOOL_NEVER.test(u.hostname)) return "";
+  return cut(u.origin + u.pathname, 200);
+}
+function cleanSmm(s) {
+  const x = s && typeof s === "object" ? s : {};
+  const url = toolUrl(x.url);
+  return { on: x.on === true && !!url, name: line(x.name, 60), url, browser: chrome(x.browser), workspace: line(x.workspace, 120), notes: lines(x.notes, 1200) };
+}
 function cleanChannels(c = {}) {
   const w = c.website || {}, g = c.gsc || {}, a = c.ga4 || {};
   return {
@@ -555,6 +569,7 @@ function cleanChannels(c = {}) {
     gbp: (Array.isArray(c.gbp) ? c.gbp : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("gb_").slice(0, 11), name: line(x?.name, 120), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.name || x.link),
     gsc: { property: line(g.property), browser: chrome(g.browser), note: line(g.note) },
     ga4: { property: line(a.property), browser: chrome(a.browser), note: line(a.note) },
+    smm: cleanSmm(c.smm),
     social: (Array.isArray(c.social) ? c.social : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("so_").slice(0, 11), platform: oneOf(x?.platform, SOCIAL_PLATFORMS.map((p) => p.key), "facebook"), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.link),
   };
 }
@@ -643,6 +658,10 @@ function browserFor(pid, cat) {
     if (!w.browser) return { error: `Choose a Chrome ID for the website's editor ${where}.` };
     return { profileId: w.browser, hosts, label: "website editor", startUrl: w.adminUrl || w.url };
   }
+  if (cat.channel === "social" && ch.smm.on) {
+    if (!ch.smm.browser) return { error: "Choose a Chrome ID for the SMM management tool in Work setup, Social Media." };
+    return { profileId: ch.smm.browser, hosts: toolHosts(ch.smm.url), label: `SMM management tool${ch.smm.name ? ` (${ch.smm.name})` : ""}`, startUrl: ch.smm.url, signIn: true };
+  }
   if (cat.channel === "social") {
     const first = ch.social.find((x) => x.browser);
     if (!ch.social.length) return { error: "Add this project's social profiles in Work setup, Social Media." };
@@ -662,6 +681,10 @@ function setupLines(pid, area, profile = false) {
   if (area !== "social" && ch.gsc.property) out.push(`Search Console property: ${ch.gsc.property}`);
   if (area === "general" && ch.ga4.property) out.push(`Analytics property: ${ch.ga4.property}`);
   if (area === "social" || area === "general") for (const x of ch.social) out.push(`${platformLabel(x.platform)}: ${x.link}${x.note ? `. ${x.note}` : ""}`);
+  if ((area === "social" || area === "general") && ch.smm.on) {
+    out.push(`SMM management tool: ${ch.smm.name || "the agency's tool"} (${ch.smm.url}). This client's social profiles are published and scheduled there, not on each platform${ch.smm.workspace ? `; in the tool this client is the workspace, brand or profile group named "${ch.smm.workspace}"` : ""}.`);
+    if (ch.smm.notes) out.push(`SMM tool notes: ${ch.smm.notes.split("\n").join(" ")}`);
+  }
   if (area === "onpage") {
     const o = r.onpage;
     out.push(o.siteChanges === "approval" ? "Changes on the live website are allowed only as an approved task; otherwise deliver drafts and recommendations." : "Never change the live website. Deliver drafts and recommendations only.");
@@ -903,6 +926,7 @@ function checkTargets(pid) {
   if (w.browser && (w.adminUrl || w.url)) out.push({ key: "website", label: "website editor", profileId: w.browser, hosts: siteHosts(w.url, w.adminUrl), url: withScheme(w.adminUrl || w.url) });
   for (const g of ch.gbp) if (g.browser) out.push({ key: "gbp:" + g.id, label: `Business Profile "${g.name || g.link}"`, profileId: g.browser, hosts: CHANNEL_HOSTS.gbp, url: CHANNEL_CHECK_URL.gbp });
   for (const k of ["gsc", "ga4"]) if (ch[k].browser) out.push({ key: k, label: CHANNEL_LABEL[k], profileId: ch[k].browser, hosts: CHANNEL_HOSTS[k], url: CHANNEL_CHECK_URL[k] });
+  if (ch.smm.on && ch.smm.browser) out.push({ key: "smm", label: `SMM management tool${ch.smm.name ? ` (${ch.smm.name})` : ""}`, profileId: ch.smm.browser, hosts: toolHosts(ch.smm.url), url: ch.smm.url });
   for (const x of ch.social) { const pf = SOCIAL_PLATFORMS.find((q) => q.key === x.platform); if (x.browser && pf?.check) out.push({ key: "social:" + x.id, label: `${pf.label} profile`, profileId: x.browser, hosts: pf.hosts, url: pf.check }); }
   return out;
 }
@@ -2997,6 +3021,8 @@ function agentHello(d, body) {
   d.state = clip(body?.state || "", 120);
   if (body?.googleProfile != null) d.googleProfile = !!body.googleProfile;
   if (body?.updateSkipped != null) d.updateSkipped = clip(body.updateSkipped, 20);
+  /* which tools this computer holds a saved sign-in for: the name and the site, never the sign-in itself */
+  if (Array.isArray(body?.signins)) d.signins = body.signins.slice(0, 20).map((x) => ({ name: line(x?.name, 60), site: line(x?.site, 80) })).filter((x) => x.site);
   if (body?.localKey != null) d.localKey = !!body.localKey;
   if (Array.isArray(body?.browserProfiles)) d.profiles = body.browserProfiles.slice(0, 40).filter((p) => CHROME_ID.test(String(p?.id || ""))).map((p) => ({ id: p.id, name: clip(p.name || "", 60) }));
   if (body?.playbooksRev != null) d.playbooksRev = +body.playbooksRev || 0;
@@ -3064,6 +3090,7 @@ function claimPayload(t, d) {
       ...(br && !br.error ? { browser: br } : {}),
       resources: t.projectId === AGENCY_PROJECT ? [] : resourcesOf(t.projectId).filter((x) => x.kind === "drive" || !x.deviceId || x.deviceId === d.id).map((x) => ({ id: x.id, kind: x.kind, label: x.label, location: x.location, useFor: x.useFor, notFor: x.notFor })),
       ...(repo?.url && (repo.method === "token" ? repo.tokenAt : repo.publicKey) && repo.deviceId === d.id ? { repo: { url: repo.url, branch: repo.branch, mode: repo.mode, method: repo.method || "key", notes: repo.notes || "" } } : {}),
+      ...(t.projectId !== AGENCY_PROJECT && outputOf(t.projectId)?.deviceId === d.id ? { output: { folder: outputOf(t.projectId).folder, driveUrl: outputOf(t.projectId).driveUrl || "", note: outputOf(t.projectId).note || "" } } : {}),
       seoTools: seoToolsOf().filter((x) => hasChrome(d, x.profileId)).map((x) => ({ id: x.id, name: x.name, url: x.url, profileId: x.profileId, hosts: toolHosts(x.url), useFor: x.useFor })),
     };
   }
@@ -3256,11 +3283,26 @@ function pendingAsks(d) {
       else { r.ask = null; r.test = { ok: false, detail: "The token was not handed over in time. Enter it again.", at: now() }; repoTokens.delete(pid); save("repos"); }
     } else out.push({ ...base, kind: r.ask.kind === "key" ? "repoKey" : r.ask.kind === "tokenRemove" ? "repoTokenRemove" : "repoTest" });
   }
+  for (const [id, x] of signinRelay) {
+    if (now() - x.at >= ASK_TTL) { signinRelay.delete(id); continue; }
+    if (x.deviceIds.includes(d.id) && !x.done.includes(d.id)) out.push(x.remove ? { id, kind: "signinRemove", site: x.site } : { id, kind: "signin", name: x.name, loginUrl: x.loginUrl, user: x.user, password: x.password });
+  }
+  for (const [pid, o] of Object.entries(load("outputs"))) if (o?.ask && o.deviceId === d.id && now() - o.ask.at < ASK_TTL) out.push({ id: o.ask.id, kind: "output", projectId: pid, folder: o.folder });
   for (const [pid, list] of Object.entries(res)) for (const x of list) if (x.ask && now() - x.ask.at < ASK_TTL && (!x.deviceId || x.deviceId === d.id) && (!x.ask.sentTo || x.ask.sentTo === d.id)) { x.ask.sentTo = d.id; out.push({ id: x.ask.id, kind: "resource", projectId: pid, source: { id: x.id, kind: x.kind, location: x.location } }); }
   return out.slice(0, 6);
 }
 const SSH_PUBLIC = /^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{60,800}( [A-Za-z0-9@._ -]{1,80})?$/;
 function agentAsked(d, body) {
+  if (body?.kind === "signin" || body?.kind === "signinRemove") {
+    const x = signinRelay.get(String(body.id || ""));
+    if (!x || !x.deviceIds.includes(d.id)) return [200, { ok: true, ignored: true }];
+    x.done.push(d.id);
+    d.signinResult = { site: x.site, ok: body.ok === true, removed: !!x.remove, detail: clip(body.detail || "", 200), at: now() };
+    save("devices");
+    logActivity("settings", `${d.name} ${x.remove ? (body.ok === true ? "deleted its saved sign-in" : "could not delete its saved sign-in") : body.ok === true ? "now keeps the sign-in" : "could not keep the sign-in"} for ${x.name || x.site}.`);
+    if (x.deviceIds.every((id) => x.done.includes(id))) signinRelay.delete(String(body.id));        // handed over: forgotten here
+    return [200, { ok: true }];
+  }
   const pid = String(body?.projectId || ""), p = projectOf(pid);
   if (!p) return [200, { ok: true, ignored: true }];
   if (["repoKey", "repoTest", "repoToken", "repoTokenRemove"].includes(body.kind)) {
@@ -3284,6 +3326,11 @@ function agentAsked(d, body) {
       logActivity("check", `${d.name} tested its access to the code repository of ${p.name}: ${okNow ? "it works" : "it does not work"}.`, { projectId: pid });
     }
     r.ask = null; save("repos");
+  } else if (body.kind === "output") {
+    const o = load("outputs")[pid];
+    if (!o?.ask || o.ask.id !== body.id || o.deviceId !== d.id) return [200, { ok: true, ignored: true }];
+    o.check = { ok: body.ok === true, files: num(body.files, 0, 1e6, 0), detail: clip(body.detail || "", 300), at: now(), device: d.name };
+    o.ask = null; save("outputs");
   } else if (body.kind === "resource") {
     const x = resourcesOf(pid).find((s) => s.ask?.id === body.id && (!s.deviceId || s.deviceId === d.id));      // a folder is answered for by its own computer only
     if (!x) return [200, { ok: true, ignored: true }];
@@ -3291,6 +3338,128 @@ function agentAsked(d, body) {
     x.ask = null; save("resources");
   }
   return [200, { ok: true }];
+}
+
+/* ---------- a tool's sign-in, handed to the agent's computer ----------
+   The user name and password of a tool (an SMM management tool, a paid SEO
+   tool) are typed in the CRM once and handed to the computer that has the
+   tool's Chrome ID at its next check-in. That computer keeps them encrypted
+   and types them into the tool's own sign-in page when needed. Here they are
+   held in memory only until then (ten minutes at most): never written to a
+   file, never logged, never sent to a browser, never part of any task. What
+   the CRM does keep is which computer holds a sign-in for which site. */
+const signinRelay = new Map();       // id -> { name, site, loginUrl, user, password, deviceIds, done, at, remove }
+const siteOf = (url) => { try { return toolHosts(url)[1] || new URL(url).hostname; } catch { return ""; } };
+function signinView() {
+  const waiting = [...signinRelay.values()].filter((x) => now() - x.at < ASK_TTL && !x.remove).map((x) => ({ site: x.site, name: x.name, at: x.at }));
+  return { ok: true, waiting, devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3, profiles: (d.profiles || []).map((p) => p.id), signins: d.signins || [], last: d.signinResult || null })) };
+}
+function signinEdit(admin, body) {
+  const bad = (detail) => [400, { error: "bad_request", detail }];
+  if (body.action === "add") {
+    const loginUrl = toolUrl(body.loginUrl), name = line(body.name, 60), user = String(body.user || "").trim(), password = String(body.password || "");
+    if (!loginUrl) return bad("Give the tool's sign-in page as a full https address. Sign-ins for Google, Microsoft, Apple, Facebook and payment sites are not handled here: sign in to those yourself in the Chrome ID.");
+    if (!name) return bad("Give the tool a name.");
+    if (!user || user.length > 200 || password.length < 4 || password.length > 300) return bad("Enter the user name and the password.");
+    const devs = load("devices").filter((d) => !d.revoked && (CHROME_ID.test(String(body.profileId || "")) ? hasChrome(d, body.profileId) : d.id === body.deviceId));
+    if (!devs.length) return bad("No computer has that Chrome ID. Create it in the agent's application first (Settings, Chrome IDs).");
+    for (const [id, x] of signinRelay) if (x.site === siteOf(loginUrl)) signinRelay.delete(id);
+    signinRelay.set(uid("sg_"), { name, site: siteOf(loginUrl), loginUrl, user, password, deviceIds: devs.map((d) => d.id), done: [], at: now() });
+    logActivity("settings", `${admin.name} entered a sign-in for ${name}. It is handed to ${devs.map((d) => d.name).join(", ")} and not kept in the CRM.`);
+    pokeDevices((d) => devs.some((x) => x.id === d.id));
+  } else if (body.action === "remove") {
+    const dev = load("devices").find((d) => d.id === body.deviceId && !d.revoked), site = line(body.site, 80);
+    if (!dev || !site) return bad("Choose the computer and the tool.");
+    signinRelay.set(uid("sg_"), { name: site, site, remove: true, deviceIds: [dev.id], done: [], at: now() });
+    pokeDevices((d) => d.id === dev.id);
+  } else if (body.action && body.action !== "list") return bad("Unknown action.");
+  return [200, signinView()];
+}
+
+/* ---------- copying one project's settings and notes to another ----------
+   For setting a new client up the way an existing one is set up. What is
+   copied is how the agent works: working limits and schedules, the rules and
+   their notes, website notes, the SMM tool. What is never copied is what
+   belongs to the client itself: the website address, Business Profiles,
+   social profile links, Search Console and Analytics, the Chrome IDs chosen
+   for them, protected pages, the name outreach is signed with, brand voice,
+   resources, the code repository, what the agent knows and its lessons. */
+const COPY_PARTS = ["limits", "rules", "profileRules", "websiteNotes", "smm", "budget", "directions"];
+function projectCopy(admin, body) {
+  const from = projectOf(body?.fromId), to = projectOf(body?.toId);
+  if (!from || !to || from.id === AGENCY_PROJECT || to.id === AGENCY_PROJECT) return [404, { error: "not_found", detail: "Unknown project." }];
+  if (from.id === to.id) return [400, { error: "bad_request", detail: "Choose a different project to copy from." }];
+  const want = (Array.isArray(body.parts) ? body.parts : []).filter((k) => COPY_PARTS.includes(k));
+  if (!want.length) return [400, { error: "bad_request", detail: "Choose what to copy." }];
+  const cfg = load("config"), src = cfg.projects[from.id] || {}, dst = (cfg.projects[to.id] ||= {});
+  const copy = (v) => JSON.parse(JSON.stringify(v));
+  const done = [];
+  if (want.includes("limits")) { dst.tasks = copy(src.tasks || {}); done.push("working limits and schedules"); }
+  if (want.includes("budget")) { for (const k of ["tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "triggers"]) if (src[k] != null) dst[k] = copy(src[k]); else delete dst[k]; done.push("token and spend limits"); }
+  if (want.includes("rules") || want.includes("profileRules")) {
+    const a = cleanRules(src.rules), b = cleanRules(dst.rules);
+    const next = { ...b };
+    if (want.includes("rules")) {
+      /* the rules and their notes, but not what names this one client's pages or people */
+      next.onpage = { ...a.onpage, protectedUrls: b.onpage.protectedUrls };
+      next.offpage = { ...a.offpage, senderName: b.offpage.senderName };
+      next.social = { ...a.social };
+      done.push("on-page, off-page and social rules with their notes");
+    }
+    if (want.includes("profileRules")) { next.gbp = copy(a.gbp); done.push("Business Profile rules"); }
+    dst.rules = cleanRules(next);
+  }
+  if (want.includes("websiteNotes") || want.includes("smm")) {
+    const a = cleanChannels(src.channels), b = cleanChannels(dst.channels);
+    if (want.includes("websiteNotes")) { b.website.notes = copy(a.website.notes); done.push(`${a.website.notes.length} website note${a.website.notes.length === 1 ? "" : "s"}`); }
+    if (want.includes("smm")) { b.smm = { ...copy(a.smm), workspace: b.smm.workspace }; done.push("the SMM management tool"); }
+    dst.channels = cleanChannels(b);
+  }
+  if (want.includes("directions")) {
+    let n = 0;
+    for (const d of directionsOf(from.id)) if (addDirection(to.id, d.text, admin.name, "copy")) n += 1;
+    done.push(`${n} direction${n === 1 ? "" : "s"}`);
+  }
+  cfg.rev += 1; save("config");
+  logActivity("settings", `${admin.name} copied settings from ${from.name} to ${to.name}: ${done.join("; ")}.`, { projectId: to.id });
+  return [200, { ...overview(admin), copied: done }];
+}
+
+/* ---------- working documents: where the agent saves what people will open ----------
+   A folder on the agent's computer where it saves its deliverables as real
+   Excel and Word files: keyword research, content plans, audit tables. When
+   that folder lies inside Google Drive for desktop, the files appear in the
+   agency's Drive by themselves and open there as Sheets and Docs; the Drive
+   link is kept so the team can open the folder from here. The CRM stores only
+   the place and the note, never the files. */
+const outputOf = (pid) => load("outputs")[pid] || null;
+function outputView(pid) {
+  const o = outputOf(pid);
+  return { ok: true, projectId: pid, devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
+    output: o ? { folder: o.folder, deviceId: o.deviceId, deviceName: load("devices").find((d) => d.id === o.deviceId)?.name || "a removed computer", driveUrl: o.driveUrl || "", note: o.note || "", check: o.check || null, asking: !!(o.ask && now() - o.ask.at < ASK_TTL), by: o.by || "", at: o.at || null } : null };
+}
+function outputEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const all = load("outputs"), cur = all[p.id], bad = (detail) => [400, { error: "bad_request", detail }];
+  if (body.action === "save") {
+    const folder = String(body.folder || "").trim();
+    if (!LOCAL_PATH.test(folder)) return bad("Give the folder's full path on the agent's computer, for example C:\\Clients\\Northgate\\Agent work or a folder inside Google Drive for desktop.");
+    const deviceId = String(body.deviceId || "");
+    if (!load("devices").some((d) => d.id === deviceId && !d.revoked)) return bad("Choose the computer the folder is on.");
+    let driveUrl = "";
+    if (String(body.driveUrl || "").trim()) { const id = driveFolderId(body.driveUrl); if (!id) return bad("The Google Drive link has to be the link of a folder (it looks like https://drive.google.com/drive/folders/…). Leave it empty if the folder is not in Google Drive."); driveUrl = "https://drive.google.com/drive/folders/" + id; }
+    all[p.id] = { folder: folder.replace(/[\\/]+$/, "") || folder, deviceId, driveUrl, note: para(body.note, 600), by: admin.name, at: now(), check: cur && cur.folder === folder && cur.deviceId === deviceId ? cur.check || null : null };
+    save("outputs");
+    logActivity("settings", `${admin.name} set the folder for the agent's working documents of ${p.name}.`, { projectId: p.id });
+  } else if (body.action === "remove") {
+    if (cur) { delete all[p.id]; save("outputs"); }
+  } else if (body.action === "check") {
+    if (!cur) return bad("Save the folder first.");
+    cur.ask = { id: uid("ak_"), at: now() }; save("outputs");
+    pokeDevices((d) => d.id === cur.deviceId);
+  } else if (body.action && body.action !== "get") return bad("Unknown action.");
+  return [200, outputView(p.id)];
 }
 
 /* ---------- SEO tools the agent may use, signed in ----------
@@ -3739,6 +3908,9 @@ export async function agentOpsPost(req, body) {
     case "status": return statusEdit(admin, body || {});
     case "resources": return resourcesEdit(admin, body || {});
     case "repo": return repoEdit(admin, body || {});
+    case "signin": return signinEdit(admin, body || {});
+    case "output": return outputEdit(admin, body || {});
+    case "project/copy": return projectCopy(admin, body || {});
     case "ranking": return rankingEdit(admin, body || {});
     case "evidence": return evidenceGet(body || {});
     case "report": return reportGet(body || {});
