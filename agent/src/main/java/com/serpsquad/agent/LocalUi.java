@@ -213,8 +213,43 @@ final class LocalUi {
                     return;
                 }
                 case "autostart":
-                    if (!Shortcuts.setAutostart(cfg.home, body.path("on").asBoolean(false))) { refuse(ex, 400, Shortcuts.isWindows() ? "Windows did not allow the start-up shortcut to be changed." : "Starting with the computer is set up by hand on this system."); return; }
+                    if (!Shortcuts.setAutostart(cfg.home, body.path("on").asBoolean(false))) { refuse(ex, 400, Shortcuts.isWindows() ? "Windows did not allow the start-up shortcut to be changed." : "The start-up entry could not be written on this computer."); return; }
                     break;
+                case "signin": {
+                    /* sign-ins for SEO tools: saved encrypted on this computer, never sent anywhere, never shown again */
+                    String action = body.path("action").asText("");
+                    try {
+                        if ("add".equals(action)) { worker.vault().add(body.path("name").asText(""), body.path("loginUrl").asText(""), body.path("user").asText(""), body.path("password").asText("")); Log.info("A sign-in for an SEO tool was saved on this computer."); break; }
+                        if ("remove".equals(action)) { if (!worker.vault().remove(body.path("id").asText(""))) { refuse(ex, 404, "That sign-in is no longer saved."); return; } Log.info("A saved sign-in was removed from this computer."); break; }
+                    } catch (IllegalArgumentException | IllegalStateException e) { refuse(ex, 400, e.getMessage()); return; }
+                    refuse(ex, 400, "Unknown action.");
+                    return;
+                }
+                case "choose-folder": {
+                    /* a folder picker of this computer, for the Resources tab: only the chosen path goes back to the page */
+                    if (java.awt.GraphicsEnvironment.isHeadless()) { refuse(ex, 400, "This computer has no screen for a folder window. Type the folder's path instead."); return; }
+                    final String[] picked = { null };
+                    javax.swing.SwingUtilities.invokeAndWait(() -> {
+                        javax.swing.JFileChooser fc = new javax.swing.JFileChooser(System.getProperty("user.home"));
+                        fc.setDialogTitle("Choose the folder with this project's pictures and media");
+                        fc.setFileSelectionMode(javax.swing.JFileChooser.DIRECTORIES_ONLY);
+                        javax.swing.JFrame owner = new javax.swing.JFrame();
+                        owner.setAlwaysOnTop(true);
+                        owner.setUndecorated(true);
+                        owner.setLocationRelativeTo(null);
+                        owner.setVisible(true);
+                        try { if (fc.showOpenDialog(owner) == javax.swing.JFileChooser.APPROVE_OPTION && fc.getSelectedFile() != null) picked[0] = fc.getSelectedFile().getAbsolutePath(); } finally { owner.dispose(); }
+                    });
+                    out.put("path", picked[0] == null ? "" : picked[0]);
+                    break;
+                }
+                case "open-work": {
+                    java.nio.file.Path w = cfg.home.resolve("work");
+                    java.nio.file.Files.createDirectories(w);
+                    if (java.awt.GraphicsEnvironment.isHeadless() || !java.awt.Desktop.isDesktopSupported()) { refuse(ex, 400, "The folder is " + w); return; }
+                    java.awt.Desktop.getDesktop().open(w.toFile());
+                    break;
+                }
                 case "connect": {
                     String url = body.path("serverUrl").asText("").trim().replaceAll("/+$", "");
                     String tok = body.path("deviceToken").asText("").trim();

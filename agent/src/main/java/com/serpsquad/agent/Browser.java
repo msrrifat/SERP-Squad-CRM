@@ -59,6 +59,19 @@ final class Browser implements AutoCloseable {
 
     void setLookOnly(boolean on) { this.lookOnly = on; }
 
+    /**
+     * A window on a paid SEO tool the agency has an account with. The agent
+     * may search and filter there (so it may type and choose), but a button
+     * that would change the account, spend its credits or send something is
+     * not clicked, and nothing is uploaded.
+     */
+    private volatile boolean toolMode = false;
+
+    void setToolMode(boolean on) { this.toolMode = on; }
+
+    private static final java.util.regex.Pattern TOOL_CHANGES = java.util.regex.Pattern.compile(
+        "(?i)\\b(delete|remove|pay|buy|purchase|order|checkout|upgrade|downgrade|subscribe|unsubscribe|cancel (plan|subscription|account)|invite|add (a )?(user|member|seat|project)|create project|export|download|send|share|publish|post|disconnect|revoke|transfer|log ?out|sign ?out|deactivate|uninstall|billing|start (a )?(crawl|audit|campaign)|run (a )?(crawl|audit))\\b");
+
     boolean lookOnly() { return lookOnly; }
 
     Browser(Path profileDir, int port, String chromePath, boolean headless, Predicate<String> hostAllowed, boolean humanPace, Path logFile) {
@@ -232,7 +245,7 @@ final class Browser implements AutoCloseable {
      */
     private void answerDialog(WebSocket socket, JsonNode d) {
         String type = d.path("type").asText("alert");
-        boolean accept = type.equals("alert") || type.equals("beforeunload") || (type.equals("confirm") && !lookOnly);
+        boolean accept = type.equals("alert") || type.equals("beforeunload") || (type.equals("confirm") && !lookOnly && !toolMode);
         String said = Json.clip(d.path("message").asText("").replaceAll("\\s+", " ").trim(), 200);
         if (!type.equals("beforeunload")) {
             dialogNote = (type.equals("alert") ? "The page showed a message box, which was closed: \""
@@ -496,6 +509,8 @@ final class Browser implements AutoCloseable {
         JsonNode at = locate(ref);
         if (lookOnly && changesSomething(at.path("label").asText(""), at.path("link").asBoolean(false), "submit".equals(at.path("type").asText(""))))
             throw new BrowserException("This run only looks and proposes. [" + ref + "] \"" + Json.clip(at.path("label").asText(""), 60) + "\" would change something, so it was not clicked. Describe the change in your proposal or report instead.");
+        if (toolMode && TOOL_CHANGES.matcher(at.path("label").asText("")).find())
+            throw new BrowserException("In an SEO tool the agent reads and searches. [" + ref + "] \"" + Json.clip(at.path("label").asText(""), 60) + "\" would change the account, spend its credits or send something, so it was not clicked. Say in the report what a person should do there.");
         pace();
         clickAt(at);
         settle(1100);
@@ -563,6 +578,88 @@ final class Browser implements AutoCloseable {
         return read();
     }
 
+    private static final String SIGNIN_JS = """
+        (() => {
+          const vis = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' && !el.disabled; };
+          document.querySelectorAll('[data-ssl]').forEach((e) => e.removeAttribute('data-ssl'));
+          const pass = [...document.querySelectorAll('input[type=password]')].filter(vis)[0] || null;
+          const texts = [...document.querySelectorAll('input')].filter((el) => vis(el) && ['text', 'email', 'tel', ''].includes((el.getAttribute('type') || '').toLowerCase()));
+          const hint = (el) => [el.name, el.id, el.autocomplete, el.getAttribute('aria-label'), el.placeholder].join(' ').toLowerCase();
+          const code = texts.some((el) => /one-time|otp|2fa|two-factor|verification|passcode|(^|[^a-z])code([^a-z]|$)/.test(hint(el)));
+          let user = null;
+          if (pass) { const before = texts.filter((el) => (!pass.form || el.form === pass.form) && (el.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING)); user = before[before.length - 1] || null; }
+          else user = texts.find((el) => /user|e-?mail|login|account/.test(hint(el)) || (el.getAttribute('type') || '').toLowerCase() === 'email') || null;
+          if (user && /search|query/.test(hint(user))) user = null;
+          const captcha = [...document.querySelectorAll('iframe')].some((f) => vis(f) && ((/recaptcha\\/api2\\/(anchor|bframe)/i.test(f.src || '') && !/size=invisible/i.test(f.src || '')) || /hcaptcha\\.com\\/captcha|challenges\\.cloudflare\\.com/i.test(f.src || '')));
+          if (pass) pass.setAttribute('data-ssl', 'pass');
+          if (user) user.setAttribute('data-ssl', 'user');
+          return JSON.stringify({ host: location.hostname, pass: !!pass, user: !!user, code: code && !pass, captcha });
+        })()""";
+
+    /** Put text into the field this program marked on a sign-in page. The text is never logged and never part of a page reading. */
+    private void fillMarked(String which, String text) throws BrowserException {
+        JsonNode ok = eval("(() => { const el = document.querySelector('[data-ssl=\"" + which + "\"]'); if (!el) return false; el.focus(); if (el.select) el.select(); return true; })()");
+        if (!ok.asBoolean(false)) throw new BrowserException("The sign-in page changed while it was being filled in. A person has to sign in.");
+        ObjectNode p = Json.obj();
+        p.put("text", text);
+        send("Input.insertText", p);
+        try { Thread.sleep(250); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    private void pressEnter() throws BrowserException {
+        for (String t : new String[] { "rawKeyDown", "char", "keyUp" }) {
+            ObjectNode k = Json.obj();
+            k.put("type", t);
+            k.put("key", "Enter");
+            k.put("code", "Enter");
+            k.put("windowsVirtualKeyCode", 13);
+            k.put("nativeVirtualKeyCode", 13);
+            if ("char".equals(t)) k.put("text", "\r");
+            send("Input.dispatchKeyEvent", k);
+        }
+    }
+
+    /**
+     * Sign in to an SEO tool with a sign-in a person saved on this computer.
+     * This is the program acting, never Claude: the user name and password
+     * come from the local store and go straight into the page. It types only
+     * when the page is on the site the sign-in was saved for, never completes
+     * a captcha or a code, and gives up (so a person signs in) the moment the
+     * site asks for more than a user name and a password.
+     */
+    String signIn(String user, String password, String site) throws BrowserException {
+        ensureStarted();
+        boolean sent = false;
+        for (int stage = 0; stage < 3 && !sent; stage++) {
+            JsonNode f = Json.parse(eval(SIGNIN_JS).asText("{}"));
+            String host = f.path("host").asText("");
+            if (!Vault.site(host).equals(site)) throw new BrowserException("The sign-in page is on " + host + ", not on the site this sign-in was saved for, so nothing was typed. A person has to sign in.");
+            if (f.path("captcha").asBoolean(false)) throw new BrowserException("The site asks to prove a person is there (a captcha). The agent does not do that; a person has to sign in.");
+            if (f.path("code").asBoolean(false)) throw new BrowserException("The site asks for a code. A person has to sign in.");
+            if (f.path("pass").asBoolean(false)) {
+                if (f.path("user").asBoolean(false)) fillMarked("user", user);
+                fillMarked("pass", password);
+                pace();
+                pressEnter();
+                settle(2500);
+                sent = true;
+            } else if (f.path("user").asBoolean(false)) {
+                fillMarked("user", user);
+                pace();
+                pressEnter();
+                settle(2200);
+            } else {
+                throw new BrowserException("No sign-in form was found on the page. A person has to sign in.");
+            }
+        }
+        if (!sent) throw new BrowserException("The site did not ask for the password after the user name. A person has to sign in.");
+        try { Thread.sleep(1500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        JsonNode after = Json.parse(eval(SIGNIN_JS).asText("{}"));
+        if (after.path("code").asBoolean(false) || after.path("captcha").asBoolean(false)) throw new BrowserException("The site asks for a code or a check only a person can complete. A person has to sign in in this Chrome ID (Settings, Chrome IDs, Sign in).");
+        if (after.path("pass").asBoolean(false)) throw new BrowserException("The saved sign-in was not accepted. Check it under Settings, Saved sign-ins, or sign in by hand in this Chrome ID.");
+        return read();
+    }
+
     String scroll(String direction) throws BrowserException {
         ensureStarted();
         pace();
@@ -609,6 +706,7 @@ final class Browser implements AutoCloseable {
      */
     String upload(int ref, Path file) throws BrowserException {
         if (lookOnly) throw new BrowserException("This run only looks and proposes, so nothing is uploaded. Name the photo in your proposal or report instead.");
+        if (toolMode) throw new BrowserException("Nothing is uploaded to an SEO tool.");
         JsonNode before = snapshotGuard();
         if (signInPage(before)) throw new BrowserException("This is a sign-in page. A person has to sign in; the agent does not.");
         JsonNode at = locate(ref);

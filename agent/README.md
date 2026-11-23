@@ -522,8 +522,10 @@ profile of versions before 0.7.0 becomes the first Chrome ID automatically.
 - It talks to the CRM and to Claude over https only (this computer itself is
   allowed, for tests).
 
-- It never types on a page that has a password field or on Google's sign-in
-  pages, and it never types into a password field. A person signs in.
+- Claude never types on a page that has a password field or on Google's
+  sign-in pages, and never into a password field. A person signs in. The one
+  exception is the program itself (not Claude) signing in to a listed SEO
+  tool with a sign-in saved on this computer, see below.
 - Before approval, typing in the browser is switched off entirely.
 - A Chrome ID opened for a channel refuses any address outside that channel's own sites.
 - Text on web pages is passed to Claude as data. The agent rules tell it to
@@ -583,6 +585,42 @@ may already be live. It stops with that explanation and a person decides.
 **Run again** tells the agent to look at what is already live first and to do
 only what is missing. Tasks that only read or propose are simply run again.
 
+### Carrying on after a power cut or a restart
+
+While a task runs, the program keeps where it stands in `data/checkpoints/`:
+the conversation so far after every turn, and around every single step a
+small file that says which steps of the current turn are finished (with
+their results) and which one is in progress. The task's Claude key is never
+written there.
+
+When the program starts again after the computer stopped (power cut, crash,
+restart, or it was closed), it first asks the CRM whether that run is still
+its own (`agent/resume`). The CRM agrees when the task is still assigned to
+this computer, or was released only because the computer went silent and
+nobody has touched it since: not after a person ran it again, cancelled it or
+another computer took it, not after 24 hours, and at most three times for one
+run. The run then goes on from the saved conversation, on the same token
+budget, with what it already spent still counted and the time it stood still
+not counted against the longest a run may take. Nothing new is taken before
+that is settled.
+
+The agent is told plainly that the computer stopped. A step that had finished
+keeps its result. The step that was in progress is reported as *not known to
+have taken effect*, never as done, and the ones after it as not run. In a run
+that was making an approved change, the agent must look at what is already
+live and do only what is still missing; the browser has been restarted, so it
+has to open the page again before it can act at all. With this, a cut-off
+approved change no longer has to wait for a person, as long as the same
+computer comes back within a day. The switch is in the CRM (AI agent, API
+setup, "Carrying on after a power cut or a restart"); with it off the old
+behaviour applies.
+
+For the agent to come back by itself, switch on **Start the agent when this
+computer starts** in its Settings (a Startup shortcut on Windows, a launch
+agent on macOS, an autostart entry on Linux). The computer has to switch on
+again when power returns (a BIOS setting, usually "Restore on AC power loss")
+and sign this user in without waiting for a password.
+
 When the CRM cannot be reached at the end of a task, the result is kept in
 `data/outbox/` and delivered at the next check-in, before any new task is
 taken. A result that arrives after the CRM released the task is still
@@ -635,6 +673,12 @@ than 45 days, and a log that has grown past 20 MB, are removed at start.
 | `data/chrome-profiles/<Chrome ID>/`, `data/browser-profiles.json` | The signed-in Chrome profiles and their list |
 | `data/chrome-web/` | The clean Chrome profile for the open web |
 | `data/screenshots/` | A screenshot of the final browser state of each browser task |
+| `data/checkpoints/` | Where the running task stands, so it can be carried on after a power cut. Emptied when the run ends |
+| `data/signins.json`, `signins.key` | Saved sign-ins for SEO tools, encrypted, and the key that opens them (this user only) |
+| `keys/` | The access key of each project's code repository (the private half never leaves this folder) |
+| `work/<project>/files/` | The agent's own notes, inventories and drafts for the project |
+| `work/<project>/drive/` | Copies of media it fetched from the project's Google Drive folders |
+| `work/<project>/repo/` | Its working copy of the website's code |
 | `logs/` | One log file per day. Keys and tokens are never logged |
 
 ## Build
@@ -678,7 +722,106 @@ Claude is called through the official Anthropic Java SDK
 effort from the CRM setting, prompt caching on the growing conversation, and
 the server-side refusal fallback on Opus and Sonnet models.
 
+## What runs where
+
+The agent runs on this computer: the program, its Chrome windows, the files
+it works with and the Git commands all use this computer's processor, memory
+and disk (Settings, This computer shows them). The CRM server keeps only the
+records: tasks, reports, limits, and what the agent knows about each project.
+One task runs at a time on a computer, plus the chat; to work on several
+projects at once, add a second computer.
+
+## The project's working folder
+
+Every project has a folder under `work/` on this computer. The tools
+`files_list`, `file_read` and `file_write` let a task keep working material
+there between runs (a page inventory, crawl results, drafts, notes on a
+competitor) and read it before fetching anything again. The short facts go
+into the project's status in the CRM; the detail stays here. Only text files
+are written (Markdown, text, CSV, JSON, HTML, XML, YAML), up to 400,000
+characters each and 300 MB per project. A path cannot leave the folder, and
+text that contains something that looks like a password or a key is not
+saved.
+
+## Media sources (the Resources tab)
+
+In the CRM, Work setup, Resources lists where a project's pictures, video
+and other media are: a folder on this computer, or a Google Drive folder
+shared with "Anyone with the link". Each has a note on what it is for and
+what it must not be used for, and every task is given those notes. The files
+are never copied to the CRM.
+
+- `resources_list` lists a source (pictures, video, audio and PDF; other
+  files are left out), `resource_look` shows the agent one picture (JPG, PNG,
+  GIF) so it can judge it before choosing it.
+- `browser_upload` attaches a file from a source through a page's file
+  chooser, in a run that may change things. `repo_add_media` copies one into
+  a website's code.
+- A folder is read on the computer it is on, and only inside that folder.
+- A Drive folder is read without signing in, from this program and not from
+  a signed-in Chrome window: the public folder page for the listing, the
+  public download address for a file (up to 80 MB; Google Docs, Sheets and
+  Slides are skipped). A folder that is not shared by link cannot be read.
+  In the application on this computer the Resources tab has a **Choose
+  folder** button that opens the computer's own folder window.
+
+## A website's code repository
+
+For a site built from code in a GitHub, GitLab or Bitbucket repository. Set
+it up in the CRM under Work setup, Resources: the address, the branch the
+site is built from, and whether an approved change goes to a branch of its
+own for review (the default) or straight to that branch.
+
+- **The key.** This computer makes an ed25519 key pair for the project with
+  `ssh-keygen` (`keys/repo-<project>`). Only the public half is sent to the
+  CRM, where it is shown for a person to add to the repository as a deploy
+  key with write access. The private half is used by Git itself and is never
+  sent anywhere or given to Claude. **Test access** reads the repository and
+  tries a push without changing anything.
+- **Reading.** `repo_sync`, `repo_files`, `repo_read`, `repo_search` are
+  given to every task of the project, so audits can read how the site is
+  built.
+- **Changing.** Only in the task type *Change the website's code
+  (repository)*, and only after approval: `repo_write` (one file, complete
+  content), `repo_add_media`, `repo_diff`, `repo_publish` (one commit, to
+  `agent/<task id>` or to the working branch; never a forced push).
+- **Limits built into the program.** It never runs anything from the
+  repository; Git runs with hooks and the user's own settings switched off.
+  It neither reads nor writes files that hold keys or server settings
+  (`.env`, key files, `.git`, CI and workflow folders) and does not write
+  what decides what is installed, built or deployed (`package.json`, lock
+  files, Dockerfiles, `netlify.toml`, scripts and the like). Content that
+  looks like a password or a key is not written.
+
+Git and `ssh-keygen` have to be installed on the computer.
+
+## SEO tools the agent may sign in to
+
+Paid tools the agency has an account with are listed in the CRM (AI agent,
+API setup): a name, the tool's address, the Chrome ID that is signed in to
+it and what it is for. A task on a computer that has that Chrome ID can open
+the tool with `seo_tool_open`; the browser tools then act in that window
+until `seo_tool_close`. There the agent may search and filter, but a button
+that would change the account, spend exports or credits, or send something
+is not clicked, account and billing pages are not opened, and nothing is
+uploaded.
+
+**Saved sign-ins.** In this application, Settings, Saved sign-ins, a person
+can save a tool's user name and password. They are encrypted on this
+computer (AES-256-GCM, key in `signins.key`, readable by this user only),
+never sent to the CRM, never given to Claude, never logged and never shown
+again. When a tool has signed the agent out, the program types them into the
+tool's sign-in page itself, and only when that page is on the site the
+sign-in was saved for. It does not complete a captcha or a code: then, or
+when the sign-in is not accepted, the agent is told that a person has to
+sign in and carries on without the tool. Sign-ins for Google, Microsoft,
+Apple, Facebook, payment sites and code hosts cannot be saved. This protects
+the passwords from the file being read on its own; it does not protect them
+from someone who can use this computer's user account.
+
 ## Not built yet
+
+- Several tasks at once on one computer.
 
 - The agent changing the CRM's own code (planned as pull requests for review).
 - Sending outreach email. It drafts; a person sends.

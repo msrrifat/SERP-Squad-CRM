@@ -42,6 +42,22 @@ Rules the server enforces:
   read-only CRM tools `crm_overview`, `crm_read` (switch: `global.crmRead`). The CRM tools never return fields
   named like secrets (`CRM_HIDE`).
 
+**Local AI agent, added 24 Nov 2026, second part** (all in `server/agentops.js`):
+
+- `POST /api/agentops/resources` (`get`, `add`, `update`, `remove`, `check`): a project's media sources
+  (`data/agentops/resources.json`). Only a place (a folder path on a named device, or a Google Drive folder id)
+  and the notes are stored; the server never reads the files.
+- `POST /api/agentops/repo` (`get`, `save`, `remove`, `key`, `test`): the website's code repository
+  (`data/agentops/repos.json`). `key` and `test` are done by the device at its next check-in
+  (`asks` in the answer to `agent/hello`, result through `agent/asked`). Only a value shaped like an SSH
+  PUBLIC key is ever stored. Test hook: `AGENTOPS_REPO_TEST=1` accepts a `file:///` repository.
+- `config` accepts `global.seoTools` (name, https address, Chrome ID, purpose; sign-in providers and payment
+  sites refused) and `global.resume`. No sign-in of a tool is stored on the server. Test hook:
+  `AGENTOPS_TOOL_TEST=1` accepts a tool on 127.0.0.1.
+- `POST /api/agentops/agent/resume`: a device asks to carry on with the run it was in when it stopped. See
+  "carrying on after the computer restarted" in the file for the exact conditions.
+- Task claims now carry `resources`, `repo` and `seoTools` for the device that may use them.
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |

@@ -99,7 +99,8 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5").put("vision", true).put("crmRead", true);
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5").put("vision", true).put("crmRead", true).put("resume", true);
+        global.putArray("seoTools").addObject().put("id", "st_demo1").put("name", "Ahrefs").put("url", "https://app.ahrefs.example/").put("profileId", CHROME[0][0]).put("useFor", "Referring domains and lost links of the client and of the competitors that outrank it.").put("by", "Sam Whitfield").put("at", System.currentTimeMillis() - 9 * DAY);
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -500,6 +501,8 @@ final class Demo {
         ArrayNode profs = s.putArray("profiles");
         for (String[] c : CHROME) profs.addObject().put("id", c[0]).put("name", c[1]).put("createdAt", startedAt - 20 * DAY).put("opened", true);
         s.put("platform", Shortcuts.isWindows() ? "windows" : "other").put("autostart", true);
+        s.putArray("signins").addObject().put("id", "si_demo1").put("name", "Ahrefs").put("site", "ahrefs.example").put("loginUrl", "https://app.ahrefs.example/user/login").put("userHint", "se…ty").put("readable", true).put("addedAt", startedAt - 9 * DAY);
+        s.putObject("computer").put("cores", 8).put("memoryMb", 16384).put("agentMemoryMb", 4096).put("freeDiskGb", 212).put("workDir", "C:\\SERP Squad Agent\\work");
         ArrayNode recent = s.putArray("recent");
         long finishedAt = now - pos[1];
         for (int k = 1; k <= Math.min(3, pos[2]); k++) {
@@ -567,6 +570,62 @@ final class Demo {
     private final Map<String, List<String>> visPrompts = new HashMap<>();
 
     private ObjectNode dfsOwn = Json.obj().put("set", false);
+
+    private final Map<String, ArrayNode> resSources = new HashMap<>();
+    private final Map<String, ObjectNode> resRepo = new HashMap<>();
+
+    /** Made-up media sources and a code repository, in the shape the CRM sends. The first project has examples. */
+    private Reply resourcesEdit(String what, String pid, JsonNode body) {
+        boolean first = pid.equals(PROJECTS[0][0]);
+        long now = System.currentTimeMillis();
+        String a = body.path("action").asText("get");
+        ArrayNode list = resSources.computeIfAbsent(pid, (k) -> {
+            ArrayNode n = Json.arr();
+            if (!first) return n;
+            n.addObject().put("id", "rs_demo1").put("kind", "folder").put("label", "Finished jobs 2026").put("location", "C:\\Clients\\Northgate Plumbing\\Finished jobs 2026").put("deviceId", "dev_demo").put("deviceName", "Office PC")
+                .put("useFor", "Blog posts and Business Profile photos about boiler and bathroom work. Before-and-after pairs belong together.").put("notFor", "Nothing that shows a customer's face or a house number. Not for directory listings.").put("by", "Sam Whitfield").put("at", now - 12 * DAY)
+                .putObject("check").put("ok", true).put("files", 64).put("folders", 5).put("detail", "64 media files and 5 folders at the top.").put("at", now - 2 * HOUR).put("device", "Office PC");
+            n.addObject().put("id", "rs_demo2").put("kind", "drive").put("label", "Team and vans (from the client)").put("location", "https://drive.google.com/drive/folders/1DemoFolderIdForTheAgentDemo00").put("deviceId", "").put("deviceName", "")
+                .put("useFor", "About page, social posts, the profile's team photos.").put("notFor", "Do not use the 2019 van photos: the livery has changed.").put("by", "Sam Whitfield").put("at", now - 5 * DAY);
+            return n;
+        });
+        if (what.equals("resources")) {
+            if (a.equals("add")) {
+                String loc = body.path("location").asText("").trim();
+                if (loc.isEmpty()) return bad(400, "Give the folder's path or the Google Drive link.");
+                boolean drive = "drive".equals(body.path("kind").asText(""));
+                if (drive && !loc.startsWith("https://drive.google.com/")) return bad(400, "Paste the link of a Google Drive folder (it looks like https://drive.google.com/drive/folders/…). The folder has to be shared with \"Anyone with the link\".");
+                list.addObject().put("id", "rs_demo" + (list.size() + 3)).put("kind", drive ? "drive" : "folder").put("label", body.path("label").asText("").isBlank() ? (drive ? "Google Drive folder" : "Folder") : body.path("label").asText()).put("location", loc)
+                    .put("deviceId", drive ? "" : "dev_demo").put("deviceName", drive ? "" : "Office PC").put("useFor", body.path("useFor").asText("")).put("notFor", body.path("notFor").asText("")).put("by", "Office PC (agent's computer)").put("at", now);
+            } else if (a.equals("update") || a.equals("remove") || a.equals("check")) {
+                for (int i = 0; i < list.size(); i++) {
+                    if (!list.get(i).path("id").asText("").equals(body.path("id").asText(""))) continue;
+                    ObjectNode x = (ObjectNode) list.get(i);
+                    if (a.equals("remove")) { list.remove(i); break; }
+                    if (a.equals("update")) { if (body.has("label")) x.put("label", body.path("label").asText()); x.put("useFor", body.path("useFor").asText("")).put("notFor", body.path("notFor").asText("")); }
+                    else x.putObject("check").put("ok", true).put("files", 18).put("folders", 2).put("detail", "Demo: 18 media files and 2 folders at the top.").put("at", now).put("device", "Office PC");
+                    break;
+                }
+            }
+        } else {
+            if (a.equals("save")) {
+                String url = body.path("url").asText("").trim();
+                if (!url.startsWith("git@") && !url.startsWith("https://")) return bad(400, "Give the repository's address, for example git@github.com:owner/website.git or https://github.com/owner/website. GitHub, GitLab and Bitbucket are supported.");
+                ObjectNode r = resRepo.computeIfAbsent(pid, (k) -> Json.obj());
+                r.put("url", url).put("branch", body.path("branch").asText("main")).put("mode", "direct".equals(body.path("mode").asText("")) ? "direct" : "branch").put("deviceId", "dev_demo").put("deviceName", "Office PC").put("notes", body.path("notes").asText("")).put("by", "Office PC (agent's computer)").put("at", now).put("asking", "");
+                if (!r.has("publicKey")) { r.put("publicKey", ""); r.putNull("keyAt"); r.putNull("test"); }
+            } else if (a.equals("remove")) resRepo.remove(pid);
+            else if (a.equals("key") && resRepo.containsKey(pid)) resRepo.get(pid).put("publicKey", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoKeyOnlyForTheDemoNotARealKey0000000000000 serpsquad-agent demo").put("keyAt", now);
+            else if (a.equals("test") && resRepo.containsKey(pid)) resRepo.get(pid).putObject("test").put("ok", true).put("detail", "Demo: reading works, and the key is allowed to write.").put("at", now);
+        }
+        ObjectNode o = Json.obj();
+        o.put("ok", true).put("projectId", pid).put("max", 12);
+        o.putArray("devices").addObject().put("id", "dev_demo").put("name", "Office PC").put("online", true);
+        o.set("sources", list.deepCopy());
+        if (resRepo.containsKey(pid)) o.set("repo", resRepo.get(pid).deepCopy()); else o.putNull("repo");
+        o.putObject("taskType").put("mode", "off");
+        return new Reply(200, o);
+    }
 
     private static final String[][] STATUS = {
         { "business", "The business" }, { "website", "The website" }, { "technical", "Technical state of the site" }, { "profile", "Google Business Profile" },
@@ -998,6 +1057,7 @@ final class Demo {
             ((ObjectNode) p.path("usage")).putObject("seo").put("usd", spent).put("calls", calls);
             if (!setting.has("seoUsdPerMonth")) setting.put("seoUsdPerMonth", 5.0);
             p.put("photos", i < 0 ? 0 : photosOf((String) PROJECTS[i][0]).size());
+            { String rid = p.path("id").asText(""); p.put("resources", resSources.containsKey(rid) ? resSources.get(rid).size() : i == 0 ? 2 : 0); if (resRepo.containsKey(rid)) p.putObject("repo").put("ready", !resRepo.get(rid).path("publicKey").asText("").isEmpty()).put("ok", resRepo.get(rid).path("test").path("ok").asBoolean(false)); else p.putNull("repo"); }
             if (i == 0) p.putObject("visibility").put("at", System.currentTimeMillis() - 2 * DAY).put("share", 58).put("asked", 12); else p.putNull("visibility");
             if (!setting.has("triggers")) setting.putObject("triggers").put("rankDrop", i == 0).put("rankDropBy", 5).put("siteDown", i >= 0 && i < 2);
             seoUsd += spent;
@@ -1536,7 +1596,15 @@ final class Demo {
         switch (p) {
             case "config": {
                 if (body.path("global").isObject()) {
-                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision", "crmRead");
+                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision", "crmRead", "resume");
+                    if (body.path("global").path("seoTools").isArray()) {
+                        ArrayNode next = Json.arr();
+                        for (JsonNode x : body.path("global").path("seoTools")) {
+                            if (x.path("name").asText("").isBlank() || !x.path("url").asText("").startsWith("https://") || x.path("profileId").asText("").isBlank()) return bad(400, "Each SEO tool needs a name, an https address and a Chrome ID.");
+                            next.addObject().put("id", x.path("id").asText("").isBlank() ? "st_demo" + (next.size() + 2) : x.path("id").asText()).put("name", x.path("name").asText()).put("url", x.path("url").asText()).put("profileId", x.path("profileId").asText()).put("useFor", x.path("useFor").asText("")).put("by", "Office PC (agent's computer)").put("at", System.currentTimeMillis());
+                        }
+                        global.set("seoTools", next);
+                    }
                     if (body.path("global").path("alerts").isObject()) alerts.setAll((ObjectNode) body.path("global").path("alerts"));
                     if (body.path("global").path("workHours").isObject()) workHours.setAll((ObjectNode) body.path("global").path("workHours"));
                 }
@@ -1639,6 +1707,7 @@ final class Demo {
             case "roster": return rosterEdit(body);
             case "visibility": return known(pid) ? new Reply(200, visibility(pid, body)) : bad(404, "Unknown project.");
             case "status": return known(pid) ? statusEdit(pid, body) : bad(404, "Unknown project.");
+            case "resources": case "repo": return known(pid) ? resourcesEdit(p, pid, body) : bad(404, "Unknown project.");
             case "ranking": return known(pid) ? new Reply(200, ranking(pid)) : bad(404, "Unknown project.");
             case "media": {
                 if (!known(pid)) return bad(404, "Unknown project.");

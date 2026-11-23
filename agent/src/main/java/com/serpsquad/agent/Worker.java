@@ -37,6 +37,8 @@ final class Worker {
     private final SyncStore store;
     private final Profiles profiles;
     private final java.util.Map<String, Browser> channelBrowsers = new java.util.HashMap<>();
+    private final java.util.List<Browser> toolBrowsers = new java.util.concurrent.CopyOnWriteArrayList<>();     // SEO tools opened by the running task
+    private final Vault vault;
     private volatile CrmClient crm;
     private volatile Updater updater;
     private final LinkedBlockingQueue<Boolean> wake = new LinkedBlockingQueue<>();
@@ -84,6 +86,7 @@ final class Worker {
         this.store = new SyncStore(cfg.dataDir());
         this.profiles = new Profiles(cfg);
         this.history = loadHistory();
+        this.vault = new Vault(cfg);
         rebuildClient();
         /* Quit, a restart for an update or the computer shutting down: close the
            Chrome window the agent opened, so a signed-in profile is never left
@@ -91,6 +94,7 @@ final class Worker {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             Browser b = taskBrowser;
             if (b != null) { try { b.close(); } catch (Throwable ignored) { /* the process is ending */ } }
+            for (Browser t : toolBrowsers) { try { t.close(); } catch (Throwable ignored) { /* the process is ending */ } }
         }, "close-chrome"));
     }
 
@@ -224,6 +228,39 @@ final class Worker {
 
     Profiles profiles() { return profiles; }
 
+    Vault vault() { return vault; }
+
+    /** Opening a signed-in SEO tool for the running task, and signing in again with the sign-in saved here. */
+    private ToolBox.ToolSites toolSites(JsonNode task) {
+        return new ToolBox.ToolSites() {
+            @Override
+            public Browser open(JsonNode tool) throws Browser.BrowserException {
+                String id = tool.path("profileId").asText("");
+                Path dir = profiles.dir(id);
+                if (dir == null) throw new Browser.BrowserException("This computer does not have Chrome ID " + id + ", which " + tool.path("name").asText("the tool") + " is set to use.");
+                if (id.equals(task.path("browser").path("profileId").asText("-"))) throw new Browser.BrowserException("That tool uses the same Chrome ID as this task's own window, so it cannot be opened beside it.");
+                for (Browser open : toolBrowsers) { try { open.close(); } catch (Throwable ignored) { /* a new window is opened below */ } }
+                toolBrowsers.clear();
+                List<String> hosts = new ArrayList<>();
+                for (JsonNode h : tool.path("hosts")) hosts.add(h.asText());
+                if (hosts.isEmpty()) throw new Browser.BrowserException("The tool has no address.");
+                Browser b = new Browser(dir, profiles.port(id), chromePath(), cfg.headless, Browser.onlyHosts(hosts), true, cfg.home.resolve("logs").resolve("chrome-" + id + ".log"));
+                b.setToolMode(true);
+                toolBrowsers.add(b);
+                return b;
+            }
+
+            @Override
+            public String signIn(Browser b, JsonNode tool) throws Browser.BrowserException {
+                String host = Vault.hostOf(tool.path("url").asText(""));
+                String[] c = vault.forHost(host);
+                if (c == null) throw new Browser.BrowserException(tool.path("name").asText("The tool") + " asks for a sign-in, and no sign-in is saved for it on this computer (Settings, Saved sign-ins). A person has to sign in in its Chrome ID. Carry on without this tool and say so in the report.");
+                Log.info("  signing in to " + tool.path("name").asText("an SEO tool") + " with the sign-in saved on this computer");
+                return b.signIn(c[0], c[1], Vault.site(host));
+            }
+        };
+    }
+
     /**
      * The browser a task works in. A task that belongs to one of the project's
      * channels gets the Chrome ID the CRM named for that channel, limited to
@@ -328,7 +365,68 @@ final class Worker {
 
     // ---------- one task ----------
 
-    private void runTask(JsonNode task) {
+    private void runTask(JsonNode task) { runTask(task, null); }
+
+    /**
+     * A run was in progress when this computer last stopped. Ask the CRM
+     * whether it is still ours to carry on (nobody ran it again, cancelled it
+     * or gave it to another computer in the meantime); if so, go on from the
+     * conversation kept on disk. Returns true when the saved run was dealt
+     * with, one way or the other.
+     */
+    private boolean resumeRun(ObjectNode saved) throws CrmClient.CrmException {
+        String id = saved.path("taskId").asText(""), title = saved.path("title").asText("a task");
+        ObjectNode ask = Json.obj();
+        ask.put("taskId", id);
+        JsonNode r;
+        try {
+            r = crm.post("agent/resume", ask);
+        } catch (CrmClient.CrmException e) {
+            if (e.status == 409 || e.status == 404 || e.status == 400) {
+                Log.info("\"" + title + "\" was cut off when this computer stopped and is not carried on: " + e.getMessage());
+                Checkpoint.forget(cfg.dataDir(), id);
+                return true;
+            }
+            throw e;
+        }
+        if (!r.path("task").isObject()) {
+            Log.info("\"" + title + "\" was cut off when this computer stopped. It is carried on later: " + r.path("reason").asText("the CRM said to wait") + ".");
+            return false;
+        }
+        Log.info("Carrying on with \"" + title + "\" where it stopped (step " + (saved.path("turn").asInt(0) + 1) + ").");
+        if (r.path("playbooksRev").asLong(store.rev()) != store.rev()) sync("playbooks changed");
+        runTask(r.path("task"), saved);
+        return true;
+    }
+
+    /** Things asked for in the CRM outside a task: make the repository's key, test access to it, look into a media source. */
+    private void runAsks(JsonNode asks) {
+        for (JsonNode a : asks) {
+            String kind = a.path("kind").asText(""), pid = a.path("projectId").asText("");
+            ObjectNode body = Json.obj();
+            body.put("id", a.path("id").asText("")).put("kind", kind).put("projectId", pid);
+            try {
+                if ("repoKey".equals(kind)) {
+                    body.put("publicKey", new Repo(cfg, pid).ensureKey()).put("ok", true);       // the public half only
+                    Log.info("Made the access key for a project's code repository. Its public half was sent to the CRM; the private half stays on this computer.");
+                } else if ("repoTest".equals(kind)) {
+                    state = "working: testing access to a code repository";
+                    body.put("detail", new Repo(cfg, pid).test(a.path("url").asText(""), a.path("branch").asText("main"))).put("ok", true);
+                } else if ("resource".equals(kind)) {
+                    body.setAll(LocalTools.checkSource(a.path("source")));
+                } else continue;
+            } catch (Repo.RepoException e) {
+                body.put("ok", false).put("detail", Json.clip(e.getMessage(), 280));
+            } catch (Throwable e) {
+                body.put("ok", false).put("detail", "The check could not run on this computer: " + e.getClass().getSimpleName());
+            } finally {
+                state = "idle";
+            }
+            try { crm.post("agent/asked", body); } catch (Exception e) { Log.warn("The result could not be reported to the CRM: " + e.getMessage()); }
+        }
+    }
+
+    private void runTask(JsonNode task, ObjectNode resume) {
         state = "working: " + Json.clip(task.path("title").asText(""), 80);
         Log.info("Task: " + task.path("title").asText("") + "  [" + task.path("label").asText("") + ", " + task.path("projectName").asText("") + ", " + task.path("model").asText("") + "]");
         ObjectNode cur = Json.obj();
@@ -339,6 +437,7 @@ final class Worker {
         cur.put("phase", task.path("phase").asText("run"));
         cur.put("keySource", task.path("keySource").asText("device"));
         cur.put("startedAt", System.currentTimeMillis());
+        cur.put("resumed", resume != null);
         cur.put("tokens", 0);
         cur.put("budget", task.path("runBudgetTokens").asLong(0));
         cur.putArray("steps");
@@ -372,7 +471,11 @@ final class Worker {
             b = browserFor(task);
             taskBrowser = b;
             tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
+            tools.local = new LocalTools(cfg, task);
+            if (task.path("seoTools").size() > 0) tools.sites = toolSites(task);
             TaskRunner runner = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher);
+            runner.checkpoint = new Checkpoint(cfg.dataDir(), task.path("id").asText("task"));
+            runner.resume = resume;
             runner.keepForLater = this::keepResult;
             runner.ended = () -> stalled;
             String problem = runner.run();
@@ -392,6 +495,9 @@ final class Worker {
             Thread.interrupted();           // the watchdog's interrupt ends with the task; the loop goes on
             if (b != null) b.close();
             taskBrowser = null;
+            for (Browser t : toolBrowsers) { try { t.close(); } catch (Throwable ignored) { /* closed with the program at the latest */ } }
+            toolBrowsers.clear();
+            Checkpoint.forget(cfg.dataDir(), task.path("id").asText("task"));      // the run ended here, whatever its outcome: nothing is left to carry on
             if (tools != null) tools.cleanUp();
             if (stalled) { outcome[0] = "failed"; outcome[1] = "The run stood still for too long and was ended."; }
             remember(cur, outcome[0], outcome[1]);
@@ -581,8 +687,17 @@ final class Worker {
         s.put("pausedCrm", pausedByCrm);
         ObjectNode cur = current;
         if (cur != null) { synchronized (cur) { s.set("current", cur.deepCopy()); } } else s.putNull("current");
-        s.put("platform", Shortcuts.isWindows() ? "windows" : "other");
+        s.put("platform", Shortcuts.isWindows() ? "windows" : Shortcuts.isMac() ? "mac" : "other");
         s.put("autostart", Shortcuts.autostartOn());
+        s.set("signins", vault.view());
+        ObjectNode pc = s.putObject("computer");
+        pc.put("cores", Runtime.getRuntime().availableProcessors());
+        try { pc.put("memoryMb", ((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getTotalMemorySize() / 1048576L); } catch (Throwable e) { pc.put("memoryMb", 0); }
+        pc.put("agentMemoryMb", Runtime.getRuntime().maxMemory() / 1048576L);
+        pc.put("freeDiskGb", cfg.home.toFile().getUsableSpace() / 1073741824L);
+        pc.put("workDir", cfg.home.resolve("work").toString());
+        ObjectNode saved = Checkpoint.pending(cfg.dataDir());
+        if (saved != null && current == null) pc.put("cutOff", saved.path("title").asText(""));
         ObjectNode chat = s.putObject("chat");
         chat.put("answering", chatting);
         chat.put("lastAt", lastChatAt);
@@ -699,6 +814,7 @@ final class Worker {
                 }
                 deliverKept();
                 if (h.path("checks").size() > 0) runChecks(h.path("checks"));
+                if (h.path("asks").size() > 0) runAsks(h.path("asks"));
                 if (pausedByCrm || cfg.paused) {
                     if (!"paused".equals(state)) Log.info(cfg.paused ? "Paused on this computer. Waiting." : "Paused in the CRM. Waiting.");
                     state = "paused";
@@ -708,6 +824,13 @@ final class Worker {
                     state = "blocked: " + blockedWhy;
                 } else {
                     state = "idle";
+                    ObjectNode saved = Checkpoint.pending(cfg.dataDir());
+                    if (saved != null) {
+                        /* first what was cut off when this computer stopped; new work only after that */
+                        if (resumeRun(saved)) sleepMs = 3000;
+                        sleep(sleepMs);
+                        continue;
+                    }
                     JsonNode c = crm.post("agent/claim", Json.obj());
                     if (c.path("task").isObject()) {
                         if (c.path("playbooksRev").asLong(store.rev()) != store.rev()) sync("playbooks changed");

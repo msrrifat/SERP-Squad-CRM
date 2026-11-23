@@ -39,8 +39,10 @@ final class Redact {
 
     /** The text with every secret-looking part replaced. */
     static String text(String input) {
-        if (input == null || input.length() < 8) return input == null ? "" : input;
+        if (input == null) return "";
         String t = input;
+        for (String s : ALSO) if (t.contains(s)) t = t.replace(s, HIDDEN);
+        if (t.length() < 8) return t;
         for (Pattern p : PATTERNS) t = p.matcher(t).replaceAll(Matcher.quoteReplacement(HIDDEN));
         Matcher a = APP_PASSWORD.matcher(t);
         StringBuilder sb = new StringBuilder();
@@ -66,6 +68,11 @@ final class Redact {
         if (input == null || input.isEmpty()) return "";
         return text(URL_SECRET.matcher(input).replaceAll("$1[hidden]"));
     }
+
+    private static final Set<String> ALSO = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** A value this program knows to be secret (a saved password): hidden wherever it turns up in text. */
+    static void alsoHide(String secret) { if (secret != null && secret.length() >= 4) ALSO.add(secret); }
 
     /** True when the text holds something that looks like a password or a key. */
     static boolean hasSecret(String input) {

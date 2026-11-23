@@ -31,7 +31,10 @@ import com.anthropic.models.beta.messages.BetaWebFetchTool20260209;
 import com.anthropic.models.beta.messages.BetaWebSearchTool20250305;
 import com.anthropic.models.beta.messages.BetaWebSearchTool20260209;
 import com.anthropic.models.beta.messages.MessageCreateParams;
+import com.anthropic.core.ObjectMappers;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -162,6 +165,26 @@ final class TaskRunner {
             m.append("\nDirections from the manager for this project (follow them):\n");
             int n = 1;
             for (JsonNode d : task.path("directions")) m.append(n++).append(". ").append(d.asText("")).append('\n');
+        }
+        if (task.path("resources").size() > 0) {
+            m.append("\nMedia sources for this project (pictures, video and other media the client or the manager provided; list one with resources_list and follow its notes):\n");
+            int n = 1;
+            for (JsonNode r : task.path("resources")) {
+                m.append(n++).append(". ").append(r.path("label").asText("")).append(" (").append("drive".equals(r.path("kind").asText("")) ? "a Google Drive folder" : "a folder on this computer").append(").");
+                if (!r.path("useFor").asText("").isBlank()) m.append(" Use for: ").append(r.path("useFor").asText("").replaceAll("\\s+", " "));
+                if (!r.path("notFor").asText("").isBlank()) m.append(" Do NOT use for: ").append(r.path("notFor").asText("").replaceAll("\\s+", " "));
+                m.append('\n');
+            }
+        }
+        JsonNode repo = task.path("repo");
+        if (repo.isObject()) {
+            m.append("\nThe website is built from code in a repository (").append(repo.path("url").asText("")).append(", branch ").append(repo.path("branch").asText("main")).append("). Read it with the repo tools after repo_sync. ")
+                .append("direct".equals(repo.path("mode").asText("")) ? "An approved change is delivered straight to that branch." : "An approved change is delivered to a branch of its own, for a person to review and merge.").append('\n');
+            if (!repo.path("notes").asText("").isBlank()) m.append("Notes on the repository from the manager: ").append(repo.path("notes").asText("")).append('\n');
+        }
+        if (task.path("seoTools").size() > 0) {
+            m.append("\nSEO tools the agency has an account with (open one with seo_tool_open; there you read and search only):\n");
+            for (JsonNode t : task.path("seoTools")) m.append("- ").append(t.path("name").asText("")).append(t.path("useFor").asText("").isBlank() ? "" : ": " + t.path("useFor").asText("").replaceAll("\\s+", " ")).append('\n');
         }
         JsonNode approved = task.path("approved");
         if (approved.isObject()) {
@@ -359,10 +382,27 @@ final class TaskRunner {
             String system = systemPrompt();
             List<BetaTool> toolDefs = tools.definitions();
             List<BetaMessageParam> history = new ArrayList<>();
-            history.add(BetaMessageParam.ofUser(firstMessage()));
-            int continues = 0;
+            int continues = 0, firstTurn = 1;
             boolean wrappedUp = false;
-            for (int turn = 1; turn <= MAX_TURNS; turn++) {
+            if (resume != null) {
+                /* the computer stopped in the middle of this run: carry on from the conversation kept on disk */
+                history.addAll(restored());
+                continues = resume.path("continues").asInt(0);
+                wrappedUp = resume.path("wrappedUp").asBoolean(false);
+                lastText = resume.path("lastText").asText("");
+                firstTurn = Math.max(1, Math.min(MAX_TURNS, resume.path("turn").asInt(0) + 1));
+                if (resume.path("cleared").asBoolean(false) && tools.checkedAuto()) {
+                    tools.clearToAct();
+                    clearedToAct = true;
+                    clearedPlan = resume.path("clearedPlan").asText("");
+                    if (resume.path("check").isObject()) check = (ObjectNode) resume.get("check").deepCopy();
+                }
+                event("note", "Carried on after the computer restarted, from step " + firstTurn + ".");
+            } else {
+                history.add(BetaMessageParam.ofUser(firstMessage()));
+            }
+            for (int turn = firstTurn; turn <= MAX_TURNS; turn++) {
+                saveTurn(history, turn - 1, false, continues, wrappedUp, lastText);
                 BetaMessage m = ask(system, toolDefs, history);
                 watcher.progress();
                 String stopWhy = reportUsage(m);
@@ -370,6 +410,7 @@ final class TaskRunner {
                 if (!text.isBlank()) lastText = text;
                 m.content().forEach((b) -> b.fallback().ifPresent((f) -> event("note", "A safety check declined this request on " + model + "; the API continued on its fallback model.")));
                 history.add(m.toParam());
+                saveTurn(history, turn, true, continues, wrappedUp, lastText);
                 BetaStopReason stop = m.stopReason().orElse(BetaStopReason.END_TURN);
 
                 if (stop.equals(BetaStopReason.REFUSAL)) {
@@ -407,7 +448,9 @@ final class TaskRunner {
                     watcher.step(use.name() + " " + Json.clip(Json.str(input), 140));
                     /* cancelled or taken away in the CRM: stop BEFORE the next action, not after it */
                     if (event("tool", use.name() + " " + Json.clip(Json.str(input), 600))) { Log.info("  the task was cancelled in the CRM"); watcher.finished("stopped", "Stopped in the CRM."); return null; }
+                    stepStart(turn, use.id());
                     ToolBox.Outcome out = tools.run(use.name(), input);
+                    stepDone(use.id(), out);
                     watcher.progress();
                     if (use.name().equals("request_approval") && tools.approval != null && !out.error) out = afterPlan(out);
                     if (out.image != null) {
@@ -466,6 +509,122 @@ final class TaskRunner {
         return null;
     }
 
+    // ---------- carrying on after the computer stopped ----------
+
+    /** Set by the worker: where this run's progress is kept on disk. */
+    Checkpoint checkpoint = null;
+
+    /** Set by the worker: the progress of this same run from before the computer stopped. */
+    JsonNode resume = null;
+
+    private boolean clearedToAct = false;
+    private ObjectNode stepState = null;
+
+    private void saveTurn(List<BetaMessageParam> history, int turn, boolean open, int continues, boolean wrappedUp, String lastText) {
+        if (checkpoint == null) return;
+        try {
+            ObjectNode s = Json.obj();
+            s.put("taskId", taskId).put("title", Json.clip(task.path("title").asText(""), 160)).put("phase", task.path("phase").asText("run")).put("turn", turn).put("open", open)
+                .put("continues", continues).put("wrappedUp", wrappedUp).put("lastText", Json.clip(lastText == null ? "" : lastText, 20000)).put("cleared", clearedToAct).put("clearedPlan", clearedPlan);
+            if (check != null) s.set("check", check);
+            s.set("history", ObjectMappers.jsonMapper().valueToTree(history));
+            checkpoint.turn(s);
+            stepState = null;
+        } catch (Throwable e) {
+            Log.warn("This run's progress could not be saved (" + e.getClass().getSimpleName() + "). The run goes on; it could not be carried on after a power cut.");
+        }
+    }
+
+    private void stepStart(int turn, String id) {
+        if (checkpoint == null) return;
+        if (stepState == null || stepState.path("turn").asInt(-1) != turn) { stepState = Json.obj(); stepState.put("turn", turn); stepState.putObject("done"); }
+        stepState.put("running", id);
+        checkpoint.step(stepState);
+    }
+
+    private void stepDone(String id, ToolBox.Outcome out) {
+        if (checkpoint == null || stepState == null) return;
+        ((ObjectNode) stepState.get("done")).putObject(id).put("text", Json.clip(out.text == null ? "" : out.text, 60000)).put("error", out.error).put("image", out.image != null);
+        stepState.put("running", "");
+        checkpoint.step(stepState);
+    }
+
+    /**
+     * The conversation as it was kept on disk, made whole again. If the
+     * computer stopped while the agent's last answer was being carried out,
+     * every step of that answer gets its result: the recorded one when the
+     * step had finished, "it is not known whether this took effect" for the
+     * one that was running, and "not run" for those that had not started.
+     * The agent is then told plainly what happened.
+     */
+    private List<BetaMessageParam> restored() throws TaskFailed {
+        try {
+            ArrayNode hist = (ArrayNode) resume.path("history").deepCopy();
+            JsonNode step = resume.path("step");
+            String running = step.path("running").asText("");
+            boolean acting = task.path("write").asBoolean(false) && ("execute".equals(task.path("phase").asText("")) || resume.path("cleared").asBoolean(false) || !tools.canRequestApproval());
+            ArrayNode results = Json.arr();
+            boolean unknown = false;
+            JsonNode last = hist.get(hist.size() - 1);
+            if ("assistant".equals(last.path("role").asText(""))) {
+                List<JsonNode> uses = new ArrayList<>();
+                if (last.path("content").isArray()) for (JsonNode b : last.path("content")) if ("tool_use".equals(b.path("type").asText(""))) uses.add(b);
+                if (uses.isEmpty()) {
+                    hist.remove(hist.size() - 1);       // an answer that was still being given: it is asked for again
+                } else {
+                    for (JsonNode u : uses) {
+                        String id = u.path("id").asText("");
+                        JsonNode done = step.path("done").path(id);
+                        ObjectNode r = results.addObject();
+                        r.put("type", "tool_result").put("tool_use_id", id);
+                        if (done.isObject()) {
+                            r.put("content", done.path("text").asText("") + (done.path("image").asBoolean(false) ? "\n(The picture itself was not kept across the restart. Look again if you still need it.)" : ""));
+                            r.put("is_error", done.path("error").asBoolean(false));
+                        } else if (id.equals(running) || (running.isEmpty() && !step.isObject() && uses.indexOf(u) == 0)) {
+                            unknown = true;
+                            r.put("content", "This step (" + u.path("name").asText("") + ") was in progress when the computer stopped. It is NOT known whether it took effect. Look at the current state first, and repeat it only if you can see that it did not happen.");
+                            r.put("is_error", true);
+                        } else {
+                            r.put("content", "Not run: the computer stopped before this step. Send it again if it is still needed.");
+                            r.put("is_error", true);
+                        }
+                    }
+                }
+            }
+            StringBuilder note = new StringBuilder("The computer this run was working on stopped (a power cut, a restart, or the program was closed) and has now started again. This is the same run, carried on from where it stopped; everything above is what you had done until then.");
+            if (tools.hasBrowser()) note.append(" The browser was restarted, so no page is open: open the page again before you do anything in it.");
+            if (acting) note.append(" Before you change anything, check what is already live" + (unknown ? " (one step may or may not have taken effect, see its result above)" : "") + ", and do only what is still missing. Never do the same thing twice.");
+            note.append(" Mention in your report that the run was interrupted.");
+            ObjectNode text = Json.obj();
+            text.put("type", "text").put("text", note.toString());
+            if (results.size() > 0) {
+                results.add(text);
+                ObjectNode msg = hist.addObject();
+                msg.put("role", "user");
+                msg.set("content", results);
+            } else {
+                ObjectNode prev = (ObjectNode) hist.get(hist.size() - 1);
+                if (!"user".equals(prev.path("role").asText(""))) {
+                    ObjectNode msg = hist.addObject();
+                    msg.put("role", "user");
+                    msg.putArray("content").add(text);
+                } else if (prev.path("content").isArray()) {
+                    ((ArrayNode) prev.get("content")).add(text);
+                } else {
+                    String was = prev.path("content").asText("");
+                    ArrayNode c = prev.putArray("content");
+                    c.addObject().put("type", "text").put("text", was);
+                    c.add(text);
+                }
+            }
+            return new ArrayList<>(ObjectMappers.jsonMapper().convertValue(hist, new TypeReference<List<BetaMessageParam>>() {}));
+        } catch (Throwable e) {
+            Log.warn("The saved progress of the run could not be read: " + e);
+            throw new TaskFailed("The computer restarted in the middle of this run, and its saved progress could not be read, so it was not carried on."
+                + (task.path("write").asBoolean(false) ? " If it was making a change, part of it may already be live: check before running it again." : ""));
+        }
+    }
+
     // ---------- the second check ----------
 
     private ObjectNode check;          // what the second check said about the plan (null = it did not run)
@@ -490,6 +649,7 @@ final class TaskRunner {
         if (!tools.checkedAuto()) return sent;
         if ("pass".equals(verdict)) {
             clearedPlan = tools.approval.path("details").asText("");
+            clearedToAct = true;
             tools.clearToAct();
             return new ToolBox.Outcome("The second check passed your plan. Carry out exactly this plan now, nothing more and nothing different. If the page does not match what the plan expects, stop and say so. Then call finish_task and state exactly what was changed.", false);
         }

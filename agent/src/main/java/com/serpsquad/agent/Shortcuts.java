@@ -175,20 +175,49 @@ final class Shortcuts {
         return appData == null ? null : Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", NAME + ".lnk");
     }
 
+    private static Path macAgent() { return Paths.get(System.getProperty("user.home"), "Library", "LaunchAgents", "com.serpsquad.agent.plist"); }
+
+    private static Path linuxAutostart() {
+        String x = System.getenv("XDG_CONFIG_HOME");
+        return (x == null || x.isBlank() ? Paths.get(System.getProperty("user.home"), ".config") : Paths.get(x)).resolve("autostart").resolve("serpsquad-agent.desktop");
+    }
+
     static boolean autostartOn() {
-        if (!isWindows()) return false;
-        Path p = startupLink();
+        Path p = isWindows() ? startupLink() : isMac() ? macAgent() : linuxAutostart();
         return p != null && Files.exists(p);
     }
 
-    /** Start the agent when Windows starts (a shortcut in the Startup folder). */
+    /**
+     * Start the agent when the computer starts and this user is signed in, so
+     * that after a power cut it comes back by itself: a shortcut in the
+     * Startup folder on Windows, a launch agent on macOS, an autostart entry
+     * on Linux. The computer itself has to be set to switch on again when the
+     * power returns and to sign this user in; that is a setting of the
+     * computer, not of this program.
+     */
     static boolean setAutostart(Path home, boolean on) {
-        if (!isWindows()) return false;
         try {
-            Path p = startupLink();
-            if (p == null) return false;
+            if (isWindows()) {
+                Path p = startupLink();
+                if (p == null) return false;
+                if (!on) { Files.deleteIfExists(p); return true; }
+                return powershell(shortcutScript(home, "[Environment]::GetFolderPath('Startup')"));
+            }
+            Path p = isMac() ? macAgent() : linuxAutostart();
             if (!on) { Files.deleteIfExists(p); return true; }
-            return powershell(shortcutScript(home, "[Environment]::GetFolderPath('Startup')"));
+            writeLaunchers(home);
+            Files.createDirectories(home.resolve("logs"));
+            Files.createDirectories(p.getParent());
+            String h = home.toAbsolutePath().toString();
+            String xml = h.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+            String text = isMac()
+                ? "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n"
+                    + "<key>Label</key><string>com.serpsquad.agent</string>\n<key>ProgramArguments</key><array><string>/bin/sh</string><string>" + xml + "/run.sh</string></array>\n"
+                    + "<key>WorkingDirectory</key><string>" + xml + "</string>\n<key>RunAtLoad</key><true/>\n<key>ProcessType</key><string>Interactive</string>\n"
+                    + "<key>StandardOutPath</key><string>" + xml + "/logs/launcher.log</string>\n<key>StandardErrorPath</key><string>" + xml + "/logs/launcher.log</string>\n</dict></plist>\n"
+                : "[Desktop Entry]\nType=Application\nName=" + NAME + "\nExec=/bin/sh \"" + h.replace("\"", "\\\"") + "/run.sh\"\nPath=" + h + "\nX-GNOME-Autostart-enabled=true\nTerminal=false\n";
+            Files.writeString(p, text, StandardCharsets.UTF_8);
+            return true;
         } catch (Exception e) {
             return false;
         }

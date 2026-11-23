@@ -16,6 +16,8 @@ const tok = () => { try { return localStorage.getItem("ss_token") || ""; } catch
    server, which forwards to the CRM with the device's token; the page proves
    itself with the header that application hands in. */
 let EXTRA_HEADERS = {};
+/* set only inside the agent's own application: what that computer can do for the page (open a folder picker) */
+let LOCAL_APP = null;
 let SECOND_CHECK = true;      // whether a plan is read by a second check before the agent acts on it alone (company setting)
 const auth = () => ({ "X-SS-Token": tok(), ...EXTRA_HEADERS });
 async function api(path, body) {
@@ -73,6 +75,7 @@ const selCls = "rounded-lg border border-gray-200 bg-white px-2 py-1 text-[12.5p
    device management stays in the CRM. */
 export function AgentOpsSection({ company, app = null }) {
   EXTRA_HEADERS = app?.headers || {};
+  LOCAL_APP = app?.local || null;
   const accent = company?.accent || "#1F2A44";
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
@@ -805,7 +808,8 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
     );
   };
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
-  const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
+  const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)],
+    ["resources", "Resources", FolderInput, `${project.resources || 0} media source${project.resources === 1 ? "" : "s"}${project.repo ? " · code repository" : ""}`], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
     ["visibility", "AI search", Sparkles, project.visibility ? `named in ${project.visibility.share}% of ${project.visibility.asked} answers` : "not checked yet"],
     ["photos", "Photos", ImageIcon, `${project.photos || 0} photo${project.photos === 1 ? "" : "s"} to publish`],
@@ -1000,6 +1004,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       )}
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
+      {tab === "resources" && <Resources key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "visibility" && <AiVisibility key={project.id} project={project} accent={accent} reload={reload} onOpenTask={onOpenTask} />}
       {tab === "photos" && <Photos key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "experience" && <ProjectStatus key={"st" + project.id} project={project} accent={accent} />}
@@ -2087,6 +2092,163 @@ function DfsLogin({ data, accent, act, busy }) {
 }
 
 /* ---------------- what the agent knows about a project (it starts every task and chat from this) ---------------- */
+/* ---------- Resources: where the agent finds media for a project, and the website's code ---------- */
+function Resources({ project, accent, reload }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const blank = { kind: "folder", location: "", deviceId: "", label: "", useFor: "", notFor: "" };
+  const [form, setForm] = useState(blank); const [edit, setEdit] = useState(null); const [waiting, setWaiting] = useState(0);
+  const [repo, setRepo] = useState(null); const [copied, setCopied] = useState(false);
+  const run = useCallback(async (path, body, quiet) => {
+    if (!quiet) { setBusy(true); setErr(""); }
+    try { const o = await api(path, { projectId: project.id, ...body }); setV(o); return o; } catch (e) { if (!quiet) setErr(String(e.message || e)); return null; } finally { if (!quiet) setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run("resources", { action: "get" }); }, [run]);
+  /* a check, a new key or a test is done by the agent's computer: look again until its answer is in */
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(async () => { const o = await run("resources", { action: "get" }, true); if (Date.now() > waiting || (o && !o.repo?.asking && !o.sources.some((x) => x.ask))) setWaiting(0); }, 3000);
+    return () => clearInterval(t);
+  }, [waiting, run]);
+  useEffect(() => { if (v && repo === null) setRepo(v.repo ? { url: v.repo.url, branch: v.repo.branch, mode: v.repo.mode, deviceId: v.repo.deviceId, notes: v.repo.notes } : { url: "", branch: "main", mode: "branch", deviceId: v.devices.length === 1 ? v.devices[0].id : "", notes: "" }); }, [v, repo]);
+  if (!v) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading the project's resources…"}</Card>;
+  const devices = v.devices, oneDevice = devices.length === 1 ? devices[0].id : "";
+  const f = { ...form, deviceId: form.deviceId || oneDevice };
+  const choose = async () => { setErr(""); try { const r = await LOCAL_APP.chooseFolder(); if (r?.path) setForm((x) => ({ ...x, location: r.path })); } catch (e) { setErr(String(e.message || e)); } };
+  const add = async () => { const o = await run("resources", { action: "add", ...f }); if (o) { setForm(blank); setNote("Added. The agent sees it from its next task."); if (reload) reload(); } };
+  const saveEdit = async () => { const o = await run("resources", { action: "update", id: edit.id, label: edit.label, useFor: edit.useFor, notFor: edit.notFor }); if (o) { setEdit(null); setNote("Saved."); } };
+  const remove = async (x) => { if (!(await askConfirm({ title: "Remove this source?", message: `"${x.label}" is taken off the list. The files themselves are not touched.`, confirmLabel: "Remove", danger: true }))) return; const o = await run("resources", { action: "remove", id: x.id }); if (o && reload) reload(); };
+  const check = async (x) => { const o = await run("resources", { action: "check", id: x.id }); if (o) setWaiting(Date.now() + 45000); };
+  const r = v.repo, changed = repo && (!r || repo.url !== r.url || repo.branch !== r.branch || repo.mode !== r.mode || repo.deviceId !== r.deviceId || (repo.notes || "") !== (r.notes || ""));
+  const saveRepo = async () => { const o = await run("repo", { action: "save", ...repo }); if (o) { setRepo(null); setNote("Repository saved."); if (reload) reload(); } };
+  const askRepo = async (action) => { const o = await run("repo", { action }); if (o) setWaiting(Date.now() + 90000); };
+  const removeRepo = async () => { if (!(await askConfirm({ title: "Remove the repository?", message: "The agent stops reading and changing this code. Also delete the key from the repository's deploy keys.", confirmLabel: "Remove", danger: true }))) return; const o = await run("repo", { action: "remove" }); if (o) { setRepo(null); if (reload) reload(); } };
+  const area = "mt-1 w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12.5px] leading-5 outline-none focus:border-gray-400";
+  const host = r ? (r.url.match(/@([^:]+):/)?.[1] || "the repository's host") : "";
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="text-[13.5px] font-semibold text-gray-900">Pictures, video and other media for {project.name}</div>
+          <Chip>{v.sources.length} of {v.max}</Chip>
+        </div>
+        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Point the agent at the folders that hold this client's media: a folder on the agent's computer, or a Google Drive folder shared with "Anyone with the link". It uses them for blog posts, page work, Business Profile photos and the pictures in link-building content. For each one, say what it is for and what it must not be used for: the agent is given those notes with every task and looks at a picture before it chooses it. The files stay where they are; only the place and your notes are kept in the CRM.</div>
+        {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+        {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+        <div className="mt-3 space-y-3">
+          {!v.sources.length && <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12.5px] text-gray-500">No media source yet. Add the first one below.</div>}
+          {v.sources.map((x, i) => (
+            <div key={x.id} className="rounded-xl border border-gray-200 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold text-gray-900">{i + 1}. {x.label} <Chip>{x.kind === "drive" ? "Google Drive folder" : "Folder on " + (x.deviceName || "the agent's computer")}</Chip></div>
+                  <div className="mt-0.5 break-all font-mono text-[11.5px] text-gray-500">{x.location}</div>
+                </div>
+                <div className="flex items-center gap-2"><Btn ghost disabled={busy || !!waiting} onClick={() => check(x)} title="Asks the agent's computer to open it and count what is there."><RefreshCw size={13} /> Check</Btn><Btn ghost disabled={busy} onClick={() => setEdit({ id: x.id, label: x.label, useFor: x.useFor, notFor: x.notFor })}><PencilLine size={13} /> Edit notes</Btn><Btn ghost danger disabled={busy} onClick={() => remove(x)}>Remove</Btn></div>
+              </div>
+              {x.ask ? <div className="mt-2 text-[12px] text-gray-500">Asking the agent's computer… (it answers at its next check-in, within a minute when it is online and not in the middle of a task)</div>
+                : x.check ? <div className="mt-2 text-[12px]" style={{ color: x.check.ok ? "#15803D" : "#B91C1C" }}>{x.check.ok ? <><Check size={12} className="mr-1 inline" />{x.check.device} opened it {relTime(x.check.at)}: {x.check.detail}</> : <>{x.check.device} could not open it {relTime(x.check.at)}: {x.check.detail}</>}</div> : null}
+              {edit?.id === x.id ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Labeled label="Name"><input className={inputCls} value={edit.label} maxLength={80} onChange={(e) => setEdit({ ...edit, label: e.target.value })} /></Labeled><div />
+                  <Labeled label="Use these for"><textarea rows={3} className={area} value={edit.useFor} maxLength={600} onChange={(e) => setEdit({ ...edit, useFor: e.target.value })} /></Labeled>
+                  <Labeled label="Do not use these for"><textarea rows={3} className={area} value={edit.notFor} maxLength={600} onChange={(e) => setEdit({ ...edit, notFor: e.target.value })} /></Labeled>
+                  <div className="flex gap-2 md:col-span-2"><Btn accent={accent} disabled={busy} onClick={saveEdit}>Save notes</Btn><Btn ghost onClick={() => setEdit(null)}>Cancel</Btn></div>
+                </div>
+              ) : (
+                <div className="mt-2 grid gap-3 text-[12.5px] leading-5 md:grid-cols-2">
+                  <div><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Use for</div><div className="whitespace-pre-wrap text-gray-700">{x.useFor || <span className="text-gray-400">Nothing noted: the agent may use these wherever a picture of this client fits.</span>}</div></div>
+                  <div><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Do not use for</div><div className="whitespace-pre-wrap text-gray-700">{x.notFor || <span className="text-gray-400">Nothing noted.</span>}</div></div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        {v.sources.length < v.max && (
+          <div className="mt-4 rounded-xl border border-dashed border-gray-300 p-3">
+            <div className="text-[12.5px] font-semibold text-gray-900">Add a source</div>
+            <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Kind of source">
+              {[["folder", "A folder on the agent's computer"], ["drive", "A Google Drive link"]].map(([k, label]) => <button key={k} type="button" role="radio" aria-checked={f.kind === k} onClick={() => setForm({ ...form, kind: k, location: "" })} className="rounded-lg border px-3 py-1.5 text-[12.5px] font-medium" style={f.kind === k ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#E5E7EB", color: "#374151" }}>{label}</button>)}
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {f.kind === "folder" ? (
+                <>
+                  <Labeled label="Folder (its full path on that computer)">
+                    <div className="flex gap-2"><input className={inputCls} value={f.location} maxLength={380} placeholder="C:\Clients\Northgate\Photos" onChange={(e) => setForm({ ...form, location: e.target.value })} />{LOCAL_APP?.chooseFolder && <Btn ghost onClick={choose}><span className="flex items-center gap-1.5 whitespace-nowrap"><FolderInput size={13} /> Choose folder…</span></Btn>}</div>
+                  </Labeled>
+                  <Labeled label="On which computer">
+                    <select className={inputCls} value={f.deviceId} onChange={(e) => setForm({ ...form, deviceId: e.target.value })}><option value="">Choose…</option>{devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
+                  </Labeled>
+                </>
+              ) : (
+                <Labeled label="Link to the Google Drive folder"><input className={inputCls} value={f.location} maxLength={300} placeholder="https://drive.google.com/drive/folders/…" onChange={(e) => setForm({ ...form, location: e.target.value })} /></Labeled>
+              )}
+              <Labeled label="Name (optional)"><input className={inputCls} value={f.label} maxLength={80} placeholder="Finished jobs 2026" onChange={(e) => setForm({ ...form, label: e.target.value })} /></Labeled>
+              {f.kind === "folder" && <div />}
+              <Labeled label="Use these for"><textarea rows={3} className={area} value={f.useFor} maxLength={600} placeholder="Blog posts and Business Profile photos about boiler work. Before-and-after pairs belong together." onChange={(e) => setForm({ ...form, useFor: e.target.value })} /></Labeled>
+              <Labeled label="Do not use these for"><textarea rows={3} className={area} value={f.notFor} maxLength={600} placeholder="Nothing showing a customer's face or a house number. Not for directory listings." onChange={(e) => setForm({ ...form, notFor: e.target.value })} /></Labeled>
+            </div>
+            {f.kind === "drive" && <div className="mt-2 text-[11.5px] leading-5 text-gray-500">In Google Drive, share the folder with <b>Anyone with the link</b> (Viewer). The agent's computer reads it without signing in, so a private folder cannot be read. Google Docs, Sheets and Slides in it are skipped; files over 80 MB are too large to fetch this way.</div>}
+            {f.kind === "folder" && !LOCAL_APP?.chooseFolder && <div className="mt-2 text-[11.5px] leading-5 text-gray-500">A web page cannot look into another computer's folders, so the path is typed here. In the agent's own application on that computer, this same screen has a <b>Choose folder</b> button.</div>}
+            <div className="mt-3"><Btn accent={accent} disabled={busy || !f.location.trim() || (f.kind === "folder" && !f.deviceId)} onClick={add}><Plus size={13} /> Add source</Btn></div>
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="text-[13.5px] font-semibold text-gray-900">Website code (GitHub, GitLab or Bitbucket repository)</div>
+          {r ? <Chip fg={r.test?.ok ? "#15803D" : "#92400E"} bg={r.test?.ok ? "#DCFCE7" : "#FEF3C7"}>{r.test?.ok ? "Access works" : r.publicKey ? "Key made, not tested yet" : "No key yet"}</Chip> : <Chip>Not set up</Chip>}
+        </div>
+        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">For a website that is built from code in a repository instead of a site editor. The agent reads the code for its audits and, in the task type <b>Change the website's code (repository)</b>, prepares exact file changes (a new post, a page edit, titles, structured data) for your approval and delivers them as a commit. It never runs the repository's code, and it does not touch workflow, deployment, dependency or key files.</div>
+        {repo && (
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <Labeled label="Repository address"><input className={inputCls} value={repo.url} maxLength={220} placeholder="git@github.com:owner/website.git" onChange={(e) => setRepo({ ...repo, url: e.target.value })} /></Labeled>
+            <Labeled label="Branch the website is built from"><input className={inputCls} value={repo.branch} maxLength={80} placeholder="main" onChange={(e) => setRepo({ ...repo, branch: e.target.value })} /></Labeled>
+            <Labeled label="How an approved change is delivered">
+              <select className={inputCls} value={repo.mode} onChange={(e) => setRepo({ ...repo, mode: e.target.value })}><option value="branch">To a branch of its own, for a person to review and merge (recommended)</option><option value="direct">Straight to the branch above (the site rebuilds from it)</option></select>
+            </Labeled>
+            <Labeled label="Computer that holds the access key">
+              <select className={inputCls} value={repo.deviceId} onChange={(e) => setRepo({ ...repo, deviceId: e.target.value })}><option value="">Choose…</option>{devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
+            </Labeled>
+            <div className="md:col-span-2"><Labeled label="Notes for the agent about this code (optional)"><textarea rows={3} className={area} value={repo.notes} maxLength={1200} placeholder="Blog posts are Markdown files in src/content/blog. Images go in public/images/blog. Never edit files under src/layouts." onChange={(e) => setRepo({ ...repo, notes: e.target.value })} /></Labeled></div>
+            <div className="flex flex-wrap gap-2 md:col-span-2"><Btn accent={accent} disabled={busy || !changed || !repo.url.trim() || !repo.deviceId} onClick={saveRepo}>{r ? "Save changes" : "Save repository"}</Btn>{r && <Btn ghost danger disabled={busy} onClick={removeRepo}>Remove</Btn>}</div>
+          </div>
+        )}
+        {r && (
+          <div className="mt-4 space-y-3 border-t border-gray-100 pt-3">
+            <div>
+              <div className="text-[12.5px] font-semibold text-gray-900">1. The access key</div>
+              <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">{r.deviceName} makes a key pair for this project. The private half never leaves that computer: it is not sent to the CRM, shown anywhere or given to Claude. The public half appears here for you to add to the repository.</div>
+              {r.publicKey ? (
+                <>
+                  <textarea readOnly rows={2} className={area + " mt-2 font-mono text-[11.5px]"} value={r.publicKey} aria-label="Public key" onFocus={(e) => e.target.select()} />
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost onClick={() => { navigator.clipboard?.writeText(r.publicKey); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy the public key</>}</Btn><span className="text-[11.5px] text-gray-500">Made {relTime(r.keyAt)}.</span></div>
+                  <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-[12px] leading-5 text-gray-600">
+                    {host === "github.com" ? <><li>On GitHub open the repository, then Settings, Deploy keys, Add deploy key.</li><li>Paste the public key, give it a title such as "SERP Squad agent", and tick <b>Allow write access</b>.</li></>
+                      : host === "gitlab.com" ? <><li>On GitLab open the project, then Settings, Repository, Deploy keys.</li><li>Paste the public key and tick <b>Grant write permissions to this key</b>.</li></>
+                      : <><li>On Bitbucket open the repository, then Repository settings, Access keys, Add key, and paste the public key.</li><li>Bitbucket access keys can only read. To let the agent deliver changes, add the key to a user account that may write to this repository instead.</li></>}
+                    <li>Come back here and press Test access.</li>
+                  </ol>
+                </>
+              ) : <div className="mt-2"><Btn accent={accent} disabled={busy || !!waiting || !!r.asking} onClick={() => askRepo("key")}><KeyRound size={13} /> Create the access key on {r.deviceName}</Btn></div>}
+            </div>
+            <div>
+              <div className="text-[12.5px] font-semibold text-gray-900">2. Test access</div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost disabled={busy || !!waiting || !!r.asking || !r.publicKey} onClick={() => askRepo("test")}><RefreshCw size={13} /> Test access</Btn>
+                {r.asking ? <span className="text-[12px] text-gray-500">Asking {r.deviceName}… (it answers at its next check-in; the first test also downloads the code)</span>
+                  : r.test ? <span className="text-[12px]" style={{ color: r.test.ok ? "#15803D" : "#B91C1C" }}>{relTime(r.test.at)}: {r.test.detail || (r.test.ok ? "It works." : "It does not work.")}</span> : <span className="text-[12px] text-gray-400">Not tested yet.</span>}</div>
+            </div>
+            <div>
+              <div className="text-[12.5px] font-semibold text-gray-900">3. Let the agent change the code</div>
+              <div className="mt-0.5 text-[12px] leading-5 text-gray-600">{v.taskType?.mode === "off" ? <>The task type <b>Change the website's code (repository)</b> is switched off for this project. Switch it on under Onpage SEO. Reading the code for audits works without it.</> : <>The task type <b>Change the website's code (repository)</b> is on. Give the agent a task of that type (Tasks, New task) or ask for it in the chat: it prepares the exact change, you approve it, and it delivers the commit {r.mode === "direct" ? "straight to " + r.branch : "to a branch for review"}.</>}</div>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function ProjectStatus({ project, accent }) {
   const [v, setV] = useState(null); const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false);
   const run = useCallback(async (body) => {
@@ -2516,6 +2678,41 @@ function CheckNote({ check }) {
     </div>
   );
 }
+/* SEO tools the agent may use, signed in: a common setting, with the sign-in itself kept on the agent's computer */
+function SeoToolsCard({ data, accent, act, busy }) {
+  const saved = data.global.seoTools || [];
+  const [rows, setRows] = useState(null);
+  const list = rows || saved;
+  const profiles = data.devices.flatMap((d) => (d.profiles || []).map((p) => ({ ...p, device: d.name })));
+  const set = (i, k, val) => setRows(list.map((x, j) => (j === i ? { ...x, [k]: val } : x)));
+  const dirty = rows && JSON.stringify(rows.map(({ name, url, profileId, useFor }) => [name, url, profileId, useFor])) !== JSON.stringify(saved.map(({ name, url, profileId, useFor }) => [name, url, profileId, useFor || ""]));
+  const complete = list.every((x) => (x.name || "").trim() && /^https:\/\/\S+\.\S+/.test((x.url || "").trim()) && x.profileId);
+  const save = async () => { const o = await act("config", { global: { seoTools: list.map((x) => ({ id: x.id, name: x.name, url: x.url.trim(), profileId: x.profileId, useFor: x.useFor || "" })) } }); if (o) setRows(null); };
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><KeyRound size={15} style={{ color: accent }} /> SEO tools the agent may use, signed in</div>
+        <Chip>{saved.length} set up</Chip>
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Paid tools your agency has an account with (a backlink index, a keyword tool, a site crawler). Each is opened in a Chrome ID that is signed in to it, on the agent's computer, and the agent may read reports and search there for any project. It cannot change the account, spend exports or open billing pages. <b>The user name and password are not entered here.</b> Save them in the agent's own application on that computer (Settings, Saved sign-ins): they stay there, encrypted, and the program types them into the tool's sign-in page itself when the tool has signed out. They are never sent to the CRM or to Claude. A tool that asks for a code or a captcha still needs a person.</div>
+      <div className="mt-3 space-y-2">
+        {list.map((x, i) => (
+          <div key={x.id || "new" + i} className="grid gap-2 rounded-xl border border-gray-200 p-2.5 md:grid-cols-[1fr_1.4fr_1fr_auto]">
+            <input className={inputCls} aria-label="Tool name" placeholder="Name, for example Ahrefs" maxLength={60} value={x.name || ""} onChange={(e) => set(i, "name", e.target.value)} />
+            <input className={inputCls} aria-label="Address of the tool" placeholder="https://app.example.com/" maxLength={200} value={x.url || ""} onChange={(e) => set(i, "url", e.target.value)} />
+            <select className={inputCls} aria-label="Chrome ID signed in to it" value={x.profileId || ""} onChange={(e) => set(i, "profileId", e.target.value)}><option value="">Chrome ID…</option>{profiles.map((p) => <option key={p.device + p.id} value={p.id}>{p.id} · {p.name} ({p.device})</option>)}</select>
+            <Btn ghost danger onClick={() => setRows(list.filter((_, j) => j !== i))}>Remove</Btn>
+            <input className={inputCls + " md:col-span-4"} aria-label="What the agent should use it for" placeholder="What the agent should use it for, for example: referring domains and lost links of the client and its competitors" maxLength={500} value={x.useFor || ""} onChange={(e) => set(i, "useFor", e.target.value)} />
+          </div>
+        ))}
+        {!list.length && <div className="rounded-lg bg-gray-50 px-3 py-2.5 text-[12.5px] text-gray-500">No tool set up. The agent works from the CRM, DataForSEO and the open web.</div>}
+      </div>
+      {!profiles.length && <div className="mt-2 text-[12px] text-amber-800">No computer has a Chrome ID yet. Create one in the agent's application (Settings, Chrome IDs) and sign in to the tool there first.</div>}
+      <div className="mt-3 flex flex-wrap gap-2">{list.length < 10 && <Btn ghost onClick={() => setRows([...list, { name: "", url: "", profileId: profiles.length === 1 ? profiles[0].id : "", useFor: "" }])}><Plus size={13} /> Add a tool</Btn>}{dirty && <Btn accent={accent} disabled={busy || !complete} title={complete ? "" : "Each tool needs a name, an https address and a Chrome ID."} onClick={save}>Save the list</Btn>}{dirty && <Btn ghost onClick={() => setRows(null)}>Cancel</Btn>}</div>
+    </Card>
+  );
+}
+
 function SecondCheckCard({ data, accent, act, busy }) {
   const g = data.global, on = g.secondCheck !== false;
   return (
@@ -2603,6 +2800,14 @@ function ApiSetupView({ data, accent, act, busy }) {
         </div>
         <div className="mt-1 text-[11.5px] leading-5 text-gray-500">With this on the agent can read the CRM itself, not only the rankings: a task on a client project sees all of that project (its records, pages, posts, reports, ads), and the chat and the agency-level task <b>CRM oversight review</b> see every client and project, so you can ask it for an overview of anything. It can change nothing through this. Passwords, API keys, sign-in and mail settings are never returned, and what it reads about one client is not to be used for another.</div>
       </Card>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><RefreshCw size={15} style={{ color: accent }} /> Carrying on after a power cut or a restart</div>
+          <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={data.global.resume !== false} label="Carry on with a run after the computer restarted" onChange={(v) => act("config", { global: { resume: v } })} /> {data.global.resume !== false ? "On" : "Off"}</label>
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">The agent's computer saves where a running task stands after every step. If the power goes or the computer restarts, the agent picks the same run up where it stopped when it is back, with the same token budget, instead of starting over: up to three times per run and within 24 hours, and only if nobody ran, cancelled or reassigned the task in the meantime. If it stopped in the middle of making an approved change, it is told which step was in progress and has to check what is already live before doing anything again. With this off, a run that was cut off goes back to the queue (or, for an approved change, waits for a person). Set the agent's application to start with the computer (its Settings), and the computer itself to switch on again when power returns.</div>
+      </Card>
+      <SeoToolsCard data={data} accent={accent} act={act} busy={busy} />
       <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

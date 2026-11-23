@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json", resources: "resources.json", repos: "repos.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true, crmRead: true }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true, crmRead: true, resume: true, seoTools: [] }, projects: {}, playbooks: {} }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}), resources: () => ({}), repos: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -372,7 +372,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -1523,6 +1523,12 @@ function blockOf(t, device) {
   if (room.left <= 0) return `Token limit reached: ${room.why}.`;
   const running = load("tasks").filter((x) => x.status === "running" && x.id !== t.id);
   if (running.some((x) => x.projectId === t.projectId)) return "Another task is running on this project.";
+  if ((cat.needs || []).includes("repo")) {
+    const r = load("repos")[t.projectId];
+    if (!r?.url) return "No code repository is set up for this project. Add it under Work setup, Resources.";
+    if (!r.publicKey) return "The repository has no access key yet. Create it under Work setup, Resources, and add it to the repository.";
+    if (device && r.deviceId !== device.id) return "The repository's access key is on another computer.";
+  }
   const br = browserFor(t.projectId, cat);
   if (br?.error) return br.error;
   if (br) {
@@ -1559,7 +1565,7 @@ function requeueStale() {
     const tooLong = now() - (t.startedAt || 0) > RUN_HOURS * 36e5;
     if (!tooLong && now() - (t.heartbeatAt || t.startedAt || 0) < 20 * 60e3) continue;
     changed = true;
-    t.silent = { deviceId: t.deviceId, at: now() };
+    t.silent = { deviceId: t.deviceId, at: now(), ...(tooLong ? { tooLong: true } : {}) };
     if (t.phase === "execute") { t.status = "failed"; t.interrupted = true; t.finishedAt = now(); t.error = tooLong ? `This run lasted more than ${RUN_HOURS} hours and was ended. Part of the approved change may already be live: check the page or profile before running it again.` : INTERRUPTED; }
     else if (tooLong) { t.status = "failed"; t.finishedAt = now(); t.error = `This run lasted more than ${RUN_HOURS} hours and was ended.`; }
     else if ((t.attempts || 0) >= 3) { t.status = "failed"; t.error = "The device stopped responding three times while running this task."; t.finishedAt = now(); }
@@ -2550,7 +2556,7 @@ function overview(admin) {
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!dfsCreds(""), own: dfsOwn(), balance: dfsBalanceView(), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, resources: (load("resources")[p.id] || []).length, repo: load("repos")[p.id]?.url ? { ready: !!load("repos")[p.id].publicKey, ok: load("repos")[p.id].test?.ok === true } : null, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -2574,6 +2580,12 @@ function saveConfig(admin, body) {
     if (g.secondCheck != null && !!g.secondCheck !== (cfg.global.secondCheck !== false)) { cfg.global.secondCheck = !!g.secondCheck; logActivity("settings", `${admin.name} switched the second check before a change ${cfg.global.secondCheck ? "on" : "off"}.`); }
     if (g.checkModel && MODELS.some((m) => m.id === g.checkModel)) cfg.global.checkModel = g.checkModel;
     if (g.crmRead != null && !!g.crmRead !== (cfg.global.crmRead !== false)) { cfg.global.crmRead = !!g.crmRead; cfg.playbooksRev += 1; logActivity("settings", `${admin.name} switched "the agent may look over the CRM" ${cfg.global.crmRead ? "on" : "off"}.`); }
+    if (g.resume != null && !!g.resume !== (cfg.global.resume !== false)) { cfg.global.resume = !!g.resume; logActivity("settings", `${admin.name} switched "carry on with a run after the computer restarted" ${cfg.global.resume ? "on" : "off"}.`); }
+    if (Array.isArray(g.seoTools)) {
+      const next = cleanSeoTools(g.seoTools, admin);
+      if (next.length !== g.seoTools.length) return [400, { error: "bad_request", detail: "Each SEO tool needs a name, an https address and a Chrome ID. Sign-in providers and payment sites (Google, Microsoft, Apple, Facebook, PayPal) cannot be added as tools." }];
+      if (JSON.stringify(next) !== JSON.stringify(seoToolsOf())) { cfg.global.seoTools = next; logActivity("settings", `${admin.name} changed the list of SEO tools the agent may use (${next.length ? next.map((x) => x.name).join(", ") : "none"}).`); }
+    }
     if (g.vision != null && !!g.vision !== (cfg.global.vision !== false)) { cfg.global.vision = !!g.vision; logActivity("settings", `${admin.name} switched "the agent may look at pages as pictures" ${cfg.global.vision ? "on" : "off"}.`); }
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
     if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
@@ -2849,7 +2861,7 @@ function agentHello(d, body) {
      old behaviour and is caught by the longest-run limit instead. */
   const idle = body?.idleSeconds == null ? 0 : num(body.idleSeconds, 0, 864e2, 0);
   for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = Math.max(t.heartbeatAt || 0, now() - idle * 1000);
-  return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key, checks: pendingChecks(d) }];
+  return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key, checks: pendingChecks(d), asks: pendingAsks(d) }];
 }
 function agentClaim(d) {
   requeueStale();
@@ -2866,15 +2878,26 @@ function agentClaim(d) {
     const room = tokenRoom(t.projectId);
     t.runBudget = Math.max(20000, Math.min(cat.maxRunTokens || 300000, room.left));
     t.runStartTokens = t.usage.total; t.runSpent = 0;
+    const task = claimPayload(t, d);
+    save("tasks");
+    logActivity("task", `${d.name} started "${t.title}".`, { taskId: t.id, projectId: t.projectId });
+    return [200, { ok: true, playbooksRev: cfg.playbooksRev, task }];
+  }
+  save("tasks");
+  return [200, { ok: true, task: null, reason: firstReason || "Nothing is waiting." }];
+}
+/* everything a device needs to run a task. Sets how the run is paid for and which Chrome ID it holds; the caller saves. */
+function claimPayload(t, d) {
+  const cat = CATALOG_BY_KEY[t.type], ts = taskSetting(t.projectId, t.type), cfg = load("config"), p = projectOf(t.projectId);
+  {
     const again = t.interrupted === true && t.phase === "execute";
     const projectKey = secrets().projects[t.projectId]?.key || "";
     const claudeKey = projectKey || (d.localKey === true ? "" : secrets().claude?.key || "");
     t.keySource = projectKey ? "project" : claudeKey ? "company" : "device";
     const br = browserFor(t.projectId, cat);
     t.browserProfile = br?.profileId || null;
-    save("tasks");
-    logActivity("task", `${d.name} started "${t.title}".`, { taskId: t.id, projectId: t.projectId });
-    return [200, { ok: true, playbooksRev: cfg.playbooksRev, task: {
+    const repo = t.projectId === AGENCY_PROJECT ? null : load("repos")[t.projectId];
+    return {
       id: t.id, projectId: t.projectId, projectName: p.name, clientName: p.client, type: t.type, label: cat.label, title: t.title, instructions: t.instructions, reason: t.reason || "",
       phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
       ...(cat.write && !t.askAlways && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
@@ -2890,10 +2913,228 @@ function agentClaim(d) {
       lessons: t.projectId === AGENCY_PROJECT ? [] : lessonsFor(t.projectId, t.type, { count: true }),
       knowledge: t.type === "knowledge_study" ? "" : [knowledgeBlock(cat.area === "agency" ? "general" : cat.area), statusBlock(t.projectId)].filter(Boolean).join("\n\n"),
       ...(br && !br.error ? { browser: br } : {}),
-    } }];
+      resources: t.projectId === AGENCY_PROJECT ? [] : resourcesOf(t.projectId).filter((x) => x.kind === "drive" || !x.deviceId || x.deviceId === d.id).map((x) => ({ id: x.id, kind: x.kind, label: x.label, location: x.location, useFor: x.useFor, notFor: x.notFor })),
+      ...(repo?.url && repo.publicKey && repo.deviceId === d.id ? { repo: { url: repo.url, branch: repo.branch, mode: repo.mode, notes: repo.notes || "" } } : {}),
+      seoTools: seoToolsOf().filter((x) => hasChrome(d, x.profileId)).map((x) => ({ id: x.id, name: x.name, url: x.url, profileId: x.profileId, hosts: toolHosts(x.url), useFor: x.useFor })),
+    };
   }
+}
+
+/* ---------- carrying on after the computer restarted ----------
+   The device keeps the conversation of its running task on its own disk,
+   turn by turn. When it comes back (a power cut, a crash, a restart) it asks
+   here to carry on with exactly that run. That is allowed when the task is
+   still its own, or when it was released only because the device went silent
+   and nobody has touched it since: not after a person ran it again, cancelled
+   it or another device took it, not after 24 hours, and at most three times
+   for one run. The run keeps its token budget and what it has spent. A run
+   that was making an approved change is carried on too: the device knows
+   which step was in progress when it stopped and has the agent check what is
+   live before anything is repeated. */
+const RESUME_HOURS = 24, RESUME_MAX = 3;
+function agentResume(d, body) {
+  requeueStale();
+  const t = load("tasks").find((x) => x.id === body?.taskId), cfg = load("config");
+  const no = (why) => [409, { error: "not_resumable", detail: why }];
+  if (!t) return no("The task no longer exists.");
+  if (cfg.global.resume === false) return no("Carrying on after a restart is switched off for the company.");
+  const mine = t.status === "running" && t.deviceId === d.id;
+  const cutOff = t.silent?.deviceId === d.id && !t.silent.tooLong && now() - t.silent.at < RESUME_HOURS * 36e5 && (t.status === "queued" || (t.status === "failed" && t.interrupted === true && t.phase === "execute"));
+  if (!mine && !cutOff) return no("The task was finished, taken over or changed in the CRM in the meantime.");
+  if ((t.resumes || 0) >= RESUME_MAX) return no(`This run was already carried on ${RESUME_MAX} times after a restart.`);
+  const cat = CATALOG_BY_KEY[t.type], ps = projectSetting(t.projectId);
+  if (!cat || !projectOf(t.projectId)) return no("The project or the task type no longer exists.");
+  if (!ps.enabled && !cat.system) return no("The agent is no longer enabled for this project.");
+  if (taskSetting(t.projectId, t.type).mode === "off") return no(`${cat.label} is switched off for this project.`);
+  if (tokenRoom(t.projectId).left <= 0) return no("The project's token limit is used up.");
+  if (!cfg.global.enabled || cfg.global.paused || d.paused) return [200, { ok: true, task: null, wait: true, reason: "The agent is paused or switched off. The run is carried on when it is switched on again." }];
+  if (load("tasks").some((x) => x.id !== t.id && x.status === "running" && (x.projectId === t.projectId || x.deviceId === d.id))) return [200, { ok: true, task: null, wait: true, reason: "Another task is running." }];
+  const gap = Math.max(0, now() - (t.heartbeatAt || t.startedAt || now()));
+  t.status = "running"; t.deviceId = d.id; t.startedAt = (t.startedAt || now()) + gap; t.heartbeatAt = now(); t.silent = null; t.finishedAt = null; t.error = ""; t.interrupted = false; t.blockedReason = null;
+  t.resumes = (t.resumes || 0) + 1;
+  const task = claimPayload(t, d);
+  t.events.push({ at: now(), kind: "note", text: `${d.name} carried on with this run after its computer restarted (it had stopped for ${Math.max(1, Math.round(gap / 60e3))} minute${Math.round(gap / 60e3) === 1 ? "" : "s"}).` });
   save("tasks");
-  return [200, { ok: true, task: null, reason: firstReason || "Nothing is waiting." }];
+  logActivity("task", `${d.name} carried on with "${t.title}" after its computer restarted.`, { taskId: t.id, projectId: t.projectId });
+  return [200, { ok: true, playbooksRev: cfg.playbooksRev, task: { ...task, resumed: true, resumes: t.resumes } }];
+}
+
+/* ---------- resources: where the agent finds pictures, video and other media for a project ----------
+   A folder on the agent's computer, or a Google Drive folder shared with
+   "anyone with the link". Each has a note on what it is for and what it must
+   not be used for. Only the place and the notes are kept here: the files stay
+   where they are, and the agent's computer reads them (never this server). */
+const RES_MAX = 12, RES_KINDS = ["folder", "drive"];
+const resourcesOf = (pid) => { const all = load("resources"); return (all[pid] ||= []); };
+const LOCAL_PATH = /^(\/|~\/|[A-Za-z]:[\\/]|\\\\)[^\u0000-\u001f<>"|?*]{1,380}$/;
+function driveFolderId(u) {
+  const m = String(u || "").trim().match(/^https:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?id=|embeddedfolderview\?id=)([A-Za-z0-9_-]{10,80})(?:[/?#&].*)?$/);
+  return m ? m[1] : "";
+}
+function resourcesView(pid) {
+  const repo = load("repos")[pid] || null;
+  return { ok: true, projectId: pid, max: RES_MAX,
+    devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
+    sources: resourcesOf(pid).map((x) => ({ ...x, deviceName: x.deviceId ? load("devices").find((d) => d.id === x.deviceId)?.name || "a removed computer" : "" })),
+    repo: repo ? { url: repo.url, branch: repo.branch, mode: repo.mode, deviceId: repo.deviceId, deviceName: load("devices").find((d) => d.id === repo.deviceId)?.name || "a removed computer", notes: repo.notes || "", publicKey: repo.publicKey || "", keyAt: repo.keyAt || null, test: repo.test || null, asking: repo.ask && now() - repo.ask.at < ASK_TTL ? repo.ask.kind : "", by: repo.by || "", at: repo.at || null } : null,
+    taskType: taskSetting(pid, "repo_edit") };
+}
+function resourcesEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const list = resourcesOf(p.id), bad = (detail) => [400, { error: "bad_request", detail }];
+  if (body.action === "add" || body.action === "update") {
+    const cur = body.action === "update" ? list.find((x) => x.id === body.id) : null;
+    if (body.action === "update" && !cur) return [404, { error: "not_found", detail: "That source is no longer in the list." }];
+    if (!cur && list.length >= RES_MAX) return bad(`A project can have ${RES_MAX} sources. Remove one first.`);
+    const kind = cur ? cur.kind : RES_KINDS.includes(body.kind) ? body.kind : "";
+    if (!kind) return bad("Choose a folder on the agent's computer or a Google Drive link.");
+    let location = cur?.location || "", deviceId = cur?.deviceId || "";
+    if (body.location != null || !cur) {
+      const raw = String(body.location || "").trim();
+      if (kind === "drive") {
+        const id = driveFolderId(raw);
+        if (!id) return bad("Paste the link of a Google Drive folder (it looks like https://drive.google.com/drive/folders/…). The folder has to be shared with \"Anyone with the link\".");
+        location = "https://drive.google.com/drive/folders/" + id;
+      } else {
+        if (!LOCAL_PATH.test(raw)) return bad("Give the folder's full path on the agent's computer, for example C:\\Clients\\Northgate\\Photos or /Users/office/Clients/Northgate/Photos.");
+        location = raw.replace(/[\\/]+$/, "") || raw;
+      }
+    }
+    if (kind === "folder" && (body.deviceId != null || !cur)) {
+      deviceId = String(body.deviceId || "");
+      if (!load("devices").some((d) => d.id === deviceId && !d.revoked)) return bad("Choose the computer the folder is on.");
+    }
+    const row = { id: cur?.id || uid("rs_"), kind, label: line(body.label ?? cur?.label ?? "", 80) || (kind === "drive" ? "Google Drive folder" : location.split(/[\\/]/).pop() || "Folder"), location, deviceId: kind === "folder" ? deviceId : "",
+      useFor: para(body.useFor ?? cur?.useFor ?? "", 600), notFor: para(body.notFor ?? cur?.notFor ?? "", 600), by: admin.name, at: now(), check: location === cur?.location && deviceId === (cur?.deviceId || "") ? cur?.check || null : null };
+    if (cur) Object.assign(cur, row); else list.push(row);
+    save("resources");
+    logActivity("settings", `${admin.name} ${cur ? "changed" : "added"} a ${kind === "drive" ? "Google Drive folder" : "folder"} in the resources of ${p.name}: ${row.label}.`, { projectId: p.id });
+  } else if (body.action === "remove") {
+    const i = list.findIndex((x) => x.id === body.id);
+    if (i >= 0) { const [gone] = list.splice(i, 1); save("resources"); logActivity("settings", `${admin.name} removed "${gone.label}" from the resources of ${p.name}.`, { projectId: p.id }); }
+  } else if (body.action === "check") {
+    const x = list.find((r) => r.id === body.id);
+    if (!x) return [404, { error: "not_found", detail: "That source is no longer in the list." }];
+    x.ask = { id: uid("ak_"), at: now() }; save("resources");
+    pokeDevices(x.deviceId ? (d) => d.id === x.deviceId : null);
+  } else if (body.action && body.action !== "get") return bad("Unknown action.");
+  return [200, resourcesView(p.id)];
+}
+
+/* ---------- the website's code repository ----------
+   For a site that is built from code in a Git repository (GitHub, GitLab or
+   Bitbucket). The agent's computer makes its own key pair for the project
+   and shows the public half here; a person adds that as a deploy key of the
+   repository (with write access). The private half never leaves that
+   computer and is never sent here, to a browser or to Claude. The agent then
+   reads the code for its audits and, in the task type "Change the website's
+   code", prepares exact file changes for approval and delivers them: by
+   default to a branch of its own for review, or straight to the working
+   branch when that is chosen. It never runs the repository's code. */
+const REPO_URL = /^git@(github\.com|gitlab\.com|bitbucket\.org):([A-Za-z0-9][A-Za-z0-9._-]{0,99})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?$/;
+const ASK_TTL = 10 * 60e3;
+function repoUrl(raw) {
+  let u = String(raw || "").trim();
+  if (process.env.AGENTOPS_REPO_TEST === "1" && /^file:\/\/\/[A-Za-z0-9._\/-]{3,300}$/.test(u)) return u;      // tests only: a repository in a folder
+  const web = u.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/([A-Za-z0-9][A-Za-z0-9._-]{0,99})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/);
+  if (web) u = `git@${web[1]}:${web[2]}/${web[3]}.git`;
+  const m = u.match(REPO_URL);
+  return m ? `git@${m[1]}:${m[2]}/${m[3]}.git` : "";
+}
+function repoEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const all = load("repos"), cur = all[p.id], bad = (detail) => [400, { error: "bad_request", detail }];
+  if (body.action === "save") {
+    const url = repoUrl(body.url);
+    if (!url) return bad("Give the repository's address, for example git@github.com:owner/website.git or https://github.com/owner/website. GitHub, GitLab and Bitbucket are supported.");
+    const branch = String(body.branch || "main").trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,79}$/.test(branch) || branch.includes("..") || branch.endsWith("/") || branch.startsWith("agent/")) return bad("Give the branch the website is built from, for example main.");
+    const deviceId = String(body.deviceId || "");
+    if (!load("devices").some((d) => d.id === deviceId && !d.revoked)) return bad("Choose the computer that will hold the access key and work on the code.");
+    const moved = cur && (cur.deviceId !== deviceId);
+    all[p.id] = { ...(cur && !moved ? cur : {}), url, branch, mode: body.mode === "direct" ? "direct" : "branch", deviceId, notes: para(body.notes, 1200), by: admin.name, at: now(), ...(cur && cur.url !== url ? { test: null } : {}) };
+    save("repos");
+    logActivity("settings", `${admin.name} set the code repository of ${p.name} to ${url} (branch ${branch}, ${all[p.id].mode === "direct" ? "changes go straight to that branch" : "changes go to a branch for review"}).`, { projectId: p.id });
+  } else if (body.action === "remove") {
+    if (cur) { delete all[p.id]; save("repos"); logActivity("settings", `${admin.name} removed the code repository of ${p.name}. The access key stays on the computer until it is deleted there; remove it from the repository's deploy keys as well.`, { projectId: p.id }); }
+  } else if (body.action === "key" || body.action === "test") {
+    if (!cur?.url) return bad("Save the repository first.");
+    if (body.action === "test" && !cur.publicKey) return bad("Create the access key first.");
+    cur.ask = { id: uid("ak_"), kind: body.action, at: now() }; save("repos");
+    pokeDevices((d) => d.id === cur.deviceId);
+  } else if (body.action && body.action !== "get") return bad("Unknown action.");
+  return [200, resourcesView(p.id)];
+}
+/* what a device is asked to do outside a task: make a key, test access, look into a media source */
+function pendingAsks(d) {
+  if (String(d.state || "").startsWith("working")) return [];
+  const out = [], repos = load("repos"), res = load("resources");
+  for (const [pid, r] of Object.entries(repos)) if (r.ask && r.deviceId === d.id && now() - r.ask.at < ASK_TTL) out.push({ id: r.ask.id, kind: r.ask.kind === "key" ? "repoKey" : "repoTest", projectId: pid, url: r.url, branch: r.branch });
+  for (const [pid, list] of Object.entries(res)) for (const x of list) if (x.ask && now() - x.ask.at < ASK_TTL && (!x.deviceId || x.deviceId === d.id) && (!x.ask.sentTo || x.ask.sentTo === d.id)) { x.ask.sentTo = d.id; out.push({ id: x.ask.id, kind: "resource", projectId: pid, source: { id: x.id, kind: x.kind, location: x.location } }); }
+  return out.slice(0, 6);
+}
+const SSH_PUBLIC = /^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{60,800}( [A-Za-z0-9@._ -]{1,80})?$/;
+function agentAsked(d, body) {
+  const pid = String(body?.projectId || ""), p = projectOf(pid);
+  if (!p) return [200, { ok: true, ignored: true }];
+  if (body.kind === "repoKey" || body.kind === "repoTest") {
+    const r = load("repos")[pid];
+    if (!r?.ask || r.ask.id !== body.id || r.deviceId !== d.id) return [200, { ok: true, ignored: true }];
+    const okNow = body.ok === true;
+    if (body.kind === "repoKey") {
+      /* only the PUBLIC half of the key is ever accepted here, and only in the shape of one */
+      const pub = String(body.publicKey || "").trim();
+      if (okNow && SSH_PUBLIC.test(pub)) { r.publicKey = pub; r.keyAt = now(); r.test = null; }
+      else r.test = { ok: false, detail: clip(body.detail || "The key could not be created on that computer.", 300), at: now() };
+      logActivity("settings", `${d.name} ${okNow ? "created the access key" : "could not create the access key"} for the code repository of ${p.name}.`, { projectId: pid });
+    } else {
+      r.test = { ok: okNow, detail: clip(body.detail || "", 300), at: now() };
+      logActivity("check", `${d.name} tested its access to the code repository of ${p.name}: ${okNow ? "it works" : "it does not work"}.`, { projectId: pid });
+    }
+    r.ask = null; save("repos");
+  } else if (body.kind === "resource") {
+    const x = resourcesOf(pid).find((s) => s.ask?.id === body.id && (!s.deviceId || s.deviceId === d.id));      // a folder is answered for by its own computer only
+    if (!x) return [200, { ok: true, ignored: true }];
+    x.check = { ok: body.ok === true, files: num(body.files, 0, 1e6, 0), folders: num(body.folders, 0, 1e6, 0), detail: clip(body.detail || "", 300), at: now(), device: d.name };
+    x.ask = null; save("resources");
+  }
+  return [200, { ok: true }];
+}
+
+/* ---------- SEO tools the agent may use, signed in ----------
+   Paid tools the agency has an account with (a rank tracker, a backlink
+   index, a site crawler). Each is opened in a Chrome ID a person signed in
+   to. The sign-in itself (user name and password) can be saved on the
+   agent's computer, in its own application, so the program can sign in again
+   when the tool has signed it out. Nothing of that sign-in is stored here or
+   sent to Claude; this list holds only the tool's name, address, Chrome ID
+   and what it is for. Sign-in providers (Google, Microsoft, Apple, Facebook)
+   are not accepted as tools. */
+const TOOL_MAX = 10, TOOL_NEVER = /(^|\.)(google\.[a-z.]+|gmail\.com|microsoft\.com|microsoftonline\.com|live\.com|apple\.com|icloud\.com|facebook\.com|instagram\.com|paypal\.com|stripe\.com)$/i;
+const seoToolsOf = () => { const g = load("config").global; return Array.isArray(g.seoTools) ? g.seoTools : []; };
+function toolHosts(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase(), parts = h.split(".");
+    /* the site a host belongs to: example.com for app.example.com, example.co.uk for www.example.co.uk */
+    const three = parts.length > 2 && parts[parts.length - 1].length === 2 && ["co", "com", "org", "net", "ac", "gov", "edu"].includes(parts[parts.length - 2]);
+    const base = parts.slice(three ? -3 : -2).join(".");
+    return [...new Set([h, base, "*." + base])];
+  } catch { return []; }
+}
+function cleanSeoTools(list, admin) {
+  const out = [], was = seoToolsOf();
+  for (const x of (Array.isArray(list) ? list : []).slice(0, TOOL_MAX)) {
+    let u; try { u = new URL(String(x?.url || "").trim()); } catch { continue; }
+    const local = process.env.AGENTOPS_TOOL_TEST === "1" && u.hostname === "127.0.0.1";       // tests only: a stand-in tool on this computer
+    if ((u.protocol !== "https:" && !local) || TOOL_NEVER.test(u.hostname) || !CHROME_ID.test(String(x?.profileId || ""))) continue;
+    const name = line(x.name, 60);
+    if (!name) continue;
+    const old = was.find((w) => w.id === x.id);
+    out.push({ id: old?.id || uid("st_"), name, url: cut(u.origin + u.pathname, 200), profileId: x.profileId, useFor: para(x.useFor, 500), by: old && old.name === name && old.url === cut(u.origin + u.pathname, 200) && old.by ? old.by : admin.name, at: old?.at || now() });
+  }
+  return out;
 }
 /* what an "act alone, within limits" setting allows, told to the agent and to the second check alike */
 const POLICY = { auto_positive: { gbp_review_reply: "Only reviews of 4 or 5 stars may be answered in this run. Do not draft or post a reply to a review of 3 stars or fewer here. For those, call suggest_task once with type gbp_review_reply and needs_approval true, naming each such review (reviewer, date, stars, first words), so a person approves those replies. If no 4 or 5 star review is without a reply, finish without changing anything." } };
@@ -3264,6 +3505,8 @@ export async function agentOpsPost(req, body) {
       case "agent/tool": return agentTool(d, body);
       case "agent/complete": return agentComplete(d, body);
       case "agent/check": return agentCheck(d, body || {});
+      case "agent/resume": return agentResume(d, body || {});
+      case "agent/asked": return agentAsked(d, body || {});
       case "agent/board": return agentBoard(d);
       case "agent/media": return agentMedia(d, body || {});
       case "agent/evidence": return agentEvidence(d, body || {});
@@ -3303,6 +3546,8 @@ export async function agentOpsPost(req, body) {
     case "media": return mediaEdit(admin, body || {});
     case "visibility": return visibilityEdit(admin, body || {});
     case "status": return statusEdit(admin, body || {});
+    case "resources": return resourcesEdit(admin, body || {});
+    case "repo": return repoEdit(admin, body || {});
     case "ranking": return rankingEdit(admin, body || {});
     case "evidence": return evidenceGet(body || {});
     case "report": return reportGet(body || {});

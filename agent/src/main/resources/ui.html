@@ -404,11 +404,32 @@
         </section>
         <section class="card">
           <h2>Chrome IDs</h2>
-          <div class="hint">Separate Chrome profiles that you sign in to once: one per Google account or social login. In each project's Work setup you choose which Chrome ID a channel uses. The agent never types passwords or codes; if a site asks again, it stops and tells you.</div>
+          <div class="hint">Separate Chrome profiles that you sign in to once: one per Google account or social login. In each project's Work setup you choose which Chrome ID a channel uses. The agent never types passwords or codes for these accounts; if a site asks again, it stops and tells you. (The only sign-ins the program types itself are the ones you save for SEO tools, on this screen.)</div>
           <div id="profiles"></div>
           <div style="display:flex;gap:8px;margin-top:10px"><input id="pName" type="text" autocomplete="off" placeholder="Name, for example: Agency Google account"><button class="b primary" id="pAdd" style="white-space:nowrap">Add Chrome ID</button></div>
           <div class="msg" id="gMsg"></div>
           <ol class="how"><li>Add a Chrome ID and press Sign in. Chrome opens with that profile.</li><li>Sign in to the account yourself, then close that Chrome window. The sign-in is kept.</li><li>In the project's Work setup, choose this Chrome ID for the channel it manages.</li></ol>
+        </section>
+        <section class="card">
+          <h2>Saved sign-ins for SEO tools</h2>
+          <div class="hint">For paid tools your agency has an account with (a backlink index, a keyword tool). When a tool has signed the agent out, the program types the saved user name and password into that tool's own sign-in page. They are stored encrypted on this computer only: never sent to the CRM, never given to Claude, and not shown again after saving. Not for Google, Microsoft, Apple or Facebook accounts: sign in to those yourself in the Chrome ID. A tool that asks for a code or a captcha still needs you.</div>
+          <div id="signins"></div>
+          <label for="siName">Tool</label>
+          <input id="siName" type="text" autocomplete="off" placeholder="Name, for example: Ahrefs">
+          <label for="siUrl">Its sign-in page</label>
+          <input id="siUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://app.example.com/login">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label for="siUser">User name or email</label><input id="siUser" type="text" autocomplete="off" spellcheck="false"></div><div><label for="siPass">Password</label><input id="siPass" type="password" autocomplete="new-password" spellcheck="false"></div></div>
+          <div class="btns"><button class="b primary" id="siAdd">Save sign-in</button></div>
+          <div class="msg" id="siMsg"></div>
+          <ol class="how"><li>In the CRM (AI agent, API setup, SEO tools) add the tool and choose the Chrome ID it uses.</li><li>Under Chrome IDs here, press Sign in for that Chrome ID and sign in to the tool once yourself.</li><li>Save the sign-in here, so the agent can sign in again when the tool signs it out.</li></ol>
+        </section>
+        <section class="card">
+          <h2>This computer</h2>
+          <div class="hint">The agent runs here: its own program, its Chrome windows and its working files use this computer's processor, memory and disk. The CRM server only keeps the records (tasks, reports, what the agent knows about each project).</div>
+          <div id="pcRows" style="margin-top:6px"></div>
+          <div class="btns" style="margin-top:12px"><button class="b" id="workBtn">Open the working folder</button></div>
+          <div class="msg" id="pcMsg"></div>
+          <div class="hint" style="margin:6px 0 0">The working folder has one folder per project: the agent's own notes and inventories, copies of pictures it fetched from Google Drive, and its copy of a website's code. It reads these before fetching anything again.</div>
         </section>
         <section class="card">
           <h2>This application</h2>
@@ -416,8 +437,9 @@
           <div class="btns" style="margin-top:12px"><button class="b" id="updBtn">Sync for update</button></div>
           <div class="msg" id="updMsg"></div>
           <div class="hint" style="margin:6px 0 10px">New versions come from the CRM. The agent installs them by itself, between tasks; this button checks right now. The window reloads when the new version has started.</div>
-          <div id="autoRow" class="vhide" style="align-items:center;gap:10px;margin-top:12px"><button class="switch" id="autoSw" role="switch" aria-label="Start when Windows starts"></button><span style="font-size:13px">Start the agent when Windows starts</span></div>
+          <div id="autoRow" style="display:flex;align-items:center;gap:10px;margin-top:12px"><button class="switch" id="autoSw" role="switch" aria-label="Start when the computer starts"></button><span style="font-size:13px">Start the agent when this computer starts</span></div>
           <div class="msg" id="appMsg"></div>
+          <div class="hint" style="margin:6px 0 0">With this on, the agent comes back by itself after a power cut and carries on with the task it was in the middle of. The computer itself also has to switch on again when power returns (a setting in its BIOS, usually "Restore on AC power loss") and sign this user in without waiting for a password.</div>
           <div class="hint" style="margin:6px 0 0">Closing this window does not stop the agent. Use the SERP Squad icon near the clock to open the window again, pause, or quit.</div>
         </section>
       </div>
@@ -450,10 +472,13 @@
   /* which of the management screens (the same ones the CRM shows) a sidebar entry opens */
   const MANAGE = { projects: "limits", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", keys: "api" }, BACK = { limits: "projects", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", api: "keys" };
   let updAsked = 0;      // when "Sync for update" was last pressed in this window
+  let signSig = "";
+  /* what this computer can do for the management screens: a real folder window for the Resources tab */
+  const LOCAL = { chooseFolder: async () => { const r = await api("choose-folder", {}); return r.preview ? { path: "C:\\Clients\\Northgate Plumbing\\Photos" } : r; } };
   let mgr = null, manageKnown = null, navTick = 0;      // navTick moves every time a sidebar entry is pressed, so pressing Projects again returns to the list of projects
   const canManage = () => !!(last && last.manage && window.SerpSquadManage);
   function showManage(v) {
-    const opts = { headers: { "X-Agent-Ui": TOKEN }, view: MANAGE[v], tick: navTick, sticky: parseFloat(getComputedStyle(document.querySelector("main")).paddingTop) || 1, onView: (x) => { if (BACK[x] && BACK[x] !== view) go(BACK[x]); }, onCounts: (c) => { $("navApprove").textContent = c.approvals; $("navApprove").classList.toggle("vhide", !c.approvals); } };
+    const opts = { headers: { "X-Agent-Ui": TOKEN }, local: LOCAL, view: MANAGE[v], tick: navTick, sticky: parseFloat(getComputedStyle(document.querySelector("main")).paddingTop) || 1, onView: (x) => { if (BACK[x] && BACK[x] !== view) go(BACK[x]); }, onCounts: (c) => { $("navApprove").textContent = c.approvals; $("navApprove").classList.toggle("vhide", !c.approvals); } };
     try { if (mgr) mgr.set(opts); else mgr = window.SerpSquadManage.mount($("manageRoot"), opts); $("manageErr").classList.add("vhide"); }
     catch (e) { $("manageErr").textContent = "The settings screens could not start: " + e.message; $("manageErr").classList.remove("vhide"); }
   }
@@ -551,7 +576,14 @@
     $("updBtn").disabled = busyUpd;
     $("updBtn").textContent = busyUpd ? (u.state === "installing" ? "Installing…" : u.state === "restarting" ? "Restarting…" : u.state === "waiting" ? "Waiting for the task…" : "Checking…") : "Sync for update";
     if (u.state && u.checkedAt && (busyUpd || updAsked || Date.now() - u.checkedAt < 10 * 60000)) say("updMsg", u.detail || "", u.state === "failed" ? "no" : "ok");
-    $("autoRow").classList.toggle("vhide", s.platform !== "windows"); $("autoRow").style.display = s.platform === "windows" ? "flex" : "";
+    const pc = s.computer || {}, gb = (mb) => mb >= 1024 ? (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + " GB" : mb + " MB";
+    $("pcRows").innerHTML = '<div class="row"><span>Processor</span><span>' + esc(pc.cores || "?") + ' cores</span></div><div class="row"><span>Memory</span><span>' + (pc.memoryMb ? esc(gb(pc.memoryMb)) + ' in this computer, up to ' + esc(gb(pc.agentMemoryMb || 0)) + ' for the agent program (Chrome uses its own)' : "not known") + '</span></div><div class="row"><span>Free disk space</span><span>' + esc(pc.freeDiskGb == null ? "?" : pc.freeDiskGb) + ' GB</span></div><div class="row"><span>Working folder</span><span style="word-break:break-all;text-align:right">' + esc(pc.workDir || "") + "</span></div>"
+      + (pc.cutOff ? '<div class="banner warn" style="margin-top:8px">"' + esc(pc.cutOff) + '" was cut off when this computer last stopped. The agent carries on with it as soon as the CRM confirms it is still its task.</div>' : "");
+    const ssig = JSON.stringify(s.signins || []);
+    if (ssig !== signSig) {
+      signSig = ssig;
+      $("signins").innerHTML = (s.signins || []).length ? s.signins.map((x) => '<div class="row" style="align-items:center"><span style="color:var(--ink)"><b>' + esc(x.name) + "</b> · " + esc(x.site) + ' <span style="color:var(--mute)">(' + (x.readable ? "user " + esc(x.userHint) : "cannot be read: save it again") + ')</span></span><span style="flex:none"><button class="b danger" data-signin="' + esc(x.id) + '" data-name="' + esc(x.name) + '">Remove</button></span></div>').join("") : '<div class="empty">No sign-in saved.</div>';
+    }
     $("autoSw").classList.toggle("on", !!s.autostart); $("autoSw").setAttribute("aria-checked", !!s.autostart);
     const log = $("log"), bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 12;
     log.textContent = s.log.join("\n"); if (bottom) log.scrollTop = log.scrollHeight;
@@ -792,7 +824,17 @@
     if (what === "rename") { const name = prompt("Name for " + id, b.dataset.name || ""); if (name && name.trim()) act("gMsg", "profile", { action: "rename", id, name: name.trim() }, "Renamed."); }
     if (what === "remove" && confirm("Remove " + id + " from this computer? Its sign-in is deleted and channels that use it stop working until you choose another Chrome ID.")) act("gMsg", "profile", { action: "remove", id }, id + " removed.");
   });
-  $("autoSw").onclick = () => act("appMsg", "autostart", { on: !(last && last.autostart) }, last && last.autostart ? "The agent no longer starts with Windows." : "The agent now starts with Windows.");
+  $("autoSw").onclick = () => act("appMsg", "autostart", { on: !(last && last.autostart) }, last && last.autostart ? "The agent no longer starts with this computer." : "The agent now starts when this computer starts.");
+  $("workBtn").onclick = () => act("pcMsg", "open-work", {}, "Opened.");
+  $("siAdd").onclick = async () => {
+    const r = await act("siMsg", "signin", { action: "add", name: $("siName").value.trim(), loginUrl: $("siUrl").value.trim(), user: $("siUser").value, password: $("siPass").value }, "Saved on this computer. It is not shown again.");
+    if (r) { $("siName").value = ""; $("siUrl").value = ""; $("siUser").value = ""; }
+    $("siPass").value = "";
+  };
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-signin]");
+    if (b && confirm("Remove the saved sign-in for " + (b.dataset.name || "this tool") + " from this computer?")) act("siMsg", "signin", { action: "remove", id: b.dataset.signin }, "Removed.");
+  });
 
   if (PAGES[location.hash.slice(1)]) go(location.hash.slice(1));
   window.addEventListener("hashchange", () => { if (PAGES[location.hash.slice(1)]) go(location.hash.slice(1)); });
