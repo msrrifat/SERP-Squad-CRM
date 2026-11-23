@@ -99,7 +99,7 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5");
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5").put("vision", true);
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -564,6 +564,34 @@ final class Demo {
     { workHours.putArray("days").add(1).add(2).add(3).add(4).add(5); }
     private final java.util.Set<String> dismissed = new java.util.HashSet<>();
 
+    private final Map<String, List<ObjectNode>> photos = new HashMap<>();
+    private int photoSeq = 0;
+
+    /** A drawn stand-in for a photo, so the demo shows pictures without shipping any. */
+    private static String picture(String sky, String ink, String caption) {
+        String svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'><rect width='400' height='300' fill='" + sky + "'/><rect y='200' width='400' height='100' fill='" + ink + "' opacity='.18'/>"
+            + "<rect x='60' y='120' width='150' height='100' rx='6' fill='" + ink + "' opacity='.75'/><path d='M50 124 L135 70 L220 124Z' fill='" + ink + "'/><rect x='250' y='160' width='110' height='50' rx='10' fill='" + ink + "' opacity='.9'/><circle cx='275' cy='214' r='13' fill='#111827'/><circle cx='337' cy='214' r='13' fill='#111827'/>"
+            + "<text x='200' y='280' text-anchor='middle' font-family='sans-serif' font-size='17' fill='" + ink + "'>" + caption + "</text></svg>";
+        return "data:image/svg+xml;base64," + java.util.Base64.getEncoder().encodeToString(svg.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private List<ObjectNode> photosOf(String pid) {
+        return photos.computeIfAbsent(pid, (k) -> {
+            List<ObjectNode> list = new ArrayList<>();
+            if (!k.equals(PROJECTS[0][0]) && !k.equals(PROJECTS[1][0])) return list;
+            long now = System.currentTimeMillis();
+            Object[][] demo = { { "Van outside a house", "Our van parked outside a customer's house.", "#DBEAFE", "#1E3A8A", 3, 6 }, { "New boiler fitted", "A new boiler we fitted in a kitchen, pipework boxed in.", "#DCFCE7", "#14532D", 1, 20 }, { "The team", "Three engineers in uniform in front of the workshop.", "#FEF3C7", "#78350F", 0, 0 } };
+            for (Object[] d : demo) {
+                ObjectNode x = Json.obj();
+                String pic = picture((String) d[2], (String) d[3], (String) d[0]);
+                x.put("id", "ph_demo" + (++photoSeq)).put("name", (String) d[0]).put("note", (String) d[1]).put("type", "image/jpeg").put("bytes", 412_000).put("thumb", pic).put("full", pic).put("addedAt", now - 12 * DAY).put("by", "You").put("timesUsed", (Integer) d[4]);
+                if ((Integer) d[4] > 0) x.putObject("lastUsed").put("at", now - (Integer) d[5] * DAY).put("title", "Business Profile post"); else x.putNull("lastUsed");
+                list.add(x);
+            }
+            return list;
+        });
+    }
+
     /** A made-up "needs a person" list, in the shape the CRM sends: one of each kind that matters. */
     private ArrayNode attention() {
         long now = System.currentTimeMillis();
@@ -807,6 +835,7 @@ final class Demo {
             double spent = Math.round(calls * 0.0135 * 10000.0) / 10000.0;
             ((ObjectNode) p.path("usage")).putObject("seo").put("usd", spent).put("calls", calls);
             if (!setting.has("seoUsdPerMonth")) setting.put("seoUsdPerMonth", 5.0);
+            p.put("photos", i < 0 ? 0 : photosOf((String) PROJECTS[i][0]).size());
             if (!setting.has("triggers")) setting.putObject("triggers").put("rankDrop", i == 0).put("rankDropBy", 5).put("siteDown", i >= 0 && i < 2);
             seoUsd += spent;
             seoCalls += calls;
@@ -1344,7 +1373,7 @@ final class Demo {
         switch (p) {
             case "config": {
                 if (body.path("global").isObject()) {
-                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel");
+                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision");
                     if (body.path("global").path("alerts").isObject()) alerts.setAll((ObjectNode) body.path("global").path("alerts"));
                     if (body.path("global").path("workHours").isObject()) workHours.setAll((ObjectNode) body.path("global").path("workHours"));
                 }
@@ -1437,6 +1466,30 @@ final class Demo {
             case "brand": return brandEdit(pid, body);
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
+            case "media": {
+                if (!known(pid)) return bad(404, "Unknown project.");
+                List<ObjectNode> list = photosOf(pid);
+                String action = body.path("action").asText("list"), id = body.path("id").asText("");
+                if (action.equals("add")) {
+                    ObjectNode x = Json.obj();
+                    x.put("id", "ph_demo" + (++photoSeq)).put("name", Json.clip(body.path("name").asText("Photo"), 80)).put("note", Json.clip(body.path("note").asText(""), 200)).put("type", "image/jpeg")
+                        .put("bytes", body.path("dataUrl").asText("").length() * 3 / 4).put("thumb", body.path("thumb").asText("")).put("full", body.path("dataUrl").asText("")).put("addedAt", System.currentTimeMillis()).put("by", "You").put("timesUsed", 0).putNull("lastUsed");
+                    list.add(x);
+                } else if (!action.equals("list")) {
+                    ObjectNode x = null;
+                    for (ObjectNode y : list) if (y.path("id").asText().equals(id)) x = y;
+                    if (x == null) return bad(404, "That photo no longer exists.");
+                    if (action.equals("get")) return new Reply(200, Json.obj().put("ok", true).put("dataUrl", x.path("full").asText(x.path("thumb").asText(""))));
+                    if (action.equals("edit")) { if (body.has("note")) x.put("note", Json.clip(body.path("note").asText(""), 200)); }
+                    else list.remove(x);
+                }
+                ObjectNode out = Json.obj();
+                out.put("ok", true).put("projectId", pid).put("max", 60).put("maxBytes", 2_000_000);
+                ArrayNode arr = out.putArray("photos");
+                for (ObjectNode y : list) { ObjectNode v = y.deepCopy(); v.remove("full"); arr.add(v); }
+                return new Reply(200, out);
+            }
+            case "evidence": return new Reply(200, Json.obj().put("ok", true).put("label", "The page when the task ended").put("at", System.currentTimeMillis() - 3 * HOUR).put("dataUrl", picture("#E5E7EB", "#1F2A44", "Business Profile: post published")));
             case "alerts": {
                 if ("ack".equals(body.path("action").asText(""))) {
                     if (body.path("keys").isArray()) for (JsonNode k : body.path("keys")) dismissed.add(k.asText(""));

@@ -54,6 +54,8 @@ final class Browser implements AutoCloseable {
     private volatile boolean lookOnly = false;
     /** What a message box on the page said, to be told to the agent with the next page reading. */
     private volatile String dialogNote = "";
+    /** Set when the page opens its file chooser (the click that opened it is waiting for this). */
+    private volatile CompletableFuture<Integer> chooser = null;
 
     void setLookOnly(boolean on) { this.lookOnly = on; }
 
@@ -155,6 +157,8 @@ final class Browser implements AutoCloseable {
             CompletableFuture<WebSocket> f = HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(wsUrl), new Listener());
             ws = f.get(15, TimeUnit.SECONDS);
             send("Page.enable", Json.obj());
+            /* a page's "choose a file" is handed to the program instead of opening a window nobody can click */
+            try { ObjectNode on = Json.obj(); on.put("enabled", true); send("Page.setInterceptFileChooserDialog", on); } catch (BrowserException ignored) { /* an older Chrome: a direct file field still works */ }
         } catch (BrowserException e) {
             throw e;
         } catch (InterruptedException e) {
@@ -189,6 +193,9 @@ final class Browser implements AutoCloseable {
                     if (n.has("id")) {
                         CompletableFuture<JsonNode> f = pending.remove(n.get("id").asInt());
                         if (f != null) f.complete(n);
+                    } else if ("Page.fileChooserOpened".equals(n.path("method").asText(""))) {
+                        CompletableFuture<Integer> waiting = chooser;
+                        if (waiting != null) waiting.complete(n.path("params").path("backendNodeId").asInt(0));
                     } else if ("Page.javascriptDialogOpening".equals(n.path("method").asText(""))) {
                         JsonNode d = n.path("params");
                         CompletableFuture.runAsync(() -> answerDialog(socket, d));
@@ -571,6 +578,78 @@ final class Browser implements AutoCloseable {
         eval("(() => { history.back(); return true; })()");
         settle(900);
         return read();
+    }
+
+    /**
+     * A picture of the visible page, for Claude to look at or to keep as
+     * proof with the work. A picture cannot be scrubbed the way text is, so
+     * none is taken of a page that asks for a sign-in, that has a field for a
+     * password, a code or a key, or whose text shows something that looks
+     * like one. The page is then read as text, where such things are hidden.
+     */
+    String picture() throws BrowserException {
+        read();                                        // the same checks as any reading: still on the channel's sites, not on an account page
+        JsonNode s = snapshot();
+        if (signInPage(s)) throw new BrowserException("This page asks for a sign-in, so no picture is taken of it.");
+        for (JsonNode e : s.path("els")) if (e.path("secret").asBoolean(false)) throw new BrowserException("This page has a field for a password, a code or a key, so no picture is taken of it. Read it as text instead.");
+        if (Redact.hasSecret(s.path("text").asText("")) || Redact.hasSecret(s.path("url").asText(""))) throw new BrowserException("This page shows something that looks like a password or a key, so no picture is taken of it. Read it as text instead.");
+        ObjectNode p = Json.obj();
+        p.put("format", "jpeg");
+        p.put("quality", 60);
+        String data = send("Page.captureScreenshot", p).path("data").asText("");
+        if (data.isEmpty()) throw new BrowserException("Chrome returned no picture of the page.");
+        return data;
+    }
+
+    /**
+     * Put one file into the page's file chooser. The number is either the
+     * file field itself or the button that opens the chooser ("Add photos",
+     * "Select images"). The file comes from the CRM's photos for this
+     * project; nothing else on this computer can be uploaded.
+     */
+    String upload(int ref, Path file) throws BrowserException {
+        if (lookOnly) throw new BrowserException("This run only looks and proposes, so nothing is uploaded. Name the photo in your proposal or report instead.");
+        JsonNode before = snapshotGuard();
+        if (signInPage(before)) throw new BrowserException("This is a sign-in page. A person has to sign in; the agent does not.");
+        JsonNode at = locate(ref);
+        ObjectNode set = Json.obj();
+        set.putArray("files").add(file.toAbsolutePath().toString());
+        if ("input".equals(at.path("tag").asText("")) && "file".equals(at.path("type").asText(""))) {
+            set.put("objectId", objectOf("document.querySelector('[data-ssa=\"" + ref + "\"]')"));
+        } else {
+            CompletableFuture<Integer> opened = new CompletableFuture<>();
+            chooser = opened;
+            int node = 0;
+            try {
+                pace();
+                clickAt(at);
+                node = opened.get(6, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BrowserException("interrupted");
+            } catch (Exception e) {
+                node = 0;                               // no chooser opened: the page may keep a hidden file field instead
+            } finally {
+                chooser = null;
+            }
+            if (node > 0) set.put("backendNodeId", node);
+            else {
+                String hidden = objectOf("document.querySelector('input[type=file]')");
+                if (hidden.isEmpty()) throw new BrowserException("Clicking [" + ref + "] did not open a file chooser, and the page has no file field. Read the page again: the upload may be behind another button.");
+                set.put("objectId", hidden);
+            }
+        }
+        send("DOM.setFileInputFiles", set);
+        settle(1500);
+        return read();
+    }
+
+    /** A handle on a page element for commands that need the element itself, or "" when there is none. */
+    private String objectOf(String expression) throws BrowserException {
+        ObjectNode p = Json.obj();
+        p.put("expression", expression);
+        p.put("returnByValue", false);
+        return send("Runtime.evaluate", p).path("result").path("objectId").asText("");
     }
 
     /** Save a PNG of the visible page (kept on this device as evidence of what was done). */

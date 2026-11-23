@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.serpsquad</groupId>
   <artifactId>serpsquad-agent</artifactId>
-  <version>0.14.0</version>
+  <version>0.15.0</version>
   <packaging>jar</packaging>
   <name>SERP Squad local AI agent</name>
 

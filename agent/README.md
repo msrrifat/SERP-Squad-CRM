@@ -201,6 +201,32 @@ Company-wide: on/off, pause, default model and effort, and one token limit for
 all projects together. Live SEO data has its own company switch and monthly
 spend limit under API setup.
 
+## Photos, seeing a page as a picture, and proof
+
+- **Photos.** Each project has its own photos (Work setup, **Photos**): real
+  pictures of the client's work, team or premises, each with a note on what
+  it shows. They are made smaller in the browser before they are sent (long
+  side 2,000 pixels, 2 MB at most, 60 per project). The agent lists them
+  with the `photos` tool and attaches one with `browser_upload`, giving the
+  number of the page's file field or of the button that opens the file
+  chooser. The program answers the chooser itself, so no window opens on the
+  screen. The device fetches that one file for that one task and removes it
+  when the task ends. Nothing else on the computer can be uploaded, and
+  nothing is uploaded in a run that only looks. The photo records which task
+  used it, so the agent can avoid repeating one.
+- **Seeing a page.** `browser_look` returns the visible page as a JPEG next
+  to the tool's answer, for the times the text reading is not enough (a
+  visual editor, a photo, a layout). It costs more tokens than a reading, and
+  the rules tell the agent to use it sparingly. A picture cannot be scrubbed
+  the way text is, so none is taken of a page that asks for a sign-in, has a
+  field for a password, a code or a key, or shows something that looks like
+  one. The switch is under API setup (**Looking at pages as pictures**).
+- **Proof.** When a task that changed something ends, a picture of the page
+  as the agent left it is sent to the CRM and kept with the task (shown in
+  the task under **Proof**; four per task at most, kept 120 days). The same
+  rule about passwords and keys holds. The PNG on the computer
+  (`data/screenshots/`) is still written as before.
+
 ## The second check, and acting without a person's approval
 
 Every task type that changes something live has an approval setting, per
@@ -546,6 +572,5 @@ the server-side refusal fallback on Opus and Sonnet models.
 
 - The agent changing the CRM's own code (planned as pull requests for review).
 - Sending outreach email. It drafts; a person sends.
-- Uploading photos to a Business Profile.
 - Applying changes on a website and publishing to social profiles exist as
   task types but have never been run against real sites or platforms.

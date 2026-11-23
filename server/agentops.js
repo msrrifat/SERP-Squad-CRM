@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5" }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true }, projects: {}, playbooks: {} }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -319,7 +319,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -1420,7 +1420,7 @@ function tokenRoom(pid) {
 
 /* ---------- tasks ---------- */
 const ACTIVE = new Set(["queued", "approved", "running", "needs_approval"]);
-const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null, check: t.proposal?.check?.verdict || t.result?.check?.verdict || null });
+const lightTask = (t) => ({ keySource: t.keySource || null, id: t.id, projectId: t.projectId, type: t.type, title: t.title, status: t.status, phase: t.phase, source: t.source, createdAt: t.createdAt, createdBy: t.createdBy, startedAt: t.startedAt || null, finishedAt: t.finishedAt || null, deviceId: t.deviceId || null, usage: t.usage, blockedReason: t.blockedReason || null, summary: t.result?.summary || t.proposal?.summary || t.error || "", findings: (t.result?.findings || []).length, attempts: t.attempts || 0, feedback: t.feedback?.rating || null, evidence: (t.evidence || []).length, check: t.proposal?.check?.verdict || t.result?.check?.verdict || null });
 function createTask({ projectId, type, title, instructions, source, createdBy, reason }) {
   const cat = CATALOG_BY_KEY[type];
   if (!cat) return { error: "Unknown task type." };
@@ -1745,6 +1745,99 @@ async function tickTriggers() {
 setInterval(tickTriggers, TRIGGER_TEST ? 3000 : 5 * 60e3).unref?.();
 setTimeout(tickTriggers, 30e3).unref?.();
 
+/* ---------- photos the agent may publish, and screenshots it keeps as proof ----------
+   Photos: per project, uploaded in the dashboard (Work setup, Photos). The
+   agent lists them with the photos tool and attaches one in the browser
+   with browser_upload; the device fetches that one file for that one task.
+   It can upload nothing else from its computer.
+   Proof: when a task that changed something ends, the device sends a
+   picture of the final page. It is kept with the task (four at most) and
+   removed after 120 days. Neither is part of the hourly backup. */
+const MEDIA_DIR = new URL("./data/agentops/media/", import.meta.url), EVID_DIR = new URL("./data/agentops/evidence/", import.meta.url);
+const PHOTO_MAX = 60, PHOTO_BYTES = 2_000_000, EVIDENCE_BYTES = 700_000, EVIDENCE_PER_TASK = 4;
+const IMG_EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+function imageFrom(dataUrl, maxBytes) {
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ""));
+  if (!m) return { error: "That is not a JPEG, PNG or WebP picture." };
+  const buf = Buffer.from(m[2], "base64");
+  if (buf.length < 100) return { error: "The picture is empty." };
+  if (buf.length > maxBytes) return { error: `The picture is larger than ${(maxBytes / 1e6).toFixed(1)} MB.` };
+  const ok = m[1] === "image/jpeg" ? buf[0] === 0xff && buf[1] === 0xd8 : m[1] === "image/png" ? buf.readUInt32BE(0) === 0x89504e47 : buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP";
+  return ok ? { type: m[1], buf } : { error: "The file is not the kind of picture it says it is." };
+}
+const photosOf = (pid) => (load("media")[pid] ||= []);
+const photoView = (x) => ({ id: x.id, name: x.name, note: x.note || "", type: x.type, bytes: x.bytes, thumb: x.thumb || "", addedAt: x.addedAt, by: x.by || "", timesUsed: (x.used || []).length, lastUsed: (x.used || []).slice(-1)[0] || null });
+const photoFile = (x) => new URL(`${x.id}.${IMG_EXT[x.type] || "jpg"}`, MEDIA_DIR);
+function mediaEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const list = photosOf(p.id), bad = (detail, code = 400) => [code, { error: code === 404 ? "not_found" : "bad_request", detail }];
+  const action = body.action || "list";
+  if (action === "add") {
+    if (list.length >= PHOTO_MAX) return bad(`A project holds ${PHOTO_MAX} photos at most. Remove one first.`);
+    const img = imageFrom(body.dataUrl, PHOTO_BYTES);
+    if (img.error) return bad(img.error);
+    const thumb = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]{100,40000}$/.test(String(body.thumb || "")) ? String(body.thumb) : "";
+    const x = { id: uid("ph_"), name: line(body.name || "Photo", 80) || "Photo", note: line(body.note || "", 200), type: img.type, bytes: img.buf.length, thumb, addedAt: now(), by: admin.name, used: [] };
+    mkdirSync(MEDIA_DIR, { recursive: true });
+    writeFileSync(photoFile(x), img.buf);
+    list.push(x);
+    save("media");
+    logActivity("media", `${admin.name} added a photo for ${p.name}: ${x.name}`, { projectId: p.id });
+  } else if (action === "remove" || action === "edit" || action === "get") {
+    const x = list.find((y) => y.id === body.id);
+    if (!x) return bad("That photo no longer exists.", 404);
+    if (action === "get") { try { return [200, { ok: true, dataUrl: `data:${x.type};base64,${readFileSync(photoFile(x)).toString("base64")}` }]; } catch { return bad("The photo's file is missing on the server.", 404); } }
+    if (action === "edit") { if (body.name != null) x.name = line(body.name, 80) || x.name; if (body.note != null) x.note = line(body.note, 200); }
+    else { rmSync(photoFile(x), { force: true }); list.splice(list.indexOf(x), 1); logActivity("media", `${admin.name} removed a photo of ${p.name}: ${x.name}`, { projectId: p.id }); }
+    save("media");
+  } else if (action !== "list") return bad("Unknown action.");
+  return [200, { ok: true, projectId: p.id, max: PHOTO_MAX, maxBytes: PHOTO_BYTES, photos: list.map(photoView) }];
+}
+/* the one photo a running task asked for, for the device to put in the page's file chooser */
+function agentMedia(d, body) {
+  const t = myRunning(d, body?.taskId);
+  if (!t) return [409, { error: "not_running", detail: "This task is no longer assigned to this device." }];
+  const x = photosOf(t.projectId).find((y) => y.id === body?.id);
+  if (!x) return [404, { error: "not_found", detail: "This project has no photo with that id. List them with the photos tool." }];
+  let buf;
+  try { buf = readFileSync(photoFile(x)); } catch { return [404, { error: "not_found", detail: "That photo's file is missing on the server." }]; }
+  (x.used ||= []).push({ at: now(), taskId: t.id, title: cut(t.title, 80) });
+  if (x.used.length > 12) x.used.splice(0, x.used.length - 12);
+  save("media");
+  t.heartbeatAt = now();
+  return [200, { ok: true, id: x.id, name: x.name.replace(/[^A-Za-z0-9 ._-]/g, "").trim().slice(0, 60) || "photo", ext: IMG_EXT[x.type] || "jpg", type: x.type, base64: buf.toString("base64") }];
+}
+function agentEvidence(d, body) {
+  const t = myRunning(d, body?.taskId);
+  if (!t) return [409, { error: "not_running" }];
+  const img = imageFrom("data:image/jpeg;base64," + String(body?.image || ""), EVIDENCE_BYTES);
+  if (img.error) return [400, { error: "bad_request", detail: img.error }];
+  const list = (t.evidence ||= []);
+  if (list.length >= EVIDENCE_PER_TASK) return [200, { ok: true, kept: false }];
+  const n = list.length + 1;
+  mkdirSync(EVID_DIR, { recursive: true });
+  writeFileSync(new URL(`${t.id}_${n}.jpg`, EVID_DIR), img.buf);
+  list.push({ id: n, label: line(body.label || "Screenshot", 120), url: clip(body.url || "", 300), at: now(), bytes: img.buf.length });
+  save("tasks");
+  return [200, { ok: true, kept: true }];
+}
+function evidenceGet(body) {
+  const t = load("tasks").find((x) => x.id === body?.taskId), e = (t?.evidence || []).find((x) => x.id === +body?.id);
+  if (!t || !e) return [404, { error: "not_found", detail: "That screenshot no longer exists." }];
+  try { return [200, { ok: true, label: e.label, at: e.at, url: e.url || "", dataUrl: "data:image/jpeg;base64," + readFileSync(new URL(`${t.id}_${e.id}.jpg`, EVID_DIR)).toString("base64") }]; }
+  catch { return [404, { error: "not_found", detail: "That screenshot was removed (they are kept for 120 days)." }]; }
+}
+function pruneEvidence() {
+  try {
+    if (!existsSync(EVID_DIR)) return;
+    const old = now() - 120 * 864e5;
+    for (const f of readdirSync(EVID_DIR)) { const u = new URL(f, EVID_DIR); try { if (statSync(u).mtimeMs < old) rmSync(u, { force: true }); } catch { /* looked at again tomorrow */ } }
+  } catch { /* housekeeping never stops the server */ }
+}
+setInterval(pruneEvidence, 24 * 36e5).unref?.();
+setTimeout(pruneEvidence, 90e3).unref?.();
+
 /* ---------- playbooks, settings and the CRM tool list synced to devices ---------- */
 const PLAYBOOK_KEYS = ["_rules", "_chat", ...CATALOG.map((c) => c.key)];
 const PLAYBOOK_LABEL = (k) => (k === "_rules" ? "Agent rules (all tasks)" : k === "_chat" ? "Chat (talking about a project)" : CATALOG_BY_KEY[k].label);
@@ -2039,6 +2132,10 @@ const SERVER_TOOLS = [
     if (holder) { holder.lessonsSaved = (holder.lessonsSaved || 0) + (corrects ? 0 : 1); save("tasks"); }
     return { ok: true, id: l.id, saved: l.text };
   }),
+  tool("photos", "List the photos the team uploaded for this project, which you may attach to a post or a profile (browser_upload takes a photo's id). Each has a name, the team's note on what it shows, and when it was last used. Choose one that fits what you are writing about and was not used recently. If the list is empty, publish without a photo and say so in the report.", {}, [], (ctx) => {
+    if (ctx.task.projectId === AGENCY_PROJECT) return { photos: [] };
+    return { photos: photosOf(ctx.task.projectId).map((x) => ({ id: x.id, name: x.name, whatItShows: x.note || "(no note)", added: new Date(x.addedAt).toISOString().slice(0, 10), timesUsed: (x.used || []).length, lastUsed: (x.used || []).length ? new Date(x.used[x.used.length - 1].at).toISOString().slice(0, 10) : "never" })) };
+  }),
   tool("lessons", "List everything you have learned so far on this project, with ids, and what you have learned about this kind of task on every project. Use it before an experience review, or when you need a lesson's id to correct it.", {}, [], (ctx) => {
     const all = load("lessons"), pid = ctx.task.projectId;
     return { thisProject: (all[pid] || []).map((l) => ({ id: l.id, kindOfTask: typeLabel(l.type) || "all tasks", text: l.text, source: LESSON_SOURCE[l.source] || l.source, pinned: !!l.pinned, date: new Date(l.updatedAt || l.at).toISOString().slice(0, 10) })),
@@ -2102,7 +2199,7 @@ function overview(admin) {
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -2125,6 +2222,7 @@ function saveConfig(admin, body) {
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
     if (g.secondCheck != null && !!g.secondCheck !== (cfg.global.secondCheck !== false)) { cfg.global.secondCheck = !!g.secondCheck; logActivity("settings", `${admin.name} switched the second check before a change ${cfg.global.secondCheck ? "on" : "off"}.`); }
     if (g.checkModel && MODELS.some((m) => m.id === g.checkModel)) cfg.global.checkModel = g.checkModel;
+    if (g.vision != null && !!g.vision !== (cfg.global.vision !== false)) { cfg.global.vision = !!g.vision; logActivity("settings", `${admin.name} switched "the agent may look at pages as pictures" ${cfg.global.vision ? "on" : "off"}.`); }
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
     if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
     if (g.timeZone != null) {
@@ -2423,6 +2521,7 @@ function agentClaim(d) {
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
       ...(again ? { interrupted: "An earlier run of this approved change was cut off, so part of it may already be live. Before changing anything, open the page or profile and check what is already there. Do only what is still missing, never the same thing twice, and say in the report what you found already done." } : {}),
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
+      vision: cfg.global.vision !== false, photos: t.projectId === AGENCY_PROJECT ? 0 : photosOf(t.projectId).length,
       directions: directionsOf(t.projectId).map((x) => x.text),
       setup: setupLines(t.projectId, cat.area),
       brand: brandBlock(t.projectId, !!cat.writes),
@@ -2797,6 +2896,8 @@ export async function agentOpsPost(req, body) {
       case "agent/complete": return agentComplete(d, body);
       case "agent/check": return agentCheck(d, body || {});
       case "agent/board": return agentBoard(d);
+      case "agent/media": return agentMedia(d, body || {});
+      case "agent/evidence": return agentEvidence(d, body || {});
       case "agent/chat/get": return chatGet(body || {});
       case "agent/chat/send": return chatSend({ name: `${d.name} (agent's computer)` }, body || {});
       case "agent/chat/stop": return chatStop({ name: d.name }, body || {});
@@ -2830,6 +2931,8 @@ export async function agentOpsPost(req, body) {
     case "roster": return rosterEdit(admin, body || {});
     case "seodata": return seoDataEdit(admin, body || {});
     case "alerts": return alertsEdit(admin, body || {});
+    case "media": return mediaEdit(admin, body || {});
+    case "evidence": return evidenceGet(body || {});
     case "report": return reportGet(body || {});
     case "work": return workEdit(admin, body || {});
     case "logos": return logosGet(body || {});

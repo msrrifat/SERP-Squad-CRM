@@ -364,13 +364,14 @@ final class Worker {
             public void progress() { progressAt = System.currentTimeMillis(); }
         };
         Browser b = null;
+        ToolBox tools = null;
         progressAt = System.currentTimeMillis();
         stalled = false;
         taskThread = Thread.currentThread();
         try {
             b = browserFor(task);
             taskBrowser = b;
-            ToolBox tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
+            tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
             TaskRunner runner = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher);
             runner.keepForLater = this::keepResult;
             runner.ended = () -> stalled;
@@ -391,6 +392,7 @@ final class Worker {
             Thread.interrupted();           // the watchdog's interrupt ends with the task; the loop goes on
             if (b != null) b.close();
             taskBrowser = null;
+            if (tools != null) tools.cleanUp();
             if (stalled) { outcome[0] = "failed"; outcome[1] = "The run stood still for too long and was ended."; }
             remember(cur, outcome[0], outcome[1]);
             current = null;

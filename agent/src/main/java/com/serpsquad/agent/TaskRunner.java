@@ -10,6 +10,7 @@ import com.anthropic.errors.PermissionDeniedException;
 import com.anthropic.errors.RateLimitException;
 import com.anthropic.errors.UnauthorizedException;
 import com.anthropic.models.ErrorType;
+import com.anthropic.models.beta.messages.BetaBase64ImageSource;
 import com.anthropic.models.beta.messages.BetaCacheControlEphemeral;
 import com.anthropic.models.beta.messages.BetaClearToolUses20250919Edit;
 import com.anthropic.models.beta.messages.BetaContextManagementConfig;
@@ -409,6 +410,13 @@ final class TaskRunner {
                     ToolBox.Outcome out = tools.run(use.name(), input);
                     watcher.progress();
                     if (use.name().equals("request_approval") && tools.approval != null && !out.error) out = afterPlan(out);
+                    if (out.image != null) {
+                        /* a picture of the page: the words first, then the image, in the one tool result */
+                        results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).contentOfBlocks(List.of(
+                            BetaToolResultBlockParam.Content.Block.ofText(out.text),
+                            BetaToolResultBlockParam.Content.Block.ofImage(BetaBase64ImageSource.builder().data(out.image).mediaType(BetaBase64ImageSource.MediaType.IMAGE_JPEG).build()))).build()));
+                        continue;
+                    }
                     results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content(out.text).isError(out.error).build()));
                 }
                 if (tools.finished != null) { completeFinished(); return null; }
@@ -544,6 +552,19 @@ final class TaskRunner {
     private void completeFinished() {
         String shot = tools.hasBrowser() ? tools.evidence("end") : "";
         if (!shot.isEmpty()) event("note", "Screenshot of the final browser state saved on the device: " + shot);
+        /* a task that changed something leaves a picture of the result with its report in the CRM */
+        if (tools.hasBrowser() && task.path("write").asBoolean(false)) {
+            String jpeg = tools.proof();
+            if (!jpeg.isEmpty()) {
+                try {
+                    ObjectNode e = Json.obj();
+                    e.put("taskId", taskId);
+                    e.put("label", "The page when the task ended");
+                    e.put("image", jpeg);
+                    crm.post("agent/evidence", e);
+                } catch (CrmClient.CrmException ignored) { /* the report still goes; the picture stays on this computer */ }
+            }
+        }
         ObjectNode b = Json.obj();
         b.put("taskId", taskId);
         b.put("status", "done");

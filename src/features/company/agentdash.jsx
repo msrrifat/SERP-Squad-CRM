@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Bell, Sparkles, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bell, Sparkles, Image as ImageIcon, ArrowRight, BookOpen, ChevronRight, Bot, Check, ClipboardList, Clock, Copy, ExternalLink, Download, Eye, FolderInput, Gauge, GraduationCap, BarChart3, FileText, Globe, KeyRound, Library, ListTodo, Lock, MapPin, MessageSquare, Mic, Monitor, Pause, PencilLine, Pin, Play, Plus, RefreshCw, Search, Send, Settings2, Share2, ShieldCheck, Square, ThumbsDown, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { Card, Labeled, LogoUpload, Modal, askConfirm, inputCls } from "../../ui/primitives.jsx";
 import { relTime } from "../../lib/format.jsx";
 import { renderMd } from "./guide.jsx";
@@ -801,6 +801,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
+    ["photos", "Photos", ImageIcon, `${project.photos || 0} photo${project.photos === 1 ? "" : "s"} to publish`],
     ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`],
     ["report", "Report", ClipboardList, `${project.workItems || 0} thing${project.workItems === 1 ? "" : "s"} done`]];
   const gbpOk = ch.gbp.some((x) => x.browser && profiles.some((p) => p.id === x.browser));
@@ -820,7 +821,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
     <div className="space-y-4">
       <div>
         <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
           {TABS.map(([k, label, Icon, sub]) => (
             <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
               style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
@@ -992,6 +993,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       )}
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
+      {tab === "photos" && <Photos key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
       {tab === "report" && <WorkReport key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} />}
     </div>
@@ -1622,6 +1624,7 @@ function TaskModal({ id, accent, act, onClose }) {
             <div className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-white/70 p-2 font-mono text-[12px] text-gray-800">{t.result.plan}</div>
           </div>
         )}
+        {(t.evidence || []).length > 0 && <Proof task={t} />}
         {t.approval && <div className="text-[12px] text-gray-600">{t.approval.decision === "approved" ? "Approved" : "Rejected"} by {t.approval.by} {relTime(t.approval.at)}{t.approval.note ? `: ${t.approval.note}` : ""}</div>}
 
         {(t.result?.findings || []).length > 0 && (
@@ -1983,6 +1986,106 @@ function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
   );
 }
 /* ---------------- live SEO data: DataForSEO, reached through its MCP server ---------------- */
+/* ---------------- photos the agent may publish for a project ---------------- */
+/* a picture is made smaller in the browser before it is sent: the long side at most `max` pixels, as a JPEG */
+function shrinkImage(file, max, quality) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new window.Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight)), w = Math.max(1, Math.round(img.naturalWidth * k)), h = Math.max(1, Math.round(img.naturalHeight * k));
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`${file.name} could not be read as a picture.`)); };
+    img.src = url;
+  });
+}
+function Photos({ project, accent, reload }) {
+  const [state, setState] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [big, setBig] = useState(null);
+  const pick = useRef(null);
+  const run = useCallback(async (body, doing = "") => {
+    setBusy(doing || "working"); setErr("");
+    try { const o = await api("media", { projectId: project.id, ...body }); if (o.photos) setState(o); return o; }
+    catch (e) { setErr(String(e.message || e)); return null; }
+    finally { setBusy(""); }
+  }, [project.id]);
+  useEffect(() => { run({ action: "list" }); }, [run]);
+  const add = async (files) => {
+    let added = 0;
+    for (const f of [...files].slice(0, 12)) {
+      if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { setErr(`${f.name} is not a JPEG, PNG or WebP picture.`); continue; }
+      try {
+        const dataUrl = await shrinkImage(f, 2000, 0.86), thumb = await shrinkImage(f, 220, 0.7);
+        if (await run({ action: "add", name: f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").slice(0, 80), dataUrl, thumb }, `Adding ${f.name}…`)) added += 1;
+      } catch (e) { setErr(String(e.message || e)); }
+    }
+    if (added && reload) reload();
+  };
+  const photos = state?.photos || [];
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-[220px] flex-1">
+          <div className="text-[13.5px] font-semibold text-gray-900">Photos the agent may publish</div>
+          <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Real photos of this client's work, team, vehicles or premises. When the agent publishes a Business Profile post (or anything else that takes a picture) it chooses one that fits and was not used recently, and attaches it. It can upload these and nothing else from its computer. Say what each photo shows: the agent only knows the name and your note.</div>
+        </div>
+        <input ref={pick} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" aria-label="Choose photos to add" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+        <Btn accent={accent} disabled={!!busy || photos.length >= (state?.max || 60)} onClick={() => pick.current?.click()}><Upload size={13} /> Add photos</Btn>
+      </div>
+      {busy && busy !== "working" && <div className="mt-2 text-[12px] text-gray-500">{busy}</div>}
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {state && !photos.length && <div className="mt-3 rounded-lg border border-dashed border-gray-300 px-4 py-6 text-center text-[12.5px] text-gray-500">No photos yet. Without one the agent publishes posts with text only and says so in its report.</div>}
+      {photos.length > 0 && (
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {photos.map((x) => (
+            <div key={x.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+              <button type="button" className="block aspect-[4/3] w-full bg-gray-100" title="Show this photo larger" onClick={async () => { const o = await run({ action: "get", id: x.id }); if (o?.dataUrl) setBig({ ...x, dataUrl: o.dataUrl }); }}>
+                {x.thumb ? <img src={x.thumb} alt={x.note || x.name} className="h-full w-full object-cover" /> : <span className="flex h-full items-center justify-center text-gray-400"><ImageIcon size={22} /></span>}
+              </button>
+              <div className="space-y-1.5 p-2">
+                <div className="truncate text-[12px] font-semibold text-gray-900" title={x.name}>{x.name}</div>
+                <input className={inputCls + " !py-1 text-[12px]"} aria-label={`What ${x.name} shows`} placeholder="What it shows (for the agent)" defaultValue={x.note} onBlur={(e) => { if (e.target.value.trim() !== (x.note || "")) run({ action: "edit", id: x.id, note: e.target.value }); }} />
+                <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                  <span>{x.timesUsed ? `Used ${x.timesUsed}×, last ${relTime(x.lastUsed.at)}` : "Not used yet"}</span>
+                  <button type="button" className="text-red-700 hover:underline" disabled={!!busy} onClick={async () => { if (await askConfirm({ title: "Remove this photo?", message: `"${x.name}" is removed from the photos the agent may publish. Posts that already used it are not changed.`, confirmLabel: "Remove" })) { await run({ action: "remove", id: x.id }); if (reload) reload(); } }}>Remove</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {state && <div className="mt-3 text-[11px] text-gray-400">{photos.length} of {state.max} photos. Each is made smaller in your browser before it is sent (long side 2,000 pixels).</div>}
+      {big && <Modal title={big.name} onClose={() => setBig(null)}><img src={big.dataUrl} alt={big.note || big.name} className="mx-auto max-h-[70vh] rounded-lg" />{big.note && <div className="mt-2 text-[12.5px] text-gray-600">{big.note}</div>}</Modal>}
+    </Card>
+  );
+}
+/* the picture a task left of the page it changed */
+function Proof({ task }) {
+  const [shown, setShown] = useState({});
+  const [err, setErr] = useState("");
+  const open = async (e) => {
+    if (shown[e.id]) { setShown((c) => ({ ...c, [e.id]: null })); return; }
+    try { const o = await api("evidence", { taskId: task.id, id: e.id }); setShown((c) => ({ ...c, [e.id]: o.dataUrl })); setErr(""); } catch (x) { setErr(String(x.message || x)); }
+  };
+  return (
+    <div>
+      <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Proof</div>
+      {task.evidence.map((e) => (
+        <div key={e.id} className="mb-2">
+          <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12px] font-medium text-gray-700 hover:bg-gray-50" onClick={() => open(e)}><ImageIcon size={13} /> {shown[e.id] ? "Hide" : "Show"}: {e.label} <span className="font-normal text-gray-400">· {relTime(e.at)}</span></button>
+          {shown[e.id] && <img src={shown[e.id]} alt={e.label} className="mt-2 max-w-full rounded-lg border border-gray-200" />}
+        </div>
+      ))}
+      {err && <div className="text-[12px] text-red-700">{err}</div>}
+      <div className="text-[11px] text-gray-400">A picture of the page as the agent left it, taken on its computer. Kept for 120 days.</div>
+    </div>
+  );
+}
 /* what the independent second check said about a plan */
 function CheckNote({ check }) {
   if (!check) return null;
@@ -2075,6 +2178,13 @@ function ApiSetupView({ data, accent, act, busy }) {
       </Card>
 
       <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Eye size={15} style={{ color: accent }} /> Looking at pages as pictures</div>
+          <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={data.global.vision !== false} label="The agent may look at pages as pictures" onChange={(v) => act("config", { global: { vision: v } })} /> {data.global.vision !== false ? "On" : "Off"}</label>
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">The agent reads a page as text. With this on it can also ask for a picture of the page when the text is not enough: a visual editor, a photo, a layout. A picture costs more tokens than a reading, so it is told to use it sparingly. No picture is ever taken of a page that asks for a sign-in, has a field for a password, a code or a key, or shows something that looks like one. The same rule holds for the screenshot the agent keeps as proof when a task that changed something ends.</div>
+      </Card>
       <SeoDataCard data={data} accent={accent} act={act} busy={busy} />
 
       <Card className="p-4">
