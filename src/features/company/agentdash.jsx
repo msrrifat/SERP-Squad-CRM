@@ -1002,8 +1002,9 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
       {tab === "visibility" && <AiVisibility key={project.id} project={project} accent={accent} reload={reload} onOpenTask={onOpenTask} />}
       {tab === "photos" && <Photos key={project.id} project={project} accent={accent} reload={reload} />}
+      {tab === "experience" && <ProjectStatus key={"st" + project.id} project={project} accent={accent} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
-      {tab === "report" && <WorkReport key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} />}
+      {tab === "report" && <Reports key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} reload={reload} />}
     </div>
   );
 }
@@ -2052,6 +2053,202 @@ function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
   );
 }
 /* ---------------- live SEO data: DataForSEO, reached through its MCP server ---------------- */
+/* ---------------- the agent's own DataForSEO login, and what is left on it ---------------- */
+function DfsLogin({ data, accent, act, busy }) {
+  const s = data.seoData || {}, own = s.own || { set: false }, bal = s.balance || {};
+  const [login, setLogin] = useState(""); const [password, setPassword] = useState(""); const [open, setOpen] = useState(false);
+  const save = async () => { const o = await act("credentials", { kind: "dataforseo", action: "set", login, password }); if (o) { setLogin(""); setPassword(""); setOpen(false); } };
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 p-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-[200px] flex-1">
+          <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">DataForSEO account balance</div>
+          <div className="mt-0.5 text-[13px] text-gray-800">{!s.login ? "No login set" : bal.known ? <><b className="text-[18px] text-gray-900">{usd(bal.balance)}</b> left{bal.total ? <span className="text-gray-500"> of {usd(bal.total)} paid in</span> : null}<span className="text-gray-400"> · checked {relTime(bal.at)}</span></> : bal.detail ? <span className="text-red-700">{bal.detail}</span> : "Checking…"}</div>
+        </div>
+        <Btn ghost disabled={busy || !s.login} onClick={() => act("credentials", { kind: "dataforseo", action: "balance" })} title="Asks DataForSEO for the balance now. This request is free."><RefreshCw size={13} /> Check now</Btn>
+      </div>
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-gray-700">
+          <span className="min-w-[200px] flex-1">{own.set ? <>The agent works with its own DataForSEO login <code className="rounded bg-gray-100 px-1">{own.hint}</code>{own.by ? ` (saved by ${own.by} ${relTime(own.updatedAt)})` : ""}.</> : s.login ? "The agent uses the DataForSEO login saved in Company Settings, API settings. You can give it its own here." : "Give the agent a DataForSEO login here, or save one in Company Settings, API settings."}</span>
+          <Btn ghost onClick={() => setOpen(!open)}>{own.set ? "Replace" : "Set a login for the agent"}</Btn>
+          {own.set && <Btn ghost danger disabled={busy} onClick={async () => { if (await askConfirm({ title: "Remove the agent's DataForSEO login?", message: "The agent goes back to the login saved in Company Settings, API settings, if there is one.", confirmLabel: "Remove" })) act("credentials", { kind: "dataforseo", action: "remove" }); }}>Remove</Btn>}
+        </div>
+        {open && (
+          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <input className={inputCls} aria-label="DataForSEO API login" autoComplete="off" placeholder="API login (an email address)" value={login} onChange={(e) => setLogin(e.target.value)} />
+            <input className={inputCls} type="password" aria-label="DataForSEO API password" autoComplete="new-password" placeholder="API password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Btn accent={accent} disabled={busy || login.trim().length < 3 || password.length < 6} onClick={save}><Check size={13} /> Check and save</Btn>
+            <div className="text-[11.5px] leading-5 text-gray-500 sm:col-span-3">Both are on your DataForSEO dashboard under API Access (the API password is not your sign-in password). The login is checked with DataForSEO before it is saved, stored encrypted on the server beside the agent's Claude keys, never shown again, and never sent to the agent's computer or to Claude.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- what the agent knows about a project (it starts every task and chat from this) ---------------- */
+function ProjectStatus({ project, accent }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [edit, setEdit] = useState(null); const [busy, setBusy] = useState(false);
+  const run = useCallback(async (body) => {
+    setBusy(true); setErr("");
+    try { const o = await api("status", { projectId: project.id, ...body }); setV(o); return o; } catch (e) { setErr(String(e.message || e)); return null; } finally { setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run({ action: "get" }); }, [run]);
+  if (!v) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading what the agent knows…"}</Card>;
+  const filled = v.sections.filter((x) => x.text).length;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[13.5px] font-semibold text-gray-900">What the agent knows about this project</div>
+        <Chip>{filled} of {v.sections.length} sections filled</Chip>
+      </div>
+      <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">The agent does not look at a project afresh each time. It keeps what its work found out in these short sections, starts every task and every chat from them, and rewrites one when it learns something new. Correct anything that is wrong: the agent takes your version as the truth. The pages it fetched and its working files stay on its own computer.</div>
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[12px] leading-5 text-gray-700"><b>Rankings now</b> (always from the rank tracker, never from memory): {v.rankings}</div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        {v.sections.map((x) => (
+          <div key={x.key} className="rounded-xl border border-gray-200 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[12.5px] font-semibold text-gray-900">{x.label}</div>
+              <span className="text-[11px] text-gray-400">{x.updatedAt ? `${x.by || "Agent"} · ${relTime(x.updatedAt)}` : "nothing yet"}</span>
+            </div>
+            {edit?.key === x.key ? (
+              <>
+                <textarea className={inputCls + " mt-2 h-40 text-[12.5px]"} aria-label={x.label} maxLength={v.max} value={edit.text} onChange={(e) => setEdit({ key: x.key, text: e.target.value })} />
+                <div className="mt-2 flex items-center gap-2"><Btn accent={accent} disabled={busy} onClick={async () => { if (await run({ action: "set", section: x.key, text: edit.text })) setEdit(null); }}><Check size={13} /> Save</Btn><Btn ghost onClick={() => setEdit(null)}>Close</Btn><span className="text-[11px] text-gray-400">{edit.text.length} of {v.max}</span></div>
+              </>
+            ) : (
+              <>
+                <div className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap text-[12.5px] leading-5 text-gray-700">{x.text || <span className="text-gray-400">The agent fills this in as it works. You can also write it yourself.</span>}</div>
+                <button type="button" className="mt-1.5 text-[11.5px] font-semibold text-blue-700 hover:underline" onClick={() => setEdit({ key: x.key, text: x.text })}>{x.text ? "Correct this" : "Write this"}</button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ---------------- reports: the work that was done, and how the rankings moved ---------------- */
+function Reports({ project, accent, onOpenTask, reload }) {
+  const [sub, setSub] = useState("work");
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Reports">
+        {[["work", "Working report", ClipboardList], ["ranking", "Ranking report", BarChart3]].map(([k, label, Icon]) => (
+          <button key={k} type="button" role="tab" aria-selected={sub === k} onClick={() => setSub(k)} className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold"
+            style={sub === k ? { background: accent, color: "#fff", borderColor: accent } : { background: "#fff", color: "#374151", borderColor: "#E5E7EB" }}><Icon size={13} />{label}</button>
+        ))}
+      </div>
+      {sub === "work" ? <WorkReport project={project} accent={accent} onOpenTask={onOpenTask} /> : <RankingReport project={project} accent={accent} onOpenTask={onOpenTask} reload={reload} />}
+    </div>
+  );
+}
+function RankingReport({ project, accent, onOpenTask, reload }) {
+  const [r, setR] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const run = useCallback(async (action) => {
+    setBusy(true); setErr("");
+    try { const o = await api("ranking", { projectId: project.id, action }); setR(o); return o; } catch (e) { setErr(String(e.message || e)); return null; } finally { setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run("get"); }, [run]);
+  if (!r) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Working out this week's report…"}</Card>;
+  const w = r.week, k = w.rank, g = w.gsc || {}, off = r.taskType?.mode === "off";
+  const day = (t) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const delta = (a, b, lowerIsBetter) => { if (a == null || b == null || a === b) return null; const good = lowerIsBetter ? a < b : a > b, d = Math.abs(a - b); return <span className="ml-1.5 text-[11.5px] font-semibold" style={{ color: good ? "#15803D" : "#B91C1C" }}>{a > b ? "▲" : "▼"} {Number.isInteger(d) ? d : d.toFixed(1)}</span>; };
+  const tile = (label, now, before, lower) => <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{label}</div><div className="text-[20px] font-semibold text-gray-900">{now == null ? "–" : now}{delta(now, before, lower)}</div><div className="text-[11px] text-gray-500">a week ago: {before == null ? "–" : before}</div></div>;
+  const moves = (title, list, good, empty) => (
+    <div>
+      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{title}</div>
+      {!list.length ? <div className="py-2 text-[12px] text-gray-400">{empty}</div> : list.map((x, i) => (
+        <div key={i} className="flex items-center gap-2 border-t border-gray-100 py-1.5 text-[12.5px] first:border-t-0">
+          <span className="min-w-0 flex-1 truncate text-gray-800" title={x.url}>{x.keyword}{x.city ? <span className="text-gray-400"> · {x.city}</span> : null}</span>
+          <span className="whitespace-nowrap text-gray-500">{x.from} → <b className="text-gray-900">{x.to}</b></span>
+          <span className="w-10 text-right text-[11.5px] font-semibold" style={{ color: good ? "#15803D" : "#B91C1C" }}>{good ? "+" : "−"}{x.by}</span>
+        </div>
+      ))}
+    </div>
+  );
+  const gscRows = (title, list, good) => (
+    <div>
+      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{title}</div>
+      {!list?.length ? <div className="py-2 text-[12px] text-gray-400">None.</div> : list.slice(0, 6).map((x, i) => (
+        <div key={i} className="flex items-center gap-2 border-t border-gray-100 py-1.5 text-[12.5px] first:border-t-0"><span className="min-w-0 flex-1 truncate text-gray-800" title={x.name}>{x.name}</span><span className="whitespace-nowrap text-gray-500">{x.before} → <b className="text-gray-900">{x.clicks}</b> clicks</span><span className="w-10 text-right text-[11.5px] font-semibold" style={{ color: good ? "#15803D" : "#B91C1C" }}>{good ? "+" : "−"}{Math.abs(x.clicks - x.before)}</span></div>
+      ))}
+    </div>
+  );
+  const review = async () => {
+    setBusy(true); setErr(""); setNote("");
+    try { await api("task/create", { projectId: project.id, type: "ranking_review", title: `Weekly ranking review: ${project.name}` }); setNote("Queued. The agent reads this report, says what moved and why, and queues the work that should follow. Its review appears here when it has finished."); if (reload) reload(); }
+    catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
+  };
+  const top = Math.max(1, ...k.trend.map((x) => x.top10 || 0));
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-[220px] flex-1">
+            <div className="text-[13.5px] font-semibold text-gray-900">Ranking report · week of {day(w.week + "T12:00:00")}</div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">What moved in the last seven days, from the rank tracker's scans (DataForSEO) and, where it is connected, Search Console. Worked out {relTime(w.at)}; it costs no tokens. The agent reviews it once a week and queues the work that should follow.</div>
+          </div>
+          <div className="flex items-center gap-2"><Btn ghost disabled={busy} onClick={() => run("refresh")}><RefreshCw size={13} /> Work it out again</Btn><Btn accent={accent} disabled={busy || off || w.demoData} title={off ? "Weekly ranking review is switched off for this project. Switch it on above, under the task types." : w.demoData ? "This project is on demo data." : ""} onClick={review}>Review it now</Btn></div>
+        </div>
+        {w.demoData && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">This project is on demo data, so these rankings are made up. They are shown so you can see the report; no work is planned from them.</div>}
+        {off && !w.demoData && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">The task type <b>Weekly ranking review</b> is switched off for this project. Switch it on (and set it to start by itself every 7 days) for the agent to act on this report each week.</div>}
+        {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+        {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+        <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+          {tile("In the top 3", k.now.top3, k.before.top3)}{tile("In the top 10", k.now.top10, k.before.top10)}{tile("In the top 20", k.now.top20, k.before.top20)}{tile("Average position", k.now.avg, k.before.avg, true)}
+        </div>
+        <div className="mt-2 text-[12px] text-gray-600">{k.now.tracked} keywords tracked: <b style={{ color: "#15803D" }}>{k.upCount} went up</b>, <b style={{ color: "#B91C1C" }}>{k.downCount} went down</b>, {k.sameCount} did not move{k.now.notRanked ? `, ${k.now.notRanked} outside the top 100` : ""}.</div>
+        <div className="mt-3">
+          <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Keywords in the top 10, last eight weeks</div>
+          <div className="mt-1.5 flex h-20 items-end gap-2" role="img" aria-label={k.trend.map((x) => `${day(x.at)}: ${x.top10}`).join(", ")}>
+            {k.trend.map((x, i) => <div key={i} className="flex flex-1 flex-col items-center justify-end gap-1" title={`${day(x.at)}: ${x.top10} in the top 10, ${x.top3} in the top 3`}><span className="text-[10px] font-semibold text-gray-700">{x.top10}</span><span className="w-full max-w-[40px] rounded-t" style={{ height: Math.max(3, Math.round(((x.top10 || 0) / top) * 48)) + "px", background: i === k.trend.length - 1 ? accent : accent + "55" }} /><span className="text-[9.5px] text-gray-400">{day(x.at)}</span></div>)}
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="grid gap-5 lg:grid-cols-2">
+          {moves(`Went up (${k.upCount})`, k.up, true, "No keyword went up this week.")}
+          {moves(`Went down (${k.downCount})`, k.down, false, "No keyword went down this week.")}
+          {moves(`Entered the top 10 (${k.entered.length})`, k.entered, true, "None this week.")}
+          {moves(`Left the top 10 (${k.left.length})`, k.left, false, "None this week.")}
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[13.5px] font-semibold text-gray-900">Search Console</div>
+        {!g.connected ? <div className="mt-1 text-[12.5px] text-gray-500">Search Console is not connected for this project in the CRM, so clicks and impressions are not in this report.</div>
+          : g.error ? <div className="mt-1 text-[12.5px] text-red-700">{g.error}</div> : (
+            <>
+              <div className="mt-0.5 text-[11.5px] text-gray-500">{g.range.from} to {g.range.to}, against {g.range.beforeFrom} to {g.range.beforeTo}. Search Console is about three days behind.</div>
+              <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">{tile("Clicks", g.now.clicks, g.before.clicks)}{tile("Impressions", g.now.impressions, g.before.impressions)}{tile("Click rate, %", g.now.ctr, g.before.ctr)}{tile("Average position", g.now.position, g.before.position, true)}</div>
+              <div className="mt-4 grid gap-5 lg:grid-cols-2">{gscRows("Queries that gained clicks", g.queries.up, true)}{gscRows("Queries that lost clicks", g.queries.down, false)}{gscRows("Pages that gained clicks", g.pages.up, true)}{gscRows("Pages that lost clicks", g.pages.down, false)}</div>
+            </>
+          )}
+        <div className="mt-3 border-t border-gray-100 pt-3 text-[12px] text-gray-500"><b className="text-gray-700">Google Business Profile.</b> {r.gbp}</div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div className="text-[13.5px] font-semibold text-gray-900">The agent's review of this week</div>{w.review?.taskId && <Btn ghost onClick={() => onOpenTask(w.review.taskId)}>Open the task and its report</Btn>}</div>
+        {!w.review ? <div className="mt-1 text-[12.5px] text-gray-500">Not reviewed yet. {off ? "" : "It is reviewed when the weekly task runs, or press Review it now."}</div> : (
+          <>
+            <div className="mt-1 whitespace-pre-wrap text-[12.5px] leading-5 text-gray-700">{w.review.summary}</div>
+            {w.review.actions.length > 0 && <div className="mt-3"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Work decided on ({w.review.actions.length})</div>
+              {w.review.actions.map((x, i) => <div key={i} className="border-t border-gray-100 py-2 text-[12.5px] first:border-t-0"><div className="font-medium text-gray-900">{x.about}</div>{x.finding && <div className="text-gray-600">{x.finding}</div>}<div className="text-gray-800"><b>Action:</b> {x.action}</div>{x.task && <div className="text-[11.5px] text-gray-500">Task queued: {x.task}</div>}</div>)}</div>}
+          </>
+        )}
+        {r.history.length > 1 && (
+          <div className="mt-4 overflow-x-auto"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Earlier weeks</div>
+            <table className="mt-1 w-full min-w-[520px] text-left text-[12.5px]"><thead><tr className="border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-400"><th className="py-1.5 pr-3 font-semibold">Week of</th><th className="py-1.5 pr-3 font-semibold">Top 3</th><th className="py-1.5 pr-3 font-semibold">Top 10</th><th className="py-1.5 pr-3 font-semibold">Top 20</th><th className="py-1.5 pr-3 font-semibold">Up / down</th><th className="py-1.5 pr-3 font-semibold">Clicks</th><th className="py-1.5 font-semibold">Reviewed</th></tr></thead>
+              <tbody>{[...r.history].reverse().map((h) => <tr key={h.week} className="border-b border-gray-100"><td className="py-1.5 pr-3 text-gray-800">{day(h.week + "T12:00:00")}</td><td className="py-1.5 pr-3">{h.top3 ?? "–"}</td><td className="py-1.5 pr-3">{h.top10 ?? "–"}</td><td className="py-1.5 pr-3">{h.top20 ?? "–"}</td><td className="py-1.5 pr-3">{h.up} / {h.down}</td><td className="py-1.5 pr-3">{h.clicks ?? "–"}</td><td className="py-1.5">{h.reviewed ? `Yes, ${h.actions} action${h.actions === 1 ? "" : "s"}` : "No"}</td></tr>)}</tbody></table></div>
+        )}
+      </Card>
+    </div>
+  );
+}
 /* ---------------- AI search visibility: the share of AI answers that name the business, over time ---------------- */
 function Bars({ items, accent, max = 100, unit = "%" }) {
   if (!items.length) return null;
@@ -2361,6 +2558,7 @@ function SeoDataCard({ data, accent, act, busy }) {
         <Btn ghost disabled={busy || test?.running} onClick={runTest}><RefreshCw size={13} /> {test?.running ? "Testing…" : "Test connection"}</Btn>
       </div>
       {test && !test.running && <div className="mt-2 rounded-lg px-3 py-2 text-[12px]" role="status" style={test.connected ? { background: "#ECFDF5", color: "#047857" } : { background: "#FEF2F2", color: "#B91C1C" }}>{test.detail}</div>}
+      <DfsLogin data={data} accent={accent} act={act} busy={busy} />
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <Labeled label="Company spend limit per month, in $ (0 = none)">
           <input className={inputCls} inputMode="decimal" aria-label="Company DataForSEO spend limit per month in dollars" value={cap} onChange={(e) => setCap(e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1").slice(0, 8))} onBlur={() => { if ((+cap || 0) !== limit) act("config", { global: { seoUsdPerMonth: +cap || 0 } }); }} />
@@ -2398,6 +2596,13 @@ function ApiSetupView({ data, accent, act, busy }) {
       </Card>
 
       <UsageCard data={data} accent={accent} />
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Eye size={15} style={{ color: accent }} /> Looking over the CRM</div>
+          <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={data.global.crmRead !== false} label="The agent may look over the CRM" onChange={(v) => act("config", { global: { crmRead: v } })} /> {data.global.crmRead !== false ? "On" : "Off"}</label>
+        </div>
+        <div className="mt-1 text-[11.5px] leading-5 text-gray-500">With this on the agent can read the CRM itself, not only the rankings: a task on a client project sees all of that project (its records, pages, posts, reports, ads), and the chat and the agency-level task <b>CRM oversight review</b> see every client and project, so you can ask it for an overview of anything. It can change nothing through this. Passwords, API keys, sign-in and mail settings are never returned, and what it reads about one client is not to be used for another.</div>
+      </Card>
       <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

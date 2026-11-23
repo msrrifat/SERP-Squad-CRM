@@ -25,6 +25,23 @@ Rules the server enforces:
 - **Provider rejects (bad auth, quota) → HTTP 502** with the provider's message. The UI shows the error — it does not silently fall back.
 - Only when the API server is **unreachable or unconfigured** does the UI fall back to the deterministic demo simulation, and every demo result is labeled **"Demo data"** in the UI.
 
+**Local AI agent, added 24 Nov 2026** (all in `server/agentops.js`, Admin-only like the rest of `/api/agentops/*`):
+
+- `POST /api/agentops/credentials` with `kind: "dataforseo"`: `set` (login + password, checked against
+  DataForSEO's free `GET /v3/appendix/user_data` before it is saved), `remove`, `balance`. The login is kept
+  encrypted in `data/agentops/secrets.json` beside the agent's Claude keys and is used for everything the agent
+  asks DataForSEO; without one the login from API settings is used. Only a hint ever leaves the server. The
+  overview's `seoData.balance` is asked at most every 20 minutes. Test hook: `DFS_BASE`.
+- `POST /api/agentops/status` (`get`, `set` one section): what the agent knows about a project
+  (`data/agentops/status.json`). It is added to every task claim and chat turn.
+- `POST /api/agentops/ranking` (`get`, `refresh`): the weekly ranking report, worked out from the rank tracker's
+  scans and, when the project's Google connection has a Search Console property, from Search Console
+  (`data/agentops/ranking.json`, 26 weeks). No provider call other than Search Console; no fabrication: a project
+  without Search Console says so.
+- Tools for the device: `project_status`, `update_status`, `ranking_report`, `log_ranking_review`, and the
+  read-only CRM tools `crm_overview`, `crm_read` (switch: `global.crmRead`). The CRM tools never return fields
+  named like secrets (`CRM_HIDE`).
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |

@@ -367,7 +367,16 @@ API (never the account part), at most three task objects, and caps on `depth`,
 project.
 
 To point a test server at a stand-in instead of DataForSEO, start the CRM
-server with `AGENTOPS_DFS_MCP_URL`.
+server with `AGENTOPS_DFS_MCP_URL` (and `DFS_BASE` for the balance).
+
+**The agent's own login, and the balance.** AI agent, API setup shows what is
+left on the DataForSEO account (asked from DataForSEO at most every 20
+minutes; the question is free). By default the agent uses the login saved in
+Company Settings, API settings. An Admin can give the agent a separate
+DataForSEO login there instead, for example a sub-account with its own
+budget. It is checked against DataForSEO before it is saved, kept in the same
+encrypted file as the agent's Claude keys, shown afterwards only as a hint,
+and never sent to a browser, to this program or to Claude.
 
 ## What a task can use
 
@@ -417,6 +426,57 @@ the live page links, off-page with links won and built, social media). The
 agent adds to it by itself: every finished task, every logged change, and
 single items it records with the `log_work` tool. People add work done
 outside the agent there too.
+
+The Report tab has two parts. **Working report** is the above. **Ranking
+report** is the week in numbers: how many tracked keywords are in the top 3,
+10 and 20 now and a week ago, which went up and down, which entered or left
+the top 10, an eight-week trend, and (where the project's Search Console is
+connected in the CRM) clicks, impressions, click rate and position for the
+last seven full days against the seven before, with the queries and pages
+that gained and lost most. It is worked out by the CRM from data it already
+has, so it costs no tokens. Once a week the task type *Weekly ranking review*
+has the agent read it (`ranking_report`), find the likely cause of each
+important move, queue the tasks that should follow, and record its review
+with `log_ranking_review`; the review and its actions are shown under the
+numbers, and 26 weeks are kept. Business Profile performance numbers (calls,
+direction requests) are not in it: the CRM has no source for them yet.
+
+### What the agent knows about a project (status)
+
+The agent does not look at a project afresh every time. What it has found
+out is kept per project in eight short sections: the business, the website,
+its technical state, the Business Profile, links and listings, the
+competitors that rank, how the trade works, and what is in progress. Every
+task and chat answer starts with them, together with the rankings as they
+are right now from the rank tracker, and the rules tell the agent not to
+fetch or audit again what is already recorded there unless a section is
+marked as over 30 days old. It rewrites a section with `update_status`
+when its work teaches it something that belongs there, and reads all of
+them in full with `project_status`. People can read and correct every
+section in Work setup, Experience. The status is kept on the CRM server
+(`status.json`), so any computer continues with it.
+
+Two task types keep it growing. **Learn the trade** (daily, when switched
+on) studies one gap in what the agent knows about the client's trade from
+sources that know it (trade bodies, regulators, manufacturers), checks each
+fact in a second source and adds it to "How this trade works" with the
+source named. **Study the competitors that rank** (weekly) looks at the two
+or three businesses that outrank the client: site, Business Profile as it
+shows in search, social profiles, listings and, with live SEO data, links;
+it records what they do that the client does not and suggests at most three
+tasks. Both only read public pages. Both are off until a project switches
+them on, because they spend tokens every day or week.
+
+### Looking over the CRM
+
+With `crm_overview` and `crm_read` the agent can read the CRM itself. A task
+on a client project sees everything of that project (its records, pages,
+posts, reports, ads and rankings). The chat and agency-level tasks see every
+client and project, and the task type *CRM oversight review* reports across
+all of them. The tools only read. Anything named like a password, key, token
+or sign-in is left out by name, embedded files are named but not returned,
+and every value passes the same scrubbing as the rest. One switch on the API
+setup tab turns it off for everything.
 
 ### Knowledge for every project
 

@@ -99,7 +99,7 @@ final class Demo {
         } catch (Exception ignored) { /* the demo then has no task types */ }
         this.catalogFile = c;
         for (JsonNode t : c.path("catalog")) cat.put(t.path("key").asText(), t);
-        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5").put("vision", true);
+        global.put("enabled", true).put("paused", false).put("model", "claude-opus-5-5").put("effort", "medium").put("tokensPerMonth", 12_000_000L).put("seoData", true).put("seoUsdPerMonth", 25.0).put("timeZone", "Europe/London").put("secondCheck", true).put("checkModel", "claude-sonnet-5-5").put("vision", true).put("crmRead", true);
         companyKey = Json.obj();
         companyKey.put("set", true).put("last4", "7f3a").put("updatedAt", startedAt - 9 * DAY).put("by", "You");
         seedSettings();
@@ -566,6 +566,112 @@ final class Demo {
 
     private final Map<String, List<String>> visPrompts = new HashMap<>();
 
+    private ObjectNode dfsOwn = Json.obj().put("set", false);
+
+    private static final String[][] STATUS = {
+        { "business", "The business" }, { "website", "The website" }, { "technical", "Technical state of the site" }, { "profile", "Google Business Profile" },
+        { "offpage", "Links, citations and social profiles" }, { "competitors", "Competitors that rank" }, { "niche", "How this trade works" }, { "plan", "In progress and next" } };
+    private final Map<String, ObjectNode> statusText = new HashMap<>();
+
+    /** What the agent knows about a project. The first project has a filled-in example; the others start empty. */
+    private Reply statusEdit(String pid, JsonNode body) {
+        boolean first = pid.equals(PROJECTS[0][0]);
+        long now = System.currentTimeMillis();
+        ObjectNode st = statusText.computeIfAbsent(pid, (k) -> {
+            ObjectNode n = Json.obj();
+            if (!first) return n;
+            String[][] demo = {
+                { "business", "Emergency plumbing, boiler repair and servicing, and bathroom fitting across Leeds and the LS postcodes. Family firm, 9 engineers, Gas Safe registered. Most profitable work: boiler replacement and emergency call-outs. Quiet months: June to August.", "3" },
+                { "website", "WordPress with a custom theme, 22 pages. Service pages under /services/, six area pages under /areas/. Blog has 31 posts, the last from 2 weeks ago. The boiler repair page is the strongest landing page from search; the bathroom fitting page has under 300 words.", "5" },
+                { "technical", "Loads in about 2.1 s on a phone. Sitemap and robots.txt are in order. Open: the area pages share one title pattern; three service pages have no LocalBusiness structured data (seen 12 days ago, queued).", "12" },
+                { "profile", "Main category Plumber, four more set. 212 reviews at 4.8; the last reply was 6 days ago. Posts go out weekly. Services list is complete; no products. Photos: 48, the newest three weeks old.", "6" },
+                { "competitors", "Aire Valley Plumbing outranks for \"emergency plumber leeds\": 540 reviews, a page for every LS postcode, prices shown on the page. Headingley Heating outranks for boiler terms: a boiler cost guide that earns links from two local news sites.", "38" },
+                { "niche", "Boiler servicing in the UK is yearly and must be done by a Gas Safe registered engineer; landlords need a gas safety record every 12 months (Gas Safe Register). Customers ask first about call-out charges and how soon someone can come. Demand for boiler work peaks October to January.", "1" },
+                { "plan", "This month: structured data on the three service pages (waiting for approval), a boiler cost guide (brief written), replies to the newest reviews. Next: a page for each of the six strongest postcodes.", "2" } };
+            for (String[] d : demo) n.putObject(d[0]).put("text", d[1]).put("updatedAt", System.currentTimeMillis() - Long.parseLong(d[2]) * DAY).put("by", d[0].equals("business") ? "Sam Whitfield" : "the agent");
+            return n;
+        });
+        if ("set".equals(body.path("action").asText(""))) {
+            String sec = body.path("section").asText(""), text = body.path("text").asText("").trim();
+            if (java.util.Arrays.stream(STATUS).noneMatch((x) -> x[0].equals(sec))) return bad(400, "Unknown section.");
+            if (text.isEmpty()) st.remove(sec); else st.putObject(sec).put("text", text.length() > 2500 ? text.substring(0, 2500) : text).put("updatedAt", now).put("by", "Office PC (agent's computer)");
+        }
+        ObjectNode o = Json.obj();
+        o.put("ok", true).put("projectId", pid).put("max", 2500).put("rankings", first ? "14 keywords tracked: 3 in the top 3, 8 in the top 10, 11 in the top 20 (latest scan " + java.time.LocalDate.now().minusDays(1) + "). Moved most in 7 days: \"boiler repair leeds\" 9 to 5; \"bathroom fitter leeds\" 12 to 17." : "No keywords are tracked for this project in the CRM.");
+        ArrayNode secs = o.putArray("sections");
+        for (String[] x : STATUS) {
+            ObjectNode n = secs.addObject().put("key", x[0]).put("label", x[1]).put("text", st.path(x[0]).path("text").asText("")).put("by", st.path(x[0]).path("by").asText(""));
+            if (st.has(x[0])) n.put("updatedAt", st.path(x[0]).path("updatedAt").asLong()); else n.putNull("updatedAt");
+        }
+        return new Reply(200, o);
+    }
+
+    private static ObjectNode counts(int tracked, int top3, int top10, int top20, int notRanked, double avg) {
+        return Json.obj().put("tracked", tracked).put("scanned", tracked).put("top3", top3).put("top10", top10).put("top20", top20).put("notRanked", notRanked).put("avg", avg);
+    }
+
+    private static ObjectNode move(String kw, String from, String to, int by, String url) {
+        return Json.obj().put("keyword", kw).put("city", "Leeds").put("from", from).put("to", to).put("by", by).put("url", url);
+    }
+
+    private static ObjectNode gscRow(String name, int clicks, int before, double pos, double posBefore) {
+        return Json.obj().put("name", name).put("clicks", clicks).put("before", before).put("position", pos).put("positionBefore", posBefore);
+    }
+
+    /** A made-up week of rankings for the first project, in the shape the CRM sends. */
+    private ObjectNode ranking(String pid) {
+        boolean first = pid.equals(PROJECTS[0][0]);
+        long now = System.currentTimeMillis();
+        ObjectNode o = Json.obj();
+        o.put("ok", true).put("projectId", pid);
+        o.putObject("taskType").put("mode", "limited").put("auto", true).put("everyDays", 7);
+        o.put("gbp", "The CRM has no source of Business Profile performance numbers (calls, direction requests, views) yet, so none are shown. What the agent reads on the profile itself is in its Business Profile tasks.");
+        java.time.LocalDate monday = java.time.LocalDate.now().with(java.time.DayOfWeek.MONDAY);
+        ObjectNode w = o.putObject("week");
+        w.put("week", monday.toString()).put("at", now - 40 * 60_000L).put("demoData", false);
+        ObjectNode rank = w.putObject("rank");
+        ArrayNode hist = o.putArray("history");
+        if (!first) {
+            rank.set("now", counts(0, 0, 0, 0, 0, 0)); rank.set("before", counts(0, 0, 0, 0, 0, 0));
+            rank.putArray("trend"); rank.putArray("up"); rank.putArray("down"); rank.putArray("entered"); rank.putArray("left");
+            rank.put("upCount", 0).put("downCount", 0).put("sameCount", 0);
+            w.putObject("gsc").put("connected", false);
+            return o;
+        }
+        rank.set("now", counts(14, 3, 8, 11, 1, 9.4)); rank.set("before", counts(14, 2, 7, 11, 1, 10.6));
+        int[][] tr = { { 1, 5, 9 }, { 1, 5, 10 }, { 2, 6, 10 }, { 2, 6, 10 }, { 2, 7, 11 }, { 2, 7, 11 }, { 2, 7, 11 }, { 3, 8, 11 } };
+        double[] avg = { 13.8, 13.1, 12.4, 12.0, 11.3, 10.9, 10.6, 9.4 };
+        ArrayNode trend = rank.putArray("trend");
+        for (int i = 0; i < tr.length; i++) trend.addObject().put("at", now - (7L - i) * 7 * DAY).put("top3", tr[i][0]).put("top10", tr[i][1]).put("top20", tr[i][2]).put("avg", avg[i]);
+        String site = "https://northgateplumbing.example";
+        ArrayNode up = rank.putArray("up"), down = rank.putArray("down");
+        up.add(move("boiler repair leeds", "9", "5", 4, site + "/services/boiler-repair/")); up.add(move("emergency plumber leeds", "4", "3", 1, site + "/")); up.add(move("blocked drain leeds", "12", "10", 2, site + "/services/drains/")); up.add(move("gas safe engineer leeds", "15", "13", 2, site + "/about/"));
+        down.add(move("bathroom fitter leeds", "12", "17", 5, site + "/services/bathrooms/")); down.add(move("boiler service cost leeds", "7", "9", 2, site + "/services/boiler-service/"));
+        rank.put("upCount", 4).put("downCount", 2).put("sameCount", 7);
+        rank.putArray("entered").add(move("blocked drain leeds", "12", "10", 2, site + "/services/drains/"));
+        rank.putArray("left");
+        ObjectNode g = w.putObject("gsc");
+        g.put("connected", true);
+        java.time.LocalDate today = java.time.LocalDate.now();
+        g.putObject("range").put("from", today.minusDays(9).toString()).put("to", today.minusDays(3).toString()).put("beforeFrom", today.minusDays(16).toString()).put("beforeTo", today.minusDays(10).toString());
+        g.putObject("now").put("clicks", 412).put("impressions", 9840).put("ctr", 4.19).put("position", 11.2);
+        g.putObject("before").put("clicks", 371).put("impressions", 9310).put("ctr", 3.98).put("position", 12.0);
+        ObjectNode q = g.putObject("queries"), pg = g.putObject("pages");
+        q.putArray("up").add(gscRow("boiler repair leeds", 64, 41, 5.2, 8.7)).add(gscRow("emergency plumber near me", 38, 29, 3.4, 3.9));
+        q.putArray("down").add(gscRow("bathroom fitters leeds", 9, 21, 16.8, 11.9));
+        pg.putArray("up").add(gscRow(site + "/services/boiler-repair/", 121, 88, 6.1, 8.9));
+        pg.putArray("down").add(gscRow(site + "/services/bathrooms/", 14, 30, 17.2, 12.4));
+        ObjectNode rv = w.putObject("review");
+        rv.put("at", now - 30 * 60_000L).put("by", "Office PC").putNull("taskId");
+        rv.put("summary", "A good week: one more keyword in the top 3 and one more in the top 10, and Search Console clicks are up 11%. The boiler repair page gained after its title and internal links were changed two weeks ago. The bathroom fitting page fell five positions; it is the thinnest service page on the site and a competitor published a longer one.");
+        ArrayNode acts = rv.putArray("actions");
+        acts.addObject().put("about", "bathroom fitter leeds").put("finding", "Fell from 12 to 17. The page has under 300 words and no photos of finished work; Aire Valley Plumbing's page was rebuilt this month.").put("action", "Write a content brief for a fuller bathroom fitting page.").put("task", "Content brief: bathroom fitting page");
+        acts.addObject().put("about", "boiler repair leeds").put("finding", "Rose from 9 to 5 after the title rewrite and three new internal links.").put("action", "Do the same for the boiler service page.").put("task", "Internal links: boiler service page");
+        int[][] h = { { 2, 6, 10, 371 }, { 2, 7, 11, 380 }, { 2, 7, 11, 371 }, { 3, 8, 11, 412 } };
+        for (int i = 0; i < h.length; i++) hist.addObject().put("week", monday.minusWeeks(h.length - 1 - i).toString()).put("top3", h[i][0]).put("top10", h[i][1]).put("top20", h[i][2]).put("avg", avg[4 + i]).put("up", 3 + i % 2).put("down", 2 - i % 2).put("clicks", h[i][3]).put("reviewed", true).put("actions", 2);
+        return o;
+    }
+
     /** Made-up AI search visibility for the first project: four checks, three engines, in the shape the CRM sends. */
     private ObjectNode visibility(String pid, JsonNode body) {
         boolean first = pid.equals(PROJECTS[0][0]);
@@ -858,6 +964,8 @@ final class Demo {
         /* live SEO data (DataForSEO): the same fields the CRM reports, with made-up spend */
         ObjectNode seo = o.putObject("seoData");
         seo.put("enabled", global.path("seoData").asBoolean(false)).put("usdPerMonth", global.path("seoUsdPerMonth").asDouble(25)).put("login", true).put("testedAt", 0).put("testOk", false).put("requestsPerTask", 20);
+        seo.set("own", dfsOwn.deepCopy());
+        seo.putObject("balance").put("known", true).put("balance", dfsOwn.path("set").asBoolean(false) ? 61.4 : 184.37).put("total", dfsOwn.path("set").asBoolean(false) ? 100.0 : 500.0).put("at", System.currentTimeMillis() - 4 * 60_000L).put("detail", "");
         double seoUsd = 0;
         int seoCalls = 0;
         ArrayNode ps = o.putArray("projects");
@@ -1428,7 +1536,7 @@ final class Demo {
         switch (p) {
             case "config": {
                 if (body.path("global").isObject()) {
-                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision");
+                    copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision", "crmRead");
                     if (body.path("global").path("alerts").isObject()) alerts.setAll((ObjectNode) body.path("global").path("alerts"));
                     if (body.path("global").path("workHours").isObject()) workHours.setAll((ObjectNode) body.path("global").path("workHours"));
                 }
@@ -1507,6 +1615,14 @@ final class Demo {
             }
             case "credentials": {
                 String a = body.path("action").asText("");
+                if (body.path("kind").asText("").equals("dataforseo")) {
+                    if (a.equals("set")) {
+                        String login = body.path("login").asText("").trim();
+                        if (login.length() < 4 || body.path("password").asText("").length() < 4) return bad(400, "Enter the DataForSEO API login and API password (from the API Access page of the DataForSEO dashboard).");
+                        dfsOwn = Json.obj().put("set", true).put("hint", login.length() > 6 ? login.substring(0, 3) + "…" + login.substring(login.length() - 3) : "…").put("updatedAt", System.currentTimeMillis()).put("by", "Office PC (agent's computer)");
+                    } else if (a.equals("remove")) dfsOwn = Json.obj().put("set", false);
+                    return new Reply(200, overview());
+                }
                 String key = body.path("key").asText("").trim();
                 if (a.equals("test")) { ObjectNode out = Json.obj(); out.put("ok", true).put("valid", true).put("detail", "Demo: the key was not sent anywhere."); return new Reply(200, out); }
                 ObjectNode rec = null;
@@ -1522,6 +1638,8 @@ final class Demo {
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
             case "visibility": return known(pid) ? new Reply(200, visibility(pid, body)) : bad(404, "Unknown project.");
+            case "status": return known(pid) ? statusEdit(pid, body) : bad(404, "Unknown project.");
+            case "ranking": return known(pid) ? new Reply(200, ranking(pid)) : bad(404, "Unknown project.");
             case "media": {
                 if (!known(pid)) return bad(404, "Unknown project.");
                 List<ObjectNode> list = photosOf(pid);

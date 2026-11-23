@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json" };
 const EMPTY = {
-  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}),
+  config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true, crmRead: true }, projects: {}, playbooks: {} }),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -233,9 +233,9 @@ function secrets() {
     v = key ? openSecrets(raw, key) : null;
     secretsLocked = !v;
   }
-  secretsCache = { claude: v?.claude?.key ? v.claude : null, projects: v?.projects && typeof v.projects === "object" ? v.projects : {} };
+  secretsCache = { claude: v?.claude?.key ? v.claude : null, projects: v?.projects && typeof v.projects === "object" ? v.projects : {}, dataforseo: v?.dataforseo?.login && v?.dataforseo?.password ? v.dataforseo : null };
   /* an older plain file is moved to the encrypted form the first time it is read */
-  if (raw && !raw.enc && (secretsCache.claude || Object.keys(secretsCache.projects).length) && master()) { try { saveSecrets(); } catch { /* stays plain */ } }
+  if (raw && !raw.enc && (secretsCache.claude || secretsCache.dataforseo || Object.keys(secretsCache.projects).length) && master()) { try { saveSecrets(); } catch { /* stays plain */ } }
   return secretsCache;
 }
 function saveSecrets() {
@@ -272,6 +272,32 @@ async function credentials(admin, body) {
   if (pid && !projectOf(pid)) return [404, { error: "not_found", detail: "Unknown project." }];
   const sec = secrets();
   const where = pid ? `for ${projectOf(pid).name}` : "for the company";
+  if (body.kind === "dataforseo") {
+    if (body.action === "set") {
+      const login = String(body.login || "").trim(), password = String(body.password || "");
+      if (login.length < 3 || login.length > 200 || /\s/.test(login) || password.length < 6 || password.length > 200) return [400, { error: "bad_request", detail: "Enter the DataForSEO API login and the API password from your DataForSEO dashboard (API Access)." }];
+      const check = await dfsBalance({ login, password });
+      if (!check.ok) return [400, { error: "bad_request", detail: `Not saved. ${check.detail}` }];
+      sec.dataforseo = { login, password, updatedAt: now(), by: admin.name };
+      saveSecrets();
+      mcpSessions.clear();
+      dfsBalanceCache = { at: now(), ...check };
+      logActivity("settings", `${admin.name} saved a DataForSEO login for the agent.`);
+      return [200, overview(admin)];
+    }
+    if (body.action === "remove") {
+      sec.dataforseo = null; saveSecrets(); mcpSessions.clear(); dfsBalanceCache = { at: 0, ok: false, balance: null, total: null, detail: "" };
+      logActivity("settings", `${admin.name} removed the agent's own DataForSEO login.`);
+      return [200, overview(admin)];
+    }
+    if (body.action === "balance") {
+      const creds = dfsCreds("");
+      if (!creds) return [400, { error: "not_configured", detail: "No DataForSEO login is set." }];
+      dfsBalanceCache = { at: now(), ...(await dfsBalance(creds)) };
+      return [200, overview(admin)];
+    }
+    return [400, { error: "bad_request", detail: "Unknown action." }];
+  }
   if (body.action === "set") {
     const key = String(body.key || "").trim();
     if (key.length < 20 || key.length > 400 || /\s/.test(key)) return [400, { error: "bad_request", detail: "That does not look like an API key. Paste the whole key, with no spaces." }];
@@ -293,6 +319,33 @@ async function credentials(admin, body) {
     return [200, { ok: true, ...(await testClaudeKey(key)) }];
   }
   return [400, { error: "bad_request", detail: "Unknown action." }];
+}
+
+/* ---------- the DataForSEO login the agent works with, and what is left on it ----------
+   The agent can be given its own DataForSEO login under AI agent, API setup.
+   It is kept in the same encrypted file as the agent's Claude keys, is never
+   sent back to a browser, to a device or to Claude, and is used for everything
+   the agent asks DataForSEO. Without one, the login saved in Company
+   Settings, API settings is used, as before. */
+const DFS_API = process.env.DFS_BASE || "https://api.dataforseo.com/v3";
+const dfsCreds = (pid) => { const own = secrets().dataforseo; return own?.login && own?.password ? { login: own.login, password: own.password } : deps.dfsForProject(pid || ""); };
+const dfsOwn = () => { const o = secrets().dataforseo; return o?.login ? { set: true, hint: o.login.length > 6 ? o.login.slice(0, 3) + "…" + o.login.slice(-3) : "…", updatedAt: o.updatedAt || null, by: o.by || "" } : { set: false }; };
+let dfsBalanceCache = { at: 0, ok: false, balance: null, total: null, detail: "" }, dfsBalanceBusy = null;
+async function dfsBalance(creds) {
+  try {
+    const r = await fetch(`${DFS_API}/appendix/user_data`, { headers: { Authorization: "Basic " + Buffer.from(`${creds.login}:${creds.password}`).toString("base64"), "Content-Type": "application/json" }, signal: AbortSignal.timeout(20000) });
+    if (r.status === 401 || r.status === 403) return { ok: false, detail: "DataForSEO did not accept this login." };
+    const j = await r.json().catch(() => null), res = j?.tasks?.[0]?.result?.[0];
+    if (!r.ok || !res?.money) return { ok: false, detail: `DataForSEO answered ${r.status}${j?.status_message ? ": " + cut(String(j.status_message), 120) : ""}.` };
+    return { ok: true, balance: +(+res.money.balance || 0).toFixed(2), total: +(+res.money.total || 0).toFixed(2), detail: "" };
+  } catch (e) { return { ok: false, detail: /timeout|aborted/i.test(String(e?.name || e)) ? "DataForSEO did not answer in 20 seconds." : "DataForSEO could not be reached." }; }
+}
+/* the balance on the overview comes from here: looked up at most every 20 minutes, never while the screen waits */
+function dfsBalanceView() {
+  const creds = dfsCreds("");
+  if (!creds) return { known: false, detail: "" };
+  if (now() - dfsBalanceCache.at > 20 * 60e3 && !dfsBalanceBusy) dfsBalanceBusy = dfsBalance(creds).then((b) => { dfsBalanceCache = { at: now(), ...b }; }).catch(() => { /* asked again later */ }).finally(() => { dfsBalanceBusy = null; });
+  return dfsBalanceCache.at ? { known: dfsBalanceCache.ok, balance: dfsBalanceCache.balance, total: dfsBalanceCache.total, at: dfsBalanceCache.at, detail: dfsBalanceCache.detail } : { known: false, detail: "", checking: true };
 }
 
 /* ---------- who is asking ---------- */
@@ -319,7 +372,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -1186,7 +1239,7 @@ function seoRecord(pid, usd, guessed) {
 function seoBlock(pid) {
   const g = seoGlobal();
   if (!g.enabled) return "SEO data from DataForSEO is switched off for the company. It is switched on in the AI agent's API setup.";
-  if (!deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid)) return "No DataForSEO login is set. It is added in Company Settings, API settings.";
+  if (!dfsCreds(pid === AGENCY_PROJECT ? "" : pid)) return "No DataForSEO login is set. Add one under AI agent, API setup, or in Company Settings, API settings.";
   const cap = seoProjectCap(pid), used = seoUsage(pid).usd;
   if (cap <= 0) return "This project's DataForSEO spend limit is 0, so no paid request is made for it.";
   if (used >= cap) return `This project's DataForSEO spend limit for the month is used up ($${used.toFixed(2)} of $${cap.toFixed(2)}).`;
@@ -1246,7 +1299,7 @@ const mcpText = (res) => (Array.isArray(res?.content) ? res.content.filter((c) =
 async function seoDocs(ctx, tool, args) {
   const pid = ctx.task.projectId, g = seoGlobal();
   if (!g.enabled) return { error: "SEO data from DataForSEO is switched off for the company." };
-  const creds = deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid);
+  const creds = dfsCreds(pid === AGENCY_PROJECT ? "" : pid);
   if (!creds) return { error: "No DataForSEO login is set. It is added in Company Settings, API settings." };
   const holder = ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id);
   if (holder && (holder.seoDocs || 0) >= SEO_DOCS_PER_TASK) return { error: "Thirty documentation look-ups have been made in this task. Work with what you have read." };
@@ -1290,7 +1343,7 @@ async function seoRequestNow(ctx, a) {
   /* the request is counted before it is sent: one that fails on the way still used its turn */
   if (holder) { holder.seoCalls = made + 1; save("tasks"); }
   if (turn) { turn.turn.seoCalls = made + 1; save("chats"); }
-  const creds = deps.dfsForProject(pid === AGENCY_PROJECT ? "" : pid);
+  const creds = dfsCreds(pid === AGENCY_PROJECT ? "" : pid);
   let res;
   try { res = await mcpCall(creds, "tools/call", { name: "api_request", arguments: { method, path, ...(method === "POST" ? { data: jobs } : {}), noAiMode: a.full_response === true } }); }
   catch (e) { return { error: e.message }; }
@@ -1313,7 +1366,7 @@ async function seoRequestNow(ctx, a) {
 /* the switch, the company limit, and a free test that the login and the MCP server work */
 async function seoDataEdit(admin, body) {
   if (body.action === "test") {
-    const creds = deps.dfsForProject(body.projectId || "");
+    const creds = dfsCreds(body.projectId || "");
     if (!creds) return [200, { ok: true, connected: false, detail: "No DataForSEO login is set. Add it in Company Settings, API settings (DataForSEO), then test again." }];
     try {
       const res = await mcpCall(creds, "tools/list", {});
@@ -1400,7 +1453,7 @@ function usageSummary() {
     /* by kind of task (the cost per kind is kept from the version that added it; earlier calls are in the token count only) */
     types: (() => { const by = {}; for (const u of Object.values(rows)) for (const [k, t] of Object.entries(u.types || {})) { const x = (by[k] ||= { total: 0, calls: 0, costUsd: 0 }); x.total += t.total || 0; x.calls += t.calls || 0; x.costUsd += t.costUsd || 0; }
       return Object.entries(by).map(([k, t]) => ({ type: k, label: k === "chat" ? "Chat" : CATALOG_BY_KEY[k]?.label || k, total: t.total, calls: t.calls, costUsd: +t.costUsd.toFixed(2) })).sort((a, b) => b.total - a.total).slice(0, 14); })(),
-    seo: { enabled: g.enabled, login: !!deps.dfsForProject(""), usd: usd4(seoCompanyUsd()), calls: seoCompanyCalls(), limit: g.usdPerMonth, days: seoDays, lastMonthUsd: usd4(sum(prev, (u) => u.seo?.usd)) },
+    seo: { enabled: g.enabled, login: !!dfsCreds(""), usd: usd4(seoCompanyUsd()), calls: seoCompanyCalls(), limit: g.usdPerMonth, days: seoDays, lastMonthUsd: usd4(sum(prev, (u) => u.seo?.usd)) },
     projects: Object.entries(rows).map(([pid, u]) => ({ id: pid, name: nameOf(pid), tokens: u.total || 0, costUsd: +(u.costUsd || 0).toFixed(2), seoUsd: usd4(u.seo?.usd || 0), seoCalls: u.seo?.calls || 0 }))
       .filter((x) => x.tokens > 0 || x.seoCalls > 0).sort((a, b) => b.costUsd + b.seoUsd - (a.costUsd + a.seoUsd) || b.tokens - a.tokens).slice(0, 6),
   };
@@ -1752,6 +1805,162 @@ async function tickTriggers() {
 setInterval(tickTriggers, TRIGGER_TEST ? 3000 : 5 * 60e3).unref?.();
 setTimeout(tickTriggers, 30e3).unref?.();
 
+/* ---------- what the agent already knows about a project: its status ----------
+   A project is not looked at afresh every time. What the agent has found out
+   (what the business does, how the site is built, its technical state, the
+   Business Profile, links, the competitors that rank, how the trade works,
+   what is in progress) is kept here in a few short sections, and every task
+   and chat starts with them, together with the rankings as they are now. The
+   agent rewrites a section when its work teaches it something that belongs
+   there; a person can correct any of them. The work itself (pages fetched,
+   notes, files) stays on the agent's computer; this is only the memory. */
+const STATUS_SECTIONS = [["business", "The business"], ["website", "The website"], ["technical", "Technical state of the site"], ["profile", "Google Business Profile"], ["offpage", "Links, citations and social profiles"], ["competitors", "Competitors that rank"], ["niche", "How this trade works"], ["plan", "In progress and next"]];
+const STATUS_MAX = 2500;
+const statusOf = (pid) => { const all = load("status"); const s = (all[pid] ||= { sections: {} }); s.sections ||= {}; return s; };
+function rankingLine(pid) {
+  const rows = rankRows(pid);
+  if (!rows.length) return "No keywords are tracked for this project in the CRM.";
+  const s = rankSummary(rows), moved = rows.filter((r) => r.pos != null && r.d7 != null && r.pos !== r.d7).sort((a, b) => Math.abs(b.pos - b.d7) - Math.abs(a.pos - a.d7)).slice(0, 5);
+  const last = rows.map((r) => r.lastScan).filter(Boolean).sort().pop();
+  return `${s.tracked} keywords tracked: ${s.top3} in the top 3, ${s.top10} in the top 10, ${s.top20} in the top 20${last ? ` (latest scan ${last})` : ""}${projectOf(pid)?.demo ? ". These are demo numbers, not real rankings" : ""}.${moved.length ? " Moved most in 7 days: " + moved.map((r) => `"${r.keyword}" ${shown(r.d7)} to ${shown(r.pos)}`).join("; ") + "." : ""}`;
+}
+function statusView(pid) {
+  const s = statusOf(pid).sections;
+  return { ok: true, projectId: pid, max: STATUS_MAX, rankings: rankingLine(pid),
+    sections: STATUS_SECTIONS.map(([key, label]) => ({ key, label, text: s[key]?.text || "", updatedAt: s[key]?.updatedAt || null, by: s[key]?.by || "" })) };
+}
+/* the status as every task and chat is given it */
+function statusBlock(pid) {
+  if (!pid || pid === AGENCY_PROJECT) return "";
+  const s = statusOf(pid).sections, parts = [];
+  let room = 7000;
+  for (const [key, label] of STATUS_SECTIONS) {
+    const x = s[key];
+    if (!x?.text) continue;
+    const age = Math.floor((now() - (x.updatedAt || 0)) / 864e5), text = x.text.length > room ? x.text.slice(0, Math.max(200, room)) + "… (the rest: project_status)" : x.text;
+    parts.push(`## ${label} (${age <= 0 ? "updated today" : age === 1 ? "updated yesterday" : `updated ${age} days ago`}${age > 30 ? ": over 30 days old, check before relying on it" : ""})\n${text}`);
+    room -= text.length;
+    if (room <= 0) break;
+  }
+  return `Project status (what you already know about this project from earlier work; start from it):\n${parts.length ? parts.join("\n\n") : "Nothing is recorded yet. What this task teaches you about the project belongs here: write it with update_status."}\n\n## Rankings now (from the CRM's rank tracker)\n${rankingLine(pid)}`;
+}
+function statusEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  if (body.action === "set") {
+    if (!STATUS_SECTIONS.some(([k]) => k === body.section)) return [400, { error: "bad_request", detail: "Unknown section." }];
+    const text = para(body.text, STATUS_MAX), s = statusOf(p.id).sections;
+    if (text) s[body.section] = { text, updatedAt: now(), by: admin.name }; else delete s[body.section];
+    save("status");
+  } else if (body.action && body.action !== "get") return [400, { error: "bad_request" }];
+  return [200, statusView(p.id)];
+}
+
+/* ---------- the weekly ranking report ----------
+   What moved in a week, from data the CRM already has: the rank tracker's
+   scans (which come from DataForSEO) and, where the project's Search Console
+   is connected, clicks and impressions against the week before. Each week is
+   kept, with what the agent made of it and the work it queued. Nothing here
+   costs tokens until the weekly review task reads it. */
+const RANK_WEEKS = 26;
+const rankStore = (pid) => { const all = load("ranking"); const r = (all[pid] ||= { weeks: [] }); r.weeks ||= []; return r; };
+function rankingCompute(pid) {
+  const t0 = now(), W = 7 * 864e5, tr = trackingOf(pid).filter((t) => !t.paused);
+  const at = (ts) => { const pos = tr.map((t) => posAtTs(t, ts)).filter((x) => x != null), real = pos.filter((x) => x < UNRANKED);
+    return { tracked: tr.length, scanned: pos.length, top3: pos.filter((x) => x <= 3).length, top10: pos.filter((x) => x <= 10).length, top20: pos.filter((x) => x <= 20).length, notRanked: pos.length - real.length, avg: real.length ? +(real.reduce((a, b) => a + b, 0) / real.length).toFixed(1) : null }; };
+  const rows = tr.map((t) => { const sc = scansOf(t), last = sc ? sc[sc.length - 1] : null; return { keyword: line(t.keyword, 120), city: line(t.city || "", 60), now: posAtTs(t, t0), before: posAtTs(t, t0 - W), url: cut(last?.u || t.rankUrl || "", 200) }; }).filter((r) => r.now != null && r.before != null);
+  const view = (r) => ({ keyword: r.keyword, city: r.city, from: shown(r.before), to: shown(r.now), by: Math.abs(r.now - r.before), url: r.url });
+  const up = rows.filter((r) => r.now < r.before).sort((a, b) => (b.before - b.now) - (a.before - a.now)), down = rows.filter((r) => r.now > r.before).sort((a, b) => (b.now - b.before) - (a.now - a.before));
+  return { now: at(t0), before: at(t0 - W), trend: Array.from({ length: 8 }, (_, i) => { const ts = t0 - (7 - i) * W, a = at(ts); return { at: ts, top3: a.top3, top10: a.top10, top20: a.top20, avg: a.avg }; }),
+    up: up.slice(0, 20).map(view), down: down.slice(0, 20).map(view), upCount: up.length, downCount: down.length, sameCount: rows.length - up.length - down.length,
+    entered: rows.filter((r) => r.before > 10 && r.now <= 10).map(view), left: rows.filter((r) => r.before <= 10 && r.now > 10).map(view) };
+}
+async function rankingGsc(pid) {
+  const g = projectOf(pid)?.raw?.google || {};
+  if (!g.connectionId || !g.gscSite || !deps.gscQuery) return { connected: false };
+  const day = (n) => new Date(now() - n * 864e5).toISOString().slice(0, 10);
+  const ask = (a, b) => deps.gscQuery({ connectionId: g.connectionId, siteUrl: g.gscSite, startDate: day(a), endDate: day(b) });
+  try {
+    /* seven full days against the seven before; Search Console is about three days behind */
+    const [[c1, cur], [c2, prev]] = await Promise.all([ask(9, 3), ask(16, 10)]);
+    if (c1 !== 200 || c2 !== 200) return { connected: true, error: clip((c1 !== 200 ? cur : prev)?.detail || "Search Console could not be read.", 200) };
+    const num4 = (t) => ({ clicks: Math.round(t?.clicks || 0), impressions: Math.round(t?.impressions || 0), ctr: +((t?.ctr || 0) * 100).toFixed(2), position: +(t?.position || 0).toFixed(1) });
+    const movers = (a, b, key) => { const was = new Map((b || []).map((r) => [r[key], r])), seen = new Set(), out = [];
+      for (const r of a || []) { seen.add(r[key]); const o = was.get(r[key]); out.push({ name: cut(String(r[key]), 160), clicks: Math.round(r.clicks || 0), before: Math.round(o?.clicks || 0), position: +(r.position || 0).toFixed(1), positionBefore: o ? +(o.position || 0).toFixed(1) : null }); }
+      for (const [k, o] of was) if (!seen.has(k)) out.push({ name: cut(String(k), 160), clicks: 0, before: Math.round(o.clicks || 0), position: null, positionBefore: +(o.position || 0).toFixed(1) });
+      const d = (x) => x.clicks - x.before;
+      return { up: out.filter((x) => d(x) > 0).sort((x, y) => d(y) - d(x)).slice(0, 10), down: out.filter((x) => d(x) < 0).sort((x, y) => d(x) - d(y)).slice(0, 10) }; };
+    return { connected: true, range: { from: day(9), to: day(3), beforeFrom: day(16), beforeTo: day(10) }, now: num4(cur.totals), before: num4(prev.totals), queries: movers(cur.queries, prev.queries, "query"), pages: movers(cur.pages, prev.pages, "page") };
+  } catch (e) { return { connected: true, error: "Search Console could not be read: " + clip(e?.message || e, 160) }; }
+}
+const rankingBusy = new Map();
+/* this week's report: worked out when asked for, then kept for three hours */
+async function rankingSnapshot(pid, force) {
+  const store = rankStore(pid), wk = new Date(periodStart("week") + 12 * 36e5).toISOString().slice(0, 10);
+  let w = store.weeks.find((x) => x.week === wk);
+  if (w && !force && now() - (w.at || 0) < 3 * 36e5) return w;
+  if (rankingBusy.has(pid)) return rankingBusy.get(pid);
+  const job = (async () => {
+    const rank = rankingCompute(pid), gsc = await rankingGsc(pid);
+    w = store.weeks.find((x) => x.week === wk);
+    if (!w) { w = { week: wk }; store.weeks.push(w); }
+    Object.assign(w, { at: now(), demoData: !!projectOf(pid)?.demo, rank, gsc });
+    store.weeks.sort((a, b) => a.week.localeCompare(b.week));
+    if (store.weeks.length > RANK_WEEKS) store.weeks.splice(0, store.weeks.length - RANK_WEEKS);
+    save("ranking");
+    return w;
+  })().finally(() => rankingBusy.delete(pid));
+  rankingBusy.set(pid, job);
+  return job;
+}
+const rankingHistory = (pid) => rankStore(pid).weeks.slice(-12).map((w) => ({ week: w.week, top3: w.rank?.now?.top3 ?? null, top10: w.rank?.now?.top10 ?? null, top20: w.rank?.now?.top20 ?? null, avg: w.rank?.now?.avg ?? null, up: w.rank?.upCount ?? 0, down: w.rank?.downCount ?? 0, clicks: w.gsc?.now?.clicks ?? null, reviewed: !!w.review, actions: (w.review?.actions || []).length }));
+async function rankingEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const week = await rankingSnapshot(p.id, body.action === "refresh");
+  return [200, { ok: true, projectId: p.id, week, history: rankingHistory(p.id), taskType: taskSetting(p.id, "ranking_review"), gbp: "The CRM has no source of Business Profile performance numbers (calls, direction requests, views) yet, so none are shown. What the agent reads on the profile itself is in its Business Profile tasks." }];
+}
+
+/* ---------- looking over the CRM ----------
+   Read-only, and never anything that is a secret: passwords, keys, tokens,
+   sign-in data and mail settings are left out by name, embedded files are
+   named but not returned, and every value still goes through the same
+   scrubbing as everything else. A task on a client project sees that project
+   (all of it: its records, pages, posts, reports, ads, rankings). The chat and
+   agency-level tasks see the whole company, because that is where a manager
+   asks for an overview. Nothing can be changed through these tools. */
+const CRM_DOCS = ["pm", "performance", "optimization", "ads", "reports"];
+const CRM_HIDE = /pass|secret|token|api_?key|^apis$|hash|salt|credential|smtp|session|otp|^login$|card|iban|bank|private|^key$|keys$|twofa|2fa|recovery/i;
+function crmRoot(scopePid) {
+  const core = deps.readDocCached("core", null) || {}, docs = Object.fromEntries(CRM_DOCS.map((d) => [d, deps.readDocCached(d, {}) || {}]));
+  const whole = (p, c) => Object.assign({ client: c.name || "" }, p, ...CRM_DOCS.map((d) => docs[d][p.id] || {}));
+  const all = (core.clients || []).flatMap((c) => (c.projects || []).map((p) => ({ p, c })));
+  if (scopePid) { const hit = all.find((x) => x.p.id === scopePid); return hit ? whole(hit.p, hit.c) : null; }
+  const pids = new Set(all.map((x) => x.p.id)), company = { ...(core.company || {}) };
+  for (const d of CRM_DOCS) for (const [k, v] of Object.entries(docs[d])) if (!pids.has(k)) company[k] = v;
+  return { company, clients: (core.clients || []).map((c) => ({ ...c, projects: (c.projects || []).map((p) => whole(p, c)) })) };
+}
+function crmShow(v, depth) {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v;
+  if (typeof v === "string") return /^data:[a-z]+\//i.test(v) ? `[embedded file, ${v.length} characters]` : clip(v, 400);
+  if (Array.isArray(v)) return depth <= 0 ? `[list of ${v.length}]` : { count: v.length, items: v.slice(0, 25).map((x) => crmShow(x, depth - 1)), ...(v.length > 25 ? { more: `${v.length - 25} more: read them with from` } : {}) };
+  const keys = Object.keys(v).filter((k) => !CRM_HIDE.test(k));
+  if (depth <= 0) return `{${keys.length} fields: ${keys.slice(0, 14).join(", ")}${keys.length > 14 ? ", …" : ""}}`;
+  return Object.fromEntries(keys.slice(0, 80).map((k) => [k, crmShow(v[k], depth - 1)]));
+}
+function crmWalk(rootValue, path) {
+  let cur = rootValue;
+  const steps = String(path || "").split(/\.|\[|\]/).map((x) => x.trim()).filter(Boolean);
+  for (const step of steps) {
+    if (cur == null) return { error: `Nothing at "${step}".` };
+    if (CRM_HIDE.test(step)) return { error: "That part of the CRM holds sign-in or key data and is not readable." };
+    if (Array.isArray(cur)) { const i = /^\d+$/.test(step) ? cur[+step] : cur.find((x) => x && (x.id === step || x.name === step || x.slug === step || x.keyword === step)); if (i === undefined) return { error: `The list has no item "${step}". Use a number, or an item's id or name.` }; cur = i; }
+    else if (typeof cur === "object") { if (!(step in cur)) return { error: `There is no "${step}" here. Fields: ${Object.keys(cur).filter((k) => !CRM_HIDE.test(k)).slice(0, 40).join(", ")}.` }; cur = cur[step]; }
+    else return { error: `"${step}" is below a plain value.` };
+  }
+  return { value: cur };
+}
+
 /* ---------- AI search visibility, kept as numbers ----------
    Two sources, never mixed:
    • the rank tracker: for every scan it already records whether the business
@@ -1935,7 +2144,7 @@ function syncPayload() {
   ensureDefaultsRev();
   const cfg = load("config");
   return {
-    rev: cfg.playbooksRev, files: playbookFiles(), tools: SERVER_TOOLS.filter((t) => cfg.global.seoData === true || !t.name.startsWith("seo_data_")).map(({ run, ...t }) => t),
+    rev: cfg.playbooksRev, files: playbookFiles(), tools: SERVER_TOOLS.filter((t) => (cfg.global.seoData === true || !t.name.startsWith("seo_data_")) && (cfg.global.crmRead !== false || !t.name.startsWith("crm_"))).map(({ run, ...t }) => t),
     settings: { pollSeconds: 60, heartbeatSeconds: 60, googleHosts: GOOGLE_HOSTS, model: cfg.global.model, effort: cfg.global.effort,
       catalog: CATALOG.map((c) => ({ key: c.key, label: c.label, needs: c.needs || [], write: !!c.write, maxRunTokens: c.maxRunTokens || 300000 })) },
   };
@@ -2199,6 +2408,57 @@ const SERVER_TOOLS = [
     if (holder) { holder.lessonsSaved = (holder.lessonsSaved || 0) + (corrects ? 0 : 1); save("tasks"); }
     return { ok: true, id: l.id, saved: l.text };
   }),
+  tool("project_status", "Read what is already known about this project, in full: the sections of its status (the business, the website, its technical state, the Business Profile, links and social profiles, the competitors that rank, how the trade works, what is in progress) with when each was last updated, and the rankings as they are now. The task message already carries a shortened copy; use this when you need a section in full.", {}, [], (ctx) => {
+    if (ctx.task.projectId === AGENCY_PROJECT) return { error: "Status belongs to a client project." };
+    const v = statusView(ctx.task.projectId);
+    return { rankingsNow: v.rankings, sections: v.sections.map((x) => ({ section: x.key, about: x.label, text: x.text || "(nothing recorded yet)", updated: x.updatedAt ? new Date(x.updatedAt).toISOString().slice(0, 10) : "never" })) };
+  }),
+  tool("update_status", "Rewrite one section of this project's status with what is true now, so the next task and the next chat start from it instead of finding it out again. Write the whole section, not an addition: short dated facts (what, where, as of when), most useful first, at most 2,500 characters. Keep what is still true, drop what is not. Only what you observed in this run or what the manager told you; never a guess, never a password or a key.", { section: { type: "string", description: "One of: " + STATUS_SECTIONS.map(([k, l]) => `${k} (${l})`).join(", ") + "." }, text: { type: "string", description: "The whole section as it should now read." } }, ["section", "text"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Status belongs to a client project." };
+    if (!STATUS_SECTIONS.some(([k]) => k === a.section)) return { error: "Unknown section. Use one of: " + STATUS_SECTIONS.map(([k]) => k).join(", ") + "." };
+    const text = para(a.text, STATUS_MAX);
+    if (text.length < 20) return { error: "Write the section in full sentences or dated facts." };
+    statusOf(pid).sections[a.section] = { text, updatedAt: now(), by: "AI agent", taskId: ctx.chat ? null : ctx.task.id };
+    save("status");
+    return { ok: true, section: a.section, characters: text.length, ...(String(a.text || "").length > STATUS_MAX ? { note: `It was cut at ${STATUS_MAX} characters: write it shorter.` } : {}) };
+  }),
+  tool("ranking_report", "Read this week's ranking report for the project: how many tracked keywords are in the top 3, 10 and 20 now and a week ago, which went up and which went down and by how much, which entered or left the top 10, the eight-week trend, and (when Search Console is connected) clicks, impressions, click rate and average position for the last seven full days against the seven before, with the queries and pages that gained and lost most. Also the last weeks' numbers and what was decided then. It reads data the CRM already has and costs nothing.", {}, [], async (ctx) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "The ranking report belongs to a client project." };
+    const w = await rankingSnapshot(pid, false), prev = rankStore(pid).weeks.filter((x) => x.week < w.week).slice(-3);
+    return { week: w.week, ...(w.demoData ? { warning: "This project is on demo data: the rankings are made up. Say so and plan no work from them." } : {}), rankings: w.rank, searchConsole: w.gsc?.connected ? (w.gsc.error ? { error: w.gsc.error } : w.gsc) : "Search Console is not connected for this project.", businessProfile: "The CRM has no Business Profile performance numbers.",
+      earlierWeeks: prev.map((x) => ({ week: x.week, top10: x.rank?.now?.top10, average: x.rank?.now?.avg, wentUp: x.rank?.upCount, wentDown: x.rank?.downCount, review: x.review ? { summary: x.review.summary, actions: x.review.actions } : null })) };
+  }),
+  tool("log_ranking_review", "Record what you made of this week's ranking report: a short summary for the manager and the work you decided on, one entry per keyword or page (what moved, the likely cause, what will be done, and the task you queued for it with suggest_task, if any). It is shown with the week in the project's Ranking report. Call it once, at the end of a weekly ranking review.", { summary: { type: "string", description: "Three or four sentences: what moved this week and why it matters." }, actions: { type: "array", description: "The work decided on, most important first.", items: { type: "object", properties: { about: { type: "string", description: "The keyword or page." }, finding: { type: "string", description: "What moved and the likely cause, with the evidence." }, action: { type: "string", description: "What will be done." }, task: { type: "string", description: "The title of the task you queued for it, if you queued one." } }, required: ["about", "action"] } } }, ["summary"], async (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT || ctx.chat) return { error: "A ranking review is logged from a task on a client project." };
+    const w = await rankingSnapshot(pid, false);
+    w.review = { at: now(), taskId: ctx.task.id, summary: para(a.summary, 1200), actions: (Array.isArray(a.actions) ? a.actions : []).slice(0, 20).map((x) => ({ about: line(x?.about, 200), finding: line(x?.finding || "", 500), action: line(x?.action, 400), task: line(x?.task || "", 160) })).filter((x) => x.about && x.action) };
+    save("ranking");
+    return { ok: true, week: w.week, actions: w.review.actions.length };
+  }),
+  tool("crm_overview", "Look over the CRM. In the chat and in an agency-level task: every client and project with its key numbers (tracked keywords, how many are in the top 10, whether the agent works on it, its open agent tasks, when the agent last finished something there) and the names of the company-level areas. In a task on a client project: that project's own areas and how much each holds. Read a part in detail with crm_read. Read-only.", {}, [], (ctx) => {
+    const scope = ctx.chat || ctx.task.projectId === AGENCY_PROJECT ? null : ctx.task.projectId, r = crmRoot(scope);
+    if (!r) return { error: "This project is not in the CRM (it was added to the agent by hand), so there is nothing to look over." };
+    if (scope) return { project: projectOf(scope)?.name, areas: Object.fromEntries(Object.keys(r).filter((k) => !CRM_HIDE.test(k)).map((k) => [k, crmShow(r[k], 0)])), howToRead: "crm_read with a path such as records, or tracking[0], or pages." };
+    const tasks = load("tasks");
+    return { company: { areas: Object.keys(r.company).filter((k) => !CRM_HIDE.test(k)) }, clients: r.clients.map((c) => ({ id: c.id, name: c.name, projects: (c.projects || []).map((p) => { const rows = rankRows(p.id), mine = tasks.filter((t) => t.projectId === p.id), done = mine.filter((t) => t.status === "done").pop();
+      return { id: p.id, name: p.name, archived: !!p.archived, demoData: p.demoMode !== false, trackedKeywords: rows.length, inTop10: rows.filter((x) => x.pos != null && x.pos <= 10).length, agentWorksOnIt: onAgentList(p.id) && projectSetting(p.id).enabled, openAgentTasks: mine.filter((t) => ACTIVE.has(t.status)).length, lastAgentWork: done ? new Date(done.finishedAt).toISOString().slice(0, 10) : "never" }; }) })),
+      howToRead: "crm_read with a path such as clients[<client id>].projects[<project id>].records, or company.team." };
+  }),
+  tool("crm_read", "Read one part of the CRM in detail, by its path from crm_overview. A list item is named by its number, its id or its name. Long lists come 25 at a time (from). Passwords, keys, sign-in and mail settings are never returned, and embedded files are named, not shown. Read-only: nothing in the CRM can be changed with this.", { path: { type: "string", description: "For example: records, tracking[0].scans, clients[c1].projects[p2].pages, company.team." }, depth: { type: "integer", description: "How many levels to open, 1 to 3. Default 2." }, from: { type: "integer", description: "For a long list: the number of the first item to return." } }, ["path"], (ctx, a) => {
+    const scope = ctx.chat || ctx.task.projectId === AGENCY_PROJECT ? null : ctx.task.projectId, r = crmRoot(scope);
+    if (!r) return { error: "This project is not in the CRM." };
+    const got = crmWalk(r, a.path);
+    if (got.error) return { error: got.error };
+    let v = got.value;
+    const from = num(a.from, 0, 1e6, 0);
+    if (Array.isArray(v) && from) v = v.slice(from);
+    let depth = num(a.depth, 1, 3, 2), out = crmShow(v, depth);
+    while (JSON.stringify(out).length > 24000 && depth > 0) { depth -= 1; out = crmShow(v, depth); }
+    return { path: line(a.path, 300), ...(from ? { from } : {}), value: out, ...(depth < num(a.depth, 1, 3, 2) ? { note: "This part is large, so fewer levels are shown. Read a narrower path for the detail." } : {}) };
+  }),
   tool("ai_visibility_setup", "Read what the AI search visibility check of this project asks: the fixed list of questions (ask exactly these, so the numbers compare from check to check), the engines a result can be logged for, and the last check's numbers. If the list is empty, write six to ten questions a customer would really ask (service plus place, 'who is the best…', 'how much does… cost in…', a comparison) and use them: the first check saves its questions as the list.", {}, [], (ctx) => {
     if (ctx.task.projectId === AGENCY_PROJECT) return { error: "AI visibility belongs to a client project." };
     const v = visOf(ctx.task.projectId), last = v.runs[v.runs.length - 1];
@@ -2287,7 +2547,7 @@ function overview(admin) {
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
     usageSummary: usageSummary(),
     attention: attention(), alerts: { ...alertCfg(), mailReady: mailReady(), recipients: alertRecipients().length, admins: adminEmails().length }, schedule: { timeZone: tzName(), workHours: workHours(), offNow: offHours(), localTime: (() => { const z = zoned(); return `${DAY_NAMES[z.dow]} ${String(z.h).padStart(2, "0")}:${String(z.min).padStart(2, "0")}`; })() },
-    seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
+    seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!dfsCreds(""), own: dfsOwn(), balance: dfsBalanceView(), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
       return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
@@ -2313,6 +2573,7 @@ function saveConfig(admin, body) {
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
     if (g.secondCheck != null && !!g.secondCheck !== (cfg.global.secondCheck !== false)) { cfg.global.secondCheck = !!g.secondCheck; logActivity("settings", `${admin.name} switched the second check before a change ${cfg.global.secondCheck ? "on" : "off"}.`); }
     if (g.checkModel && MODELS.some((m) => m.id === g.checkModel)) cfg.global.checkModel = g.checkModel;
+    if (g.crmRead != null && !!g.crmRead !== (cfg.global.crmRead !== false)) { cfg.global.crmRead = !!g.crmRead; cfg.playbooksRev += 1; logActivity("settings", `${admin.name} switched "the agent may look over the CRM" ${cfg.global.crmRead ? "on" : "off"}.`); }
     if (g.vision != null && !!g.vision !== (cfg.global.vision !== false)) { cfg.global.vision = !!g.vision; logActivity("settings", `${admin.name} switched "the agent may look at pages as pictures" ${cfg.global.vision ? "on" : "off"}.`); }
     if (g.tokensPerMonth != null) cfg.global.tokensPerMonth = num(g.tokensPerMonth, 0, 2e9, 0);
     if (g.seoUsdPerMonth != null) cfg.global.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+g.seoUsdPerMonth || 0) * 100) / 100));
@@ -2627,7 +2888,7 @@ function agentClaim(d) {
       setup: setupLines(t.projectId, cat.area),
       brand: brandBlock(t.projectId, !!cat.writes),
       lessons: t.projectId === AGENCY_PROJECT ? [] : lessonsFor(t.projectId, t.type, { count: true }),
-      knowledge: t.type === "knowledge_study" ? "" : knowledgeBlock(cat.area === "agency" ? "general" : cat.area),
+      knowledge: t.type === "knowledge_study" ? "" : [knowledgeBlock(cat.area === "agency" ? "general" : cat.area), statusBlock(t.projectId)].filter(Boolean).join("\n\n"),
       ...(br && !br.error ? { browser: br } : {}),
     } }];
   }
@@ -2911,7 +3172,7 @@ function claimTurn(d) {
     m.turn = { status: "working", deviceId: d.id, startedAt: now(), activityAt: now(), activity: "", budget: Math.max(20000, Math.min(150000, room.left)), usage: { total: 0, calls: 0, costUsd: 0 } };
     save("chats");
     touchChat(pid);
-    return { id: m.id, projectId: pid, projectName: p.name, clientName: p.client, text: m.text, by: m.by || "", history, directions: directionsOf(pid).map((x) => x.text), brand: brandBlock(pid, false), lessons: lessonsFor(pid, null, { max: 12, chars: 2400 }), knowledge: knowledgeBlock(null), olderMessages: Math.max(0, all.indexOf(m) - history.length), model: cfg.global.model, effort: cfg.global.effort, budgetTokens: m.turn.budget, keySource: projectKey ? "project" : claudeKey ? "company" : "device", ...(claudeKey ? { claudeApiKey: claudeKey } : {}) };
+    return { id: m.id, projectId: pid, projectName: p.name, clientName: p.client, text: m.text, by: m.by || "", history, directions: directionsOf(pid).map((x) => x.text), brand: brandBlock(pid, false), lessons: lessonsFor(pid, null, { max: 12, chars: 2400 }), knowledge: [knowledgeBlock(null), statusBlock(pid)].filter(Boolean).join("\n\n"), olderMessages: Math.max(0, all.indexOf(m) - history.length), model: cfg.global.model, effort: cfg.global.effort, budgetTokens: m.turn.budget, keySource: projectKey ? "project" : claudeKey ? "company" : "device", ...(claudeKey ? { claudeApiKey: claudeKey } : {}) };
   }
   return null;
 }
@@ -3041,6 +3302,8 @@ export async function agentOpsPost(req, body) {
     case "alerts": return alertsEdit(admin, body || {});
     case "media": return mediaEdit(admin, body || {});
     case "visibility": return visibilityEdit(admin, body || {});
+    case "status": return statusEdit(admin, body || {});
+    case "ranking": return rankingEdit(admin, body || {});
     case "evidence": return evidenceGet(body || {});
     case "report": return reportGet(body || {});
     case "work": return workEdit(admin, body || {});
