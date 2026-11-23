@@ -11,6 +11,9 @@ import com.anthropic.errors.RateLimitException;
 import com.anthropic.errors.UnauthorizedException;
 import com.anthropic.models.ErrorType;
 import com.anthropic.models.beta.messages.BetaCacheControlEphemeral;
+import com.anthropic.models.beta.messages.BetaClearToolUses20250919Edit;
+import com.anthropic.models.beta.messages.BetaContextManagementConfig;
+import com.anthropic.models.beta.messages.BetaInputTokensClearAtLeast;
 import com.anthropic.models.beta.messages.BetaContentBlock;
 import com.anthropic.models.beta.messages.BetaContentBlockParam;
 import com.anthropic.models.beta.messages.BetaMessage;
@@ -41,6 +44,15 @@ import java.util.List;
 final class TaskRunner {
     private static final int MAX_TURNS = 60;
     private static final long MAX_OUTPUT_TOKENS = 16000L;
+    /**
+     * Long runs: once the conversation is large, the API itself drops the
+     * oldest tool results (old page readings, old CRM answers) and keeps the
+     * newest ones, so a task that visits many pages neither overflows nor
+     * pays for every old page on every step. Switched off for the rest of the
+     * session if the API ever refuses the setting, so a task is never lost to
+     * it.
+     */
+    private static volatile boolean trimOldResults = true;
 
     private final AnthropicClient claude;
     private final CrmClient crm;
@@ -58,6 +70,9 @@ final class TaskRunner {
         void tokens(long total);
 
         void finished(String status, String summary);
+
+        /** The run moved on (an answer from Claude, a finished tool). A run with no progress for long is stuck. */
+        default void progress() {}
     }
 
     TaskRunner(AnthropicClient claude, CrmClient crm, SyncStore store, JsonNode task, ToolBox tools, Watcher watcher) {
@@ -78,7 +93,7 @@ final class TaskRunner {
         String rules = store.playbook("_rules");
         String playbook = store.playbook(task.path("type").asText());
         StringBuilder s = new StringBuilder();
-        s.append(rules.isBlank() ? "You are the SEO operations agent of a local-SEO agency. Use real data from the tools and finish with finish_task." : rules);
+        s.append(rules);
         s.append("\n\n---\n\n");
         s.append(playbook.isBlank() ? "# " + task.path("label").asText("Task") + "\n\nFollow the task instructions." : playbook);
         s.append("\n\n---\n\n# This run\n\n");
@@ -92,6 +107,9 @@ final class TaskRunner {
         } else {
             s.append("This task only reads and reports. It changes nothing outside the CRM.\n");
         }
+        if (tools.lookOnly()) s.append("In the browser this run only looks: you can open addresses, follow links, tabs and menus, scroll and read. Nothing can be typed or chosen, and a button that would change something is not clicked. To search, open the search address directly (for example https://www.google.com/search?q=plumber+leeds).\n");
+        String interrupted = task.path("interrupted").asText("");
+        if (!interrupted.isBlank()) s.append(interrupted).append('\n');
         boolean web = needs("web");
         s.append(web ? "Web search and page fetch are available. Prefer primary sources and quote the address you relied on.\n" : "This task has no web access. Work from the CRM tools.\n");
         JsonNode br = task.path("browser");
@@ -160,6 +178,11 @@ final class TaskRunner {
             .thinking(BetaThinkingConfigAdaptive.builder().build())
             .outputConfig(BetaOutputConfig.builder().effort("low".equals(effort) ? BetaOutputConfig.Effort.LOW : "high".equals(effort) ? BetaOutputConfig.Effort.HIGH : BetaOutputConfig.Effort.MEDIUM).build())
             .messages(history);
+        if (trimOldResults) {
+            /* past 60,000 input tokens: clear all but the six newest tool results, and only when that frees at least 15,000 (each clearing re-writes the prompt cache once) */
+            b.addBeta("context-management-2025-06-27").contextManagement(BetaContextManagementConfig.builder()
+                .addEdit(BetaClearToolUses20250919Edit.builder().inputTokensTrigger(60000L).toolUsesKeep(6L).clearAtLeast(BetaInputTokensClearAtLeast.builder().value(15000L).build()).build()).build());
+        }
         for (BetaTool t : toolDefs) b.addTool(t);
         if (needs("web")) {
             /* the newer web tools filter results themselves but need a current Opus or Sonnet model */
@@ -188,8 +211,9 @@ final class TaskRunner {
         int attempt = 0;
         while (true) {
             attempt += 1;
+            if (ended.getAsBoolean()) throw new TaskFailed(STUCK);
             try {
-                return claude.beta().messages().create(p);
+                return create(p);
             } catch (UnauthorizedException e) {
                 throw new DeviceProblem("Claude rejected the API key on this device. Run the agent's setup again with a valid key.");
             } catch (PermissionDeniedException e) {
@@ -199,6 +223,12 @@ final class TaskRunner {
             } catch (BadRequestException e) {
                 String msg = String.valueOf(e.getMessage());
                 if (e.errorType().map((t) -> t.equals(ErrorType.BILLING_ERROR)).orElse(false) || msg.toLowerCase().contains("credit balance")) throw new DeviceProblem("The Claude account has no credit left. Add credit in the Claude Console.");
+                String low = msg.toLowerCase();
+                if (trimOldResults && (low.contains("context_management") || low.contains("context-management") || low.contains("clear_tool_uses"))) {
+                    trimOldResults = false;
+                    Log.warn("Claude refused the setting that trims long conversations, so it is off until the agent restarts: " + Json.clip(msg, 200));
+                    throw new Retry();
+                }
                 throw new TaskFailed("Claude rejected the request: " + Json.clip(msg, 300));
             } catch (RateLimitException e) {
                 if (attempt >= 5) throw new DeviceProblem("Claude kept answering \"rate limited\".");
@@ -217,13 +247,50 @@ final class TaskRunner {
         }
     }
 
+    /**
+     * The call itself, in a form that can be given up: a plain blocking call
+     * sits in a network read that nothing can interrupt, so a dead connection
+     * held the whole agent for as long as the timeout. Here the worker's
+     * watchdog can end the wait, and the request is cancelled.
+     */
+    private BetaMessage create(MessageCreateParams p) throws TaskFailed {
+        java.util.concurrent.CompletableFuture<BetaMessage> f = claude.async().beta().messages().create(p);
+        try {
+            return f.get();
+        } catch (InterruptedException e) {
+            f.cancel(true);
+            throw new TaskFailed(ended.getAsBoolean() ? STUCK : "The task was interrupted.");
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable c = e.getCause();
+            while (c instanceof java.util.concurrent.CompletionException && c.getCause() != null) c = c.getCause();
+            if (c instanceof RuntimeException) throw (RuntimeException) c;
+            if (c instanceof Error) throw (Error) c;
+            throw new IllegalStateException(c);
+        }
+    }
+
     private void pause(long ms, String why) throws TaskFailed {
         Log.info("  waiting " + (ms / 1000) + " s: " + why);
         try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TaskFailed("interrupted"); }
     }
 
+    private static final String STUCK = "The run made no progress for a long time (no answer from Claude and no finished step), so it was ended.";
+
     static final class TaskFailed extends Exception {
         TaskFailed(String m) { super(m); }
+    }
+
+    /** Build the request again and send it once more (a setting was just switched off). */
+    private static final class Retry extends RuntimeException {
+        Retry() { super("retry", null, false, false); }
+    }
+
+    private BetaMessage ask(String system, List<BetaTool> toolDefs, List<BetaMessageParam> history) throws TaskFailed, DeviceProblem {
+        try {
+            return call(params(system, toolDefs, history));
+        } catch (Retry again) {
+            return call(params(system, toolDefs, history));
+        }
     }
 
     static final class DeviceProblem extends Exception {
@@ -242,6 +309,8 @@ final class TaskRunner {
         }
     }
 
+    private boolean wrapUpAllowed = false;
+
     /** Report one call's tokens. Returns the CRM's reason to stop, or null to carry on. */
     private String reportUsage(BetaMessage m) {
         ObjectNode b = Json.obj();
@@ -255,6 +324,7 @@ final class TaskRunner {
         for (int i = 0; i < 3; i++) {
             try {
                 JsonNode r = crm.post("agent/usage", b);
+                wrapUpAllowed = r.path("wrapUp").asBoolean(false);
                 return r.path("stop").asBoolean(false) ? r.path("reason").asText("The CRM asked the task to stop.") : null;
             } catch (CrmClient.CrmException e) {
                 try { Thread.sleep(4000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
@@ -278,13 +348,16 @@ final class TaskRunner {
     String run() {
         String lastText = "";
         try {
+            if (store.playbook("_rules").isBlank()) throw new DeviceProblem("The agent's rules are missing on this computer, so it will not work. Press Sync in the application.");
             String system = systemPrompt();
             List<BetaTool> toolDefs = tools.definitions();
             List<BetaMessageParam> history = new ArrayList<>();
             history.add(BetaMessageParam.ofUser(firstMessage()));
             int continues = 0;
+            boolean wrappedUp = false;
             for (int turn = 1; turn <= MAX_TURNS; turn++) {
-                BetaMessage m = call(params(system, toolDefs, history));
+                BetaMessage m = ask(system, toolDefs, history);
+                watcher.progress();
                 String stopWhy = reportUsage(m);
                 String text = textOf(m);
                 if (!text.isBlank()) lastText = text;
@@ -298,8 +371,13 @@ final class TaskRunner {
                     return null;
                 }
                 List<BetaContentBlockParam> results = new ArrayList<>();
+                boolean cut = stop.equals(BetaStopReason.MAX_TOKENS);
+                int calls = 0, seen = 0;
+                for (BetaContentBlock block : m.content()) if (block.toolUse().isPresent()) calls += 1;
+                boolean endsInCall = !m.content().isEmpty() && m.content().get(m.content().size() - 1).toolUse().isPresent();
                 for (BetaContentBlock block : m.content()) {
                     if (block.toolUse().isEmpty()) continue;
+                    seen += 1;
                     BetaToolUseBlock use = block.toolUse().get();
                     JsonNode input;
                     try { input = use._input().convert(JsonNode.class); } catch (Exception e) { input = null; }
@@ -307,16 +385,35 @@ final class TaskRunner {
                         results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content("The tool input was not a valid JSON object. Send it again.").isError(true).build()));
                         continue;
                     }
+                    /* an answer cut off by the output limit: its last tool call may be half written, so it is not run */
+                    if (cut && endsInCall && seen == calls) {
+                        results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content("Your answer was cut off by the output limit before this call was complete, so it was not run. Send it again" + (use.name().equals("finish_task") ? " with a shorter report." : ".")).isError(true).build()));
+                        continue;
+                    }
+                    /* the CRM asked the run to stop: nothing more is done, only recorded */
+                    if (stopWhy != null && !ToolBox.closing(use.name())) {
+                        results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content("Not run: this run has been asked to stop. " + stopWhy).isError(true).build()));
+                        continue;
+                    }
+                    if (ended.getAsBoolean()) throw new TaskFailed(STUCK);
                     Log.info("  tool " + use.name() + " " + Json.clip(Json.str(input), 160));
                     watcher.step(use.name() + " " + Json.clip(Json.str(input), 140));
-                    boolean cancelled = event("tool", use.name() + " " + Json.clip(Json.str(input), 600));
+                    /* cancelled or taken away in the CRM: stop BEFORE the next action, not after it */
+                    if (event("tool", use.name() + " " + Json.clip(Json.str(input), 600))) { Log.info("  the task was cancelled in the CRM"); watcher.finished("stopped", "Stopped in the CRM."); return null; }
                     ToolBox.Outcome out = tools.run(use.name(), input);
+                    watcher.progress();
                     results.add(BetaContentBlockParam.ofToolResult(BetaToolResultBlockParam.builder().toolUseId(use.id()).content(out.text).isError(out.error).build()));
-                    if (cancelled) { Log.info("  the task was cancelled in the CRM"); return null; }
                 }
                 if (tools.finished != null) { completeFinished(); return null; }
                 if (tools.approval != null) { completeApproval(); return null; }
                 if (stopWhy != null) {
+                    /* one closing call, so the agent can say what it did and what is live, instead of stopping without a word */
+                    if (wrapUpAllowed && !wrappedUp) {
+                        wrappedUp = true;
+                        results.add(BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text("This run has to stop now: " + stopWhy + " Nothing more can be done in it. Call finish_task now: what was completed, what was changed live (exactly), and what is left to do.").build()));
+                        history.add(BetaMessageParam.ofUserOfContentBlockParams(results));
+                        continue;
+                    }
                     complete("stopped", null, stopWhy, lastText);
                     return null;
                 }
@@ -325,11 +422,13 @@ final class TaskRunner {
                     continue;
                 }
                 if (stop.equals(BetaStopReason.PAUSE_TURN)) continue;                    // a server tool paused; the same history resumes it
-                if (stop.equals(BetaStopReason.MAX_TOKENS) && continues < 2) {
+                if (cut && continues < 2) {
                     continues += 1;
                     history.add(BetaMessageParam.ofUser("You were cut off by the output limit. Continue from where you stopped, then end with finish_task."));
                     continue;
                 }
+                if (cut) { complete("stopped", null, "The answer was cut off by the output limit three times, so the task was ended without a complete report.", lastText); return null; }
+                if (tools.canRequestApproval()) { complete("stopped", null, "The agent ended without sending its proposal for approval. Run the task again.", lastText); return null; }
                 /* the model ended without finish_task: its last words are the report */
                 ObjectNode fin = Json.obj();
                 fin.put("summary", Json.clip(lastText.replaceAll("\\s+", " "), 300));
@@ -343,7 +442,9 @@ final class TaskRunner {
             complete("released", null, e.getMessage(), lastText);
             return e.getMessage();
         } catch (TaskFailed e) {
-            complete("failed", null, e.getMessage(), lastText);
+            boolean stuck = ended.getAsBoolean();
+            if (stuck) Thread.interrupted();    // the watchdog's interrupt has done its work; the result still has to be sent
+            complete("failed", null, stuck ? STUCK : e.getMessage(), lastText);
         } catch (Throwable e) {
             complete("failed", null, "The agent hit an unexpected error: " + e.getClass().getSimpleName() + " " + Json.clip(String.valueOf(e.getMessage()), 300), lastText);
         }
@@ -387,13 +488,22 @@ final class TaskRunner {
         watcher.finished(status, error == null ? "" : error);
     }
 
+    /** Set by the worker: true once its watchdog has ended this run for standing still. */
+    java.util.function.BooleanSupplier ended = () -> false;
+
+    /** Set by the worker: where a result goes when the CRM cannot be reached, to be delivered when it can. */
+    java.util.function.Consumer<ObjectNode> keepForLater = null;
+
     private void send(ObjectNode body) {
         for (int i = 0; i < 5; i++) {
             try { crm.post("agent/complete", body); return; } catch (CrmClient.CrmException e) {
                 if (e.status == 409) return;   // no longer ours (cancelled or released)
-                try { Thread.sleep(5000L * (i + 1)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                try { Thread.sleep(5000L * (i + 1)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
-        Log.warn("The result of task " + taskId + " could not be delivered to the CRM.");
+        if (keepForLater != null && !"released".equals(body.path("status").asText(""))) {
+            keepForLater.accept(body);
+            Log.warn("The CRM could not be reached, so the result of task " + taskId + " was kept on this computer. It is delivered as soon as the CRM answers again.");
+        } else Log.warn("The result of task " + taskId + " could not be delivered to the CRM.");
     }
 }

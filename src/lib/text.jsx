@@ -57,7 +57,9 @@ export function renderTextWithLinks(text, links = []) {
   return parts.flatMap((seg, i) => (typeof seg === "string" ? inlineFmt(seg, "s" + i) : [seg]));
 }
 export const escHtml = (s = "") => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-export const mdFmt = (t = "") => t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>').replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/~~([^~]+)~~/g, "<s>$1</s>").replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+/* a link that would run script instead of opening a page is written out as plain text (the text can come from a web page the agent read) */
+const UNSAFE_LINK = /^[\s\u0000-\u001f]*(javascript|data|vbscript)\s*:/i;
+export const mdFmt = (t = "") => t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => (UNSAFE_LINK.test(url) ? label : `<a href="${url}">${label}</a>`)).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/~~([^~]+)~~/g, "<s>$1</s>").replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 export const mdInline = (t = "") => mdFmt(escHtml(t));
 export function blocksToHtml(blocks = []) {
   return blocks.map((b) => {

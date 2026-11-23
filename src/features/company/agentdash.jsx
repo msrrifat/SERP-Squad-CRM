@@ -84,8 +84,15 @@ export function AgentOpsSection({ company, app = null }) {
   const [inProject, setInProject] = useState(false);
   const [logos, setLogos] = useState({});       // project id -> { rev, src }
 
+  /* A refresh that started before a save and lands after it would put the old
+     values back on the screen, so its answer is dropped. What a failed action
+     said stays until it is closed or the next action starts (the refresh used
+     to wipe it within seconds), and it floats above any open dialog. */
+  const gen = useRef(0), inflight = useRef(new Map());
+  const [actErr, setActErr] = useState("");
   const load = useCallback(async () => {
-    try { setData(await api("overview")); setErr(""); } catch (e) { setErr(String(e.message || e)); }
+    const g0 = gen.current;
+    try { const o = await api("overview"); if (g0 === gen.current) setData(o); setErr(""); } catch (e) { setErr(String(e.message || e)); }
   }, []);
   useEffect(() => {
     load();
@@ -93,11 +100,18 @@ export function AgentOpsSection({ company, app = null }) {
     return () => clearInterval(t);
   }, [load]);
   /* every write returns the fresh overview, so the screen never shows stale limits */
-  const act = useCallback(async (path, body) => {
-    setBusy(true);
-    try { const o = await api(path, body); if (o.catalog) setData(o); setErr(""); return o; }
-    catch (e) { setErr(String(e.message || e)); return null; }
-    finally { setBusy(false); }
+  const act = useCallback((path, body) => {
+    /* the same request sent twice in a row (a double click) is one request */
+    const key = path + "\n" + JSON.stringify(body ?? null), same = inflight.current.get(key);
+    if (same) return same;
+    const run = (async () => {
+      gen.current += 1; setBusy(true); setActErr("");
+      try { const o = await api(path, body); if (o.catalog) setData(o); return o; }
+      catch (e) { setActErr(String(e.message || e)); return null; }
+      finally { gen.current += 1; inflight.current.delete(key); setBusy(inflight.current.size > 0); }
+    })();
+    inflight.current.set(key, run);
+    return run;
   }, []);
 
   /* fetch the logos that are new or changed since the last look; a project without one shows its initials */
@@ -124,6 +138,7 @@ export function AgentOpsSection({ company, app = null }) {
     <LogoCtx.Provider value={logos}>
     <div className="space-y-4">
       {err && <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{err}</div>}
+      {actErr && <div role="alert" className="fixed right-4 top-4 z-[3000] flex max-w-[420px] items-start gap-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 text-[12.5px] text-red-900 shadow-lg"><AlertTriangle size={14} className="mt-0.5 shrink-0" /><span className="min-w-0 flex-1 break-words"><b>That did not work.</b> {actErr}</span><button onClick={() => setActErr("")} aria-label="Close this message" className="shrink-0 rounded px-1 text-[14px] leading-none text-red-700 hover:bg-red-100">×</button></div>}
 
       {/* company-wide controls (not shown on a project's own page, which is about that one project) */}
       <Card className={"p-4" + (view === "limits" && inProject ? " hidden" : "")}>
@@ -956,6 +971,13 @@ const WORK_SECTION_LABEL = { research: "Research and planning", onpage: "On-page
 const dayText = (ms) => new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 const dayInput = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const shortUrl = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, "") + x.pathname + x.search).replace(/\/$/, ""); } catch { return u; } };
+/* a link inside the agent's own text opens in a new window, so a click never navigates the CRM (or the agent's application window) away */
+const openLinkOutside = (e) => {
+  const a = e.target?.closest?.("a[href]");
+  if (!a) return;
+  e.preventDefault();
+  if (/^https?:\/\//i.test(a.getAttribute("href") || "")) window.open(a.href, "_blank", "noopener,noreferrer");
+};
 const LiveLink = ({ url, children }) => <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-1 break-all font-medium text-blue-700 hover:underline">{children || shortUrl(url)} <ExternalLink size={11} className="shrink-0" /></a>;
 function WorkRow({ it, onOpenTask, onRemove, showLink = true, showKind = true }) {
   return (
@@ -1471,7 +1493,7 @@ function TaskModal({ id, accent, act, onClose }) {
               </div>); })}</div>
           </div>
         )}
-        {t.result?.report && <div><div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Report</div><div className="rounded-xl border border-gray-200 p-3">{renderMd(t.result.report)}</div></div>}
+        {t.result?.report && <div><div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Report</div><div className="rounded-xl border border-gray-200 p-3" onClick={openLinkOutside}>{renderMd(t.result.report)}</div></div>}
 
         {["done", "stopped"].includes(t.status) && (
           <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
@@ -1577,7 +1599,7 @@ function ChatMessages({ c, project, accent, compact }) {
         <div key={m.id} className="flex justify-start gap-2">
           {!compact && <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: accent + "1A", color: accent }}><Bot size={15} /></span>}
           <div className={`min-w-0 ${compact ? "max-w-[90%]" : "max-w-[84%]"}`}>
-            <div className={`rounded-2xl rounded-bl-md border px-3.5 py-1.5 ${m.error ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>{renderMd(m.text)}</div>
+            <div className={`rounded-2xl rounded-bl-md border px-3.5 py-1.5 ${m.error ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`} onClick={openLinkOutside}>{renderMd(m.text)}</div>
             <div className="mt-0.5 text-[10px] text-gray-400">{m.device || "Agent"} · {relTime(m.at)}{m.tokens ? ` · ${fmtTok(m.tokens)} tokens · ${usd(m.costUsd)}` : ""}</div>
           </div>
         </div>

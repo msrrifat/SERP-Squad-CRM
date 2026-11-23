@@ -713,7 +713,7 @@
     stopChat();
     const run = chat.run;
     chat.pid = pid; chat.jump = true; chat.ctrl = new AbortController();
-    $("chatName").textContent = name; $("chatErr").classList.add("vhide"); $("chatText").placeholder = "Message the agent…";
+    $("chatName").textContent = name; $("chatErr").classList.add("vhide"); $("chatText").placeholder = "Message the agent…"; $("chatText").value = "";   // a half-typed message belongs to the project it was typed for
     renderChat();
     (async () => {
       let v = -1;

@@ -76,8 +76,15 @@ final class SyncStore {
             Files.writeString(staging.resolve("rev.txt"), String.valueOf(payload.path("rev").asLong(0)), StandardCharsets.UTF_8);
             Path prev = root.resolve("previous");
             deleteTree(prev);
-            if (Files.isDirectory(current())) Files.move(current(), prev, StandardCopyOption.ATOMIC_MOVE);
-            Files.move(staging, current(), StandardCopyOption.ATOMIC_MOVE);
+            boolean moved = false;
+            if (Files.isDirectory(current())) { Files.move(current(), prev, StandardCopyOption.ATOMIC_MOVE); moved = true; }
+            try {
+                Files.move(staging, current(), StandardCopyOption.ATOMIC_MOVE);
+            } catch (Exception e) {
+                /* the new set could not be put in place: the old one goes back, so the agent is never left without playbooks */
+                if (moved && !Files.exists(current())) { try { Files.move(prev, current(), StandardCopyOption.ATOMIC_MOVE); } catch (Exception ignored) { /* reported by the caller */ } }
+                throw e;
+            }
         } catch (Exception e) {
             deleteTree(staging);
             throw e;

@@ -66,6 +66,17 @@ final class Worker {
     private volatile long lastChatAt = 0;
     private final ArrayNode history;
     private Browser google, web;
+    /* the running task: when it last moved on, its thread and its Chrome window (for the watchdog and for a clean stop) */
+    private volatile long progressAt = 0;
+    private volatile Thread taskThread = null;
+    private volatile Browser taskBrowser = null;
+    private volatile boolean stalled = false;
+    /** A run with no answer from Claude and no finished step for this long is stuck, and is ended. */
+    private static final long STALL_MS = stallMs();
+
+    private static long stallMs() {
+        try { return Math.max(20, Long.parseLong(System.getenv("SERPSQUAD_STALL_SECONDS"))) * 1000L; } catch (Exception e) { return 17 * 60000L; }   // the override is for tests
+    }
 
     Worker(Config cfg, String version) {
         this.cfg = cfg;
@@ -74,6 +85,13 @@ final class Worker {
         this.profiles = new Profiles(cfg);
         this.history = loadHistory();
         rebuildClient();
+        /* Quit, a restart for an update or the computer shutting down: close the
+           Chrome window the agent opened, so a signed-in profile is never left
+           running with its control port open. */
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            Browser b = taskBrowser;
+            if (b != null) { try { b.close(); } catch (Throwable ignored) { /* the process is ending */ } }
+        }, "close-chrome"));
     }
 
     /** Called at start and whenever the CRM address or the device token changes. */
@@ -111,6 +129,7 @@ final class Worker {
         b.set("browserProfiles", profiles.view());
         b.put("updateSkipped", updater.skipped());
         b.put("localKey", !cfg.anthropicApiKey.isBlank());
+        if (taskThread != null && progressAt > 0) b.put("idleSeconds", Math.max(0, (System.currentTimeMillis() - progressAt) / 1000));   // lets the CRM tell a working run from a stuck one
         if (synced) b.put("synced", true);
         return b;
     }
@@ -340,13 +359,23 @@ final class Worker {
 
             @Override
             public void finished(String status, String summary) { outcome[0] = status; outcome[1] = summary; }
+
+            @Override
+            public void progress() { progressAt = System.currentTimeMillis(); }
         };
         Browser b = null;
+        progressAt = System.currentTimeMillis();
+        stalled = false;
+        taskThread = Thread.currentThread();
         try {
             b = browserFor(task);
+            taskBrowser = b;
             ToolBox tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
-            String problem = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher).run();
-            if (problem != null) block(problem);
+            TaskRunner runner = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher);
+            runner.keepForLater = this::keepResult;
+            runner.ended = () -> stalled;
+            String problem = runner.run();
+            if (problem != null) { block(problem); if (store.playbook("_rules").isBlank()) syncRequested = true; }
         } catch (Throwable e) {
             Log.warn("Task crashed before it could start: " + e);
             outcome[1] = "The agent could not start the task.";
@@ -358,7 +387,11 @@ final class Worker {
                 crm.post("agent/complete", body);
             } catch (Exception ignored) { /* the CRM releases the task by itself after 20 minutes */ }
         } finally {
+            taskThread = null;
+            Thread.interrupted();           // the watchdog's interrupt ends with the task; the loop goes on
             if (b != null) b.close();
+            taskBrowser = null;
+            if (stalled) { outcome[0] = "failed"; outcome[1] = "The run stood still for too long and was ended."; }
             remember(cur, outcome[0], outcome[1]);
             current = null;
             state = System.currentTimeMillis() < blockedUntil ? "blocked: " + blockedWhy : "idle";
@@ -396,6 +429,45 @@ final class Worker {
             }
             try { crm.post("agent/check", body); } catch (Exception e) { Log.warn("The check result could not be reported: " + e.getMessage()); }
         }
+    }
+
+    // ---------- results the CRM could not take ----------
+
+    private Path outbox() { return cfg.dataDir().resolve("outbox"); }
+
+    /** Keep a finished task's result on disk while the CRM cannot be reached. */
+    private void keepResult(ObjectNode body) {
+        try {
+            Files.createDirectories(outbox());
+            String id = body.path("taskId").asText("task").replaceAll("[^A-Za-z0-9_-]", "");
+            Path tmp = outbox().resolve(id + ".tmp"), file = outbox().resolve(id + ".json");
+            Files.writeString(tmp, Json.str(body), StandardCharsets.UTF_8);
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            Log.warn("The result could not be kept on this computer either: " + e.getMessage());
+        }
+    }
+
+    /** Deliver kept results. Called when the CRM answers again, before any new task is taken. */
+    private void deliverKept() {
+        if (!Files.isDirectory(outbox())) return;
+        try (java.util.stream.Stream<Path> files = Files.list(outbox())) {
+            for (Path f : (Iterable<Path>) files.filter((x) -> x.getFileName().toString().endsWith(".json"))::iterator) {
+                try {
+                    JsonNode body = Json.parse(Files.readString(f, StandardCharsets.UTF_8));
+                    boolean old = System.currentTimeMillis() - Files.getLastModifiedTime(f).toMillis() > 3 * 24 * 3600000L;
+                    try {
+                        if (!old && body.isObject()) { crm.post("agent/complete", (ObjectNode) body); Log.info("Delivered the kept result of task " + body.path("taskId").asText("") + "."); }
+                        Files.deleteIfExists(f);
+                    } catch (CrmClient.CrmException e) {
+                        if (e.status == 409 || e.status == 400 || e.status == 404) Files.deleteIfExists(f);   // the CRM no longer wants it (run again or cancelled since)
+                        else return;                                                                         // still unreachable: try at the next check-in
+                    }
+                } catch (Exception e) {
+                    try { Files.deleteIfExists(f); } catch (Exception ignored) { /* unreadable and undeletable: skipped */ }
+                }
+            }
+        } catch (Exception ignored) { /* looked at again at the next check-in */ }
     }
 
     /** This device cannot call Claude right now: stop taking tasks for ten minutes and say why in the CRM. */
@@ -562,7 +634,19 @@ final class Worker {
         boolean firstHello = true;
         long backoff = 5000;
         ScheduledExecutorService beat = Executors.newSingleThreadScheduledExecutor((r) -> { Thread t = new Thread(r, "heartbeat"); t.setDaemon(true); return t; });
-        beat.scheduleAtFixedRate(() -> { if (state.startsWith("working")) { try { hello(); } catch (Exception ignored) { /* next beat */ } } }, 60, 60, TimeUnit.SECONDS);
+        beat.scheduleAtFixedRate(() -> {
+            if (!state.startsWith("working")) return;
+            try { hello(); } catch (Exception ignored) { /* next beat */ }
+            /* the watchdog: a run that has not moved for a long time is ended, so the computer is free for the next task */
+            Thread t = taskThread;
+            if (t != null && progressAt > 0 && System.currentTimeMillis() - progressAt > STALL_MS && !stalled) {
+                stalled = true;
+                Log.warn("The running task has not moved for " + (STALL_MS / 1000) + " seconds. Ending it.");
+                Browser b = taskBrowser;
+                if (b != null) { try { b.close(); } catch (Throwable ignored) { /* the interrupt below still ends the run */ } }
+                t.interrupt();
+            }
+        }, 60, 60, TimeUnit.SECONDS);
         Thread chat = new Thread(this::chatLoop, "chat");
         chat.setDaemon(true);
         chat.start();
@@ -611,6 +695,7 @@ final class Worker {
                     syncRequested = false;
                     sync(h.path("syncNow").asBoolean(false) ? "sync requested in the CRM" : asked ? "sync requested on this computer" : stale ? "playbooks changed" : lastSyncAt == 0 ? "start-up sync" : "daily sync");
                 }
+                deliverKept();
                 if (h.path("checks").size() > 0) runChecks(h.path("checks"));
                 if (pausedByCrm || cfg.paused) {
                     if (!"paused".equals(state)) Log.info(cfg.paused ? "Paused on this computer. Waiting." : "Paused in the CRM. Waiting.");

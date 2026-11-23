@@ -27,7 +27,7 @@ final class ToolBox {
     private final CrmClient crm;
     private final SyncStore store;
     private final Browser browser;          // null when this task type has none
-    private final boolean browserReadOnly;  // prepare phase of a task that needs approval
+    private final boolean browserReadOnly;  // a run that only looks: the proposal before an approval, or any check in a signed-in window
     private final boolean canRequestApproval;
     private final Path shotsDir;
     private final List<String> crmToolNames = new ArrayList<>();
@@ -45,10 +45,28 @@ final class ToolBox {
         boolean ask = "ask".equals(task.path("approval").asText(""));
         boolean execute = "execute".equals(task.path("phase").asText(""));
         this.canRequestApproval = write && ask && !execute;
-        this.browserReadOnly = canRequestApproval;
+        /* In a Chrome window a person signed in to, only a task that is there to
+           make a change (and, where approval is asked, has it) may type, choose
+           or press a button that changes something. A check or an audit there
+           can open pages, read and scroll, and nothing else. */
+        boolean signedIn = task.path("browser").isObject();
+        for (JsonNode n : task.path("needs")) if ("google".equals(n.asText())) signedIn = true;
+        this.browserReadOnly = canRequestApproval || (signedIn && !write);
+        if (browser != null) browser.setLookOnly(browserReadOnly);
     }
 
     boolean canRequestApproval() { return canRequestApproval; }
+
+    boolean lookOnly() { return browser != null && browserReadOnly; }
+
+    /**
+     * Tools that may still run once the CRM has asked the run to stop: the ones
+     * that only record or hand over what was done. Nothing in the browser, no
+     * paid request, no new work.
+     */
+    static boolean closing(String name) {
+        return name.equals("finish_task") || name.equals("request_approval") || name.equals("log_work") || name.equals("log_change") || name.equals("remember") || name.equals("save_lesson");
+    }
 
     boolean hasBrowser() { return browser != null; }
 
@@ -95,11 +113,13 @@ final class ToolBox {
         if (browser != null) {
             out.add(tool("browser_open", "Open an address in the agent's Chrome window and return the page as text with numbered elements.", require(schema("url", "string", "Full https address."), "url")));
             out.add(tool("browser_read", "Read the current page again: its text and the numbered elements you can act on.", schema()));
-            out.add(tool("browser_click", "Click a numbered element from the latest page reading, then return the new page.", require(schema("ref", "integer", "The element number shown in square brackets."), "ref")));
-            out.add(tool("browser_scroll", "Scroll the page and return what is now visible.", require(schema("direction", "string", "down, up or top."), "direction")));
+            out.add(tool("browser_click", browserReadOnly ? "Click a numbered element from the latest page reading to move around (a link, a tab, a menu), then return the new page. This run only looks: a button that would change something is not clicked."
+                : "Click a numbered element from the latest page reading, then return the new page.", require(schema("ref", "integer", "The element number shown in square brackets."), "ref")));
+            out.add(tool("browser_scroll", "Scroll the page and return what is now visible. On a long page the reading follows the scroll position.", require(schema("direction", "string", "down, up, top or bottom."), "direction")));
             out.add(tool("browser_back", "Go back one page.", schema()));
             if (!browserReadOnly) {
                 out.add(tool("browser_type", "Type text into a numbered text field (replaces what is there). Never for passwords or codes.", require(schema("ref", "integer", "The element number.", "text", "string", "The text to enter.", "press_enter", "boolean", "Press Enter afterwards."), "ref", "text")));
+                out.add(tool("browser_select", "Choose an option in a numbered drop-down list by its visible text, then return the new page.", require(schema("ref", "integer", "The element number of the list.", "option", "string", "The option's text, as the page reading shows it."), "ref", "option")));
             }
         }
         if (canRequestApproval) {
@@ -137,8 +157,11 @@ final class ToolBox {
                 case "browser_click": return new Outcome(needBrowser().click(input.path("ref").asInt(-1)), false);
                 case "browser_scroll": return new Outcome(needBrowser().scroll(input.path("direction").asText("down")), false);
                 case "browser_back": return new Outcome(needBrowser().back(), false);
+                case "browser_select":
+                    if (browserReadOnly) return new Outcome("This run only looks, so nothing is chosen in a list. Describe the change in your " + (canRequestApproval ? "proposal (request_approval)." : "report."), true);
+                    return new Outcome(needBrowser().select(input.path("ref").asInt(-1), input.path("option").asText("")), false);
                 case "browser_type":
-                    if (browserReadOnly) return new Outcome("Typing is not allowed before approval. Propose the change with request_approval.", true);
+                    if (browserReadOnly) return new Outcome(canRequestApproval ? "Typing is not allowed before approval. Propose the change with request_approval." : "This run only looks, so nothing is typed in this window. Describe the change in your report.", true);
                     return new Outcome(needBrowser().type(input.path("ref").asInt(-1), input.path("text").asText(""), input.path("press_enter").asBoolean(false)), false);
                 default:
                     if (!crmToolNames.contains(name)) return new Outcome("Unknown tool: " + name, true);

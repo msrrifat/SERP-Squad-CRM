@@ -26,6 +26,7 @@
    ===================================================================== */
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSync, openSync, writeSync, closeSync, rmSync, chmodSync, readdirSync, copyFileSync } from "node:fs";
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { AREAS, CATALOG, CATALOG_BY_KEY, CHANNEL_CHECK_URL, CHANNEL_HOSTS, DEFAULT_PLAYBOOKS, MODELS, PRICES, REPORT_LABEL, SOCIAL_PLATFORMS, WORK_KINDS } from "./agentops-catalog.js";
@@ -81,21 +82,96 @@ const EMPTY = {
   devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }),
 };
 const cache = {};
+const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
+const rightShape = (name, v) => v != null && typeof v === "object" && Array.isArray(v) === Array.isArray(EMPTY[name]());
+/* A store that exists but cannot be read is NEVER treated as an empty one:
+   an empty value would be cached and the next save would overwrite the real
+   file. A read error (a busy disk, a permission slip) is thrown, so the
+   request fails and the next one tries again. A file that reads but is not
+   valid JSON is damaged: it is moved aside and the newest good backup takes
+   its place. Only when no backup exists does the store start empty, and the
+   damaged file is still there to be looked at. */
 function load(name) {
   if (cache[name]) return cache[name];
+  const url = new URL(FILES[name], DIR);
   let v = null;
-  try { v = JSON.parse(readFileSync(new URL(FILES[name], DIR), "utf8")); } catch { v = null; }
-  if (v == null || typeof v !== "object") v = EMPTY[name]();
+  if (existsSync(url)) {
+    const raw = readFileSync(url, "utf8");
+    try { v = JSON.parse(raw); } catch { v = null; }
+    if (!rightShape(name, v)) v = recoverStore(name, url);
+  }
+  if (!rightShape(name, v)) v = EMPTY[name]();
   if (name === "config") v = { ...EMPTY.config(), ...v, global: { ...EMPTY.config().global, ...(v.global || {}) }, projects: v.projects || {}, playbooks: v.playbooks || {} };
   cache[name] = v;
   return v;
 }
+function recoverStore(name, url) {
+  const aside = new URL(`${FILES[name]}.damaged-${now()}`, DIR);
+  renameSync(url, aside);   // if even this fails the error is thrown: better a failed request than an overwritten store
+  console.log(`[agentops] ${FILES[name]} could not be read as JSON. It was kept as ${aside.pathname.split("/").pop()}.`);
+  for (const stamp of backupStamps().reverse()) {
+    try {
+      const v = JSON.parse(gunzipSync(readFileSync(new URL(`${stamp}/${FILES[name]}.gz`, BACKUP_DIR))).toString("utf8"));
+      if (!rightShape(name, v)) continue;
+      writeFileSync(url, JSON.stringify(v));
+      console.log(`[agentops] ${FILES[name]} was restored from the backup of ${stamp}.`);
+      storeRestored.push({ file: FILES[name], from: stamp, at: now() });
+      return v;
+    } catch { /* no copy of this store in that backup: try the one before */ }
+  }
+  storeRestored.push({ file: FILES[name], from: "", at: now() });
+  return null;
+}
+const storeRestored = [];
 function save(name) {
   mkdirSync(DIR, { recursive: true });
   const url = new URL(FILES[name], DIR), tmp = new URL(FILES[name] + ".tmp", DIR);
   writeFileSync(tmp, JSON.stringify(cache[name]));
   renameSync(tmp, url);
 }
+/* ---------- backups of the agent's own data ----------
+   The CRM's workspace has hourly and daily copies; this folder had none.
+   Once an hour every store that reads as valid JSON is copied, compressed,
+   to backups/<day>-<hour>/. A damaged file is never copied, so a bad write
+   cannot push the good copies out. The last 48 hourly copies are kept, then
+   one a day for 14 days. The first copy of a day also holds the uploaded
+   brand and knowledge documents. Program files (releases) are not copied:
+   they are rebuilt from GitHub. */
+const backupStamps = () => { try { return readdirSync(BACKUP_DIR).filter((f) => /^\d{4}-\d\d-\d\d-\d\d$/.test(f)).sort(); } catch { return []; } };
+function backupStores() {
+  try {
+    if (!existsSync(DIR)) return;
+    const stamp = new Date().toISOString().slice(0, 13).replace("T", "-"), had = backupStamps();
+    if (had.includes(stamp)) return;
+    const into = new URL(`${stamp}/`, BACKUP_DIR);
+    let copied = 0;
+    for (const file of [...Object.values(FILES), "secrets.json"]) {
+      const from = new URL(file, DIR);
+      if (!existsSync(from)) continue;
+      let raw;
+      try { raw = readFileSync(from); JSON.parse(raw.toString("utf8")); } catch { continue; }
+      mkdirSync(into, { recursive: true });
+      writeFileSync(new URL(`${file}.gz`, into), gzipSync(raw));
+      copied += 1;
+    }
+    if (!copied) return;
+    if (!had.some((s) => s.slice(0, 10) === stamp.slice(0, 10))) {
+      for (const folder of ["brand-docs", "knowledge-docs"]) {
+        const src = new URL(`${folder}/`, DIR);
+        if (!existsSync(src)) continue;
+        for (const f of readdirSync(src)) {
+          try { mkdirSync(new URL(`${folder}/`, into), { recursive: true }); writeFileSync(new URL(`${folder}/${f}.gz`, into), gzipSync(readFileSync(new URL(f, src)))); } catch { /* one document that cannot be copied does not stop the rest */ }
+        }
+      }
+    }
+    const all = backupStamps(), hourly = new Set(all.slice(-48)), daily = new Map();
+    for (const s of all) daily.set(s.slice(0, 10), s);   // the last copy of each day
+    const keepDays = new Set([...daily.values()].slice(-14));
+    for (const s of all) if (!hourly.has(s) && !keepDays.has(s)) rmSync(new URL(`${s}/`, BACKUP_DIR), { recursive: true, force: true });
+  } catch (e) { console.log("[agentops] backup:", String(e?.message || e).slice(0, 160)); }
+}
+setInterval(backupStores, 10 * 60e3).unref?.();
+setTimeout(backupStores, 45e3).unref?.();
 function logActivity(kind, text, extra = {}) {
   const a = load("activity");
   a.unshift({ at: now(), kind, text: clip(text, 400), ...extra });
@@ -779,14 +855,15 @@ function agentCheck(d, body) {
 const SKILLS = "_skills";
 const LESSON_KEEP = 150, LESSON_PER_TASK = 3;
 const LESSON_SOURCE = { task: "from a task", chat: "from the chat", approval: "from an approval", feedback: "from feedback", manager: "taught by the manager", review: "from an experience review" };
-function addLesson({ pid, type, text, source, by, taskId, replaces, everywhere }) {
+function addLesson({ pid, type, text, source, by, taskId, replaces, everywhere, agent }) {
   const t = line(text, 400);
   if (t.length < 12) return null;
   const all = load("lessons"), bucket = everywhere ? SKILLS : pid, list = (all[bucket] ||= []);
   const kind = everywhere ? (type || "") : (type || "");
   let l = replaces ? list.find((x) => x.id === replaces) : null;
   if (!l) l = list.find((x) => x.text.toLowerCase() === t.toLowerCase() && x.type === kind);
-  if (l) { l.text = t; l.updatedAt = now(); l.seen = (l.seen || 1) + 1; if (source === "review") l.source = "review"; }
+  if (l && agent && (l.pinned || l.source === "manager") && l.text !== t) return { refused: true };
+  if (l) { l.text = t; l.updatedAt = now(); l.seen = (l.seen || 1) + 1; if (source === "review" && l.source !== "manager") l.source = "review"; }
   else {
     l = { id: uid("ls_"), type: kind, text: t, source: source || "task", by: cut(by || "", 80), taskId: taskId || null, at: now(), updatedAt: now(), pinned: false, uses: 0 };
     list.push(l);
@@ -1009,7 +1086,7 @@ function pushWork(w, pid, item) {
   const section = WORK_SECTIONS.includes(item.section) ? item.section : "research";
   const title = line(item.title, 200);
   if (!title) return null;
-  const it = { id: uid("wk_"), at: num(item.at, 0, 4e12, now()), section, kind: WORK_KINDS[section].includes(item.kind) ? item.kind : "other", title, detail: line(item.detail, 500), url: httpUrl(item.url), target: line(item.target, 300),
+  const it = { id: uid("wk_"), at: +item.at > 0 ? num(item.at, 1, 4e12, now()) : now(), section, kind: WORK_KINDS[section].includes(item.kind) ? item.kind : "other", title, detail: line(item.detail, 500), url: httpUrl(item.url), target: line(item.target, 300),
     platform: SOCIAL_PLATFORMS.some((x) => x.key === item.platform) ? item.platform : "", type: CATALOG_BY_KEY[item.type] ? item.type : "", taskId: item.taskId || null, by: cut(item.by || "", 80), source: ["agent", "manual", "journal"].includes(item.source) ? item.source : "agent" };
   const list = (w.projects[pid] ||= []);
   list.push(it);
@@ -1051,7 +1128,7 @@ function workEdit(admin, body) {
     if (!WORK_SECTIONS.includes(body.section)) return bad("Choose which part of the work this belongs to.");
     if (line(body.title, 200).length < 4) return bad("Say what was done.");
     if (body.url && !httpUrl(body.url)) return bad("That link is not a web address. It should start with https://");
-    const at = num(body.at, 0, now(), now());      // never in the future
+    const at = +body.at > 0 ? num(body.at, 1, now(), now()) : now();      // never in the future; a cleared date means today, not 1970
     const it = addWork(p.id, { at, section: body.section, kind: body.kind, title: body.title, detail: body.detail, url: body.url, target: body.target, platform: body.platform, by: admin.name, source: "manual" });
     logActivity("report", `${admin.name} added work to the report of ${p.name}: ${cut(it.title, 120)}`, { projectId: p.id });
     return [200, reportOf(p.id, body, { added: it.id })];
@@ -1191,7 +1268,7 @@ async function seoRequestNow(ctx, a) {
   try { if (/^https?:/i.test(path)) { const u = new URL(path); if (u.host !== "api.dataforseo.com") return { error: "Only DataForSEO's own API can be called." }; path = u.pathname + u.search; } } catch { return { error: "That is not an API path." }; }
   path = path.replace(/\.ai(?=$|\?)/, "");
   const m = /^\/v3\/([a-z_]+)\//.exec(path);
-  if (!m || !SEO_APIS.includes(m[1]) || /\.\./.test(path)) return { error: `Only these parts of the DataForSEO API can be called: ${SEO_APIS.join(", ")}. The path starts with /v3/ and one of them.` };
+  if (!m || !SEO_APIS.includes(m[1]) || /\.\.|[%\\\s]/.test(path.split("?")[0]) || /\/\//.test(path.split("?")[0])) return { error: `Only these parts of the DataForSEO API can be called: ${SEO_APIS.join(", ")}. The path starts with /v3/ and one of them.` };
   let data = a.data;
   if (typeof data === "string") { try { data = JSON.parse(data); } catch { return { error: "data has to be a JSON object or an array of task objects." }; } }
   if (data != null && typeof data !== "object") return { error: "data has to be a JSON object or an array of task objects." };
@@ -1308,10 +1385,14 @@ function createTask({ projectId, type, title, instructions, source, createdBy, r
   const t = { id: uid("at_"), projectId, type, title: clip(title || cat.label, 160), instructions: clip(instructions || "", 6000), reason: clip(reason || "", 500), phase: "run", status: "queued", source: source || "manual", createdAt: now(), createdBy: createdBy || "", attempts: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0, costUsd: 0 }, events: [] };
   tasks.push(t);
-  /* keep the file bounded: drop the oldest finished tasks past 1500 */
+  /* keep the file bounded: past 1500, drop the oldest finished tasks. Working
+     limits and the schedule count the last month's runs from this list, so a
+     task younger than 35 days is never dropped; past 4000 the step-by-step
+     log of week-old finished tasks goes instead (their reports stay). */
   if (tasks.length > 1500) {
-    const drop = tasks.length - 1500; let n = 0;
-    for (let i = 0; i < tasks.length && n < drop;) { if (!ACTIVE.has(tasks[i].status)) { tasks.splice(i, 1); n += 1; } else i += 1; }
+    const drop = tasks.length - 1500, young = now() - 35 * 864e5; let n = 0;
+    for (let i = 0; i < tasks.length && n < drop;) { if (!ACTIVE.has(tasks[i].status) && (tasks[i].finishedAt || tasks[i].createdAt) < young) { tasks.splice(i, 1); n += 1; } else i += 1; }
+    if (tasks.length > 4000) for (const x of tasks) if (!ACTIVE.has(x.status) && x.events?.length && (x.finishedAt || x.createdAt) < now() - 7 * 864e5) x.events = [];
   }
   save("tasks");
   return { task: t };
@@ -1328,6 +1409,7 @@ function blockOf(t, device) {
   const ps = projectSetting(t.projectId), ts = taskSetting(t.projectId, t.type), cat = CATALOG_BY_KEY[t.type];
   if (!cat) return "Unknown task type.";
   if (!onAgentList(t.projectId)) return "This project is not on the agent's list. Add it under Projects.";
+  if (projectOf(t.projectId)?.raw?.archived) return "This project is archived in the CRM.";
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
   if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, PERIOD_MS[ts.per]) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
@@ -1347,16 +1429,50 @@ function blockOf(t, device) {
   }
   return null;
 }
+/* A running task whose device shows no progress for 20 minutes is released.
+   Looking and proposing can simply be done again, so those go back to the
+   queue. A task that was MAKING an approved change is never started again by
+   itself: part of the change may already be live, and a second run could
+   publish it twice. It stops, says so, and a person decides (Run again tells
+   the agent to check the live page first). Either way the silent device may
+   still deliver its result later (it keeps it on disk while the CRM cannot be
+   reached), and `silent` is what lets that late result in.
+   No run may last longer than RUN_HOURS, whatever the device says. */
+const RUN_HOURS = 3, RUN_MINUTES_SOFT = 90, APPROVAL_DAYS = 14;
+const INTERRUPTED = "The agent's computer went silent while it was making this approved change, so part of it may already be live. Check the page or profile, then press Run again if it still needs doing.";
 function requeueStale() {
   let changed = false;
   for (const t of load("tasks")) {
-    if (t.status !== "running" || now() - (t.heartbeatAt || t.startedAt || 0) < 20 * 60e3) continue;
+    if (t.status === "needs_approval" && now() - (t.proposal?.at || t.createdAt) > APPROVAL_DAYS * 864e5) {
+      /* an undecided proposal would otherwise hold back every later task of its kind for the project */
+      t.status = "stopped"; t.finishedAt = now(); t.error = `Nobody approved or rejected this within ${APPROVAL_DAYS} days, so it was closed. Run it again for a fresh proposal.`; changed = true;
+      logActivity("approval", `"${t.title}" was closed: no decision in ${APPROVAL_DAYS} days.`, { taskId: t.id, projectId: t.projectId });
+      continue;
+    }
+    if (t.status !== "running") continue;
+    const tooLong = now() - (t.startedAt || 0) > RUN_HOURS * 36e5;
+    if (!tooLong && now() - (t.heartbeatAt || t.startedAt || 0) < 20 * 60e3) continue;
     changed = true;
-    if ((t.attempts || 0) >= 3) { t.status = "failed"; t.error = "The device stopped responding three times while running this task."; t.finishedAt = now(); }
-    else { t.status = t.phase === "execute" ? "approved" : "queued"; t.deviceId = null; }
-    logActivity("task", `Task "${t.title}" was released: its device went silent.`, { taskId: t.id, projectId: t.projectId });
+    t.silent = { deviceId: t.deviceId, at: now() };
+    if (t.phase === "execute") { t.status = "failed"; t.interrupted = true; t.finishedAt = now(); t.error = tooLong ? `This run lasted more than ${RUN_HOURS} hours and was ended. Part of the approved change may already be live: check the page or profile before running it again.` : INTERRUPTED; }
+    else if (tooLong) { t.status = "failed"; t.finishedAt = now(); t.error = `This run lasted more than ${RUN_HOURS} hours and was ended.`; }
+    else if ((t.attempts || 0) >= 3) { t.status = "failed"; t.error = "The device stopped responding three times while running this task."; t.finishedAt = now(); }
+    else { t.status = "queued"; t.deviceId = null; }
+    logActivity("task", `Task "${t.title}" was released: its device ${tooLong ? "ran it for too long" : "went silent"}.`, { taskId: t.id, projectId: t.projectId });
   }
   if (changed) save("tasks");
+}
+/* stop what is running when the agent, or a project, is switched off: the
+   device learns it at its next step (its task is no longer running here) */
+function stopRunning(match, why) {
+  let n = 0;
+  for (const t of load("tasks")) {
+    if (t.status !== "running" || !match(t)) continue;
+    t.status = "stopped"; t.finishedAt = now(); t.error = why; n += 1;
+    logActivity("task", `"${t.title}" was stopped: ${why}`, { taskId: t.id, projectId: t.projectId });
+  }
+  if (n) save("tasks");
+  return n;
 }
 
 /* the agent starts tasks by itself where a project's task type says so */
@@ -1624,10 +1740,15 @@ const SERVER_TOOLS = [
     if (!cat || cat.agencyOnly) return { error: "Unknown task type key." };
     const open = load("tasks").filter((t) => t.projectId === ctx.task.projectId && t.source === "agent" && ACTIVE.has(t.status)).length;
     if (!ctx.chat && open >= 10) return { error: "This project already has ten open agent-suggested tasks. Do not suggest more." };
+    /* a follow-up of a follow-up of a follow-up is a loop, and a day's worth of suggestions is plenty */
+    const parent = ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id), depth = (parent?.depth || 0) + 1;
+    if (!ctx.chat && depth > 2) return { error: "This task is already a follow-up of a follow-up. Put the next step in your report; a person starts it." };
+    if (!ctx.chat && load("tasks").filter((t) => t.projectId === ctx.task.projectId && t.source === "agent" && now() - t.createdAt < 864e5).length >= 8) return { error: "Eight follow-up tasks were already suggested for this project today. Put the rest in your report." };
     const ts = taskSetting(ctx.task.projectId, a.type);
     /* asked for in the chat = the person's own request, so it is queued in their name */
     const r = createTask({ projectId: ctx.task.projectId, type: a.type, title: a.title, instructions: a.instructions, reason: a.reason, source: ctx.chat ? "manual" : "agent", createdBy: ctx.chat ? `${ctx.chat.by} (chat)` : "AI agent" });
     if (r.error) return { error: r.error };
+    if (!ctx.chat) { r.task.depth = depth; save("tasks"); }
     if (!projectSetting(ctx.task.projectId).enabled) return { ok: true, queued: true, willStart: "no: the agent is not enabled for this project yet. A person has to switch on \"Agent works on this project\" in Projects & limits" };
     return { ok: true, queued: true, willStart: ts.mode === "open" ? "yes, this task type is open" : ts.mode === "limited" ? "when it fits the working limit" : "no, this task type is off for the project; a person has to switch it on in Projects & limits" };
   }),
@@ -1661,11 +1782,14 @@ const SERVER_TOOLS = [
     const pid = ctx.task.projectId;
     if (pid === AGENCY_PROJECT) return { error: "Lessons belong to a client project." };
     const holder = ctx.chat ? null : load("tasks").find((x) => x.id === ctx.task.id);
-    if (holder && !a.replaces && (holder.lessonsSaved || 0) >= LESSON_PER_TASK) return { error: "Three lessons are already saved from this task. Keep only the ones that matter most." };
     const everywhere = a.applies_to === "this_kind_of_task_on_every_project" && !!ctx.task.type;
-    const l = addLesson({ pid, type: a.applies_to === "this_project" || !ctx.task.type ? "" : ctx.task.type, text: a.text, source: ctx.chat ? "chat" : ctx.task.type === "experience_review" ? "review" : "task", by: "AI agent", taskId: ctx.chat ? null : ctx.task.id, replaces: a.replaces, everywhere });
+    /* a correction is free only when it corrects a lesson that exists: an unknown id would otherwise add lessons without counting */
+    const corrects = !!a.replaces && (load("lessons")[everywhere ? SKILLS : pid] || []).some((x) => x.id === a.replaces);
+    if (holder && !corrects && (holder.lessonsSaved || 0) >= LESSON_PER_TASK) return { error: "Three lessons are already saved from this task. Keep only the ones that matter most." };
+    const l = addLesson({ agent: true, pid, type: a.applies_to === "this_project" || !ctx.task.type ? "" : ctx.task.type, text: a.text, source: ctx.chat ? "chat" : ctx.task.type === "experience_review" ? "review" : "task", by: "AI agent", taskId: ctx.chat ? null : ctx.task.id, replaces: a.replaces, everywhere });
     if (!l) return { error: "Write the lesson in a full sentence." };
-    if (holder) { holder.lessonsSaved = (holder.lessonsSaved || 0) + (a.replaces ? 0 : 1); save("tasks"); }
+    if (l.refused) return { error: "That lesson was pinned or written by the manager. Only a person can change it. Save your correction as a new lesson instead." };
+    if (holder) { holder.lessonsSaved = (holder.lessonsSaved || 0) + (corrects ? 0 : 1); save("tasks"); }
     return { ok: true, id: l.id, saved: l.text };
   }),
   tool("lessons", "List everything you have learned so far on this project, with ids, and what you have learned about this kind of task on every project. Use it before an experience review, or when you need a lesson's id to correct it.", {}, [], (ctx) => {
@@ -1743,7 +1867,11 @@ function saveConfig(admin, body) {
   const cfg = load("config");
   if (body.global && typeof body.global === "object") {
     const g = body.global;
-    if (g.enabled != null) cfg.global.enabled = !!g.enabled;
+    if (g.enabled != null) {
+      const was = cfg.global.enabled;
+      cfg.global.enabled = !!g.enabled;
+      if (was && !cfg.global.enabled) stopRunning(() => true, `${admin.name} switched the agent off for the whole company.`);
+    }
     if (g.paused != null) cfg.global.paused = !!g.paused;
     if (g.model && MODELS.some((m) => m.id === g.model)) cfg.global.model = g.model;
     if (g.effort && ["low", "medium", "high"].includes(g.effort)) cfg.global.effort = g.effort;
@@ -1758,7 +1886,11 @@ function saveConfig(admin, body) {
   if (body.projectId) {
     if (!projectOf(body.projectId)) return [404, { error: "not_found", detail: "Unknown project." }];
     const p = (cfg.projects[body.projectId] ||= {});
-    if (body.enabled != null) p.enabled = !!body.enabled;
+    if (body.enabled != null) {
+      const was = p.enabled === true;
+      p.enabled = !!body.enabled;
+      if (was && !p.enabled) stopRunning((t) => t.projectId === body.projectId && !CATALOG_BY_KEY[t.type]?.system, `${admin.name} switched the agent off for this project.`);
+    }
     if (body.tokensPerMonth != null) p.tokensPerMonth = num(body.tokensPerMonth, 0, 2e9, 2000000);
     if (body.tokensPerDay != null) p.tokensPerDay = num(body.tokensPerDay, 0, 2e9, 0);
     if (body.seoUsdPerMonth != null) p.seoUsdPerMonth = Math.min(100000, Math.max(0, Math.round((+body.seoUsdPerMonth || 0) * 100) / 100));
@@ -1815,7 +1947,11 @@ function taskAction(admin, body) {
   if (!t) return [404, { error: "not_found" }];
   const a = body.action;
   if (a === "cancel" && ACTIVE.has(t.status)) { t.status = "cancelled"; t.finishedAt = now(); t.error = `Cancelled by ${admin.name}.`; }
-  else if (a === "retry" && ["failed", "cancelled", "stopped"].includes(t.status)) { t.status = t.phase === "execute" ? "approved" : "queued"; t.error = ""; t.finishedAt = null; t.attempts = 0; t.deviceId = null; }
+  else if (a === "retry" && ["failed", "cancelled", "stopped"].includes(t.status)) {
+    /* a proposal nobody decided in time is asked for afresh; an approved change goes back to being made (the agent is told when an earlier run was cut off) */
+    if (t.phase !== "execute" || !t.approval) { t.phase = "run"; t.proposal = null; }
+    t.status = t.phase === "execute" ? "approved" : "queued"; t.error = ""; t.finishedAt = null; t.attempts = 0; t.deviceId = null; t.silent = null;
+  }
   else if (a === "approve" && t.status === "needs_approval") {
     t.status = "approved"; t.phase = "execute";
     const proposed = String(t.proposal?.details || ""), squash = (x) => String(x).replace(/\s+/g, " ").trim();
@@ -1845,11 +1981,15 @@ function playbookSave(admin, body) {
   if (!PLAYBOOK_KEYS.includes(key)) return [404, { error: "not_found" }];
   const cfg = load("config");
   if (body.get) return [200, { ok: true, key, text: cfg.playbooks[key]?.text ?? DEFAULT_PLAYBOOKS[key] ?? "", edited: !!cfg.playbooks[key], defaultText: DEFAULT_PLAYBOOKS[key] || "" }];
-  if (body.reset) delete cfg.playbooks[key];
+  /* every edited version is kept (the last ten), so a change that made the agent worse can be taken back */
+  const keep = () => { if (cfg.playbooks[key]) { const h = ((cfg.playbookHistory ||= {})[key] ||= []); h.unshift({ ...cfg.playbooks[key] }); h.length = Math.min(h.length, 10); } };
+  if (body.history) return [200, { ok: true, key, versions: (cfg.playbookHistory?.[key] || []).map((v, i) => ({ n: i, updatedAt: v.updatedAt, by: v.by || "", chars: (v.text || "").length, text: v.text || "" })) }];
+  if (body.reset) { keep(); delete cfg.playbooks[key]; }
   else {
-    const text = String(body.text || "");
+    const text = scrub(String(body.text || ""));          // a playbook goes to every device and to Claude: nothing shaped like a password or a key is kept in one
     if (text.trim().length < 20) return [400, { error: "bad_request", detail: "The playbook is too short." }];
     if (text.length > 20000) return [400, { error: "bad_request", detail: "Keep a playbook under 20,000 characters." }];
+    keep();
     cfg.playbooks[key] = { text, updatedAt: now(), by: admin.name };
   }
   cfg.playbooksRev += 1; cfg.rev += 1;
@@ -1976,7 +2116,12 @@ function agentHello(d, body) {
   if (body?.synced) { d.syncRequested = false; d.lastSync = now(); }
   save("devices");
   const cfg = load("config");
-  for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = now();
+  /* a hello proves the program is alive, not that the task is moving. A
+     device that says how long its run has been idle is believed (a stuck run
+     is then released after 20 minutes); an older one without it keeps the
+     old behaviour and is caught by the longest-run limit instead. */
+  const idle = body?.idleSeconds == null ? 0 : num(body.idleSeconds, 0, 864e2, 0);
+  for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = Math.max(t.heartbeatAt || 0, now() - idle * 1000);
   return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key, checks: pendingChecks(d) }];
 }
 function agentClaim(d) {
@@ -1990,10 +2135,11 @@ function agentClaim(d) {
     if (why) { firstReason ||= why; continue; }
     const cat = CATALOG_BY_KEY[t.type], ts = taskSetting(t.projectId, t.type), cfg = load("config"), p = projectOf(t.projectId);
     if (!p) { t.status = "failed"; t.error = "The project no longer exists."; t.finishedAt = now(); continue; }
-    t.status = "running"; t.deviceId = d.id; t.startedAt = now(); t.heartbeatAt = now(); t.firstStartedAt ||= now(); t.attempts = (t.attempts || 0) + 1; t.blockedReason = null;
+    t.status = "running"; t.deviceId = d.id; t.startedAt = now(); t.heartbeatAt = now(); t.firstStartedAt ||= now(); t.attempts = (t.attempts || 0) + 1; t.blockedReason = null; t.silent = null;
     const room = tokenRoom(t.projectId);
     t.runBudget = Math.max(20000, Math.min(cat.maxRunTokens || 300000, room.left));
-    t.runStartTokens = t.usage.total;
+    t.runStartTokens = t.usage.total; t.runSpent = 0;
+    const again = t.interrupted === true && t.phase === "execute";
     const projectKey = secrets().projects[t.projectId]?.key || "";
     const claudeKey = projectKey || (d.localKey === true ? "" : secrets().claude?.key || "");
     t.keySource = projectKey ? "project" : claudeKey ? "company" : "device";
@@ -2006,6 +2152,7 @@ function agentClaim(d) {
       phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? ts.approval : "none",
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
+      ...(again ? { interrupted: "An earlier run of this approved change was cut off, so part of it may already be live. Before changing anything, open the page or profile and check what is already there. Do only what is still missing, never the same thing twice, and say in the report what you found already done." } : {}),
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
       directions: directionsOf(t.projectId).map((x) => x.text),
       setup: setupLines(t.projectId, cat.area),
@@ -2042,15 +2189,20 @@ function agentUsage(d, body) {
   for (const k of Object.keys(u)) t.usage[k] += u[k];
   t.usage.total += total; t.usage.calls += 1; t.usage.costUsd = +(t.usage.costUsd + cost).toFixed(5);
   t.heartbeatAt = now();
+  /* One run's budget counts tokens the way they are billed: a token read back
+     from the cache costs a tenth of a fresh one. Counted in full, the growing
+     conversation used the budget up after a handful of pages. The project's
+     monthly and daily limits still count every token. */
+  t.runSpent = (t.runSpent || 0) + u.input + u.output + u.cacheWrite + Math.round(u.cacheRead / 10);
   save("tasks");
   const room = tokenRoom(t.projectId);
-  const runUsed = t.usage.total - (t.runStartTokens || 0);
-  const runLeft = (t.runBudget || 0) - runUsed;
+  const runLeft = (t.runBudget || 0) - t.runSpent;
   let reason = "";
   if (room.left <= 0) reason = `Token limit reached: ${room.why}.`;
   else if (runLeft <= 0) reason = "This task used its token budget for one run.";
-  const cancelled = false;
-  return [200, { ok: true, stop: !!reason || cancelled, reason, runLeft: Math.max(0, runLeft), projectLeft: room.left === Infinity ? null : Math.max(0, room.left) }];
+  else if (now() - (t.startedAt || now()) > RUN_MINUTES_SOFT * 60e3) reason = `This run has lasted ${RUN_MINUTES_SOFT} minutes, the longest one run may take.`;
+  /* wrapUp: the device may make one last call so the agent can report what it did; nothing else runs */
+  return [200, { ok: true, stop: !!reason, wrapUp: !!reason && room.left > 0, reason, runLeft: Math.max(0, runLeft), projectLeft: room.left === Infinity ? null : Math.max(0, room.left) }];
 }
 function agentEvent(d, body) {
   const t = load("tasks").find((x) => x.id === body?.taskId && x.deviceId === d.id);
@@ -2075,9 +2227,16 @@ async function agentTool(d, body) {
   } catch (e) { return [200, { ok: true, result: { error: "The CRM could not answer: " + clip(e?.message || e, 200) } }]; }
 }
 function agentComplete(d, body) {
-  const t = myRunning(d, body?.taskId);
+  const st = String(body?.status || "");
+  let t = myRunning(d, body?.taskId);
+  if (!t && st !== "released") {
+    /* a result that arrives after the task was released for silence: the same
+       device, and nobody has started the task again since */
+    const late = load("tasks").find((x) => x.id === body?.taskId && x.silent?.deviceId === d.id && (x.status === "queued" || (x.status === "failed" && now() - x.silent.at < 24 * 36e5)));
+    if (late) { t = late; t.deviceId = d.id; t.interrupted = false; logActivity("task", `${d.name} delivered the result of "${t.title}" late.`, { taskId: t.id, projectId: t.projectId }); }
+  }
   if (!t) return [409, { error: "not_running" }];
-  const st = String(body.status || "");
+  t.silent = null;
   const findings = (Array.isArray(body.findings) ? body.findings : []).slice(0, 40).map((f) => ({ severity: ["high", "medium", "low", "info"].includes(f?.severity) ? f.severity : "info", title: clip(f?.title || "", 200), detail: clip(f?.detail || "", 1500), action: clip(f?.action || "", 600) })).filter((f) => f.title);
   if (st === "needs_approval") {
     t.status = "needs_approval"; t.proposal = { summary: clip(body.summary || "", 600), details: clip(body.details || body.report || "", 12000), at: now() };
@@ -2171,6 +2330,9 @@ function chatBlock(pid) {
   const g = load("config").global;
   if (!g.enabled) return "The agent is switched off for the whole company.";
   if (g.paused) return "The agent is paused for the whole company.";
+  if (!onAgentList(pid)) return "This project is not on the agent's list. Add it under Projects.";
+  if (projectOf(pid)?.raw?.archived) return "This project is archived in the CRM.";
+  if (!projectSetting(pid).enabled) return "The agent is not enabled for this project. Switch on \"Agent works on this project\" first.";
   const room = tokenRoom(pid);
   if (room.left <= 0) return `Token limit reached: ${room.why}.`;
   if (!serverKeyFor(pid) && !load("devices").some((d) => !d.revoked && d.localKey === true)) return "No Claude API key is set for the agent. Add one in API setup.";
@@ -2180,6 +2342,12 @@ function sweepChats() {
   let changed = false;
   for (const [pid, c] of Object.entries(load("chats"))) {
     for (const m of c.messages || []) {
+      if (m.role === "user" && m.turn?.status === "queued" && now() - m.at > 5 * 60e3) {
+        m.turn.status = "error"; changed = true;
+        pushReply(pid, m, "No agent computer picked this message up within five minutes. Check that the agent's application is running there, then send it again.", { system: true, error: true });
+        chatVer[pid] = (chatVer[pid] || 0) + 1;
+        continue;
+      }
       if (m.role !== "user" || m.turn?.status !== "working" || now() - (m.turn.activityAt || m.turn.startedAt || 0) < 6 * 60e3) continue;
       m.turn.status = "error"; changed = true;
       pushReply(pid, m, "The agent stopped responding while it was answering. Please send your message again.", { system: true, error: true });
@@ -2273,7 +2441,8 @@ function agentChatWait(d) {
       done = true; clearTimeout(timer);
       chatWaiters = chatWaiters.filter((f) => f !== finish);
       d.chatAt = now();
-      resolve([200, { ok: true, turn: d.revoked ? null : claimTurn(d), poke: pokes.delete(d.id) }]);
+      try { resolve([200, { ok: true, turn: d.revoked ? null : claimTurn(d), poke: pokes.delete(d.id) }]); }
+      catch (e) { console.log("[agentops] chat wait:", String(e?.message || e).slice(0, 160)); resolve([500, { error: "server_error" }]); }
     };
     const timer = setTimeout(finish, 25000);
     chatWaiters.push(finish);
@@ -2324,7 +2493,8 @@ function chatGet(body) {
       if (done) return;
       done = true; clearTimeout(timer);
       chatWatch[p.id] = (chatWatch[p.id] || []).filter((f) => f !== finish);
-      resolve([200, chatState(p.id)]);
+      try { resolve([200, chatState(p.id)]); }
+      catch (e) { console.log("[agentops] chat read:", String(e?.message || e).slice(0, 160)); resolve([500, { error: "server_error" }]); }
     };
     const timer = setTimeout(finish, 20000);
     (chatWatch[p.id] ||= []).push(finish);

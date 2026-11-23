@@ -53,6 +53,20 @@ final class Redact {
         return out.toString();
     }
 
+    private static final Pattern URL_SECRET = Pattern.compile(
+        "([?&#;](?:_wpnonce|(?:[a-z0-9]+[_.-])*(?:token|secret|password|passwd|pwd|signature|sig|apikey|key|auth|authorization|session|sessionid|sid|code|otp|jwt|credential|nonce))=)([^&#;\\s]{6,})",
+        Pattern.CASE_INSENSITIVE);
+
+    /**
+     * A web address with the values of its secret-carrying parts hidden
+     * (reset links, signed download links, sign-in codes). The address stays
+     * readable; only the value that would let someone else use it is gone.
+     */
+    static String url(String input) {
+        if (input == null || input.isEmpty()) return "";
+        return text(URL_SECRET.matcher(input).replaceAll("$1[hidden]"));
+    }
+
     /** True when the text holds something that looks like a password or a key. */
     static boolean hasSecret(String input) {
         return input != null && !text(input).equals(input);

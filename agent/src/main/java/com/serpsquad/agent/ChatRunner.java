@@ -143,11 +143,29 @@ final class ChatRunner {
         b.put("output", m.usage().outputTokens());
         b.put("cacheRead", m.usage().cacheReadInputTokens().orElse(0L));
         b.put("cacheWrite", m.usage().cacheCreationInputTokens().orElse(0L));
-        try {
-            JsonNode r = crm.post("agent/chat/usage", b);
-            return r.path("stop").asBoolean(false) ? r.path("reason").asText("Stopped.") : null;
-        } catch (CrmClient.CrmException e) {
-            return "Token usage could not be reported to the CRM.";
+        for (int i = 0; i < 3; i++) {
+            try {
+                JsonNode r = crm.post("agent/chat/usage", b);
+                return r.path("stop").asBoolean(false) ? r.path("reason").asText("Stopped.") : null;
+            } catch (CrmClient.CrmException e) {
+                try { Thread.sleep(3000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+        return "Token usage could not be reported to the CRM.";
+    }
+
+    /** One Claude call. A rate limit, a busy API or a dropped connection is tried again twice before the person is told. */
+    private BetaMessage ask(String system, List<BetaTool> toolDefs, List<BetaMessageParam> history) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return claude.beta().messages().create(params(system, toolDefs, history));
+            } catch (RateLimitException | AnthropicIoException e) {
+                if (attempt >= 3) throw e;
+            } catch (com.anthropic.errors.AnthropicServiceException e) {
+                if (e.statusCode() < 500 || attempt >= 3) throw e;
+            }
+            progress("Waiting for Claude");
+            try { Thread.sleep(8000L * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw new IllegalStateException("interrupted"); }
         }
     }
 
@@ -183,7 +201,7 @@ final class ChatRunner {
             List<BetaTool> toolDefs = tools();
             progress("Thinking");
             for (int i = 1; i <= MAX_TURNS; i++) {
-                BetaMessage m = claude.beta().messages().create(params(system, toolDefs, history));
+                BetaMessage m = ask(system, toolDefs, history);
                 String stopWhy = reportUsage(m);
                 String text = textOf(m);
                 if (!text.isBlank()) last = text;
@@ -207,7 +225,7 @@ final class ChatRunner {
                         b.put("name", use.name());
                         b.set("input", input == null || !input.isObject() ? Json.obj() : input);
                         JsonNode res = crm.post("agent/tool", b).path("result");
-                        out = Json.clip(Json.str(res), 50000);
+                        out = Redact.text(Json.clip(Json.str(res), 50000));
                         err = res.has("error");
                     } catch (CrmClient.CrmException e) {
                         if (e.status == 409) return;   // stopped
@@ -222,6 +240,7 @@ final class ChatRunner {
                 }
                 if (!results.isEmpty()) { history.add(BetaMessageParam.ofUserOfContentBlockParams(results)); continue; }
                 if (stop.equals(BetaStopReason.PAUSE_TURN)) { progress("Searching the web"); continue; }
+                if (stop.equals(BetaStopReason.MAX_TOKENS)) { reply((last.isBlank() ? "" : last + "\n\n") + "(My answer was cut off here by the length limit. Ask me to continue.)", false); return; }
                 reply(last.isBlank() ? "I have no answer to give for that." : last, false);
                 return;
             }

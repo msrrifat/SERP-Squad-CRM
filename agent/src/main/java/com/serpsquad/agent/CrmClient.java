@@ -32,7 +32,24 @@ final class CrmClient {
         if (!base.matches("(?i)https://.+") && !base.matches("(?i)http://(localhost|127\\.0\\.0\\.1)(:\\d+)?/.*")) throw new CrmException(0, "The CRM address must start with https://. Change it under Settings, Change connection.");
     }
 
+    /**
+     * One request to the CRM. "Too many requests" is not a failure of the
+     * request itself: it is sent again after a short wait (twice at most), so
+     * a burst of tool calls does not turn into errors the agent has to reason
+     * about.
+     */
     JsonNode post(String path, ObjectNode body) throws CrmException {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return postOnce(path, body);
+            } catch (CrmException e) {
+                if (e.status != 429 || attempt >= 3) throw e;
+                try { Thread.sleep(6000L * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw new CrmException(0, "interrupted"); }
+            }
+        }
+    }
+
+    private JsonNode postOnce(String path, ObjectNode body) throws CrmException {
         requireSecure();
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(base + path))

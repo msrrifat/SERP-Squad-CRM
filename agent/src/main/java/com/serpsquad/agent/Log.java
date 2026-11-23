@@ -23,6 +23,26 @@ final class Log {
         try { Files.createDirectories(logDir); dir = logDir; } catch (Exception e) { dir = null; }
     }
 
+    /**
+     * Housekeeping at start: files in a folder that have not been written to
+     * for the given number of days are removed, and so is a log that has
+     * grown past 20 MB (Chrome's own log is only ever added to). Daily logs
+     * and screenshots would otherwise pile up for ever.
+     */
+    static void prune(Path folder, int days) {
+        if (folder == null || !Files.isDirectory(folder)) return;
+        long old = System.currentTimeMillis() - days * 86400000L;
+        try (java.util.stream.Stream<Path> files = Files.list(folder)) {
+            for (Path f : (Iterable<Path>) files::iterator) {
+                try {
+                    if (!Files.isRegularFile(f)) continue;
+                    boolean big = f.getFileName().toString().endsWith(".log") && Files.size(f) > 20_000_000L;
+                    if (big || Files.getLastModifiedTime(f).toMillis() < old) Files.deleteIfExists(f);
+                } catch (Exception ignored) { /* a file in use is left for the next start */ }
+            }
+        } catch (Exception ignored) { /* housekeeping must never stop the agent */ }
+    }
+
     static synchronized void info(String msg) {
         String line = LocalTime.now().format(T) + "  " + Redact.text(msg);
         System.out.println(line);

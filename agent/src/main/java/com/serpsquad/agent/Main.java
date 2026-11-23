@@ -61,8 +61,15 @@ public final class Main {
                 if (cfg.openDashboard) AppWindow.open(cfg, running);
                 return 0;
             }
+            /* two copies started in the same second both pass the check above: only the one that holds the lock goes on */
+            if (!takeLock(home)) {
+                System.out.println("Another copy of the agent from this folder is already starting. This one stops.");
+                return 0;
+            }
         }
         Log.init(home.resolve("logs"));
+        Log.prune(home.resolve("logs"), 45);
+        Log.prune(cfg.dataDir().resolve("screenshots"), 45);
         Secure.lockDown(home);
         Worker w = new Worker(cfg, version());
         switch (cmd) {
@@ -121,6 +128,32 @@ public final class Main {
         }
         Thread.currentThread().join();
         return 0;
+    }
+
+    private static java.nio.channels.FileChannel lockFile;
+    private static java.nio.channels.FileLock lock;
+
+    /**
+     * One agent per folder: a lock on agent.lock, held until the process ends.
+     * A copy that has just been told to restart for an update needs a few
+     * seconds to end, so the lock is tried for a while before giving up.
+     */
+    private static boolean takeLock(Path home) {
+        try {
+            Files.createDirectories(home);
+            lockFile = java.nio.channels.FileChannel.open(home.resolve("agent.lock"), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE);
+            for (int i = 0; i < 24; i++) {
+                try { lock = lockFile.tryLock(); } catch (java.nio.channels.OverlappingFileLockException e) { lock = null; }
+                if (lock != null) return true;
+                Thread.sleep(500);
+            }
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            return true;    // a folder that cannot be locked (a network drive): the check for a running window is the guard there
+        }
     }
 
     /** Is an agent from this same folder already running? Then its window address is returned. */

@@ -330,6 +330,61 @@ profile of versions before 0.7.0 becomes the first Chrome ID automatically.
   not failed one after another.
 - If token usage cannot be reported to the CRM, the task stops.
 
+### A run that only looks
+
+In a Chrome window a person signed in to, only a task that is there to make a
+change (and, where approval is asked, has it) may type, choose in a list or
+press a button that changes something. Checks, audits and the proposal before
+an approval can open pages, follow links, tabs and menus, scroll and read.
+This is enforced by the program, not only by the agent's instructions: a
+button or link whose label says it changes something (Publish, Post, Save,
+Send, Reply, Delete, Remove, Confirm, Update, Upload, Request indexing and
+the like, or any submit button) is not clicked, and the agent is told to put
+it in its proposal or report. The list of words is English.
+
+A message box from the page ("are you sure?") no longer freezes the tab: a
+plain message is closed, a yes/no question is answered Yes only in a run
+that may act and No in a run that only looks, and the agent is told what the
+box said. A link made to open a new tab opens in the tab the agent can see.
+On a long page the reading follows the scroll position (browser_scroll takes
+down, up, top or bottom). browser_select chooses an option in a drop-down
+list by its text.
+
+### Stopping in time
+
+- When the CRM says stop (a limit, a cancel, the agent switched off), the
+  actions Claude asked for in that same answer are not carried out. Only the
+  tools that record work (finish_task, request_approval, log_work,
+  log_change, remember, save_lesson) still run.
+- When one run's budget or its 90 minutes are used up, the agent gets one
+  closing call to say what it did and what is live, instead of stopping
+  without a word.
+- One run's budget counts tokens the way they are billed: a token read back
+  from the cache counts as a tenth. The project's monthly and daily limits
+  still count every token. Once a conversation passes 60,000 input tokens
+  the API clears all but the six newest tool results (old page readings).
+- A tool call that was cut off by the output limit is not run.
+- Switching the agent off for the company or for a project stops its
+  running tasks at their next step. Pause only stops new tasks from
+  starting.
+- A run with no answer from Claude and no finished step for 17 minutes is
+  ended by the program itself, and the computer takes the next task. The
+  CRM releases a task whose device reports no progress for 20 minutes, and
+  ends any run after 3 hours.
+
+### An approved change is never made twice by itself
+
+If the computer goes silent (sleep, no network, a crash) while it is making
+an approved change, the task is not put back in the queue: part of the change
+may already be live. It stops with that explanation and a person decides.
+**Run again** tells the agent to look at what is already live first and to do
+only what is missing. Tasks that only read or propose are simply run again.
+
+When the CRM cannot be reached at the end of a task, the result is kept in
+`data/outbox/` and delivered at the next check-in, before any new task is
+taken. A result that arrives after the CRM released the task is still
+accepted from the same computer, as long as nobody started the task again.
+
 ## Updates
 
 - **Playbooks and settings** sync at start, once a day, when they change, and
@@ -363,6 +418,9 @@ exits. It needs `serpsquad-agent.jar` to be in the agent's own folder.
 
 A jar built by hand can still be published in the CRM under Devices &
 updates.
+
+Only one agent runs from a folder (`agent.lock`). Logs and screenshots older
+than 45 days, and a log that has grown past 20 MB, are removed at start.
 
 ## Files on the computer
 
