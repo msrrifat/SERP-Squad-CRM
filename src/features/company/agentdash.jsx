@@ -801,6 +801,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const channelCount = (ch.website.url ? 1 : 0) + ch.gbp.length + (ch.gsc.property || api.searchConsole ? 1 : 0) + (ch.ga4.property || api.analytics ? 1 : 0);
   const TABS = [["settings", "Settings", Settings2, `${channelCount} channel${channelCount === 1 ? "" : "s"} · ${profiles.length} Chrome ID${profiles.length === 1 ? "" : "s"}`], ["brand", "Brand voice", Mic, brandCaption(brandNow?.pid === project.id ? brandNow : project.brand)], ["onpage", "Onpage SEO", FileText, `${onCount("onpage")} of ${tasksOf("onpage").length} tasks on`],
     ["offpage", "Offpage SEO", MapPin, `${onCount("offpage")} of ${tasksOf("offpage").length} tasks on`], ["social", "Social Media", Share2, `${ch.social.length} profile${ch.social.length === 1 ? "" : "s"} · ${onCount("social")} of ${tasksOf("social").length} tasks on`],
+    ["visibility", "AI search", Sparkles, project.visibility ? `named in ${project.visibility.share}% of ${project.visibility.asked} answers` : "not checked yet"],
     ["photos", "Photos", ImageIcon, `${project.photos || 0} photo${project.photos === 1 ? "" : "s"} to publish`],
     ["experience", "Experience", GraduationCap, `${project.learning?.lessons || 0} lesson${project.learning?.lessons === 1 ? "" : "s"} · ${project.learning?.done || 0} task${project.learning?.done === 1 ? "" : "s"} done`],
     ["report", "Report", ClipboardList, `${project.workItems || 0} thing${project.workItems === 1 ? "" : "s"} done`]];
@@ -821,7 +822,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
     <div className="space-y-4">
       <div>
         <div className="mb-2 text-[13.5px] font-semibold text-gray-900">Work setup</div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
           {TABS.map(([k, label, Icon, sub]) => (
             <button key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k} className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors"
               style={tab === k ? { background: accent, borderColor: accent, color: "#fff" } : { background: "#fff", borderColor: "#E5E7EB", color: "#111827" }}>
@@ -993,6 +994,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       )}
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
+      {tab === "visibility" && <AiVisibility key={project.id} project={project} accent={accent} reload={reload} onOpenTask={onOpenTask} />}
       {tab === "photos" && <Photos key={project.id} project={project} accent={accent} reload={reload} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
       {tab === "report" && <WorkReport key={project.id} project={project} accent={accent} onOpenTask={onOpenTask} />}
@@ -1190,6 +1192,30 @@ function WorkReport({ project, accent, onOpenTask }) {
     L.push("SOCIAL MEDIA", ""); add("Posts", posts, (it) => `${base(it)}${it.url ? " " + it.url : ""}`); add("Other social media work", socRest, base);
     return L.join("\n");
   };
+  /* the same report as a file for a spreadsheet, and as a clean page to print or to save as a PDF: what was done, when and where, with no names and no costs */
+  const fileName = (ext) => `work-report-${project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${dayInput(Date.now())}.${ext}`;
+  const save = (text, type, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); };
+  const csv = () => {
+    const cell = (v) => { const t = String(v == null ? "" : v).replace(/\r?\n/g, " "); return /[",;]/.test(t) || /^[=+\-@]/.test(t) ? '"' + (/^[=+\-@]/.test(t) ? "'" : "") + t.replace(/"/g, '""') + '"' : t; };      // a cell that starts like a formula is written as text
+    const rows = [["Date", "Area", "Kind", "What was done", "Detail", "Address", "Points to"], ...[...items].sort((a, b) => a.at - b.at).map((it) => [dayInput(it.at), WORK_SECTION_LABEL[it.section] || it.section, it.kind === "task" ? it.typeLabel || "Task" : WORK_KIND_LABEL[it.kind] || it.kind, it.title, it.detail || "", it.url || "", it.target || ""])];
+    save("\ufeff" + rows.map((r) => r.map(cell).join(",")).join("\r\n"), "text/csv;charset=utf-8", fileName("csv"));
+  };
+  const print = () => {
+    const e = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const out = [];
+    let part = [];
+    const block = (title, list, f) => { if (list.length) part.push(`<h3>${e(title)} <span>${list.length}</span></h3><ul>${list.map((it) => `<li>${f(it)}</li>`).join("")}</ul>`); };
+    const close = (title) => { if (part.length) out.push(`<h2>${e(title)}</h2>` + part.join("")); part = []; };      // a part of the work with nothing in this period is left out
+    const base = (it) => `<b>${e(dayText(it.at))}</b> ${e(it.title)}${it.detail ? `<div>${e(it.detail)}</div>` : ""}`, withUrl = (it) => base(it) + (it.url ? `<div class="u">${e(it.url)}</div>` : "");
+    for (const g of groups) block(g.key, g.list, base); block("Research findings", notes, withUrl); close("Research and planning");
+    for (const g of pages) block(g.key, g.list, base); block("Other on-page work", noPage, base); close("On-page SEO");
+    block("Links won and built", links, (it) => `<b>${e(dayText(it.at))}</b> ${e(WORK_KIND_LABEL[it.kind])}: ${e(it.title)}${it.url ? `<div class="u">${e(it.url)}</div>` : ""}${it.target ? `<div>Points to ${e(it.target)}</div>` : ""}`); block("Google Business Profile", gbp, base); block("Other off-page work and research", offRest, base); close("Off-page SEO");
+    block("Posts", posts, withUrl); block("Other social media work", socRest, base); close("Social media");
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Work report: ${e(project.name)}</title><style>body{font:13px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#111827;max-width:760px;margin:32px auto;padding:0 24px}h1{font-size:22px;margin:0}p.p{color:#6B7280;margin:4px 0 20px}h2{font-size:15px;margin:26px 0 6px;padding-bottom:5px;border-bottom:2px solid ${e(accent)};color:${e(accent)}}h3{font-size:12.5px;margin:14px 0 4px}h3 span{color:#9CA3AF;font-weight:400}ul{margin:0;padding-left:18px}li{margin:3px 0;break-inside:avoid}li div{color:#4B5563}li div.u{color:#1D4ED8;word-break:break-all;font-size:12px}@media print{body{margin:0 auto}}</style></head><body><h1>Work report: ${e(project.name)}</h1><p class="p">${e(period)} · ${items.length} thing${items.length === 1 ? "" : "s"} done</p>${out.join("")}<script>addEventListener("load",function(){setTimeout(function(){print()},250)})<\/script></body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.open(); w.document.write(html); w.document.close(); }
+    else save(html, "text/html;charset=utf-8", fileName("html"));      // a window that could not be opened: the same page as a file to open and print
+  };
   const copy = async () => { try { await navigator.clipboard.writeText(asText()); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { setMsg("The report could not be copied. Select the text on the page instead."); } };
   const tile = (label, value, hint) => <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5"><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">{label}</div><div className="text-[20px] font-semibold text-gray-900">{value}</div><div className="text-[11px] text-gray-500">{hint}</div></div>;
   const section = (key, Icon, count, children) => (
@@ -1207,7 +1233,7 @@ function WorkReport({ project, accent, onOpenTask }) {
             <div className="text-[13.5px] font-semibold text-gray-900">Work done for {project.name}</div>
             <div className="mt-0.5 text-[11.5px] leading-relaxed text-gray-500">Everything that was done for this project: each task the agent finished, each change that was logged, what the agent recorded while working, and work you add yourself. {rp.total.toLocaleString()} in all{rp.firstAt ? `, since ${dayText(rp.firstAt)}` : ""}.</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2"><Btn ghost onClick={copy} disabled={!items.length}><Copy size={13} /> {copied ? "Copied" : "Copy as text"}</Btn><Btn accent={accent} onClick={() => setAdding({ section: "offpage", kind: "link_built", title: "", detail: "", url: "", target: "", platform: "", date: dayInput(Date.now()) })}><Plus size={13} /> Add work done</Btn></div>
+          <div className="flex flex-wrap items-center gap-2"><Btn ghost onClick={copy} disabled={!items.length}><Copy size={13} /> {copied ? "Copied" : "Copy as text"}</Btn><Btn ghost onClick={csv} disabled={!items.length} title="A spreadsheet file with one line for each thing done in this period."><Download size={13} /> Spreadsheet (CSV)</Btn><Btn ghost onClick={print} disabled={!items.length} title="Opens the report as a clean page to print, or to save as a PDF from the print window."><FileText size={13} /> Print or save as PDF</Btn><Btn accent={accent} onClick={() => setAdding({ section: "offpage", kind: "link_built", title: "", detail: "", url: "", target: "", platform: "", date: dayInput(Date.now()) })}><Plus size={13} /> Add work done</Btn></div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-gray-200 p-0.5" role="group" aria-label="Period">
@@ -1986,6 +2012,121 @@ function KeyForm({ accent, state, label, onSave, onTest, onRemove, busy }) {
   );
 }
 /* ---------------- live SEO data: DataForSEO, reached through its MCP server ---------------- */
+/* ---------------- AI search visibility: the share of AI answers that name the business, over time ---------------- */
+function Bars({ items, accent, max = 100, unit = "%" }) {
+  if (!items.length) return null;
+  return (
+    <div className="flex h-24 items-end gap-1.5" role="img" aria-label={items.map((x) => `${x.label}: ${x.value}${unit}`).join(", ")}>
+      {items.map((x, i) => (
+        <div key={i} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1" title={x.title || `${x.label}: ${x.value}${unit}`}>
+          <span className="text-[10px] font-semibold text-gray-700">{x.value}{unit}</span>
+          <span className="w-full max-w-[34px] rounded-t" style={{ height: Math.max(3, Math.round((x.value / (max || 1)) * 64)) + "px", background: i === items.length - 1 ? accent : accent + "55" }} />
+          <span className="w-full truncate text-center text-[9.5px] text-gray-400">{x.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+function AiVisibility({ project, accent, reload, onOpenTask }) {
+  const [v, setV] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [text, setText] = useState("");
+  const [note, setNote] = useState("");
+  const run = useCallback(async (body) => {
+    setBusy(true); setErr("");
+    try { const o = await api("visibility", { projectId: project.id, ...body }); setV(o); return o; }
+    catch (e) { setErr(String(e.message || e)); return null; }
+    finally { setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run({ action: "get" }).then((o) => { if (o) setText(o.prompts.map((x) => x.text).join("\n")); }); }, [run]);
+  const day = (t) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const saved = (v?.prompts || []).map((x) => x.text).join("\n"), changed = text.trim() !== saved.trim();
+  const checkNow = async () => {
+    setBusy(true); setErr(""); setNote("");
+    try { const o = await api("task/create", { projectId: project.id, type: "ai_visibility", title: `AI search visibility check: ${project.name}` }); setNote(o ? "Queued. It starts when the agent's computer is free and this project's limits allow it; the numbers appear here when it has finished." : ""); if (reload) reload(); }
+    catch (e) { setErr(String(e.message || e)); } finally { setBusy(false); }
+  };
+  if (!v) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading…"}</Card>;
+  const L = v.latest, off = v.taskType?.mode === "off";
+  const trackerLast = v.tracker[v.tracker.length - 1];
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-[220px] flex-1">
+            <div className="text-[13.5px] font-semibold text-gray-900">AI search visibility</div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">How often this business is named when people ask AI assistants and Google's AI answers about its services. The agent asks the same questions at every check, so the share can be followed over time. Only answers the agent really read are counted; an engine it could not ask has no number.</div>
+          </div>
+          <Btn accent={accent} disabled={busy || off} title={off ? "AI search visibility is switched off for this project. Switch it on under Onpage SEO." : ""} onClick={checkNow}><RefreshCw size={13} /> Check now</Btn>
+        </div>
+        {off && <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">The task type <b>AI search visibility</b> is switched off for this project, so no check runs. Switch it on under Onpage SEO; set it to start by itself every 14 days to keep the trend going.</div>}
+        {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+        {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-gray-200 p-3">
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Named in AI answers (the agent's checks)</div>
+            {L ? (
+              <>
+                <div className="mt-1 flex items-baseline gap-2"><span className="text-[26px] font-semibold text-gray-900">{L.share}%</span><span className="text-[12px] text-gray-500">{L.named} of {L.asked} answers on {day(L.at)} · website linked in {L.linked}</span></div>
+                <div className="mt-3"><Bars accent={accent} items={v.runs.slice(-10).map((r) => ({ label: day(r.at), value: r.share, title: `${day(r.at)}: named in ${r.named} of ${r.asked} answers` }))} /></div>
+                <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(L.byEngine).map(([e, x]) => <Chip key={e} fg="#374151" bg="#F3F4F6">{e}: {x.named} of {x.asked}</Chip>)}</div>
+              </>
+            ) : <div className="mt-2 text-[12.5px] text-gray-500">No check yet. Press <b>Check now</b>, or switch the task type on to start by itself.</div>}
+          </div>
+          <div className="rounded-xl border border-gray-200 p-3">
+            <div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Cited in Google's AI Overview (the rank tracker)</div>
+            {v.demoData ? <div className="mt-2 text-[12.5px] text-gray-500">This project is on demo data, so the tracker's numbers are not shown here.</div>
+              : trackerLast ? (
+                <>
+                  <div className="mt-1 flex items-baseline gap-2"><span className="text-[26px] font-semibold text-gray-900">{trackerLast.cited}</span><span className="text-[12px] text-gray-500">of {trackerLast.scanned} tracked keywords scanned on {day(trackerLast.day)}</span></div>
+                  <div className="mt-3"><Bars accent={accent} unit="" max={Math.max(1, ...v.tracker.map((d) => d.cited))} items={v.tracker.map((d) => ({ label: day(d.day), value: d.cited, title: `${day(d.day)}: cited for ${d.cited} of ${d.scanned} keywords` }))} /></div>
+                  <div className="mt-2 text-[11px] text-gray-400">From the rank scans the CRM already runs: no tokens and no extra cost.</div>
+                </>
+              ) : <div className="mt-2 text-[12.5px] text-gray-500">No rank scan with AI Overview data yet.</div>}
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[13.5px] font-semibold text-gray-900">The questions asked at every check</div>
+        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">One per line, the way a customer would ask: "who is the best emergency plumber in Leeds", "how much does a boiler service cost in Leeds". Up to {v.maxPrompts}. Keep the list stable: changing it breaks the comparison with earlier checks. With an empty list the agent writes its own at the first check and keeps them.</div>
+        <textarea className={inputCls + " mt-2 h-36 text-[12.5px]"} aria-label="Questions for the AI search visibility check, one per line" value={text} onChange={(e) => setText(e.target.value)} placeholder={"who is the best emergency plumber in Leeds\nhow much does a boiler service cost in Leeds"} />
+        <div className="mt-2 flex items-center gap-2"><Btn accent={accent} disabled={busy || !changed} onClick={async () => { const o = await run({ action: "prompts", prompts: text.split("\n") }); if (o) setText(o.prompts.map((x) => x.text).join("\n")); }}><Check size={13} /> Save questions</Btn><span className="text-[11.5px] text-gray-500">{(v.prompts || []).length} saved{changed ? " · unsaved changes" : ""}</span></div>
+      </Card>
+
+      {L && (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[13.5px] font-semibold text-gray-900">The latest check, answer by answer</div>
+            {L.taskId && <Btn ghost onClick={() => onOpenTask(L.taskId)}>Open the task and its report</Btn>}
+          </div>
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-[12.5px]">
+              <thead><tr className="border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-400"><th className="py-1.5 pr-3 font-semibold">Question</th><th className="py-1.5 pr-3 font-semibold">Engine</th><th className="py-1.5 pr-3 font-semibold">This business</th><th className="py-1.5 font-semibold">Who else was named</th></tr></thead>
+              <tbody>
+                {L.results.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-100 align-top">
+                    <td className="py-1.5 pr-3 text-gray-800">{r.question}{r.note && <div className="text-[11.5px] text-gray-500">{r.note}</div>}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-gray-600">{r.engine}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3">{r.named ? <Chip fg="#15803D" bg="#DCFCE7">{r.linked ? "Named and linked" : "Named"}</Chip> : <Chip fg="#B91C1C" bg="#FEE2E2">Not named</Chip>}</td>
+                    <td className="py-1.5 text-gray-600">{(r.others || []).join(", ") || "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(L.others.length > 0 || L.sources.length > 0) && (
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              {L.others.length > 0 && <div><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Named most often instead</div><div className="mt-1.5 space-y-1">{L.others.map((x) => <div key={x.name} className="flex items-center gap-2 text-[12.5px] text-gray-700"><span className="h-1.5 rounded-full" style={{ width: Math.max(8, Math.round((x.n / L.asked) * 160)) + "px", background: accent + "88" }} /><span className="min-w-0 flex-1 truncate">{x.name}</span><span className="text-gray-400">{x.n} of {L.asked}</span></div>)}</div></div>}
+              {L.sources.length > 0 && <div><div className="text-[9.5px] font-semibold uppercase tracking-wider text-gray-400">Sites the answers cite</div><div className="mt-1.5 space-y-1">{L.sources.map((x) => <div key={x.host} className="flex items-center justify-between gap-2 text-[12.5px] text-gray-700"><span className="min-w-0 truncate">{x.host}</span><span className="text-gray-400">{x.n}</span></div>)}</div></div>}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
 /* ---------------- photos the agent may publish for a project ---------------- */
 /* a picture is made smaller in the browser before it is sent: the long side at most `max` pixels, as a JPEG */
 function shrinkImage(file, max, quality) {

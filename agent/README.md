@@ -201,6 +201,34 @@ Company-wide: on/off, pause, default model and effort, and one token limit for
 all projects together. Live SEO data has its own company switch and monthly
 spend limit under API setup.
 
+## AI search visibility as a number, and two more kinds of work
+
+- **AI search visibility** (Work setup, **AI search**). Two numbers, never
+  mixed. The first comes from the rank tracker for free: for how many
+  tracked keywords the business is cited in Google's AI Overview, per scan
+  day. The second comes from the agent's own checks: a fixed list of up to
+  20 questions per project, each asked of the AI engines the agent can
+  really ask, and logged with `log_ai_visibility` (named or not, website
+  linked or not, who else was named, which pages were cited). The list
+  stays the same so the share compares from check to check; with an empty
+  list the first check's questions become the list. An engine that was not
+  asked has no row: nothing is estimated. With live SEO data on, the agent
+  looks up DataForSEO's AI Overview and AI answer endpoints through the
+  docs tools; without it, it answers each question itself with web search
+  and logs that as the engine Claude.
+- **Whole-site technical audit** (`site_audit`). Goes through the site
+  (DataForSEO's crawl when live SEO data is on, otherwise up to 25 pages
+  from the sitemap and the ranking pages) and lists the technical problems
+  in priority order with the pages affected. Changes nothing.
+- **Structured data for a page** (`schema_markup`). Writes the JSON-LD a
+  page should carry from facts that are on the page or in the brand voice,
+  ready to paste, and lists what was left out for lack of a fact. Putting
+  it on the site is a separate, approved website change.
+
+The work report can now be downloaded as a spreadsheet (CSV) and opened as
+a clean page to print or to save as a PDF: what was done, when and where,
+with no names and no costs.
+
 ## Photos, seeing a page as a picture, and proof
 
 - **Photos.** Each project has its own photos (Work setup, **Photos**): real

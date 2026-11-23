@@ -564,6 +564,52 @@ final class Demo {
     { workHours.putArray("days").add(1).add(2).add(3).add(4).add(5); }
     private final java.util.Set<String> dismissed = new java.util.HashSet<>();
 
+    private final Map<String, List<String>> visPrompts = new HashMap<>();
+
+    /** Made-up AI search visibility for the first project: four checks, three engines, in the shape the CRM sends. */
+    private ObjectNode visibility(String pid, JsonNode body) {
+        boolean first = pid.equals(PROJECTS[0][0]);
+        List<String> qs = visPrompts.computeIfAbsent(pid, (k) -> first ? new ArrayList<>(List.of("who is the best emergency plumber in Leeds", "how much does a boiler service cost in Leeds", "which plumbers in Leeds are Gas Safe registered", "who fixes blocked drains in Leeds at night")) : new ArrayList<>());
+        if ("prompts".equals(body.path("action").asText(""))) { qs.clear(); for (JsonNode q : body.path("prompts")) { String t = q.asText("").trim(); if (t.length() >= 8 && qs.size() < 20) qs.add(t); } }
+        ObjectNode o = Json.obj();
+        o.put("ok", true).put("projectId", pid).put("maxPrompts", 20).put("demoData", false);
+        ArrayNode eng = o.putArray("engines");
+        for (String e : new String[] { "Google AI Overview", "Google AI Mode", "ChatGPT", "Gemini", "Perplexity", "Copilot", "Claude", "Other" }) eng.add(e);
+        ArrayNode ps = o.putArray("prompts");
+        for (int i = 0; i < qs.size(); i++) ps.addObject().put("id", "vp_demo" + i).put("text", qs.get(i));
+        o.putObject("taskType").put("mode", "limited").put("auto", true).put("everyDays", 14);
+        ArrayNode runs = o.putArray("runs"), tracker = o.putArray("tracker");
+        long now = System.currentTimeMillis();
+        if (!first || qs.isEmpty()) { o.putNull("latest"); return o; }
+        int[] share = { 25, 33, 50, 58 };
+        for (int i = 0; i < share.length; i++) runs.addObject().put("at", now - (2 + 14L * (share.length - 1 - i)) * DAY).put("asked", 12).put("named", Math.round(12 * share[i] / 100f)).put("linked", Math.round(12 * share[i] / 200f)).put("share", share[i]);
+        int[] cited = { 1, 1, 2, 2, 3, 3, 4 };
+        for (int i = 0; i < cited.length; i++) tracker.addObject().put("day", java.time.LocalDate.now().minusDays(7L * (cited.length - 1 - i)).toString()).put("scanned", 14).put("cited", cited[i]);
+        ObjectNode L = o.putObject("latest");
+        L.put("at", now - 2 * DAY).put("asked", 12).put("named", 7).put("linked", 4).put("share", 58).putNull("taskId");
+        ObjectNode by = L.putObject("byEngine");
+        by.putObject("ChatGPT").put("asked", 4).put("named", 3).put("linked", 2);
+        by.putObject("Google AI Overview").put("asked", 4).put("named", 2).put("linked", 2);
+        by.putObject("Perplexity").put("asked", 4).put("named", 2).put("linked", 0);
+        ArrayNode res = L.putArray("results");
+        String[] engines = { "ChatGPT", "Google AI Overview", "Perplexity" };
+        boolean[][] named = { { true, true, true }, { true, false, false }, { true, true, false }, { false, false, true } };
+        for (int q = 0; q < Math.min(4, qs.size()); q++) for (int e = 0; e < 3; e++) {
+            ObjectNode r = res.addObject();
+            r.put("question", qs.get(q)).put("engine", engines[e]).put("named", named[q][e]).put("linked", named[q][e] && e < 2).put("note", named[q][e] ? "" : "The answer lists larger firms and a directory.");
+            ArrayNode ot = r.putArray("others");
+            ot.add("Leeds Drain Co"); if (!named[q][e]) ot.add("Aire Valley Plumbing");
+        }
+        ArrayNode others = L.putArray("others");
+        others.addObject().put("name", "Leeds Drain Co").put("n", 12);
+        others.addObject().put("name", "Aire Valley Plumbing").put("n", 5);
+        ArrayNode src = L.putArray("sources");
+        src.addObject().put("host", "yell.com").put("n", 6);
+        src.addObject().put("host", "checkatrade.com").put("n", 5);
+        src.addObject().put("host", "northgateplumbing.example").put("n", 4);
+        return o;
+    }
+
     private final Map<String, List<ObjectNode>> photos = new HashMap<>();
     private int photoSeq = 0;
 
@@ -836,6 +882,7 @@ final class Demo {
             ((ObjectNode) p.path("usage")).putObject("seo").put("usd", spent).put("calls", calls);
             if (!setting.has("seoUsdPerMonth")) setting.put("seoUsdPerMonth", 5.0);
             p.put("photos", i < 0 ? 0 : photosOf((String) PROJECTS[i][0]).size());
+            if (i == 0) p.putObject("visibility").put("at", System.currentTimeMillis() - 2 * DAY).put("share", 58).put("asked", 12); else p.putNull("visibility");
             if (!setting.has("triggers")) setting.putObject("triggers").put("rankDrop", i == 0).put("rankDropBy", 5).put("siteDown", i >= 0 && i < 2);
             seoUsd += spent;
             seoCalls += calls;
@@ -1466,6 +1513,7 @@ final class Demo {
             case "brand": return brandEdit(pid, body);
             case "knowledge": return knowledgeEdit(body);
             case "roster": return rosterEdit(body);
+            case "visibility": return known(pid) ? new Reply(200, visibility(pid, body)) : bad(404, "Unknown project.");
             case "media": {
                 if (!known(pid)) return bad(404, "Unknown project.");
                 List<ObjectNode> list = photosOf(pid);

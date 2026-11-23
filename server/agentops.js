@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -319,7 +319,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -1745,6 +1745,66 @@ async function tickTriggers() {
 setInterval(tickTriggers, TRIGGER_TEST ? 3000 : 5 * 60e3).unref?.();
 setTimeout(tickTriggers, 30e3).unref?.();
 
+/* ---------- AI search visibility, kept as numbers ----------
+   Two sources, never mixed:
+   • the rank tracker: for every scan it already records whether the business
+     is cited in Google's AI Overview for a tracked keyword. That costs
+     nothing and is counted here per scan day;
+   • checks by the agent: a fixed list of questions per project (the way a
+     customer would ask), each asked of the AI engines the agent can really
+     query, logged with log_ai_visibility: was the business named, was its
+     site linked, who else was named, which sources were used. The list
+     stays the same from run to run, so the share is comparable over time.
+   Nothing is estimated: an engine that was not asked has no row. */
+const VIS_ENGINES = ["Google AI Overview", "Google AI Mode", "ChatGPT", "Gemini", "Perplexity", "Copilot", "Claude", "Other"];
+const VIS_PROMPTS = 20, VIS_RUNS = 60;
+const visOf = (pid) => { const v = (load("visibility")[pid] ||= { prompts: [], runs: [] }); v.prompts ||= []; v.runs ||= []; return v; };
+const visEngine = (e) => { const x = String(e || "").toLowerCase().replace(/[^a-z]/g, ""); return VIS_ENGINES.find((n) => n.toLowerCase().replace(/[^a-z]/g, "") === x) || (/overview/.test(x) ? "Google AI Overview" : /aimode/.test(x) ? "Google AI Mode" : /chatgpt|openai|gpt/.test(x) ? "ChatGPT" : /gemini|bard/.test(x) ? "Gemini" : /perplex/.test(x) ? "Perplexity" : /copilot|bing/.test(x) ? "Copilot" : /claude|anthropic/.test(x) ? "Claude" : "Other"); };
+function visRunSummary(run) {
+  const n = run.results.length, named = run.results.filter((r) => r.named).length, linked = run.results.filter((r) => r.linked).length;
+  const byEngine = {};
+  for (const r of run.results) { const e = (byEngine[r.engine] ||= { asked: 0, named: 0, linked: 0 }); e.asked += 1; if (r.named) e.named += 1; if (r.linked) e.linked += 1; }
+  return { at: run.at, taskId: run.taskId || null, by: run.by || "", asked: n, named, linked, share: n ? Math.round((named / n) * 100) : 0, byEngine };
+}
+function visibilityView(pid) {
+  const v = visOf(pid), p = projectOf(pid), last = v.runs[v.runs.length - 1] || null;
+  /* who is named most across the latest run: the business itself against the others */
+  const names = new Map();
+  if (last) for (const r of last.results) for (const o of r.others || []) names.set(o.toLowerCase(), { name: names.get(o.toLowerCase())?.name || o, n: (names.get(o.toLowerCase())?.n || 0) + 1 });
+  const sources = new Map();
+  if (last) for (const r of last.results) for (const s2 of r.sources || []) { try { const h = new URL(s2).hostname.replace(/^www\./, ""); sources.set(h, (sources.get(h) || 0) + 1); } catch { /* not an address */ } }
+  /* from the rank tracker: keywords cited in the AI Overview, per scan day (last 12 scan days) */
+  const days = new Map();
+  if (p && !p.demo) for (const t of trackingOf(pid)) { if (t.paused) continue; for (const s2 of scansOf(t) || []) { const k = new Date(s2.t).toISOString().slice(0, 10), d = days.get(k) || { day: k, scanned: 0, cited: 0 }; d.scanned += 1; if (s2.ai != null) d.cited += 1; days.set(k, d); } }
+  return {
+    ok: true, projectId: pid, engines: VIS_ENGINES, maxPrompts: VIS_PROMPTS, demoData: !!p?.demo,
+    prompts: v.prompts.map((x) => ({ id: x.id, text: x.text })),
+    runs: v.runs.slice(-24).map(visRunSummary),
+    latest: last ? { ...visRunSummary(last), results: last.results, others: [...names.values()].sort((a, b) => b.n - a.n).slice(0, 8), sources: [...sources.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([host, n]) => ({ host, n })) } : null,
+    tracker: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-12),
+    taskType: taskSetting(pid, "ai_visibility"),
+  };
+}
+function visibilityEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const v = visOf(p.id);
+  if (body.action === "prompts") {
+    const lines = (Array.isArray(body.prompts) ? body.prompts : String(body.prompts || "").split("\n")).map((x) => line(x, 180)).filter((x) => x.length >= 8);
+    if (lines.length > VIS_PROMPTS) return [400, { error: "bad_request", detail: `Keep the list to ${VIS_PROMPTS} questions: each one is asked of every engine at every check.` }];
+    const seen = new Set();
+    v.prompts = lines.filter((x) => !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase())).map((x) => v.prompts.find((y) => y.text.toLowerCase() === x.toLowerCase()) || { id: uid("vp_"), text: x, addedAt: now(), by: admin.name });
+    save("visibility");
+    logActivity("settings", `${admin.name} set ${v.prompts.length} question${v.prompts.length === 1 ? "" : "s"} for the AI search visibility checks of ${p.name}.`, { projectId: p.id });
+  } else if (body.action === "removeRun") {
+    const i = v.runs.findIndex((r) => r.at === +body.at);
+    if (i < 0) return [404, { error: "not_found", detail: "That check no longer exists." }];
+    v.runs.splice(i, 1);
+    save("visibility");
+  } else if (body.action && body.action !== "get") return [400, { error: "bad_request" }];
+  return [200, visibilityView(p.id)];
+}
+
 /* ---------- photos the agent may publish, and screenshots it keeps as proof ----------
    Photos: per project, uploaded in the dashboard (Work setup, Photos). The
    agent lists them with the photos tool and attaches one in the browser
@@ -2132,6 +2192,30 @@ const SERVER_TOOLS = [
     if (holder) { holder.lessonsSaved = (holder.lessonsSaved || 0) + (corrects ? 0 : 1); save("tasks"); }
     return { ok: true, id: l.id, saved: l.text };
   }),
+  tool("ai_visibility_setup", "Read what the AI search visibility check of this project asks: the fixed list of questions (ask exactly these, so the numbers compare from check to check), the engines a result can be logged for, and the last check's numbers. If the list is empty, write six to ten questions a customer would really ask (service plus place, 'who is the best…', 'how much does… cost in…', a comparison) and use them: the first check saves its questions as the list.", {}, [], (ctx) => {
+    if (ctx.task.projectId === AGENCY_PROJECT) return { error: "AI visibility belongs to a client project." };
+    const v = visOf(ctx.task.projectId), last = v.runs[v.runs.length - 1];
+    return { questions: v.prompts.map((x) => x.text), engines: VIS_ENGINES, lastCheck: last ? { date: new Date(last.at).toISOString().slice(0, 10), ...(({ asked, named, linked, share, byEngine }) => ({ asked, named, linked, sharePercent: share, byEngine }))(visRunSummary(last)) } : null,
+      howToLog: "Call log_ai_visibility once at the end with one result for every question and engine you really asked. Never log an engine you did not ask." };
+  }),
+  tool("log_ai_visibility", "Record this check's AI search visibility results, one per question and engine actually asked. They become the project's tracked numbers, so log only what you observed in an answer you read in this run: named = the business is named in the answer; linked = its website is linked or cited as a source; others = the other businesses the answer names; sources = the pages the answer cites. Call it once, at the end.", { results: { type: "array", description: "One entry per question and engine.", items: { type: "object", properties: { question: { type: "string" }, engine: { type: "string", description: "One of: " + VIS_ENGINES.join(", ") + "." }, named: { type: "boolean" }, linked: { type: "boolean" }, others: { type: "array", items: { type: "string" }, description: "Other businesses named in the answer." }, sources: { type: "array", items: { type: "string" }, description: "Addresses of the pages the answer cites." }, note: { type: "string", description: "How the business is described, in one sentence, or why it is absent." } }, required: ["question", "engine", "named"] } } }, ["results"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT || ctx.chat) return { error: "AI visibility results are logged from a task on a client project." };
+    const v = visOf(pid), list = (Array.isArray(a.results) ? a.results : []).slice(0, 200);
+    const results = list.map((r) => ({ question: line(r?.question, 180), engine: visEngine(r?.engine), named: r?.named === true, linked: r?.linked === true,
+      others: (Array.isArray(r?.others) ? r.others : []).slice(0, 12).map((x) => line(x, 80)).filter(Boolean), sources: (Array.isArray(r?.sources) ? r.sources : []).slice(0, 12).map((x) => httpUrl(x)).filter(Boolean), note: line(r?.note || "", 300) })).filter((r) => r.question.length >= 8);
+    if (!results.length) return { error: "No result had a question. Log one result per question and engine you asked." };
+    /* the first check fixes the list of questions, so every later check asks the same ones */
+    if (!v.prompts.length) { const seen = new Set(); for (const r of results) if (!seen.has(r.question.toLowerCase()) && seen.add(r.question.toLowerCase()) && v.prompts.length < VIS_PROMPTS) v.prompts.push({ id: uid("vp_"), text: r.question, addedAt: now(), by: "AI agent" }); }
+    const known = new Set(v.prompts.map((x) => x.text.toLowerCase())), off = results.filter((r) => !known.has(r.question.toLowerCase())).length;
+    const run = { at: now(), taskId: ctx.task.id, by: "AI agent", results };
+    const mine = v.runs.findIndex((r) => r.taskId === ctx.task.id);
+    if (mine >= 0) v.runs[mine] = run; else v.runs.push(run);      // logging twice in one task replaces, it does not double
+    if (v.runs.length > VIS_RUNS) v.runs.splice(0, v.runs.length - VIS_RUNS);
+    save("visibility");
+    const sum = visRunSummary(run);
+    return { ok: true, logged: results.length, namedIn: `${sum.named} of ${sum.asked}`, sharePercent: sum.share, ...(off ? { note: `${off} result${off === 1 ? " was" : "s were"} for a question that is not on the project's list. They are kept, but the list is what makes checks comparable.` } : {}) };
+  }),
   tool("photos", "List the photos the team uploaded for this project, which you may attach to a post or a profile (browser_upload takes a photo's id). Each has a name, the team's note on what it shows, and when it was last used. Choose one that fits what you are writing about and was not used recently. If the list is empty, publish without a photo and say so in the report.", {}, [], (ctx) => {
     if (ctx.task.projectId === AGENCY_PROJECT) return { photos: [] };
     return { photos: photosOf(ctx.task.projectId).map((x) => ({ id: x.id, name: x.name, whatItShows: x.note || "(no note)", added: new Date(x.addedAt).toISOString().slice(0, 10), timesUsed: (x.used || []).length, lastUsed: (x.used || []).length ? new Date(x.used[x.used.length - 1].at).toISOString().slice(0, 10) : "never" })) };
@@ -2199,7 +2283,7 @@ function overview(admin) {
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -2932,6 +3016,7 @@ export async function agentOpsPost(req, body) {
     case "seodata": return seoDataEdit(admin, body || {});
     case "alerts": return alertsEdit(admin, body || {});
     case "media": return mediaEdit(admin, body || {});
+    case "visibility": return visibilityEdit(admin, body || {});
     case "evidence": return evidenceGet(body || {});
     case "report": return reportGet(body || {});
     case "work": return workEdit(admin, body || {});

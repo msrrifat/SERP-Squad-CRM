@@ -47,6 +47,8 @@ export const CATALOG = [
   t("gsc_browser", "Google profile", "Search Console in the browser", "Inspects URLs and requests indexing in Search Console after approval.", ["google"], { mode: "off", max: 4, per: "month", auto: false, everyDays: 30 }, { write: true }),
 
   t("onpage_audit", "Work", "On-page audit of a page", "Checks one page's title, headings, content depth, internal links and structured data against what ranks.", ["web"], { mode: "limited", max: 4, per: "month", auto: false, everyDays: 30 }),
+  t("site_audit", "Work", "Whole-site technical audit", "Goes through the site's pages and lists the technical problems that cost rankings, the most serious first.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30, recAuto: true }, { maxRunTokens: 400000 }),
+  t("schema_markup", "Work", "Structured data for a page", "Writes the structured data (schema) a page should carry, ready to paste, from the facts on the page and in the brand voice.", ["web"], { mode: "limited", max: 4, per: "month", auto: false, everyDays: 30 }),
   t("meta_rewrite", "Work", "Titles and descriptions", "Proposes better titles and meta descriptions for pages with weak click-through.", [], { mode: "limited", max: 2, per: "month", auto: false, everyDays: 30 }, { maxRunTokens: 200000 }),
   t("internal_links", "Work", "Internal linking", "Finds pages that should link to each other and suggests the anchor text.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30 }),
   t("site_edit", "Work", "Apply changes on the website", "Makes an approved on-page change in the site's editor, in the browser.", ["browser"], { mode: "off", max: 4, per: "month", auto: false, everyDays: 30 }, { write: true }),
@@ -66,7 +68,7 @@ export const CATALOG = [
    may only show that channel's own sites. */
 const AREA = {
   morning_check: "general", rank_drop: "general", google_updates: "general", competitor_watch: "general", experiment_review: "general", report_draft: "general", monthly_plan: "general", custom: "general", experience_review: "general",
-  site_health: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
+  site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
   profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
   prospect_audit: "agency", knowledge_study: "agency",
@@ -79,7 +81,7 @@ const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_
    housekeeping are not in the report. */
 const REPORT = {
   morning_check: "research", rank_drop: "research", google_updates: "research", competitor_watch: "research", gsc_opportunities: "research", content_brief: "research", ai_visibility: "research", experiment_review: "research", report_draft: "research", monthly_plan: "research", custom: "research",
-  site_health: "onpage", onpage_audit: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_draft: "onpage", site_edit: "onpage", gsc_browser: "onpage",
+  site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_draft: "onpage", site_edit: "onpage", gsc_browser: "onpage",
   profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
 };
@@ -308,13 +310,42 @@ Report: a table of listing, status and the correction needed; then mentions wort
 
   ai_visibility: `# AI search visibility
 
-Goal: whether the business is cited when people ask AI-assisted search about its services.
+Goal: a number the agency can track. In how many AI answers to a fixed list of customer questions is this business named, and who is named instead.
 
-1. From rank_table read the AI Overview column: for which keywords was an overview captured, and is the client cited?
-2. For the five most valuable keywords, search them as a customer would phrase a question. Note which businesses and sources are named in AI answers or overviews when shown.
-3. Compare the client's pages with the cited sources: clear answers near the top, specific facts, structured service and location information, reviews, third-party mentions.
+1. Call ai_visibility_setup. It gives the project's fixed list of questions, the engines a result can be logged for, and the last check. Ask exactly those questions. If the list is empty, write six to ten questions a local customer would really ask about this business's services in its area, and use them: your first check saves them as the list.
+2. Ask each question of every engine you can really ask in this run:
+   - When your tools include seo_data_request: look up with seo_data_docs_search how DataForSEO returns Google's AI Overview for a query and place, and how its AI optimization API returns the answers of ChatGPT, Gemini, Perplexity and Claude to a prompt. Use the project's city and country. Keep to the fewest requests that answer each question once per engine.
+   - Without it: answer each question yourself with web_search, the way an assistant would for a customer, and log that as the engine Claude. For Google's AI Overview, use only what rank_table shows the tracker captured.
+3. For each answer you read, note: is the business named, is its website linked or cited, which other businesses are named, which pages are cited as sources.
+4. Call log_ai_visibility once with one result per question and engine. Log only answers you read in this run. An engine you could not ask has no result: never fill it in.
+5. Compare with the last check and with the pages that are cited: clear answers near the top, specific facts, structured service and place information, reviews, mentions on other sites.
 
-Report: where the client is cited, where competitors are cited instead, and the three changes most likely to earn citations. Say clearly which observations come from the tracker and which from a one-off search.`,
+Report: the share of answers that name the business now and at the last check, by engine; the questions where it is absent and who is named there; the three changes most likely to earn a mention. Say which engines were asked and which were not, and why.`,
+
+  site_audit: `# Whole-site technical audit
+
+Goal: the technical problems across the whole site that cost rankings or leads, the most serious first, each with the pages it affects.
+
+1. Read project_brief for the website and the work setup (protected pages, what may be changed).
+2. Find the pages:
+   - When your tools include seo_data_request: look up DataForSEO's on-page (site crawl) API with seo_data_docs_search and crawl the site with it, up to the page limit the tool allows. Read its summary and its lists of pages with problems.
+   - Without it: fetch /robots.txt and the sitemap, then fetch up to 25 pages: the home page, every page that ranks (rank_table's ranking addresses), and the main service and location pages.
+3. Check, across the pages you have: pages that fail to load or redirect in a chain; pages blocked from indexing that should rank (noindex, robots.txt, a canonical pointing elsewhere); duplicate or missing titles, descriptions and H1s; thin or duplicated pages; broken internal links and pages with no internal links to them; missing or wrong structured data on the home, service and location pages; images without alt text on key pages; http and https or www and non-www both answering; a sitemap that lists dead or redirected pages.
+4. Speed: you cannot measure it precisely from here. Report only what you can see (very large pages, uncompressed images named in the page) and say so.
+
+Report: a one-paragraph verdict, then the problems in priority order. For each: what is wrong, how many pages and which (list up to ten addresses), why it matters, and the fix. Add each as a finding. Say how many pages you looked at and how you found them. Suggest an onpage_audit or schema_markup task only for a page where one is clearly worth it. Change nothing.`,
+
+  schema_markup: `# Structured data for a page
+
+Goal: the structured data (schema.org, as JSON-LD) the page named in the task should carry, ready to paste, built only from facts that are true.
+
+1. Read project_brief and the brand voice: the business's exact name, address or service area, phone, opening hours, services, and its other profiles (Business Profile, social).
+2. Fetch the page. Record the structured data it has now, and what the page is: the home page, a service page, a location page, an article, a page of questions and answers.
+3. Choose the types that fit that page and nothing more: the local business type that matches the trade (with its name, address or service area, phone, hours, website, the same profiles as sameAs) on the home or location page; Service on a service page; FAQPage only where the questions and answers are really on the page; Article or BlogPosting on an article; BreadcrumbList where the site has breadcrumbs.
+4. Write the JSON-LD in full. Every value has to be on the page or in the business facts: no review ratings that are not shown on the page, no prices, hours or areas that are not stated. Where a required value is missing, leave it out and list it as a question for the team.
+5. Check it: valid JSON, the right property names for each type, absolute addresses, the same name, address and phone as everywhere else.
+
+Report: what the page has now, the JSON-LD to add in one code block, where it goes (in the page's head, or the CMS field for it), what was left out for lack of a fact, and how to test it (Google's Rich Results Test). Change nothing: putting it on the site is a site_edit task that a person approves.`,
 
   backlink_prospects: `# Backlink prospects and outreach drafts
 
