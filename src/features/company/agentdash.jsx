@@ -862,16 +862,29 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
             <div className="text-[13.5px] font-semibold text-gray-900">Working channels</div>
             <div className="mb-3 text-[11.5px] text-gray-500">Where the agent works for {project.name}, and which signed-in Chrome on its computer it uses for each. A Chrome ID is a separate Chrome profile you signed in to once; the agent never signs in itself and can only open that channel's own sites in it.</div>
             <div className="grid gap-3 lg:grid-cols-2">
+              <div className={ch.website.cms === "github" || project.repo ? "lg:col-span-2" : ""}>
               <Tile icon={Globe} accent={accent} title="Website" sub="The site the agent audits and writes for." right={<Ready ok={!!ch.website.url} />}>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <Labeled label="Website address"><input className={inputCls} placeholder="https://example.com" value={ch.website.url} onChange={(e) => setOne("website", { url: e.target.value })} /></Labeled>
-                  <Labeled label="Built with"><select className={inputCls} value={ch.website.cms} onChange={(e) => setOne("website", { cms: e.target.value })}>{[["", "Not sure"], ["wordpress", "WordPress"], ["webflow", "Webflow"], ["shopify", "Shopify"], ["wix", "Wix"], ["squarespace", "Squarespace"], ["custom", "Custom built"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Labeled>
-                  <Labeled label="Editor sign-in address (optional)"><input className={inputCls} placeholder="https://example.com/wp-admin" value={ch.website.adminUrl} onChange={(e) => setOne("website", { adminUrl: e.target.value })} /></Labeled>
-                  <Labeled label="Chrome ID signed in to the editor"><ChromeSelect profiles={profiles} value={ch.website.browser} onChange={(v) => setOne("website", { browser: v })} /></Labeled>
+                  <Labeled label="Built with"><select className={inputCls} value={ch.website.cms} onChange={(e) => setOne("website", { cms: e.target.value })}>{[["", "Not sure"], ["wordpress", "WordPress"], ["webflow", "Webflow"], ["shopify", "Shopify"], ["wix", "Wix"], ["squarespace", "Squarespace"], ["github", "GitHub repository (custom code)"], ["custom", "Custom built"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Labeled>
+                  {ch.website.cms !== "github" && <Labeled label="Editor sign-in address (optional)"><input className={inputCls} placeholder="https://example.com/wp-admin" value={ch.website.adminUrl} onChange={(e) => setOne("website", { adminUrl: e.target.value })} /></Labeled>}
+                  {ch.website.cms !== "github" && <Labeled label="Chrome ID signed in to the editor"><ChromeSelect profiles={profiles} value={ch.website.browser} onChange={(v) => setOne("website", { browser: v })} /></Labeled>}
                 </div>
-                <div className="mt-2"><Labeled label="Note for the agent (optional)"><input className={inputCls} placeholder="For example: blog posts live under /news/" value={ch.website.note} onChange={(e) => setOne("website", { note: e.target.value })} /></Labeled></div>
-                {checkLine("website", ch.website.browser)}
+                {ch.website.cms === "github" && <div className="mt-2 text-[11.5px] leading-5 text-gray-500">A site built from code has no editor to sign in to. The agent changes it through its repository, set up below{dirty ? <>. Press <b>Save changes</b> to keep "GitHub repository" as what the site is built with</> : ""}.</div>}
+                {(ch.website.cms === "github" || project.repo) && !agency && <RepoSetup key={"repo" + project.id} project={project} accent={accent} reload={reload} />}
+                <div className="mt-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2"><div className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">Notes for the agent about this website ({(ch.website.notes || []).length})</div><div className="text-[11px] text-gray-400">One fact per note. As many as you need.</div></div>
+                  {(ch.website.notes || []).map((n, i) => (
+                    <div key={i} className="mt-1.5 flex items-start gap-2">
+                      <textarea rows={1} className={inputCls + " min-h-[34px] resize-y leading-5"} aria-label={`Website note ${i + 1}`} maxLength={400} placeholder="For example: blog posts live under /news/" value={n} onChange={(e) => setOne("website", { notes: ch.website.notes.map((x, k) => (k === i ? e.target.value : x)) })} />
+                      <Btn ghost danger onClick={() => setOne("website", { notes: ch.website.notes.filter((_, k) => k !== i) })} title="Remove this note"><Trash2 size={13} /></Btn>
+                    </div>
+                  ))}
+                  <div className="mt-2"><Btn ghost disabled={(ch.website.notes || []).length >= 60} onClick={() => setOne("website", { notes: [...(ch.website.notes || []), ""] })}><Plus size={13} /> Add a note</Btn></div>
+                </div>
+                {ch.website.cms !== "github" && checkLine("website", ch.website.browser)}
               </Tile>
+              </div>
 
               <Tile icon={Store} accent={accent} title="Google Business Profiles" sub="The profiles, their rules and their tasks have a tab of their own." right={<Ready ok={gbpOk} yes={`${ch.gbp.length} ready`} no={ch.gbp.length ? "Needs a Chrome ID" : "Not set up"} />}>
                 <Btn ghost onClick={() => setTab("gbp")}><Store size={13} /> Open the Business Profile tab</Btn>
@@ -1052,7 +1065,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
       )}
 
       {tab === "brand" && <BrandVoice key={project.id} project={project} accent={accent} onSummary={(b) => setBrandNow({ pid: project.id, ...b })} />}
-      {tab === "resources" && <Resources key={project.id} project={project} accent={accent} reload={reload} />}
+      {tab === "resources" && <Resources key={project.id} project={project} accent={accent} reload={reload} onSettings={() => setTab("settings")} />}
       {tab === "visibility" && <AiVisibility key={project.id} project={project} accent={accent} reload={reload} onOpenTask={onOpenTask} />}
       {tab === "experience" && <ProjectStatus key={"st" + project.id} project={project} accent={accent} />}
       {tab === "experience" && <Experience key={project.id} project={project} data={data} accent={accent} />}
@@ -2139,12 +2152,112 @@ function DfsLogin({ data, accent, act, busy }) {
 }
 
 /* ---------------- what the agent knows about a project (it starts every task and chat from this) ---------------- */
-/* ---------- Resources: where the agent finds media for a project, and the website's code ---------- */
-function Resources({ project, accent, reload }) {
+/* ---------- a website built from code: its repository, and how the agent gets in ---------- */
+function RepoSetup({ project, accent, reload }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
+  const [repo, setRepo] = useState(null); const [copied, setCopied] = useState(false); const [waiting, setWaiting] = useState(0); const [token, setToken] = useState("");
+  const run = useCallback(async (path, body, quiet) => {
+    if (!quiet) { setBusy(true); setErr(""); }
+    try { const o = await api(path, { projectId: project.id, ...body }); setV(o); return o; } catch (e) { if (!quiet) setErr(String(e.message || e)); return null; } finally { if (!quiet) setBusy(false); }
+  }, [project.id]);
+  useEffect(() => { run("repo", { action: "get" }); }, [run]);
+  /* a key, a token or a test is handled by the agent's computer: look again until its answer is in */
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = setInterval(async () => { const o = await run("repo", { action: "get" }, true); if (Date.now() > waiting || (o && !o.repo?.asking)) { setWaiting(0); if (reload) reload(); } }, 3000);
+    return () => clearInterval(t);
+  }, [waiting, run, reload]);
+  useEffect(() => { if (v && repo === null) setRepo(v.repo ? { url: v.repo.url, branch: v.repo.branch, mode: v.repo.mode, method: v.repo.method || "key", deviceId: v.repo.deviceId } : { url: "", branch: "main", mode: "branch", method: "key", deviceId: v.devices.length === 1 ? v.devices[0].id : "" }); }, [v, repo]);
+  if (!v || !repo) return <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[12px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading the repository…"}</div>;
+  const r = v.repo, devices = v.devices;
+  const changed = !r || repo.url !== r.url || repo.branch !== r.branch || repo.mode !== r.mode || repo.deviceId !== r.deviceId || repo.method !== (r.method || "key");
+  const save = async () => { const o = await run("repo", { action: "save", ...repo }); if (o) { setRepo(null); setNote("Repository saved."); if (reload) reload(); } };
+  const ask = async (action, extra) => { const o = await run("repo", { action, ...extra }); if (o) setWaiting(Date.now() + 90000); return o; };
+  const sendToken = async () => { const o = await ask("token", { token: token.trim() }); if (o) { setToken(""); setNote(`Handed to ${o.repo.deviceName}. It keeps the token; the CRM does not.`); } };
+  const remove = async () => { if (!(await askConfirm({ title: "Remove the repository?", message: "The agent stops reading and changing this code. Also delete its key from the repository's deploy keys, or revoke its token in GitHub.", confirmLabel: "Remove", danger: true }))) return; const o = await run("repo", { action: "remove" }); if (o) { setRepo(null); if (reload) reload(); } };
+  const host = r ? (r.url.match(/@([^:]+):/)?.[1] || "") : "", byToken = r?.method === "token", ready = r && (byToken ? !!r.tokenAt : !!r.publicKey);
+  const mono = "mt-1 w-full rounded-lg border border-gray-200 px-2.5 py-1.5 font-mono text-[11.5px] leading-5 outline-none focus:border-gray-400";
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 bg-white p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[12.5px] font-semibold text-gray-900">The repository, and how the agent gets in</div>
+        {r ? <Chip fg={r.test?.ok ? "#15803D" : "#92400E"} bg={r.test?.ok ? "#DCFCE7" : "#FEF3C7"}>{r.test?.ok ? "Access works" : ready ? "Set up, not tested yet" : byToken ? "No token yet" : "No key yet"}</Chip> : <Chip>Not set up</Chip>}
+      </div>
+      <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">The agent reads the code for its audits and, in the task type <b>Change the website's code (repository)</b>, prepares exact file changes (a new post, a page edit, titles, structured data) for your approval and delivers them as a commit. It never runs the code and does not touch workflow, deployment, dependency or key files.</div>
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {note && <div className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800" role="status">{note}</div>}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <Labeled label="Repository address"><input className={inputCls} value={repo.url} maxLength={220} placeholder="https://github.com/owner/website" onChange={(e) => setRepo({ ...repo, url: e.target.value })} /></Labeled>
+        <Labeled label="Branch the website is built from"><input className={inputCls} value={repo.branch} maxLength={80} placeholder="main" onChange={(e) => setRepo({ ...repo, branch: e.target.value })} /></Labeled>
+        <Labeled label="How the agent gets in">
+          <select className={inputCls} value={repo.method} onChange={(e) => setRepo({ ...repo, method: e.target.value })}><option value="key">Access key made on the agent's computer</option><option value="token">Access token from GitHub (it can open pull requests)</option></select>
+        </Labeled>
+        <Labeled label="How an approved change is delivered">
+          <select className={inputCls} value={repo.mode} onChange={(e) => setRepo({ ...repo, mode: e.target.value })}><option value="branch">{repo.method === "token" ? "As a pull request for a person to review and merge (recommended)" : "To a branch of its own, for a person to review and merge (recommended)"}</option><option value="direct">Straight to the branch (the site rebuilds from it)</option></select>
+        </Labeled>
+        <Labeled label="Computer that works on the code">
+          <select className={inputCls} value={repo.deviceId} onChange={(e) => setRepo({ ...repo, deviceId: e.target.value })}><option value="">Choose…</option>{devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
+        </Labeled>
+        <div className="flex flex-wrap items-end gap-2"><Btn accent={accent} disabled={busy || !changed || !repo.url.trim() || !repo.deviceId} onClick={save}>{r ? "Save changes" : "Save repository"}</Btn>{r && <Btn ghost danger disabled={busy} onClick={remove}>Remove</Btn>}</div>
+      </div>
+      <div className="mt-2 text-[11.5px] leading-5 text-gray-500">{repo.method === "token" ? <><b>Access token:</b> you create a token in GitHub that is limited to this one repository and paste it once. Easiest to set up, works on networks that block the key method, and the agent opens the pull request itself. GitHub only.</> : <><b>Access key:</b> the agent's computer makes a key pair and you add its public half to the repository. Nothing secret is typed anywhere and the key opens this one repository only. The agent delivers a branch and gives you the link to review it. Works with GitHub, GitLab and Bitbucket.</>}</div>
+      {r && (
+        <div className="mt-3 space-y-3 border-t border-gray-100 pt-3">
+          {byToken ? (
+            <div>
+              <div className="text-[12.5px] font-semibold text-gray-900">1. The access token</div>
+              <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-[12px] leading-5 text-gray-600">
+                <li>In GitHub open your profile picture, Settings, Developer settings, Personal access tokens, <b>Fine-grained tokens</b>, Generate new token.</li>
+                <li>Repository access: <b>Only select repositories</b>, and choose this repository.</li>
+                <li>Permissions, Repository permissions: <b>Contents: Read and write</b> and <b>Pull requests: Read and write</b>. Nothing else.</li>
+                <li>Generate the token, copy it (it starts with <span className="font-mono">github_pat_</span>) and paste it here.</li>
+              </ol>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input className={inputCls + " max-w-[360px] font-mono text-[12px]"} type="password" autoComplete="off" spellCheck={false} aria-label="GitHub access token" placeholder="github_pat_…" value={token} onChange={(e) => setToken(e.target.value)} />
+                <Btn accent={accent} disabled={busy || !!waiting || !!r.asking || token.trim().length < 30} onClick={sendToken}><KeyRound size={13} /> Hand it to {r.deviceName}</Btn>
+                {r.tokenAt && <Btn ghost danger disabled={busy || !!waiting} onClick={() => ask("token-remove")}>Remove the token</Btn>}
+              </div>
+              <div className="mt-1 text-[11.5px] leading-5 text-gray-500">{r.asking === "token" ? `Waiting for ${r.deviceName} to take it (within a minute when it is online and not in the middle of a task)…` : r.tokenAt ? <span style={{ color: "#15803D" }}><Check size={12} className="mr-1 inline" />{r.deviceName} holds the token since {relTime(r.tokenAt)}.</span> : "No token on that computer yet."} The token is kept encrypted on that computer only. The CRM passes it on once and does not store it, it is not shown again, and it is never given to Claude.</div>
+            </div>
+          ) : (
+            <div>
+              <div className="text-[12.5px] font-semibold text-gray-900">1. The access key</div>
+              <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">{r.deviceName} makes a key pair for this project. The private half never leaves that computer: it is not sent to the CRM, shown anywhere or given to Claude. The public half appears here for you to add to the repository.</div>
+              {r.publicKey ? (
+                <>
+                  <textarea readOnly rows={2} className={mono} value={r.publicKey} aria-label="Public key" onFocus={(e) => e.target.select()} />
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost onClick={() => { navigator.clipboard?.writeText(r.publicKey); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy the public key</>}</Btn><span className="text-[11.5px] text-gray-500">Made {relTime(r.keyAt)}.</span></div>
+                  <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-[12px] leading-5 text-gray-600">
+                    {host === "github.com" ? <><li>On GitHub open the repository, then Settings, Deploy keys, Add deploy key.</li><li>Paste the public key, give it a title such as "SERP Squad agent", and tick <b>Allow write access</b>.</li></>
+                      : host === "gitlab.com" ? <><li>On GitLab open the project, then Settings, Repository, Deploy keys.</li><li>Paste the public key and tick <b>Grant write permissions to this key</b>.</li></>
+                      : <><li>On Bitbucket open the repository, then Repository settings, Access keys, Add key, and paste the public key.</li><li>Bitbucket access keys can only read. To let the agent deliver changes, add the key to a user account that may write to this repository instead.</li></>}
+                    <li>Come back here and press Test access.</li>
+                  </ol>
+                </>
+              ) : <div className="mt-2"><Btn accent={accent} disabled={busy || !!waiting || !!r.asking} onClick={() => ask("key")}><KeyRound size={13} /> Create the access key on {r.deviceName}</Btn>{r.asking === "key" && <span className="ml-2 text-[12px] text-gray-500">Asking {r.deviceName}…</span>}</div>}
+            </div>
+          )}
+          <div>
+            <div className="text-[12.5px] font-semibold text-gray-900">2. Test access</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost disabled={busy || !!waiting || !!r.asking || !ready} onClick={() => ask("test")}><RefreshCw size={13} /> Test access</Btn>
+              {r.asking === "test" ? <span className="text-[12px] text-gray-500">Asking {r.deviceName}… (the first test also downloads the code)</span>
+                : r.test ? <span className="text-[12px]" style={{ color: r.test.ok ? "#15803D" : "#B91C1C" }}>{relTime(r.test.at)}: {r.test.detail || (r.test.ok ? "It works." : "It does not work.")}</span> : <span className="text-[12px] text-gray-400">Not tested yet.</span>}</div>
+          </div>
+          <div>
+            <div className="text-[12.5px] font-semibold text-gray-900">3. Let the agent change the code</div>
+            <div className="mt-0.5 text-[12px] leading-5 text-gray-600">{v.taskType?.mode === "off" ? <>The task type <b>Change the website's code (repository)</b> is switched off for this project. Switch it on under Onpage SEO. Reading the code for audits works without it.</> : <>The task type <b>Change the website's code (repository)</b> is on. Give the agent a task of that type (Tasks, New task) or ask for it in the chat: it prepares the exact change, you approve it, and it delivers the commit {r.mode === "direct" ? "straight to " + r.branch : byToken ? "as a pull request" : "to a branch for review"}.</>}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Resources: where the agent finds media for a project ---------- */
+function Resources({ project, accent, reload, onSettings }) {
   const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
   const blank = { kind: "folder", location: "", deviceId: "", label: "", useFor: "", notFor: "" };
   const [form, setForm] = useState(blank); const [edit, setEdit] = useState(null); const [waiting, setWaiting] = useState(0);
-  const [repo, setRepo] = useState(null); const [copied, setCopied] = useState(false);
   const run = useCallback(async (path, body, quiet) => {
     if (!quiet) { setBusy(true); setErr(""); }
     try { const o = await api(path, { projectId: project.id, ...body }); setV(o); return o; } catch (e) { if (!quiet) setErr(String(e.message || e)); return null; } finally { if (!quiet) setBusy(false); }
@@ -2153,10 +2266,9 @@ function Resources({ project, accent, reload }) {
   /* a check, a new key or a test is done by the agent's computer: look again until its answer is in */
   useEffect(() => {
     if (!waiting) return undefined;
-    const t = setInterval(async () => { const o = await run("resources", { action: "get" }, true); if (Date.now() > waiting || (o && !o.repo?.asking && !o.sources.some((x) => x.ask))) setWaiting(0); }, 3000);
+    const t = setInterval(async () => { const o = await run("resources", { action: "get" }, true); if (Date.now() > waiting || (o && !o.sources.some((x) => x.ask))) setWaiting(0); }, 3000);
     return () => clearInterval(t);
   }, [waiting, run]);
-  useEffect(() => { if (v && repo === null) setRepo(v.repo ? { url: v.repo.url, branch: v.repo.branch, mode: v.repo.mode, deviceId: v.repo.deviceId, notes: v.repo.notes } : { url: "", branch: "main", mode: "branch", deviceId: v.devices.length === 1 ? v.devices[0].id : "", notes: "" }); }, [v, repo]);
   if (!v) return <Card className="p-4 text-[12.5px] text-gray-500">{err ? <span className="text-red-700">{err}</span> : "Loading the project's resources…"}</Card>;
   const devices = v.devices, oneDevice = devices.length === 1 ? devices[0].id : "";
   const f = { ...form, deviceId: form.deviceId || oneDevice };
@@ -2165,12 +2277,7 @@ function Resources({ project, accent, reload }) {
   const saveEdit = async () => { const o = await run("resources", { action: "update", id: edit.id, label: edit.label, useFor: edit.useFor, notFor: edit.notFor }); if (o) { setEdit(null); setNote("Saved."); } };
   const remove = async (x) => { if (!(await askConfirm({ title: "Remove this source?", message: `"${x.label}" is taken off the list. The files themselves are not touched.`, confirmLabel: "Remove", danger: true }))) return; const o = await run("resources", { action: "remove", id: x.id }); if (o && reload) reload(); };
   const check = async (x) => { const o = await run("resources", { action: "check", id: x.id }); if (o) setWaiting(Date.now() + 45000); };
-  const r = v.repo, changed = repo && (!r || repo.url !== r.url || repo.branch !== r.branch || repo.mode !== r.mode || repo.deviceId !== r.deviceId || (repo.notes || "") !== (r.notes || ""));
-  const saveRepo = async () => { const o = await run("repo", { action: "save", ...repo }); if (o) { setRepo(null); setNote("Repository saved."); if (reload) reload(); } };
-  const askRepo = async (action) => { const o = await run("repo", { action }); if (o) setWaiting(Date.now() + 90000); };
-  const removeRepo = async () => { if (!(await askConfirm({ title: "Remove the repository?", message: "The agent stops reading and changing this code. Also delete the key from the repository's deploy keys.", confirmLabel: "Remove", danger: true }))) return; const o = await run("repo", { action: "remove" }); if (o) { setRepo(null); if (reload) reload(); } };
   const area = "mt-1 w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12.5px] leading-5 outline-none focus:border-gray-400";
-  const host = r ? (r.url.match(/@([^:]+):/)?.[1] || "the repository's host") : "";
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -2244,55 +2351,13 @@ function Resources({ project, accent, reload }) {
       {(project.photos || 0) > 0 && <Photos key={"ph" + project.id} project={project} accent={accent} reload={reload} />}
 
       <Card className="p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div className="text-[13.5px] font-semibold text-gray-900">Website code (GitHub, GitLab or Bitbucket repository)</div>
-          {r ? <Chip fg={r.test?.ok ? "#15803D" : "#92400E"} bg={r.test?.ok ? "#DCFCE7" : "#FEF3C7"}>{r.test?.ok ? "Access works" : r.publicKey ? "Key made, not tested yet" : "No key yet"}</Chip> : <Chip>Not set up</Chip>}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-[220px] flex-1">
+            <div className="text-[13.5px] font-semibold text-gray-900">Website code (a repository)</div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">{v.repo ? <>Set up: <span className="font-mono">{v.repo.url}</span>, branch {v.repo.branch}. </> : "Not set up. "}A website that is built from code in a repository is set up under <b>Settings</b>, in the Website box: choose <b>GitHub repository</b> under "Built with".</div>
+          </div>
+          {onSettings && <Btn ghost onClick={onSettings}><Settings2 size={13} /> Open Settings</Btn>}
         </div>
-        <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">For a website that is built from code in a repository instead of a site editor. The agent reads the code for its audits and, in the task type <b>Change the website's code (repository)</b>, prepares exact file changes (a new post, a page edit, titles, structured data) for your approval and delivers them as a commit. It never runs the repository's code, and it does not touch workflow, deployment, dependency or key files.</div>
-        {repo && (
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <Labeled label="Repository address"><input className={inputCls} value={repo.url} maxLength={220} placeholder="git@github.com:owner/website.git" onChange={(e) => setRepo({ ...repo, url: e.target.value })} /></Labeled>
-            <Labeled label="Branch the website is built from"><input className={inputCls} value={repo.branch} maxLength={80} placeholder="main" onChange={(e) => setRepo({ ...repo, branch: e.target.value })} /></Labeled>
-            <Labeled label="How an approved change is delivered">
-              <select className={inputCls} value={repo.mode} onChange={(e) => setRepo({ ...repo, mode: e.target.value })}><option value="branch">To a branch of its own, for a person to review and merge (recommended)</option><option value="direct">Straight to the branch above (the site rebuilds from it)</option></select>
-            </Labeled>
-            <Labeled label="Computer that holds the access key">
-              <select className={inputCls} value={repo.deviceId} onChange={(e) => setRepo({ ...repo, deviceId: e.target.value })}><option value="">Choose…</option>{devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
-            </Labeled>
-            <div className="md:col-span-2"><Labeled label="Notes for the agent about this code (optional)"><textarea rows={3} className={area} value={repo.notes} maxLength={1200} placeholder="Blog posts are Markdown files in src/content/blog. Images go in public/images/blog. Never edit files under src/layouts." onChange={(e) => setRepo({ ...repo, notes: e.target.value })} /></Labeled></div>
-            <div className="flex flex-wrap gap-2 md:col-span-2"><Btn accent={accent} disabled={busy || !changed || !repo.url.trim() || !repo.deviceId} onClick={saveRepo}>{r ? "Save changes" : "Save repository"}</Btn>{r && <Btn ghost danger disabled={busy} onClick={removeRepo}>Remove</Btn>}</div>
-          </div>
-        )}
-        {r && (
-          <div className="mt-4 space-y-3 border-t border-gray-100 pt-3">
-            <div>
-              <div className="text-[12.5px] font-semibold text-gray-900">1. The access key</div>
-              <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">{r.deviceName} makes a key pair for this project. The private half never leaves that computer: it is not sent to the CRM, shown anywhere or given to Claude. The public half appears here for you to add to the repository.</div>
-              {r.publicKey ? (
-                <>
-                  <textarea readOnly rows={2} className={area + " mt-2 font-mono text-[11.5px]"} value={r.publicKey} aria-label="Public key" onFocus={(e) => e.target.select()} />
-                  <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost onClick={() => { navigator.clipboard?.writeText(r.publicKey); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy the public key</>}</Btn><span className="text-[11.5px] text-gray-500">Made {relTime(r.keyAt)}.</span></div>
-                  <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-[12px] leading-5 text-gray-600">
-                    {host === "github.com" ? <><li>On GitHub open the repository, then Settings, Deploy keys, Add deploy key.</li><li>Paste the public key, give it a title such as "SERP Squad agent", and tick <b>Allow write access</b>.</li></>
-                      : host === "gitlab.com" ? <><li>On GitLab open the project, then Settings, Repository, Deploy keys.</li><li>Paste the public key and tick <b>Grant write permissions to this key</b>.</li></>
-                      : <><li>On Bitbucket open the repository, then Repository settings, Access keys, Add key, and paste the public key.</li><li>Bitbucket access keys can only read. To let the agent deliver changes, add the key to a user account that may write to this repository instead.</li></>}
-                    <li>Come back here and press Test access.</li>
-                  </ol>
-                </>
-              ) : <div className="mt-2"><Btn accent={accent} disabled={busy || !!waiting || !!r.asking} onClick={() => askRepo("key")}><KeyRound size={13} /> Create the access key on {r.deviceName}</Btn></div>}
-            </div>
-            <div>
-              <div className="text-[12.5px] font-semibold text-gray-900">2. Test access</div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2"><Btn ghost disabled={busy || !!waiting || !!r.asking || !r.publicKey} onClick={() => askRepo("test")}><RefreshCw size={13} /> Test access</Btn>
-                {r.asking ? <span className="text-[12px] text-gray-500">Asking {r.deviceName}… (it answers at its next check-in; the first test also downloads the code)</span>
-                  : r.test ? <span className="text-[12px]" style={{ color: r.test.ok ? "#15803D" : "#B91C1C" }}>{relTime(r.test.at)}: {r.test.detail || (r.test.ok ? "It works." : "It does not work.")}</span> : <span className="text-[12px] text-gray-400">Not tested yet.</span>}</div>
-            </div>
-            <div>
-              <div className="text-[12.5px] font-semibold text-gray-900">3. Let the agent change the code</div>
-              <div className="mt-0.5 text-[12px] leading-5 text-gray-600">{v.taskType?.mode === "off" ? <>The task type <b>Change the website's code (repository)</b> is switched off for this project. Switch it on under Onpage SEO. Reading the code for audits works without it.</> : <>The task type <b>Change the website's code (repository)</b> is on. Give the agent a task of that type (Tasks, New task) or ask for it in the chat: it prepares the exact change, you approve it, and it delivers the commit {r.mode === "direct" ? "straight to " + r.branch : "to a branch for review"}.</>}</div>
-            </div>
-          </div>
-        )}
       </Card>
     </div>
   );

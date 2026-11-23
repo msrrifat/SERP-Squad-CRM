@@ -47,14 +47,16 @@ final class LocalTools {
     private final Map<String, String> driveNames = new HashMap<>();         // Drive id -> file name
     private final List<String> names = new ArrayList<>();
 
-    LocalTools(Config cfg, JsonNode task) {
+    LocalTools(Config cfg, JsonNode task) { this(cfg, task, null); }
+
+    LocalTools(Config cfg, JsonNode task, Vault vault) {
         this.cfg = cfg;
         this.task = task;
         String pid = task.path("projectId").asText("project").replaceAll("[^A-Za-z0-9_-]", "");
         Path root = cfg.home.resolve("work").resolve(pid.isEmpty() ? "project" : pid);
         this.files = root.resolve("files");
         this.driveCache = root.resolve("drive");
-        this.repo = task.path("repo").isObject() && Repo.validUrl(task.path("repo").path("url").asText("")) ? new Repo(cfg, pid) : null;
+        this.repo = task.path("repo").isObject() && Repo.validUrl(task.path("repo").path("url").asText("")) ? new Repo(cfg, pid).with(vault, task.path("repo").path("method").asText("key")) : null;
         this.vision = task.path("vision").asBoolean(false);
         try {
             Files.createDirectories(files);
@@ -436,7 +438,17 @@ final class LocalTools {
         long files = names.out.lines().count();
         if (direct) return "Delivered: commit " + commit + " on branch " + base + " (" + files + " file" + (files == 1 ? "" : "s") + "). The site changes when it is next built from that branch.";
         String compare = Repo.compareUrl(url, base, target);
-        return "Delivered for review: commit " + commit + " on the new branch " + target + " (" + files + " file" + (files == 1 ? "" : "s") + "). Nothing on " + base + " has changed. A person reviews and merges it" + (compare.isEmpty() ? "." : ": " + compare);
+        String delivered = "Delivered for review: commit " + commit + " on the new branch " + target + " (" + files + " file" + (files == 1 ? "" : "s") + "). Nothing on " + base + " has changed.";
+        if (r.byToken()) {
+            /* with an access token the pull request is opened here, so a person only has to review and merge */
+            try {
+                String pr = r.openPullRequest(url, base, target, msg, "Prepared by the SERP Squad agent (task " + task.path("id").asText("") + ") after approval in the CRM.\n\nReview the changes and merge when they are right.");
+                return delivered + " A pull request is open for a person to review and merge: " + pr;
+            } catch (Repo.RepoException e) {
+                return delivered + " The pull request could not be opened (" + e.getMessage() + "). A person opens it" + (compare.isEmpty() ? " in the repository." : " here: " + compare);
+            }
+        }
+        return delivered + " A person reviews and merges it" + (compare.isEmpty() ? "." : ": " + compare);
     }
 
     private static String pushWhy(Repo.Result r) {

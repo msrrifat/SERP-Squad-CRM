@@ -284,7 +284,8 @@ final class Demo {
         boolean set = i >= 0 && i < 6;
         String site = i >= 0 ? "https://" + SITES[i] : "";
         String google = i == 1 ? "CH-M4XD" : "CH-7K2Q";
-        c.putObject("website").put("url", i >= 0 ? site : "").put("cms", i < 0 ? "" : i % 3 == 0 ? "wordpress" : i % 3 == 1 ? "webflow" : "custom").put("adminUrl", i >= 0 && i % 3 == 0 ? site + "/wp-admin" : "").put("browser", i == 0 ? "CH-7K2Q" : "").put("note", i == 0 ? "Blog posts live under /advice/." : "");
+        c.putObject("website").put("url", i >= 0 ? site : "").put("cms", i < 0 ? "" : i % 3 == 0 ? "wordpress" : i % 3 == 1 ? "webflow" : "custom").put("adminUrl", i >= 0 && i % 3 == 0 ? site + "/wp-admin" : "").put("browser", i == 0 ? "CH-7K2Q" : "").put("note", "");
+        { ArrayNode wn = ((ObjectNode) c.get("website")).putArray("notes"); if (i == 0) { wn.add("Blog posts live under /advice/."); wn.add("Never change the prices on the boiler pages: the client updates them."); wn.add("Service pages follow the layout of /services/boiler-repair/."); } }
         ArrayNode gbp = c.putArray("gbp");
         if (set) gbp.addObject().put("id", "gb" + i + "a").put("name", PROJECTS[i][1] + ", " + TOWNS[i]).put("link", "https://www.google.com/maps/place/" + SITES[i].replace(".example", "")).put("browser", i <= 2 ? google : "").put("note", "");
         if (i == 0) gbp.addObject().put("id", "gb0b").put("name", "Northgate Plumbing & Heating, Wakefield").put("link", "https://www.google.com/maps/place/northgateplumbing-wakefield").put("browser", "CH-7K2Q").put("note", "Second location, opened in 2025.");
@@ -690,11 +691,15 @@ final class Demo {
                 String url = body.path("url").asText("").trim();
                 if (!url.startsWith("git@") && !url.startsWith("https://")) return bad(400, "Give the repository's address, for example git@github.com:owner/website.git or https://github.com/owner/website. GitHub, GitLab and Bitbucket are supported.");
                 ObjectNode r = resRepo.computeIfAbsent(pid, (k) -> Json.obj());
-                r.put("url", url).put("branch", body.path("branch").asText("main")).put("mode", "direct".equals(body.path("mode").asText("")) ? "direct" : "branch").put("deviceId", "dev_demo").put("deviceName", "Office PC").put("notes", body.path("notes").asText("")).put("by", "Office PC (agent's computer)").put("at", now).put("asking", "");
+                r.put("url", url).put("branch", body.path("branch").asText("main")).put("mode", "direct".equals(body.path("mode").asText("")) ? "direct" : "branch").put("method", "token".equals(body.path("method").asText("")) ? "token" : "key").put("deviceId", "dev_demo").put("deviceName", "Office PC").put("notes", body.path("notes").asText("")).put("by", "Office PC (agent's computer)").put("at", now).put("asking", "");
                 if (!r.has("publicKey")) { r.put("publicKey", ""); r.putNull("keyAt"); r.putNull("test"); }
             } else if (a.equals("remove")) resRepo.remove(pid);
             else if (a.equals("key") && resRepo.containsKey(pid)) resRepo.get(pid).put("publicKey", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoKeyOnlyForTheDemoNotARealKey0000000000000 serpsquad-agent demo").put("keyAt", now);
-            else if (a.equals("test") && resRepo.containsKey(pid)) resRepo.get(pid).putObject("test").put("ok", true).put("detail", "Demo: reading works, and the key is allowed to write.").put("at", now);
+            else if (a.equals("token") && resRepo.containsKey(pid)) {
+                if (!body.path("token").asText("").startsWith("github_pat_") && !body.path("token").asText("").startsWith("ghp_")) return bad(400, "That is not a GitHub access token. Create a fine-grained token for this one repository (it starts with github_pat_) and paste the whole of it.");
+                resRepo.get(pid).put("method", "token").put("tokenAt", now);
+            } else if (a.equals("token-remove") && resRepo.containsKey(pid)) resRepo.get(pid).putNull("tokenAt");
+            else if (a.equals("test") && resRepo.containsKey(pid)) resRepo.get(pid).putObject("test").put("ok", true).put("detail", "Demo: reading works, and writing is allowed.").put("at", now);
         }
         ObjectNode o = Json.obj();
         o.put("ok", true).put("projectId", pid).put("max", 12);

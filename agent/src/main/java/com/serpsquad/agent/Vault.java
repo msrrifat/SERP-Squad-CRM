@@ -61,7 +61,7 @@ final class Vault {
 
     private byte[] key() throws Exception {
         if (Files.exists(keyFile)) { byte[] k = Base64.getDecoder().decode(Files.readString(keyFile, StandardCharsets.UTF_8).trim()); if (k.length == 32) return k; }
-        if (Files.exists(file) && load().size() > 0) throw new IllegalStateException("The key for the saved sign-ins is missing, so they cannot be read. Remove them and save them again.");
+        if (Files.exists(file) && (load().size() > 0 || root().path("secrets").size() > 0)) throw new IllegalStateException("The key for the saved sign-ins is missing, so they cannot be read. Remove them and save them again.");
         byte[] k = new byte[32];
         random.nextBytes(k);
         Files.writeString(keyFile, Base64.getEncoder().encodeToString(k), StandardCharsets.UTF_8);
@@ -99,8 +99,45 @@ final class Vault {
         }
     }
 
+    private ObjectNode root() {
+        try {
+            if (Files.exists(file)) { JsonNode j = Json.parse(Files.readString(file, StandardCharsets.UTF_8)); if (j != null && j.isObject()) return (ObjectNode) j; }
+        } catch (Exception ignored) { /* an unreadable file is started afresh */ }
+        return Json.obj();
+    }
+
+    /** Another secret this program keeps for itself (a repository's access token), sealed like the sign-ins. */
+    synchronized void putSecret(String name, String value) throws Exception {
+        ObjectNode o = root();
+        o.put("v", 1);
+        if (!o.path("items").isArray()) o.putArray("items");
+        ObjectNode s = o.path("secrets").isObject() ? (ObjectNode) o.get("secrets") : o.putObject("secrets");
+        s.put(name, seal(value));
+        write(o);
+        Redact.alsoHide(value);
+    }
+
+    /** That secret, or "" when there is none (or it cannot be read). */
+    synchronized String secret(String name) {
+        String sealed = root().path("secrets").path(name).asText("");
+        return sealed.isEmpty() ? "" : open(sealed);
+    }
+
+    synchronized void removeSecret(String name) throws Exception {
+        ObjectNode o = root();
+        if (o.path("secrets").isObject() && o.path("secrets").has(name)) { ((ObjectNode) o.get("secrets")).remove(name); write(o); }
+    }
+
+    private void write(ObjectNode o) throws Exception {
+        Files.createDirectories(file.getParent());
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(tmp, Json.str(o), StandardCharsets.UTF_8);
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+        Secure.ownerOnly(file, false);
+    }
+
     private void save(ArrayNode items) throws Exception {
-        ObjectNode o = Json.obj();
+        ObjectNode o = root();
         o.put("v", 1);
         o.set("items", items);
         Files.createDirectories(file.getParent());

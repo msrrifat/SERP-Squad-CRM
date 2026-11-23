@@ -68,6 +68,12 @@ Rules the server enforces:
   `gbpBlocked` and `gbpNeedsPerson` are what the server enforces itself. The older
   `rules.offpage.reviewReplies` and `postsPerWeek` are read once as the starting values.
 
+- Website channel: `cms` may be `github`, and `notes` is a list (up to 60, 400 characters each; an older single
+  `note` becomes its first entry). A repository may be reached with `method: "token"`: `repo` action `token`
+  takes a GitHub token, holds it in memory only (ten minutes at most) until the repository's own device takes
+  it at its next check-in, and never writes it to a file, a log or an answer to a browser; `token-remove` has
+  the device delete it.
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |

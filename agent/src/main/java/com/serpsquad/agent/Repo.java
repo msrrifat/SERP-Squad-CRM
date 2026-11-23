@@ -46,6 +46,37 @@ final class Repo {
 
     private final Path keys, dir;
     private final String projectId;
+    private Vault vault = null;
+    private String method = "key";      // "key": the key pair made here; "token": an access token for GitHub, kept sealed on this computer
+
+    /** How this repository is reached, and where a token is kept. */
+    Repo with(Vault vault, String method) {
+        this.vault = vault;
+        this.method = "token".equals(method) ? "token" : "key";
+        if (vault != null) Redact.alsoHide(vault.secret(tokenName()));      // wherever the token might turn up in text, it is hidden
+        return this;
+    }
+
+    private String tokenName() { return "repo-token:" + projectId; }
+
+    boolean hasToken() { return vault != null && !vault.secret(tokenName()).isEmpty(); }
+
+    /** Keep the access token for this project's repository, sealed, on this computer only. */
+    void saveToken(String token) throws RepoException {
+        if (vault == null || token == null || !token.matches("(github_pat_[A-Za-z0-9_]{30,255}|ghp_[A-Za-z0-9]{30,255})")) throw new RepoException("That is not a GitHub access token.");
+        try { vault.putSecret(tokenName(), token); } catch (Exception e) { throw new RepoException("The token could not be kept on this computer: " + e.getMessage()); }
+    }
+
+    void removeToken() {
+        try { if (vault != null) vault.removeSecret(tokenName()); } catch (Exception ignored) { /* nothing was kept */ }
+    }
+
+    /** The address Git talks to: with a token the repository is reached over https instead of with the key. */
+    String remote(String url) {
+        if (!"token".equals(method)) return url;
+        Matcher m = URL.matcher(url == null ? "" : url);
+        return m.matches() ? "https://" + m.group(1) + "/" + m.group(2) + "/" + m.group(3) + ".git" : url;
+    }
 
     Repo(Config cfg, String projectId) {
         this.projectId = projectId.replaceAll("[^A-Za-z0-9_-]", "");
@@ -99,6 +130,19 @@ final class Repo {
     }
 
     private Map<String, String> env() {
+        Map<String, String> e = new java.util.HashMap<>(sshEnv());
+        if ("token".equals(method) && hasToken()) {
+            /* the token goes to Git through its environment, never on a command line and never into the repository's settings */
+            String basic = java.util.Base64.getEncoder().encodeToString(("x-access-token:" + vault.secret(tokenName())).getBytes(StandardCharsets.UTF_8));
+            Redact.alsoHide(basic);
+            e.put("GIT_CONFIG_COUNT", "1");
+            e.put("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader");
+            e.put("GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic " + basic);
+        }
+        return e;
+    }
+
+    private Map<String, String> sshEnv() {
         String k = key().toString().replace('\\', '/'), known = keys.resolve("known_hosts").toString().replace('\\', '/');
         return Map.of("GIT_SSH_COMMAND", "ssh -i \"" + k + "\" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=\"" + known + "\" -o ConnectTimeout=20",
             "GIT_TERMINAL_PROMPT", "0", "GIT_CONFIG_NOSYSTEM", "1", "GIT_CONFIG_GLOBAL", keys.resolve("gitconfig-empty").toString(), "GIT_ASKPASS", "echo", "LC_ALL", "C");
@@ -117,6 +161,7 @@ final class Repo {
 
     private static String why(Result r) {
         String e = (r.err + "\n" + r.out).trim();
+        if (e.contains("Authentication failed") || e.contains("could not read Username") || e.contains("The requested URL returned error: 403") || e.contains("Invalid username or")) return "GitHub did not accept the access token for this repository. It has to be a token for this one repository with Contents: Read and write (and Pull requests: Read and write), and not expired.";
         if (e.contains("Permission denied (publickey)")) return "The repository refused this computer's key. Add the public key to the repository's deploy keys.";
         if (e.contains("marked as read only") || e.contains("deploy key is read-only") || e.contains("Write access to repository not granted")) return "The key may read the repository but not write to it. In the repository's deploy keys, allow write access for it.";
         if (e.contains("Repository not found") || e.contains("does not appear to be a git repository")) return "No repository was found at that address with this key. Check the address, and that the key was added to this repository.";
@@ -129,15 +174,16 @@ final class Repo {
     /** Can this computer read the repository, and does the branch exist? Also tries, without changing anything, whether it may write. */
     String test(String url, String branch) throws RepoException {
         if (!validUrl(url) || !validBranch(branch)) throw new RepoException("That is not a repository address and branch this program works with.");
-        if (!hasKey() && !TEST_LOCAL) throw new RepoException("This computer has no key for the repository yet. Create it first.");
-        Result r = run(keys, 60, "ls-remote", "--heads", url, branch);
+        if ("token".equals(method)) { if (!hasToken()) throw new RepoException("This computer has no access token for the repository yet. Enter it first."); }
+        else if (!hasKey() && !TEST_LOCAL) throw new RepoException("This computer has no key for the repository yet. Create it first.");
+        Result r = run(keys, 60, "ls-remote", "--heads", remote(url), branch);
         if (!r.ok()) throw new RepoException(why(r));
         if (r.out.isBlank()) throw new RepoException("The key works, but the repository has no branch \"" + branch + "\".");
         String write;
         try {
             sync(url, branch);
             Result p = run(dir, 60, "push", "--dry-run", "origin", "HEAD:refs/heads/agent/access-test");
-            write = p.ok() ? "Reading works, and the key is allowed to write." : "Reading works. Writing does not yet: " + why(p);
+            write = p.ok() ? "Reading works, and the " + ("token".equals(method) ? "token" : "key") + " is allowed to write." : "Reading works. Writing does not yet: " + why(p);
         } catch (RepoException e) {
             write = "Reading works. Whether it may write could not be tried: " + e.getMessage();
         }
@@ -151,12 +197,12 @@ final class Repo {
             boolean fresh = !Files.isDirectory(dir.resolve(".git"));
             if (!fresh) {
                 Result origin = run(dir, 20, "remote", "get-url", "origin");
-                if (!origin.ok() || !origin.out.trim().equals(url)) { SyncStore.deleteTree(dir); fresh = true; }
+                if (!origin.ok() || !origin.out.trim().equals(remote(url))) { SyncStore.deleteTree(dir); fresh = true; }
             }
             if (fresh) {
                 SyncStore.deleteTree(dir);
                 Files.createDirectories(dir.getParent());
-                Result c = run(dir.getParent(), 600, "clone", "--depth", "50", "--single-branch", "--no-tags", "--branch", branch, url, dir.getFileName().toString());
+                Result c = run(dir.getParent(), 600, "clone", "--depth", "50", "--single-branch", "--no-tags", "--branch", branch, remote(url), dir.getFileName().toString());
                 if (!c.ok()) { SyncStore.deleteTree(dir); throw new RepoException(why(c)); }
             } else {
                 Result f = run(dir, 300, "fetch", "--depth", "50", "--no-tags", "--prune", "origin", "+refs/heads/" + branch + ":refs/remotes/origin/" + branch);
@@ -176,6 +222,38 @@ final class Repo {
     }
 
     boolean ready() { return Files.isDirectory(dir.resolve(".git")); }
+
+    boolean byToken() { return "token".equals(method); }
+
+    private static final String API = System.getenv("SERPSQUAD_GITHUB_API") == null || System.getenv("SERPSQUAD_GITHUB_API").isBlank() ? "https://api.github.com" : System.getenv("SERPSQUAD_GITHUB_API");
+
+    /**
+     * Open a pull request on GitHub for a branch this program just delivered,
+     * with the project's access token. Returns the pull request's address.
+     */
+    String openPullRequest(String url, String base, String head, String title, String body) throws RepoException {
+        Matcher m = URL.matcher(url == null ? "" : url);
+        String repo = m.matches() && m.group(1).equals("github.com") ? m.group(2) + "/" + m.group(3) : TEST_LOCAL ? "test-owner/test-site" : "";
+        if (repo.isEmpty() || !hasToken()) throw new RepoException("A pull request can only be opened on GitHub, with an access token.");
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode b = Json.obj();
+            b.put("title", Json.clip(title, 200)).put("head", head).put("base", base).put("body", body);
+            java.net.http.HttpResponse<String> r = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(20)).build().send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI.create(API + "/repos/" + repo + "/pulls")).timeout(java.time.Duration.ofSeconds(40))
+                    .header("Authorization", "Bearer " + vault.secret(tokenName())).header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28").header("User-Agent", "SERPSquadAgent").header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(Json.str(b))).build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+            com.fasterxml.jackson.databind.JsonNode j = null;
+            try { j = Json.parse(r.body()); } catch (Exception ignored) { /* an answer that is not JSON is reported by its status */ }
+            if (r.statusCode() == 201 && j != null && j.path("html_url").asText("").startsWith("https://")) return j.path("html_url").asText();
+            String said = j == null ? "" : j.path("message").asText("") + (j.path("errors").size() > 0 ? " " + j.path("errors").get(0).path("message").asText("") : "");
+            if (r.statusCode() == 403 || r.statusCode() == 404) throw new RepoException("the token may not open pull requests on this repository (it needs Pull requests: Read and write)");
+            throw new RepoException("GitHub answered " + r.statusCode() + (said.isBlank() ? "" : ": " + Json.clip(Redact.text(said.trim()), 160)));
+        } catch (RepoException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RepoException("GitHub could not be reached");
+        }
+    }
 
     /** The repository's page for comparing a branch, where the host has one. */
     static String compareUrl(String url, String base, String branch) {

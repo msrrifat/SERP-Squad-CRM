@@ -549,7 +549,9 @@ const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
 function cleanChannels(c = {}) {
   const w = c.website || {}, g = c.gsc || {}, a = c.ga4 || {};
   return {
-    website: { url: line(w.url), cms: oneOf(w.cms, ["", "wordpress", "webflow", "shopify", "wix", "squarespace", "custom", "other"], ""), adminUrl: line(w.adminUrl), browser: chrome(w.browser), note: line(w.note) },
+    /* notes: as many as wanted, one fact each. A single note from before the list existed becomes its first entry. */
+    website: { url: line(w.url), cms: oneOf(w.cms, ["", "wordpress", "webflow", "shopify", "wix", "squarespace", "github", "custom", "other"], ""), adminUrl: line(w.adminUrl), browser: chrome(w.browser), note: "",
+      notes: (Array.isArray(w.notes) ? w.notes : [w.note]).map((x) => line(x, 400)).filter(Boolean).slice(0, 60) },
     gbp: (Array.isArray(c.gbp) ? c.gbp : []).slice(0, 25).map((x) => ({ id: /^[a-z0-9_]{3,24}$/.test(String(x?.id || "")) ? x.id : uid("gb_").slice(0, 11), name: line(x?.name, 120), link: line(x?.link), browser: chrome(x?.browser), note: line(x?.note) })).filter((x) => x.name || x.link),
     gsc: { property: line(g.property), browser: chrome(g.browser), note: line(g.note) },
     ga4: { property: line(a.property), browser: chrome(a.browser), note: line(a.note) },
@@ -654,7 +656,8 @@ const platformLabel = (k) => SOCIAL_PLATFORMS.find((p) => p.key === k)?.label ||
 /* what the agent is told about where and how to work, for one area of work */
 function setupLines(pid, area, profile = false) {
   const ch = channelsOf(pid), r = rulesOf(pid), out = [];
-  if (ch.website.url) out.push(`Website: ${ch.website.url}${ch.website.cms ? ` (${ch.website.cms})` : ""}${ch.website.note ? `. ${ch.website.note}` : ""}`);
+  if (ch.website.url) out.push(`Website: ${ch.website.url}${ch.website.cms === "github" ? " (built from code in a Git repository: pages and posts are changed through the task type \"Change the website's code\", not in a site editor)" : ch.website.cms ? ` (${ch.website.cms})` : ""}`);
+  for (const n of ch.website.notes) out.push(`Website note: ${n}`);
   if (area === "offpage" || area === "general") for (const g of ch.gbp) out.push(`Google Business Profile: ${g.name || g.link}${g.link && g.name ? ` (${g.link})` : ""}${g.note ? `. ${g.note}` : ""}`);
   if (area !== "social" && ch.gsc.property) out.push(`Search Console property: ${ch.gsc.property}`);
   if (area === "general" && ch.ga4.property) out.push(`Analytics property: ${ch.ga4.property}`);
@@ -1582,8 +1585,8 @@ function blockOf(t, device) {
   if (running.some((x) => x.projectId === t.projectId)) return "Another task is running on this project.";
   if ((cat.needs || []).includes("repo")) {
     const r = load("repos")[t.projectId];
-    if (!r?.url) return "No code repository is set up for this project. Add it under Work setup, Resources.";
-    if (!r.publicKey) return "The repository has no access key yet. Create it under Work setup, Resources, and add it to the repository.";
+    if (!r?.url) return "No code repository is set up for this project. Choose \"GitHub repository\" under Work setup, Settings, Website, and set it up there.";
+    if (r.method === "token" ? !r.tokenAt : !r.publicKey) return r.method === "token" ? "The repository has no access token yet. Enter it under Work setup, Settings, Website." : "The repository has no access key yet. Create it under Work setup, Settings, Website, and add it to the repository.";
     if (device && r.deviceId !== device.id) return "The repository's access key is on another computer.";
   }
   const br = browserFor(t.projectId, cat);
@@ -2701,7 +2704,7 @@ function overview(admin) {
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!dfsCreds(""), own: dfsOwn(), balance: dfsBalanceView(), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, resources: (load("resources")[p.id] || []).length, repo: load("repos")[p.id]?.url ? { ready: !!load("repos")[p.id].publicKey, ok: load("repos")[p.id].test?.ok === true } : null, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, resources: (load("resources")[p.id] || []).length, repo: load("repos")[p.id]?.url ? { ready: !!(load("repos")[p.id].method === "token" ? load("repos")[p.id].tokenAt : load("repos")[p.id].publicKey), ok: load("repos")[p.id].test?.ok === true } : null, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -3060,7 +3063,7 @@ function claimPayload(t, d) {
       knowledge: t.type === "knowledge_study" ? "" : [knowledgeBlock(cat.area === "agency" ? "general" : cat.area), statusBlock(t.projectId)].filter(Boolean).join("\n\n"),
       ...(br && !br.error ? { browser: br } : {}),
       resources: t.projectId === AGENCY_PROJECT ? [] : resourcesOf(t.projectId).filter((x) => x.kind === "drive" || !x.deviceId || x.deviceId === d.id).map((x) => ({ id: x.id, kind: x.kind, label: x.label, location: x.location, useFor: x.useFor, notFor: x.notFor })),
-      ...(repo?.url && repo.publicKey && repo.deviceId === d.id ? { repo: { url: repo.url, branch: repo.branch, mode: repo.mode, notes: repo.notes || "" } } : {}),
+      ...(repo?.url && (repo.method === "token" ? repo.tokenAt : repo.publicKey) && repo.deviceId === d.id ? { repo: { url: repo.url, branch: repo.branch, mode: repo.mode, method: repo.method || "key", notes: repo.notes || "" } } : {}),
       seoTools: seoToolsOf().filter((x) => hasChrome(d, x.profileId)).map((x) => ({ id: x.id, name: x.name, url: x.url, profileId: x.profileId, hosts: toolHosts(x.url), useFor: x.useFor })),
     };
   }
@@ -3122,7 +3125,7 @@ function resourcesView(pid) {
   return { ok: true, projectId: pid, max: RES_MAX,
     devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
     sources: resourcesOf(pid).map((x) => ({ ...x, deviceName: x.deviceId ? load("devices").find((d) => d.id === x.deviceId)?.name || "a removed computer" : "" })),
-    repo: repo ? { url: repo.url, branch: repo.branch, mode: repo.mode, deviceId: repo.deviceId, deviceName: load("devices").find((d) => d.id === repo.deviceId)?.name || "a removed computer", notes: repo.notes || "", publicKey: repo.publicKey || "", keyAt: repo.keyAt || null, test: repo.test || null, asking: repo.ask && now() - repo.ask.at < ASK_TTL ? repo.ask.kind : "", by: repo.by || "", at: repo.at || null } : null,
+    repo: repo ? { url: repo.url, branch: repo.branch, mode: repo.mode, deviceId: repo.deviceId, deviceName: load("devices").find((d) => d.id === repo.deviceId)?.name || "a removed computer", notes: repo.notes || "", method: repo.method || "key", tokenAt: repo.tokenAt || null, publicKey: repo.publicKey || "", keyAt: repo.keyAt || null, test: repo.test || null, asking: repo.ask && now() - repo.ask.at < ASK_TTL ? repo.ask.kind : "", by: repo.by || "", at: repo.at || null } : null,
     taskType: taskSetting(pid, "repo_edit") };
 }
 function resourcesEdit(admin, body) {
@@ -3178,6 +3181,15 @@ function resourcesEdit(admin, body) {
    code", prepares exact file changes for approval and delivers them: by
    default to a branch of its own for review, or straight to the working
    branch when that is chosen. It never runs the repository's code. */
+/* A second way in, for GitHub: a fine-grained access token limited to that one
+   repository. It is easier to set up than a key, works where a network blocks
+   SSH, and lets the agent open a pull request itself. The token is typed in
+   the CRM once and handed to the repository's own computer at its next
+   check-in, which keeps it encrypted; here it is held in memory only until
+   then (ten minutes at most), never written to a file, never logged and never
+   sent to a browser. */
+const REPO_TOKEN = /^(github_pat_[A-Za-z0-9_]{30,255}|ghp_[A-Za-z0-9]{30,255})$/;
+const repoTokens = new Map();       // projectId -> { token, at }: waiting for the device, in memory only
 const REPO_URL = /^git@(github\.com|gitlab\.com|bitbucket\.org):([A-Za-z0-9][A-Za-z0-9._-]{0,99})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?$/;
 const ASK_TTL = 10 * 60e3;
 function repoUrl(raw) {
@@ -3200,14 +3212,31 @@ function repoEdit(admin, body) {
     const deviceId = String(body.deviceId || "");
     if (!load("devices").some((d) => d.id === deviceId && !d.revoked)) return bad("Choose the computer that will hold the access key and work on the code.");
     const moved = cur && (cur.deviceId !== deviceId);
-    all[p.id] = { ...(cur && !moved ? cur : {}), url, branch, mode: body.mode === "direct" ? "direct" : "branch", deviceId, notes: para(body.notes, 1200), by: admin.name, at: now(), ...(cur && cur.url !== url ? { test: null } : {}) };
+    const method = body.method === "token" || (body.method == null && cur?.method === "token") ? "token" : "key";
+    if (method === "token" && !/^git@github\.com:/.test(url) && !url.startsWith("file:///")) return bad("An access token works with GitHub repositories. For GitLab or Bitbucket use the access key.");
+    all[p.id] = { ...(cur && !moved ? cur : {}), url, branch, mode: body.mode === "direct" ? "direct" : "branch", method, deviceId, notes: para(body.notes ?? cur?.notes ?? "", 1200), by: admin.name, at: now(), ...(cur && (cur.url !== url || (cur.method || "key") !== method) ? { test: null } : {}) };
+    if (moved) repoTokens.delete(p.id);
     save("repos");
     logActivity("settings", `${admin.name} set the code repository of ${p.name} to ${url} (branch ${branch}, ${all[p.id].mode === "direct" ? "changes go straight to that branch" : "changes go to a branch for review"}).`, { projectId: p.id });
   } else if (body.action === "remove") {
     if (cur) { delete all[p.id]; save("repos"); logActivity("settings", `${admin.name} removed the code repository of ${p.name}. The access key stays on the computer until it is deleted there; remove it from the repository's deploy keys as well.`, { projectId: p.id }); }
+  } else if (body.action === "token") {
+    if (!cur?.url) return bad("Save the repository first.");
+    const token = String(body.token || "").trim();
+    if (!REPO_TOKEN.test(token)) return bad("That is not a GitHub access token. Create a fine-grained token for this one repository (it starts with github_pat_) and paste the whole of it.");
+    repoTokens.set(p.id, { token, at: now() });
+    cur.method = "token"; cur.test = null; cur.ask = { id: uid("ak_"), kind: "token", at: now() }; save("repos");
+    logActivity("settings", `${admin.name} entered an access token for the code repository of ${p.name}. It is handed to the agent's computer and not kept in the CRM.`, { projectId: p.id });
+    pokeDevices((d) => d.id === cur.deviceId);
+  } else if (body.action === "token-remove") {
+    if (!cur?.url) return bad("Save the repository first.");
+    repoTokens.delete(p.id);
+    cur.tokenAt = null; cur.test = null; cur.ask = { id: uid("ak_"), kind: "tokenRemove", at: now() }; save("repos");
+    logActivity("settings", `${admin.name} removed the access token for the code repository of ${p.name}. Also revoke it in GitHub.`, { projectId: p.id });
+    pokeDevices((d) => d.id === cur.deviceId);
   } else if (body.action === "key" || body.action === "test") {
     if (!cur?.url) return bad("Save the repository first.");
-    if (body.action === "test" && !cur.publicKey) return bad("Create the access key first.");
+    if (body.action === "test" && !(cur.method === "token" ? cur.tokenAt : cur.publicKey)) return bad(cur.method === "token" ? "Enter the access token first." : "Create the access key first.");
     cur.ask = { id: uid("ak_"), kind: body.action, at: now() }; save("repos");
     pokeDevices((d) => d.id === cur.deviceId);
   } else if (body.action && body.action !== "get") return bad("Unknown action.");
@@ -3217,7 +3246,16 @@ function repoEdit(admin, body) {
 function pendingAsks(d) {
   if (String(d.state || "").startsWith("working")) return [];
   const out = [], repos = load("repos"), res = load("resources");
-  for (const [pid, r] of Object.entries(repos)) if (r.ask && r.deviceId === d.id && now() - r.ask.at < ASK_TTL) out.push({ id: r.ask.id, kind: r.ask.kind === "key" ? "repoKey" : "repoTest", projectId: pid, url: r.url, branch: r.branch });
+  for (const [pid, r] of Object.entries(repos)) {
+    if (!r.ask || r.deviceId !== d.id || now() - r.ask.at >= ASK_TTL) continue;
+    const base = { id: r.ask.id, projectId: pid, url: r.url, branch: r.branch, method: r.method || "key" };
+    if (r.ask.kind === "token") {
+      /* the token goes to the repository's own computer and to nobody else; if this server restarted in between, it has to be entered again */
+      const held = repoTokens.get(pid);
+      if (held && now() - held.at < ASK_TTL) out.push({ ...base, kind: "repoToken", token: held.token });
+      else { r.ask = null; r.test = { ok: false, detail: "The token was not handed over in time. Enter it again.", at: now() }; repoTokens.delete(pid); save("repos"); }
+    } else out.push({ ...base, kind: r.ask.kind === "key" ? "repoKey" : r.ask.kind === "tokenRemove" ? "repoTokenRemove" : "repoTest" });
+  }
   for (const [pid, list] of Object.entries(res)) for (const x of list) if (x.ask && now() - x.ask.at < ASK_TTL && (!x.deviceId || x.deviceId === d.id) && (!x.ask.sentTo || x.ask.sentTo === d.id)) { x.ask.sentTo = d.id; out.push({ id: x.ask.id, kind: "resource", projectId: pid, source: { id: x.id, kind: x.kind, location: x.location } }); }
   return out.slice(0, 6);
 }
@@ -3225,11 +3263,17 @@ const SSH_PUBLIC = /^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{60
 function agentAsked(d, body) {
   const pid = String(body?.projectId || ""), p = projectOf(pid);
   if (!p) return [200, { ok: true, ignored: true }];
-  if (body.kind === "repoKey" || body.kind === "repoTest") {
+  if (["repoKey", "repoTest", "repoToken", "repoTokenRemove"].includes(body.kind)) {
     const r = load("repos")[pid];
     if (!r?.ask || r.ask.id !== body.id || r.deviceId !== d.id) return [200, { ok: true, ignored: true }];
     const okNow = body.ok === true;
-    if (body.kind === "repoKey") {
+    if (body.kind === "repoToken") {
+      repoTokens.delete(pid);
+      if (okNow) { r.tokenAt = now(); r.test = null; } else { r.tokenAt = null; r.test = { ok: false, detail: clip(body.detail || "The token could not be kept on that computer.", 300), at: now() }; }
+      logActivity("settings", `${d.name} ${okNow ? "now holds the access token" : "could not keep the access token"} for the code repository of ${p.name}.`, { projectId: pid });
+    } else if (body.kind === "repoTokenRemove") {
+      r.tokenAt = null;
+    } else if (body.kind === "repoKey") {
       /* only the PUBLIC half of the key is ever accepted here, and only in the shape of one */
       const pub = String(body.publicKey || "").trim();
       if (okNow && SSH_PUBLIC.test(pub)) { r.publicKey = pub; r.keyAt = now(); r.test = null; }

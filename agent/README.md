@@ -808,10 +808,28 @@ are never copied to the CRM.
 
 ## A website's code repository
 
-For a site built from code in a GitHub, GitLab or Bitbucket repository. Set
-it up in the CRM under Work setup, Resources: the address, the branch the
-site is built from, and whether an approved change goes to a branch of its
-own for review (the default) or straight to that branch.
+For a site built from code in a GitHub, GitLab or Bitbucket repository. In
+the CRM, Work setup, Settings, choose **GitHub repository (custom code)**
+under "Built with" in the Website box; the repository is then set up right
+there: the address, the branch the site is built from, how the agent gets
+in, and whether an approved change goes up for review (the default) or
+straight to that branch. There are two ways in:
+
+- **Access key** (below): a key pair made on this computer. Nothing secret
+  is typed anywhere, it opens that one repository only, and it works with
+  GitHub, GitLab and Bitbucket. The agent delivers a branch and gives the
+  link to review it.
+- **Access token** (GitHub only): a fine-grained token limited to that one
+  repository, with *Contents: Read and write* and *Pull requests: Read and
+  write*. It is pasted once in the CRM, which hands it to this computer at
+  its next check-in and does not store it; here it is kept sealed in
+  `data/signins.json` like the saved sign-ins. Git is given the token through
+  its environment for that one call (never on a command line, never in the
+  repository's settings), and the repository is reached over https, which
+  also works where a network blocks SSH. After delivering the branch the
+  program opens the pull request itself through GitHub's API, so a person
+  only reviews and merges. If the pull request cannot be opened the branch
+  is still delivered and the report gives the link to open it by hand.
 
 - **The key.** This computer makes an ed25519 key pair for the project with
   `ssh-keygen` (`keys/repo-<project>`). Only the public half is sent to the

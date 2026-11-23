@@ -411,7 +411,14 @@ final class Worker {
                     Log.info("Made the access key for a project's code repository. Its public half was sent to the CRM; the private half stays on this computer.");
                 } else if ("repoTest".equals(kind)) {
                     state = "working: testing access to a code repository";
-                    body.put("detail", new Repo(cfg, pid).test(a.path("url").asText(""), a.path("branch").asText("main"))).put("ok", true);
+                    body.put("detail", new Repo(cfg, pid).with(vault, a.path("method").asText("key")).test(a.path("url").asText(""), a.path("branch").asText("main"))).put("ok", true);
+                } else if ("repoToken".equals(kind)) {
+                    new Repo(cfg, pid).with(vault, "token").saveToken(a.path("token").asText(""));        // sealed on this computer; never logged, never sent back
+                    body.put("ok", true);
+                    Log.info("An access token for a project's code repository was handed over by the CRM and is kept sealed on this computer.");
+                } else if ("repoTokenRemove".equals(kind)) {
+                    new Repo(cfg, pid).with(vault, "token").removeToken();
+                    body.put("ok", true);
                 } else if ("resource".equals(kind)) {
                     body.setAll(LocalTools.checkSource(a.path("source")));
                 } else continue;
@@ -471,7 +478,7 @@ final class Worker {
             b = browserFor(task);
             taskBrowser = b;
             tools = new ToolBox(task, crm, store, b, cfg.dataDir().resolve("screenshots"));
-            tools.local = new LocalTools(cfg, task);
+            tools.local = new LocalTools(cfg, task, vault);
             if (task.path("seoTools").size() > 0) tools.sites = toolSites(task);
             TaskRunner runner = new TaskRunner(claude(task.path("claudeApiKey").asText("")), crm, store, task, tools, watcher);
             runner.checkpoint = new Checkpoint(cfg.dataDir(), task.path("id").asText("task"));
