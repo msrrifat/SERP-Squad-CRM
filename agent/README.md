@@ -112,6 +112,16 @@ To see the application with a made-up agency, without connecting anything:
 java -jar serpsquad-agent.jar demo
 ```
 
+## API usage on the Overview
+
+The Overview shows what the agent used this month on every computer, by
+provider: Claude's tokens (today, the month against the company limit, input,
+output and cache, a bar per day, a line per model, the estimated cost) and
+DataForSEO's spend and paid requests, then the projects that cost most. The
+numbers come from the CRM (`usage` in the board the application reads): token
+counts are the ones Claude returns with each call, DataForSEO amounts the ones
+it states with each answer.
+
 ## Live chat
 
 Each project has its own conversation in the CRM (AI agent, Chat). The agent

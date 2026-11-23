@@ -555,6 +555,55 @@ final class Demo {
 
     // ---------- the read-only board (Overview's project list) ----------
 
+    /** API usage for the Overview, in the shape the CRM sends: the month's tokens spread over the days so far, by model, the made-up DataForSEO spend, and the projects that used most. */
+    private ObjectNode usageSummary(long monthTokens) {
+        ObjectNode us = Json.obj();
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        us.put("month", today.toString().substring(0, 7));
+        int dn = today.getDayOfMonth();
+        double[] w = new double[dn];
+        double before = 0;
+        for (int k = 0; k < dn; k++) {
+            int dow = today.withDayOfMonth(k + 1).getDayOfWeek().getValue();
+            w[k] = (dow >= 6 ? 0.22 : 1.0) * (0.7 + ((k * 7) % 5) * 0.15);
+            if (k < dn - 1) before += w[k];
+        }
+        long dayToday = 0;
+        for (Object[] p : PROJECTS) dayToday += (Long) p[6];
+        long rest = Math.max(0, monthTokens - dayToday);
+        double cost = Math.round(monthTokens * 5.4 / 10000.0) / 100.0;
+        int calls = (int) (monthTokens / 14000);
+        ObjectNode cl = us.putObject("claude");
+        cl.put("today", dayToday).put("month", monthTokens).put("limit", global.path("tokensPerMonth").asLong(0))
+                .put("input", monthTokens * 2 / 10).put("output", monthTokens / 10).put("cacheRead", monthTokens * 7 / 10 - monthTokens / 50).put("cacheWrite", monthTokens / 50)
+                .put("costUsd", cost).put("calls", calls);
+        ArrayNode days = cl.putArray("days");
+        for (int k = 0; k < dn; k++) days.add(k == dn - 1 ? dayToday : before <= 0 ? 0 : Math.round(rest * w[k] / before));
+        String[][] names = { { "claude-opus-5-5", "Claude Opus 5.5" }, { "claude-sonnet-5-5", "Claude Sonnet 5.5" }, { "claude-haiku-5-5", "Claude Haiku 5.5" } };
+        double[] share = { 0.78, 0.19, 0.03 }, costShare = { 0.905, 0.093, 0.002 };
+        ArrayNode ms = cl.putArray("models");
+        for (int k = 0; k < names.length; k++)
+            ms.addObject().put("id", names[k][0]).put("label", names[k][1]).put("total", Math.round(monthTokens * share[k])).put("calls", (int) Math.round(calls * share[k])).put("costUsd", Math.round(cost * costShare[k] * 100) / 100.0);
+        cl.putObject("lastMonth").put("tokens", Math.round(monthTokens * 1.3)).put("costUsd", Math.round(cost * 130) / 100.0);
+        double seoUsd = 0;
+        int seoCalls = 0;
+        List<ObjectNode> rows = new ArrayList<>();
+        for (Object[] p : PROJECTS) {
+            long month = (Long) p[4];
+            int c = (int) (month / 350_000L);
+            double spent = Math.round(c * 0.0135 * 10000.0) / 10000.0;
+            seoUsd += spent;
+            seoCalls += c;
+            if (month > 0) rows.add(Json.obj().put("id", (String) p[0]).put("name", (String) p[1]).put("tokens", month).put("costUsd", Math.round(month * 5.4 / 10000.0) / 100.0).put("seoUsd", spent).put("seoCalls", c));
+        }
+        rows.sort((x, y) -> Long.compare(y.path("tokens").asLong(), x.path("tokens").asLong()));
+        us.putObject("seo").put("enabled", global.path("seoData").asBoolean(false)).put("login", true).put("usd", Math.round(seoUsd * 10000.0) / 10000.0).put("calls", seoCalls)
+                .put("limit", global.path("seoUsdPerMonth").asDouble(25)).put("lastMonthUsd", Math.round(seoUsd * 1.4 * 10000.0) / 10000.0).putArray("days");
+        ArrayNode top = us.putArray("projects");
+        for (int k = 0; k < Math.min(6, rows.size()); k++) top.add(rows.get(k));
+        return us;
+    }
+
     synchronized ObjectNode board() {
         advance();
         long now = System.currentTimeMillis();
@@ -565,6 +614,7 @@ final class Demo {
         long monthTokens = 0;
         for (Object[] p : PROJECTS) monthTokens += (Long) p[4];
         b.putObject("company").put("enabled", global.path("enabled").asBoolean(true)).put("paused", paused()).put("model", global.path("model").asText()).put("monthTokens", monthTokens).put("monthCostUsd", Math.round(monthTokens * 5.4 / 10000.0) / 100.0).put("limit", global.path("tokensPerMonth").asLong(0));
+        b.set("usage", usageSummary(monthTokens));
         ArrayNode ps = b.putArray("projects");
         for (int i = 0; i < PROJECTS.length; i++) {
             Object[] p = PROJECTS[i];

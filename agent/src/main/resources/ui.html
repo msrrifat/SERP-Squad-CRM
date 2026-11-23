@@ -127,6 +127,22 @@
   .task small { display: block; color: var(--ink2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task small.held { color: var(--amber); }
   .task .r { font-size: 11.5px; color: var(--ink3); text-align: right; white-space: nowrap; }
+  /* ---- API usage on the Overview: what each provider reported this month ---- */
+  .prov { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+  .prov:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+  .provhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .provhead b { font-size: 13.5px; font-weight: 650; } .provhead span { font-size: 12px; color: var(--ink3); white-space: nowrap; }
+  .stats.s3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 620px) { .stats.s3 { grid-template-columns: 1fr 1fr; } }
+  .mix { display: flex; height: 9px; border-radius: 999px; overflow: hidden; background: var(--grey-bg); margin: 12px 0 7px; }
+  .mix i { display: block; height: 100%; min-width: 2px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 3px 16px; font-size: 11.5px; color: var(--ink2); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .legend b { font-weight: 600; color: var(--ink); }
+  .days { display: flex; align-items: flex-end; gap: 2px; height: 58px; margin-top: 14px; border-bottom: 1px solid var(--line); }
+  .days i { flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; background: #C7D2FE; } .days i.today { background: #4F46E5; } .days i.none { background: transparent; }
+  .daycap { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink3); margin-top: 3px; }
+  .subh { font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--ink3); margin: 14px 0 2px; }
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat { background: var(--grey-bg); border-radius: 12px; padding: 10px 12px; }
   .stat b { display: block; font-size: 20px; font-weight: 700; } .stat span { font-size: 11.5px; color: var(--ink2); }
@@ -223,6 +239,11 @@
             <div id="now"></div>
             <div class="btns"><button class="b" id="pauseBtn">Pause</button><button class="b" id="checkBtn">Check for work now</button><button class="b vhide" id="retryBtn">Try again now</button></div>
             <div class="msg" id="nowMsg"></div>
+          </section>
+          <section class="card vhide" id="usageCard">
+            <h2>API usage</h2>
+            <div class="hint">What the agent has used on every computer, as each provider reported it.</div>
+            <div id="usageBox"></div>
           </section>
           <section class="card">
             <h2>Recent tasks on this computer</h2>
@@ -580,9 +601,39 @@
     requestAnimationFrame(botArms);
   }
   if (!botCalm) requestAnimationFrame(botArms);
+  /* ---- API usage: Claude's token counts and DataForSEO's stated costs, for the month so far ---- */
+  const usd4 = (n) => "$" + (!n ? "0.00" : n >= 0.1 ? n.toFixed(2) : n.toFixed(4));
+  function renderUsage(b) {
+    const u = b && b.usage;
+    $("usageCard").classList.toggle("vhide", !u);
+    if (!u) return;
+    const c = u.claude, s = u.seo;
+    const when = new Date(u.month + "-15T00:00:00Z"), monthName = when.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" }), shortMonth = when.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" });
+    const parts = [["Input", c.input, "#4F46E5"], ["Output", c.output, "#0EA5E9"], ["Read from cache", c.cacheRead, "#A5B4FC"], ["Written to cache", c.cacheWrite, "#F59E0B"]];
+    const tot = parts.reduce((t, x) => t + x[1], 0), peak = Math.max(1, ...c.days), pct = c.limit ? Math.round((c.month / c.limit) * 100) : 0;
+    let h = '<div class="prov"><div class="provhead"><b>Claude (Anthropic)</b><span>' + esc(monthName) + "</span></div>"
+      + '<div class="stats s3" style="margin-top:8px"><div class="stat"><b>' + fmtTok(c.today) + '</b><span>tokens today</span></div><div class="stat"><b>' + fmtTok(c.month) + "</b><span>tokens this month" + (c.limit ? " (" + pct + "% of " + fmtTok(c.limit) + ")" : "") + '</span></div><div class="stat"><b>' + usd(c.costUsd) + "</b><span>estimated cost, " + c.calls + " call" + (c.calls === 1 ? "" : "s") + "</span></div></div>"
+      + bar(c.month, c.limit);
+    if (tot) h += '<div class="mix" role="img" aria-label="How this month\'s tokens divide">' + parts.filter((x) => x[1] > 0).map((x) => '<i style="width:' + ((x[1] / tot) * 100).toFixed(2) + "%;background:" + x[2] + '" title="' + x[0] + ": " + fmtTok(x[1]) + '"></i>').join("") + '</div><div class="legend">' + parts.map((x) => '<span><i style="background:' + x[2] + '"></i>' + x[0] + " <b>" + fmtTok(x[1]) + "</b></span>").join("") + "</div>";
+    if (c.month) h += '<div class="days" role="img" aria-label="Tokens per day this month">' + c.days.map((n, i) => '<i class="' + (i === c.days.length - 1 ? "today" : "") + (n ? "" : " none") + '" style="height:' + (n ? Math.max(4, Math.round((n / peak) * 100)) : 0) + '%" title="' + (i + 1) + " " + esc(shortMonth) + ": " + fmtTok(n) + ' tokens"></i>').join("") + '</div><div class="daycap"><span>1 ' + esc(shortMonth) + "</span><span>Tokens per day, highest " + fmtTok(peak) + "</span><span>Today</span></div>";
+    if (c.models.length) h += '<div class="subh">By model</div>' + c.models.map((m) => '<div class="row"><span>' + esc(m.label) + "</span><span>" + fmtTok(m.total) + " tokens · " + m.calls + " call" + (m.calls === 1 ? "" : "s") + " · " + usd(m.costUsd) + "</span></div>").join("");
+    if (c.lastMonth.tokens) h += '<div class="row"><span>Last month</span><span>' + fmtTok(c.lastMonth.tokens) + " tokens · " + usd(c.lastMonth.costUsd) + "</span></div>";
+    h += "</div>";
+    h += '<div class="prov"><div class="provhead"><b>DataForSEO (live SEO data)</b><span>' + (s.enabled ? "On" : "Switched off") + "</span></div>";
+    if (!s.enabled && !s.calls) h += '<div class="hint" style="margin:6px 0 0">Not in use. ' + (s.login ? "" : "No DataForSEO login is saved in the CRM yet. ") + "It is switched on " + (canManage() ? "under API keys." : "in the CRM under AI agent, API setup.") + "</div>";
+    else {
+      h += '<div class="stats" style="margin-top:8px"><div class="stat"><b>' + usd4(s.usd) + "</b><span>spent this month" + (s.limit ? " of " + usd(s.limit) : "") + '</span></div><div class="stat"><b>' + s.calls + "</b><span>paid request" + (s.calls === 1 ? "" : "s") + " this month</span></div></div>" + bar(s.usd, s.limit);
+      if (s.lastMonthUsd) h += '<div class="row"><span>Last month</span><span>' + usd4(s.lastMonthUsd) + "</span></div>";
+    }
+    h += "</div>";
+    if (u.projects.length) h += '<div class="prov"><div class="provhead"><b>By project this month</b><span>highest cost first</span></div>' + u.projects.map((x) => '<div class="row"><span>' + esc(x.name) + "</span><span>" + fmtTok(x.tokens) + " tokens · " + usd(x.costUsd) + (x.seoCalls ? " · DataForSEO " + usd4(x.seoUsd) : "") + "</span></div>").join("") + "</div>";
+    h += '<div class="hint" style="margin:12px 0 0">Token counts are the ones Claude returns with every call. The Claude cost is an estimate from list prices; the invoice is in the Claude Console. DataForSEO amounts are the ones it states with each answer.</div>';
+    $("usageBox").innerHTML = h;
+  }
   function renderBoard() {
     const b = board, now = last ? last.now : Date.now();
     renderBot();
+    renderUsage(b);
     const bad = b && b.ok === false ? (b.detail || "The project list could not be loaded.") : "";
     ["boardMsgP", "boardMsgT"].forEach((id) => { $(id).textContent = bad; $(id).classList.toggle("vhide", !bad || (last && !last.configured)); });
     if (!b || !b.projects) {
@@ -593,7 +644,7 @@
     const approvals = b.tasks.filter((t) => t.status === "needs_approval").length;
     if (!canManage()) { $("navApprove").textContent = approvals; $("navApprove").classList.toggle("vhide", !approvals); }
     $("monthBox").classList.remove("vhide");
-    $("monthBox").innerHTML = '<div class="row"><span>This month, all projects</span><span>' + fmtTok(b.company.monthTokens) + (b.company.limit ? " of " + fmtTok(b.company.limit) : "") + " tokens</span></div>" + bar(b.company.monthTokens, b.company.limit) + '<div class="row"><span>Estimated cost</span><span>' + usd(b.company.monthCostUsd) + '</span></div><div class="row"><span>Waiting for your approval</span><span>' + approvals + "</span></div>";
+    $("monthBox").innerHTML = b.usage ? '<div class="row"><span>Waiting for your approval</span><span>' + approvals + "</span></div>" : '<div class="row"><span>This month, all projects</span><span>' + fmtTok(b.company.monthTokens) + (b.company.limit ? " of " + fmtTok(b.company.limit) : "") + " tokens</span></div>" + bar(b.company.monthTokens, b.company.limit) + '<div class="row"><span>Estimated cost</span><span>' + usd(b.company.monthCostUsd) + '</span></div><div class="row"><span>Waiting for your approval</span><span>' + approvals + "</span></div>";
     const on = b.projects.filter((p) => p.enabled);
     $("projHint").textContent = on.length + " of " + b.projects.length + " projects have the agent switched on.";
     const chips = (p) => (p.counts.running ? '<span class="chip running">Working now</span>' : "") + (p.counts.needsApproval ? '<span class="chip warn">' + p.counts.needsApproval + " to approve</span>" : "") + (p.counts.waiting ? '<span class="chip queued">' + p.counts.waiting + " waiting</span>" : "");

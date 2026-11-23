@@ -1096,6 +1096,7 @@ const usd4 = (n) => Math.round(n * 10000) / 10000;
 function seoRecord(pid, usd, guessed) {
   const all = load("usage"), m = (all[monthKey()] ||= {}), u = (m[pid] ||= { total: 0, days: {}, types: {}, costUsd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), s = (u.seo ||= { usd: 0, calls: 0, guessed: 0 });
   s.usd = usd4(s.usd + usd); s.calls += 1; if (guessed) s.guessed += 1;
+  (s.days ||= {})[dayKey()] = usd4((s.days[dayKey()] || 0) + usd);
   save("usage");
 }
 /* why a paid request cannot be made right now (null = it can) */
@@ -1251,6 +1252,33 @@ const dayKey = (t = now()) => new Date(t).toISOString().slice(8, 10);
 function usageOf(pid, t = now()) {
   const u = load("usage")[monthKey(t)]?.[pid];
   return { month: u?.total || 0, day: u?.days?.[dayKey(t)] || 0, costUsd: u?.costUsd || 0, input: u?.input || 0, output: u?.output || 0, cacheRead: u?.cacheRead || 0, cacheWrite: u?.cacheWrite || 0, types: u?.types || {}, seo: { usd: u?.seo?.usd || 0, calls: u?.seo?.calls || 0 } };
+}
+/* what the agent used this month, by API provider, for the Overview: Claude's own
+   token counts (returned with every call) and DataForSEO's stated costs */
+function usageSummary() {
+  const cfg = load("config"), all = load("usage"), rows = all[monthKey()] || {};
+  const d = new Date(), prev = all[monthKey(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 15))] || {};
+  const sum = (obj, f) => Object.values(obj).reduce((t, u) => t + (f(u) || 0), 0);
+  const today = +dayKey(), key = (i) => String(i + 1).padStart(2, "0");
+  const days = Array.from({ length: today }, (_, i) => sum(rows, (u) => u.days?.[key(i)]));
+  const seoDays = Array.from({ length: today }, (_, i) => usd4(sum(rows, (u) => u.seo?.days?.[key(i)])));
+  const models = {};
+  for (const u of Object.values(rows)) for (const [id, m] of Object.entries(u.models || {})) { const x = (models[id] ||= { total: 0, calls: 0, costUsd: 0 }); x.total += m.total || 0; x.calls += m.calls || 0; x.costUsd += m.costUsd || 0; }
+  const nameOf = (pid) => (pid === AGENCY_PROJECT ? "Agency (no project)" : projectOf(pid)?.name || "A project no longer on the list");
+  const g = seoGlobal();
+  return {
+    month: monthKey(),
+    claude: {
+      today: days[today - 1] || 0, month: sum(rows, (u) => u.total), limit: cfg.global.tokensPerMonth || 0,
+      input: sum(rows, (u) => u.input), output: sum(rows, (u) => u.output), cacheRead: sum(rows, (u) => u.cacheRead), cacheWrite: sum(rows, (u) => u.cacheWrite),
+      costUsd: +sum(rows, (u) => u.costUsd).toFixed(2), calls: sum(rows, (u) => sum(u.types || {}, (t) => t.calls)), days,
+      models: Object.entries(models).map(([id, m]) => ({ id, label: MODELS.find((x) => x.id === id)?.label || (id === "other" ? "Other model" : id), total: m.total, calls: m.calls, costUsd: +m.costUsd.toFixed(2) })).sort((a, b) => b.total - a.total).slice(0, 6),
+      lastMonth: { tokens: sum(prev, (u) => u.total), costUsd: +sum(prev, (u) => u.costUsd).toFixed(2) },
+    },
+    seo: { enabled: g.enabled, login: !!deps.dfsForProject(""), usd: usd4(seoCompanyUsd()), calls: seoCompanyCalls(), limit: g.usdPerMonth, days: seoDays, lastMonthUsd: usd4(sum(prev, (u) => u.seo?.usd)) },
+    projects: Object.entries(rows).map(([pid, u]) => ({ id: pid, name: nameOf(pid), tokens: u.total || 0, costUsd: +(u.costUsd || 0).toFixed(2), seoUsd: usd4(u.seo?.usd || 0), seoCalls: u.seo?.calls || 0 }))
+      .filter((x) => x.tokens > 0 || x.seoCalls > 0).sort((a, b) => b.costUsd + b.seoUsd - (a.costUsd + a.seoUsd) || b.tokens - a.tokens).slice(0, 6),
+  };
 }
 const companyMonthTokens = () => Object.values(load("usage")[monthKey()] || {}).reduce((s, u) => s + (u.total || 0), 0);
 function costOf(model, u) {
@@ -1698,6 +1726,7 @@ function overview(admin) {
     global: cfg.global, playbooksRev: cfg.playbooksRev, companyMonthTokens: companyMonthTokens(),
     credentials: { claude: maskKey(secrets().claude), ...secretsStorage() },
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
+    usageSummary: usageSummary(),
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!deps.dfsForProject(""), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
@@ -2001,6 +2030,8 @@ function recordUsage(pid, type, body) {
   row.total += total; row.costUsd = +(row.costUsd + cost).toFixed(5);
   row.days[dayKey()] = (row.days[dayKey()] || 0) + total;
   const ty = (row.types[type] ||= { total: 0, calls: 0 }); ty.total += total; ty.calls += 1;
+  const mid = /^[a-z0-9][a-z0-9.\-]{2,60}$/i.test(String(body.model || "")) ? String(body.model) : "other";
+  const mo = ((row.models ||= {})[mid] ||= { total: 0, calls: 0, costUsd: 0 }); mo.total += total; mo.calls += 1; mo.costUsd = +(mo.costUsd + cost).toFixed(5);
   save("usage");
   return { u, total, cost };
 }
@@ -2102,6 +2133,7 @@ function agentBoard(d) {
   return [200, {
     ok: true, at: now(),
     company: { enabled: cfg.global.enabled, paused: cfg.global.paused, model: cfg.global.model, monthTokens: companyMonthTokens(), monthCostUsd: +Object.values(load("usage")[monthKey()] || {}).reduce((s2, u) => s2 + (u.costUsd || 0), 0).toFixed(2), limit: cfg.global.tokensPerMonth },
+    usage: usageSummary(),
     projects,
     tasks: tasks.slice(-80).reverse().map((t) => ({ id: t.id, title: t.title, projectId: t.projectId, project: projectOf(t.projectId)?.name || "", type: label(t.type), status: t.status, source: t.source, by: t.createdBy || "", createdAt: t.createdAt, finishedAt: t.finishedAt || null,
       summary: clip(t.result?.summary || t.proposal?.summary || t.error || "", 240), held: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null, tokens: t.usage?.total || 0, costUsd: t.usage?.costUsd || 0, findings: (t.result?.findings || []).length, device: devName(t.deviceId), mine: t.deviceId === d.id })),

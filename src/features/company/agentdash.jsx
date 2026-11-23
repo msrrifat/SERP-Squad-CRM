@@ -151,6 +151,7 @@ export function AgentOpsSection({ company, app = null }) {
           <div className="ml-auto text-right text-[11.5px] text-gray-500">
             <div><span className="text-[14px] font-semibold text-gray-900">{fmtTok(data.companyMonthTokens)}</span> tokens this month</div>
             <div>about {usd(monthCost)} (estimate)</div>
+            {data.seoData?.monthCalls > 0 && <div>DataForSEO {usd4(data.seoData.monthUsd || 0)} in {data.seoData.monthCalls} request{data.seoData.monthCalls === 1 ? "" : "s"}</div>}
           </div>
         </div>
       </Card>
