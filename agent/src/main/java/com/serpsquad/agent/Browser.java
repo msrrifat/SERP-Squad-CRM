@@ -91,6 +91,7 @@ final class Browser implements AutoCloseable {
      * saved passwords and payments, and none of those is on any list.
      */
     static Predicate<String> onlyHosts(List<String> hosts) {
+        if (hosts.contains("*")) return (host) -> true;      // a window for link-building accounts: see anySite()
         return (host) -> {
             String h = host == null ? "" : host.toLowerCase();
             for (String e : hosts) {
@@ -112,6 +113,39 @@ final class Browser implements AutoCloseable {
     private static final java.util.regex.Pattern NEVER_PATH = java.util.regex.Pattern.compile(
         "(?i)(/wp-admin/(users|user-new|user-edit|profile|options[-a-z]*|plugins|plugin-install|plugin-editor|theme-editor|themes|export|import|tools|site-health|update-core|update)\\.php"
         + "|(^|/)(settings?|psettings|mypreferences|preferences|security|passwords?|login_and_security|billing|payments?|api[-_]?keys?|tokens?|credentials|two[-_]?factor|2fa|recovery|apps_and_websites|application-passwords)(/|$))");
+
+    /**
+     * A window for link-building accounts may open any public site, so what it
+     * must never open is listed instead: mail, the big account providers and
+     * money, and any page whose purpose is to create an account. Accounts are
+     * created by a person; the agent asks for them.
+     */
+    private boolean anySite;
+    Browser anySite() { this.anySite = true; return this; }
+    private static final java.util.regex.Pattern WIDE_NEVER_HOST = java.util.regex.Pattern.compile(
+        "(?i)(^(mail|webmail|email|e-mail|banking|onlinebanking|online-banking|secure-banking)\\.)"
+        + "|((^|\\.)(gmail\\.com|googlemail\\.com|outlook\\.com|live\\.com|hotmail\\.com|office\\.com|microsoftonline\\.com|icloud\\.com|appleid\\.apple\\.com|proton\\.me|protonmail\\.com|yahoo\\.com|paypal\\.com|stripe\\.com|wise\\.com|revolut\\.com|venmo\\.com|coinbase\\.com|binance\\.com)$)"
+        + "|(^accounts\\.)");
+    private static final java.util.regex.Pattern SIGN_UP_PATH = java.util.regex.Pattern.compile(
+        "(?i)(^|/)(sign[-_]?up|register|registration|join|create[-_]?account|new[-_]?account|account/create|users/new|user/register)(\\.[a-z0-9]{2,5})?/?$");
+
+    /* forum software that puts the sign-up page behind a query: ucp.php?mode=register, index.php?action=register, member.php?action=register */
+    private static final java.util.regex.Pattern SIGN_UP_QUERY = java.util.regex.Pattern.compile("(?i)(^|&)(action|mode|do|a|view|task)=(register|registration|signup|sign[-_]up|join|create[-_]?account)(&|$)");
+
+    /** Why a link-building window will not show this address, or null when it may. */
+    static String wideRefusal(String url) {
+        try {
+            URI u = URI.create(url);
+            String h = u.getHost() == null ? "" : u.getHost().toLowerCase();
+            if (WIDE_NEVER_HOST.matcher(h).find()) return "That site holds mail, an account or money. The agent does not open it.";
+            String path = u.getRawPath() == null ? "" : u.getRawPath();
+            String query = u.getRawQuery() == null ? "" : u.getRawQuery();
+            if (SIGN_UP_PATH.matcher(path).find() || SIGN_UP_QUERY.matcher(query).find()) return "That is a page for creating an account. The agent never creates accounts: ask a person for it with account_request and carry on with another site.";
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     static boolean sensitive(String url) {
         try {
@@ -347,6 +381,7 @@ final class Browser implements AutoCloseable {
         if (!ALLOW_LOCAL && isLocalAddress(hostOf(url))) throw new BrowserException("Addresses on this computer or the local network cannot be opened by the agent.");
         if (hostAllowed != null && !hostAllowed.test(hostOf(url))) throw new BrowserException("This signed-in Chrome window is limited to the sites of its channel. " + hostOf(url) + " is not one of them.");
         if (hostAllowed != null && sensitive(url)) throw new BrowserException("That page holds account, security or payment settings. The agent does not open such pages.");
+        if (anySite && wideRefusal(url) != null) throw new BrowserException(wideRefusal(url));
         ensureStarted();
         pace();
         ObjectNode p = Json.obj();
@@ -431,6 +466,13 @@ final class Browser implements AutoCloseable {
             p.put("url", "about:blank");
             send("Page.navigate", p);
             throw new BrowserException("That led to a page with account, security or payment settings, so the tab was cleared. The agent does not open such pages.");
+        }
+        if (anySite && url.matches("(?i)https?://.+") && wideRefusal(url) != null) {
+            String why = wideRefusal(url);
+            ObjectNode p = Json.obj();
+            p.put("url", "about:blank");
+            send("Page.navigate", p);
+            throw new BrowserException(why + " The tab was cleared.");
         }
         StringBuilder out = new StringBuilder();
         String note = dialogNote;

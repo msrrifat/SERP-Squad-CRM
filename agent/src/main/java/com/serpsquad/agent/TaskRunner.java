@@ -124,7 +124,8 @@ final class TaskRunner {
         if (tools.hasBrowser() && br.isObject()) {
             List<String> hosts = new ArrayList<>();
             for (JsonNode h : br.path("hosts")) { String host = h.asText(); if (!host.startsWith("*.") && !host.startsWith("accounts.")) hosts.add(host); }     // "*.site" (its subdomains) and the sign-in host are not places to work
-            s.append("A Chrome window that a person signed in to for this project's ").append(br.path("label").asText("channel")).append(" is available through the browser tools. It may only show these sites: ").append(String.join(", ", hosts)).append(".");
+            if (hosts.contains("*")) s.append("A Chrome window that holds this project's link-building accounts is available through the browser tools. It may open any public site, but never mail, an account provider, a payment site, or a page that creates an account. Work only on sites where a person already created the account and it is signed in; where there is none, ask for it with account_request.");
+            else s.append("A Chrome window that a person signed in to for this project's ").append(br.path("label").asText("channel")).append(" is available through the browser tools. It may only show these sites: ").append(String.join(", ", hosts)).append(".");
             if (!br.path("startUrl").asText("").isBlank()) s.append(" Start at ").append(br.path("startUrl").asText()).append(".");
             s.append('\n');
         } else if (tools.hasBrowser()) s.append(needs("google") ? "A Chrome window signed in to Google is available through the browser tools. It may only show Google's own pages.\n" : "A clean Chrome window is available through the browser tools.\n");

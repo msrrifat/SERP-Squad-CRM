@@ -281,6 +281,7 @@ final class Worker {
             Browser b = channelBrowsers.get(key);
             if (b == null) {
                 b = new Browser(dir, profiles.port(id), chromePath(), cfg.headless, Browser.onlyHosts(hosts), true, cfg.home.resolve("logs").resolve("chrome-" + id + ".log"));
+                if (hosts.contains("*")) b.anySite();
                 channelBrowsers.put(key, b);
             }
             return b;

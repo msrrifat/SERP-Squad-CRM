@@ -311,6 +311,14 @@ final class Demo {
             { "products", "allowed" }, { "photos", "allowed" }, { "posts", "allowed" }, { "reviews", "allowed" }, { "qa", "allowed" }, { "attributes", "allowed" } };
         for (String[] x : start) parts.putObject(x[0]).put("mode", x[1]).put("note", i == 0 && x[0].equals("services") ? "Only services listed on the website. Descriptions under 300 characters, no prices." : i == 0 && x[0].equals("photos") ? "At most three a week, finished jobs only." : "");
         r.putObject("offpage").put("reviewReplies", i == 1 ? "positive" : "all").put("postsPerWeek", 1).put("outreachPerMonth", 10).put("senderName", i == 0 ? "Sam, Northgate Plumbing & Heating" : "").put("excludedDomains", i == 0 ? "rival-plumbers.example" : "").put("notes", "");
+        ObjectNode lk = r.putObject("links");
+        lk.put("browser", i == 0 ? "CH-P9TB" : "").put("identity", "").put("anchors", i == 0 ? "Mostly the business name and the plain page address. A service with the town now and then." : "").put("notes", i == 0 ? "UK sites only. No coupon or casino sites." : "");
+        ObjectNode lt = lk.putObject("types");
+        for (String[] t : LINK_TYPES) {
+            boolean on = i == 0 && (t[0].equals("listings") || t[0].equals("profiles") || t[0].equals("qa") || t[0].equals("forums") || t[0].equals("community"));
+            lt.putObject(t[0]).put("mode", !on ? "off" : t[0].equals("qa") || t[0].equals("forums") ? "auto" : "limited").put("perMonth", t[0].equals("listings") ? 6 : 4).put("listOnly", on && t[0].equals("listings"))
+                .put("list", on && t[0].equals("listings") ? "yell.example\nthomsonlocal.example\ncheckatrade.example\nscoot.example" : "").put("approval", on && t[0].equals("listings") ? "auto" : "ask").put("note", on && t[0].equals("qa") ? "Heating and plumbing questions from West Yorkshire only." : "");
+        }
         r.putObject("social").put("postsPerWeek", i == 1 ? 2 : 3).put("hashtags", "few").put("tone", i == 1 ? "Calm and reassuring" : "Friendly and local").put("avoidTopics", i == 1 ? "Prices\nBefore and after photos of patients" : "").put("notes", "");
         return r;
     }
@@ -580,6 +588,43 @@ final class Demo {
 
     private final java.util.Set<String> demoSignins = new java.util.LinkedHashSet<>(List.of("ahrefs.example"));
     private final Map<String, ObjectNode> demoOutput = new HashMap<>();
+    private final Map<String, ObjectNode> demoLinks = new HashMap<>();
+    private static final String[][] LINK_TYPES = {
+        { "listings", "Business listings and citations", "Directory and map listings with the name, address and phone: general, local and trade directories.", "" },
+        { "profiles", "Profile backlinks", "A profile page for the business on platforms that show a website link.", "" },
+        { "web2", "Web 2.0 properties", "The business's own small blog or page on free publishing platforms, with original posts that link to the site.", "" },
+        { "articles", "Article submissions and guest posts", "An original article placed on a site that accepts contributions.", "" },
+        { "forums", "Forum profiles and replies", "A member profile on forums of the trade or the area, and replies that help in threads the business knows the answer to.", "" },
+        { "qa", "Question and answer sites", "Answers to real questions on Quora and similar sites, where the client's page adds to the answer.", "" },
+        { "social", "Social media commenting", "Useful comments on the social platforms that rank for the client's terms, under relevant posts and in local groups.", "" },
+        { "sharing", "Image, video and document sharing", "The client's own photos, videos, guides and slides on sharing platforms, with a link back.", "" },
+        { "bookmarks", "Social bookmarks and content curation", "The client's pages saved and described on bookmarking and curation platforms.", "" },
+        { "press", "Press releases and local news", "A release or a news tip about something real: an opening, an award, a community project.", "" },
+        { "community", "Sponsorships, associations and resource pages", "Chambers of commerce, trade bodies, charities and local resource pages that list members and supporters.", "1" },
+        { "mentions", "Unlinked mentions and broken links", "Pages that name the business without linking, or link to a page that is gone.", "1" },
+        { "journalists", "Journalist requests", "Requests from journalists for an expert comment in the client's trade.", "1" },
+    };
+    private ObjectNode seedLinks(String pid) {
+        long now = System.currentTimeMillis();
+        ObjectNode v = Json.obj();
+        v.put("ok", true).put("projectId", pid).put("autoMax", 12);
+        ArrayNode types = v.putArray("types");
+        ObjectNode used = v.putObject("used");
+        for (String[] t : LINK_TYPES) { types.addObject().put("key", t[0]).put("label", t[1]).put("hint", t[2]).put("drafts", !t[3].isEmpty()); used.put(t[0], 0); }
+        ArrayNode req = v.putArray("requests"), recent = v.putArray("recent");
+        if (pid.equals(PROJECTS[0][0])) {
+            req.addObject().put("id", "ar_demo1").put("site", "diynot.example").put("why", "The busiest UK forum for heating and plumbing questions. Three open threads this week ask about boiler pressure loss, which the business answers on its own site.")
+                .put("details", "Username: Northgate Plumbing & Heating\nEmail: the office address\nLocation: Leeds, West Yorkshire\nSignature: Gas Safe registered heating engineers in Leeds\nWebsite: https://northgate-plumbing.example/").put("at", now - 26 * HOUR).put("done", false);
+            req.addObject().put("id", "ar_demo2").put("site", "quora.example").put("why", "Questions about combi boiler sizes and power flushing rank on the first page for two tracked keywords.")
+                .put("details", "Name: Sam at Northgate Plumbing & Heating\nCredential line: Gas Safe registered heating engineer, Leeds\nTopics to follow: Boilers, Central Heating, Plumbing").put("at", now - 6 * 24 * HOUR).put("done", true);
+            String[][] rows = { { "listings", "yell.example", "https://yell.example/biz/northgate-plumbing-leeds", "Northgate Plumbing & Heating", "live", "20" }, { "listings", "thomsonlocal.example", "https://thomsonlocal.example/northgate-plumbing", "Northgate Plumbing & Heating", "submitted", "44" },
+                { "qa", "quora.example", "https://quora.example/What-size-combi-boiler-for-a-3-bed-house", "this sizing guide", "live", "70" }, { "profiles", "houzz.example", "https://houzz.example/pro/northgate-plumbing", "northgate-plumbing.example", "live", "120" },
+                { "community", "leedschamber.example", "", "", "drafted", "150" } };
+            for (String[] x : rows) { recent.addObject().put("id", "lk_" + x[1]).put("type", x[0]).put("site", x[1]).put("url", x[2]).put("anchor", x[3]).put("state", x[4]).put("at", now - Long.parseLong(x[5]) * HOUR).put("target", "https://northgate-plumbing.example/"); used.put(x[0], used.path(x[0]).asInt() + 1); }
+        }
+        v.put("total", recent.size());
+        return v;
+    }
     private boolean demoOutputGone = false;
 
     private static String siteOf(String url) {
@@ -1772,6 +1817,16 @@ final class Demo {
                 ArrayNode sg = d.putArray("signins"); for (String site : demoSignins) sg.addObject().put("name", site).put("site", site);
                 return new Reply(200, o);
             }
+            case "links": {
+                if (!known(pid)) return bad(404, "Unknown project.");
+                ObjectNode v = demoLinks.computeIfAbsent(pid, this::seedLinks);
+                String a = body.path("action").asText("get"), id = body.path("id").asText("");
+                ArrayNode req = (ArrayNode) v.get("requests"), recent = (ArrayNode) v.get("recent");
+                if (a.equals("request-done")) { for (JsonNode r : req) if (r.path("id").asText().equals(id)) ((ObjectNode) r).put("done", true); }
+                else if (a.equals("request-remove")) { for (int k = 0; k < req.size(); k++) if (req.get(k).path("id").asText().equals(id)) { req.remove(k); break; } }
+                else if (a.equals("remove")) { for (int k = 0; k < recent.size(); k++) if (recent.get(k).path("id").asText().equals(id)) { String type = recent.get(k).path("type").asText(); ((ObjectNode) v.get("used")).put(type, Math.max(0, v.path("used").path(type).asInt() - 1)); recent.remove(k); v.put("total", recent.size()); break; } }
+                return new Reply(200, v.deepCopy());
+            }
             case "output": {
                 if (!known(pid)) return bad(404, "Unknown project.");
                 String a = body.path("action").asText("get");
@@ -1805,7 +1860,7 @@ final class Demo {
                     String part = k.asText("");
                     if (part.equals("limits") && src.has("tasks")) { dst.set("tasks", src.get("tasks").deepCopy()); done.add("working limits and schedules"); }
                     else if (part.equals("budget")) { for (String f : new String[] { "tokensPerMonth", "tokensPerDay", "seoUsdPerMonth", "triggers" }) if (src.has(f)) dst.set(f, src.get(f).deepCopy()); done.add("token and spend limits"); }
-                    else if (part.equals("rules") && src.has("rules")) { ObjectNode r = dst.path("rules").isObject() ? (ObjectNode) dst.get("rules") : dst.putObject("rules"); for (String f : new String[] { "onpage", "offpage", "social" }) if (src.path("rules").has(f)) r.set(f, src.path("rules").get(f).deepCopy()); done.add("on-page, off-page and social rules with their notes"); }
+                    else if (part.equals("rules") && src.has("rules")) { ObjectNode r = dst.path("rules").isObject() ? (ObjectNode) dst.get("rules") : dst.putObject("rules"); for (String f : new String[] { "onpage", "offpage", "social", "blog", "trending", "links" }) if (src.path("rules").has(f)) r.set(f, src.path("rules").get(f).deepCopy()); done.add("on-page, off-page and social rules with their notes"); }
                     else if (part.equals("profileRules") && src.path("rules").has("gbp")) { ObjectNode r = dst.path("rules").isObject() ? (ObjectNode) dst.get("rules") : dst.putObject("rules"); r.set("gbp", src.path("rules").get("gbp").deepCopy()); done.add("Business Profile rules"); }
                     else if (part.equals("websiteNotes") && src.path("channels").path("website").has("notes") && dst.path("channels").path("website").isObject()) { ((ObjectNode) dst.path("channels").path("website")).set("notes", src.path("channels").path("website").get("notes").deepCopy()); done.add(src.path("channels").path("website").path("notes").size() + " website notes"); }
                     else if (part.equals("smm") && src.path("channels").has("smm") && dst.path("channels").isObject()) { ((ObjectNode) dst.get("channels")).set("smm", src.path("channels").get("smm").deepCopy()); done.add("the SMM management tool"); }

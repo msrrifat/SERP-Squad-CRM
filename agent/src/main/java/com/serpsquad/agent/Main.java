@@ -189,6 +189,7 @@ public final class Main {
         Class.forName("com.anthropic.client.okhttp.AnthropicOkHttpClient");
         Class.forName("com.anthropic.models.beta.messages.MessageCreateParams");
         if (Updater.compare("1.2.10", "1.2.9") <= 0) return 1;
+        if (Browser.wideRefusal("https://forum.example.com/register") == null || Browser.wideRefusal("https://mail.example.com/") == null || Browser.wideRefusal("https://forum.example.com/ucp.php?mode=register") == null || Browser.wideRefusal("https://forum.example.com/index.php?action=profile&u=7") != null || Browser.wideRefusal("https://www.paypal.com/") == null || Browser.wideRefusal("https://forum.example.com/threads/boiler-pressure.123/") != null || Browser.wideRefusal("https://www.quora.com/What-size-boiler") != null) throw new IllegalStateException("link-building window limits");
         if (!Browser.isLocalAddress("127.0.0.1") || !Browser.isLocalAddress("localhost") || !Browser.isLocalAddress("192.168.1.10") || !Browser.isLocalAddress("[::1]") || Browser.isLocalAddress("business.google.com") || Browser.isLocalAddress("8.8.8.8")) return 1;
         if (Main.class.getResource("/manage/manage.js") == null || Main.class.getResource("/ui.html") == null || Main.class.getResource("/catalog.json") == null) return 1;
         System.out.println("selftest ok " + version());

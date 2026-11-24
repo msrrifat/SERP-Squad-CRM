@@ -76,10 +76,10 @@ let deps = { sessionFromReq: () => null, readDocCached: () => null, gscQuery: nu
 export function initAgentOps(d) { deps = { ...deps, ...d }; }
 
 /* ---------- storage: one small JSON file per collection ---------- */
-const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json", resources: "resources.json", repos: "repos.json", outputs: "outputs.json" };
+const FILES = { config: "config.json", devices: "devices.json", tasks: "tasks.json", usage: "usage.json", memory: "memory.json", changes: "changes.json", activity: "activity.json", releases: "releases.json", chats: "chats.json", directions: "directions.json", brand: "brand.json", lessons: "lessons.json", knowledge: "knowledge.json", roster: "projects.json", work: "work.json", alerts: "alerts.json", media: "media.json", visibility: "visibility.json", status: "status.json", ranking: "ranking.json", resources: "resources.json", repos: "repos.json", outputs: "outputs.json", links: "links.json" };
 const EMPTY = {
   config: () => ({ rev: 1, playbooksRev: 1, global: { enabled: true, paused: false, model: "claude-opus-5-5", effort: "medium", tokensPerMonth: 0, seoData: false, seoUsdPerMonth: 25, timeZone: "UTC", secondCheck: true, checkModel: "claude-sonnet-5-5", vision: true, crmRead: true, resume: true, seoTools: [] }, projects: {}, playbooks: {} }),
-  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}), resources: () => ({}), repos: () => ({}), outputs: () => ({}),
+  devices: () => [], tasks: () => [], usage: () => ({}), memory: () => ({}), changes: () => ({}), activity: () => [], releases: () => ({ current: null, list: [] }), chats: () => ({}), directions: () => ({}), brand: () => ({}), lessons: () => ({}), knowledge: () => ({ docs: [] }), roster: () => ({ init: false, added: [], manual: [] }), work: () => ({ init: false, projects: {} }), alerts: () => ({ emailed: {}, acked: {}, sites: {}, marks: {}, lastEmailAt: 0 }), media: () => ({}), visibility: () => ({}), status: () => ({}), ranking: () => ({}), resources: () => ({}), repos: () => ({}), outputs: () => ({}), links: () => ({}),
 };
 const cache = {};
 const BACKUP_DIR = new URL("./data/agentops/backups/", import.meta.url);
@@ -372,7 +372,7 @@ const FORBIDDEN = [403, { error: "forbidden", detail: "Admin sign-in required." 
    an Admin turned it on. The AI model itself has no tool that reaches these
    endpoints, and the agent's browser refuses local addresses, so the agent
    cannot change its own limits or approve its own work. */
-const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "guide", "signin", "output", "project/copy", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
+const DEVICE_MAY = new Set(["overview", "config", "task/create", "task/action", "task/get", "playbook", "change", "project", "credentials", "direction", "brand", "knowledge", "roster", "report", "work", "seodata", "alerts", "media", "evidence", "visibility", "status", "ranking", "resources", "repo", "guide", "signin", "output", "links", "project/copy", "check", "lesson", "logos", "task/feedback", "chat/get", "chat/send", "chat/stop", "chat/clear"]);
 function deviceManager(req, path) {
   const d = deviceOf(req);
   return d && d.canManage === true && DEVICE_MAY.has(path) ? { id: "device:" + d.id, name: `${d.name} (agent's computer)`, viaDevice: true } : null;
@@ -678,9 +678,112 @@ function cleanTrendingRules(t) {
   const x = t && typeof t === "object" ? t : {};
   return { pages: lines(x.pages, 800), position: line(x.position, 240), heading: line(x.heading, 120), count: num(x.count, 2, 12, 4), area: line(x.area, 160), notes: lines(x.notes, 1500) };
 }
+/* ---------- link building, by type ----------
+   Each kind of link the agent can work on is switched on by itself, with a number a month (or left to the
+   agent's judgement, within a ceiling), a permission, and optionally a list of the only sites it may use.
+   What the agent may NOT do is the same for every type and is not a setting: it does not create accounts
+   (a person does, the agent prepares what is needed and asks), it uses one real identity, it posts nothing
+   that is not useful where it is posted, and it never gets round a site's checks. */
+const LINK_TYPES = [
+  ["listings", "Business listings and citations", "Directory and map listings with the business's name, address and phone: general, local and trade directories.", false],
+  ["profiles", "Profile backlinks", "A profile page for the business on platforms that show a website link.", false],
+  ["web2", "Web 2.0 properties", "The business's own small blog or page on free publishing platforms, with original posts that link to the site.", false],
+  ["articles", "Article submissions and guest posts", "An original article placed on a site that accepts contributions.", false],
+  ["forums", "Forum profiles and replies", "A member profile on forums of the trade or the area, and replies that help in threads the business knows the answer to.", false],
+  ["qa", "Question and answer sites", "Answers to real questions on Quora and similar sites, where the client's page adds to the answer.", false],
+  ["social", "Social media commenting", "Useful comments on the social platforms that rank for the client's terms, under relevant posts and in local groups.", false],
+  ["sharing", "Image, video and document sharing", "The client's own photos, videos, guides and slides on sharing platforms, with a link back.", false],
+  ["bookmarks", "Social bookmarks and content curation", "The client's pages saved and described on bookmarking and curation platforms.", false],
+  ["press", "Press releases and local news", "A release or a news tip about something real: an opening, an award, a community project.", false],
+  ["community", "Sponsorships, associations and resource pages", "Chambers of commerce, trade bodies, charities and local resource pages that list members and supporters. The agent drafts the request; a person sends it.", true],
+  ["mentions", "Unlinked mentions and broken links", "Pages that name the business without linking, or link to a page that is gone. The agent drafts the request; a person sends it.", true],
+  ["journalists", "Journalist requests", "Requests from journalists for an expert comment in the client's trade. The agent drafts the answer; a person sends it.", true],
+];
+const LINK_AUTO_MAX = 12;         // "the agent decides" still has a ceiling per type and month
+function cleanLinkRules(l) {
+  const x = l && typeof l === "object" ? l : {};
+  return {
+    types: Object.fromEntries(LINK_TYPES.map(([k]) => { const t = x.types?.[k] || {}; return [k, { mode: oneOf(t.mode, ["off", "limited", "auto"], "off"), perMonth: num(t.perMonth, 0, 200, 4), listOnly: t.listOnly === true, list: lines(t.list, 4000), approval: oneOf(t.approval, ["ask", "auto"], "ask"), note: line(t.note, 300) }]; })),
+    browser: chrome(x.browser), identity: line(x.identity, 120), anchors: lines(x.anchors, 1200), notes: lines(x.notes, 1500),
+  };
+}
+const linkHosts = (list) => String(list || "").split("\n").map((x) => hostOfUrl(x.trim())).filter(Boolean);
+const linksOf = (pid) => { const all = load("links"); const l = (all[pid] ||= { built: [], requests: [] }); l.built ||= []; l.requests ||= []; return l; };
+function linkUsed(pid) {
+  const from = periodStart("month"), used = Object.fromEntries(LINK_TYPES.map(([k]) => [k, 0]));
+  for (const x of linksOf(pid).built) if ((x.at || 0) >= from && used[x.type] != null) used[x.type] += 1;
+  return used;
+}
+const linkCap = (t) => (t.mode === "off" ? 0 : t.mode === "auto" ? LINK_AUTO_MAX : t.perMonth);
+/* may this kind of link be made on this site now? "" when it may */
+function linkRefusal(pid, type, site) {
+  const def = LINK_TYPES.find(([k]) => k === type);
+  if (!def) return "Unknown kind of link. Use one of: " + LINK_TYPES.map(([k]) => k).join(", ") + ".";
+  const t = rulesOf(pid).links.types[type], used = linkUsed(pid)[type];
+  if (t.mode === "off") return `${def[1]} are switched off for this project.`;
+  if (used >= linkCap(t)) return `This month's number of ${def[1].toLowerCase()} is reached (${linkCap(t)}).`;
+  const host = hostOfUrl(site || "");
+  if (site != null) {
+    if (!host) return "Give the site's address.";
+    if (TOOL_NEVER.test(host) && !/(^|\.)(facebook\.com|instagram\.com)$/i.test(host)) return "That site is not a place to build a link.";
+    if (t.listOnly) { const ok = linkHosts(t.list); if (!ok.some((h) => host === h || host.endsWith("." + h))) return `For ${def[1].toLowerCase()} only the sites on the manager's list may be used, and ${host} is not on it.`; }
+  }
+  return "";
+}
+function linkBlocked(pid) {
+  if (pid === AGENCY_PROJECT) return "Link building belongs to a client project.";
+  const r = rulesOf(pid).links, used = linkUsed(pid);
+  if (LINK_TYPES.every(([k]) => r.types[k].mode === "off")) return "No kind of link is switched on. Choose them under Work setup, Offpage SEO, Link building.";
+  /* the task never gets a window without limits: it works in the Chrome ID that holds the accounts, where sign-up pages, mail and money are closed */
+  if (!r.browser) return "Choose the Chrome ID that holds the link-building accounts under Work setup, Offpage SEO, Link building.";
+  if (LINK_TYPES.every(([k]) => r.types[k].mode === "off" || used[k] >= linkCap(r.types[k]))) return "This month's number of links is reached for every kind that is switched on.";
+  return "";
+}
+function linkNeedsPerson(pid) {
+  if (pid === AGENCY_PROJECT) return false;
+  const r = rulesOf(pid).links, used = linkUsed(pid), open = LINK_TYPES.filter(([k, , , drafts]) => !drafts && r.types[k].mode !== "off" && used[k] < linkCap(r.types[k]));
+  return open.length > 0 && open.every(([k]) => r.types[k].approval === "ask");
+}
+function linkPolicy(pid) {
+  const r = rulesOf(pid).links, used = linkUsed(pid), open = LINK_TYPES.filter(([k, , , drafts]) => !drafts && r.types[k].mode !== "off" && used[k] < linkCap(r.types[k]));
+  const alone = open.filter(([k]) => r.types[k].approval === "auto").map(([, l]) => l.toLowerCase()), asks = open.filter(([k]) => r.types[k].approval === "ask").map(([, l]) => l.toLowerCase());
+  if (!alone.length || !asks.length) return "";
+  return `In this run only these may be created without a person: ${alone.join("; ")}. These need a person's approval, so do not create one here; describe it in your report or queue it with suggest_task (needs_approval true): ${asks.join("; ")}.`;
+}
+/* did a person approve this run? A run that acts alone (after the second check) has no such approval. */
+const personApproved = (t) => t?.approval?.decision === "approved";
+/* why a link of this kind may not be posted in this run, or "" when it may */
+function linkNotNow(ctx, type) {
+  const def = LINK_TYPES.find(([k]) => k === type);
+  if (!def) return "";
+  if (def[3]) return `${def[1]}: you only draft these, and a person sends them. Record it as drafted.`;
+  if (rulesOf(ctx.task.projectId).links.types[type].approval === "ask" && !personApproved(ctx.task)) return `${def[1]} need a person's approval before they are posted, and no person approved this run. Put it in your proposal (request_approval), or queue it with suggest_task (needs_approval true).`;
+  return "";
+}
+function linksView(pid) {
+  const l = linksOf(pid), used = linkUsed(pid);
+  return { ok: true, projectId: pid, used, autoMax: LINK_AUTO_MAX, types: LINK_TYPES.map(([key, label, hint, drafts]) => ({ key, label, hint, drafts })),
+    requests: l.requests.slice(-60).reverse(), recent: l.built.slice(-60).reverse(), total: l.built.length };
+}
+function linksEdit(admin, body) {
+  const p = chatProject(body);
+  if (!p) return [404, { error: "not_found", detail: "Unknown project." }];
+  const l = linksOf(p.id);
+  if (body.action === "request-done" || body.action === "request-remove") {
+    const r = l.requests.find((x) => x.id === body.id);
+    if (!r) return [404, { error: "not_found", detail: "That request is no longer in the list." }];
+    if (body.action === "request-done") { r.done = true; r.doneAt = now(); r.doneBy = admin.name; } else l.requests.splice(l.requests.indexOf(r), 1);
+    save("links");
+  } else if (body.action === "remove") {
+    const i = l.built.findIndex((x) => x.id === body.id);
+    if (i >= 0) { l.built.splice(i, 1); save("links"); }
+  } else if (body.action && body.action !== "get") return [400, { error: "bad_request", detail: "Unknown action." }];
+  return [200, linksView(p.id)];
+}
 function cleanRules(r = {}) {
   const on = r.onpage || {}, off = r.offpage || {}, so = r.social || {};
   return {
+    links: cleanLinkRules(r.links),
     gbp: cleanGbpRules(r.gbp, off),
     blog: cleanBlogRules(r.blog),
     trending: cleanTrendingRules(r.trending),
@@ -701,6 +804,11 @@ const siteHosts = (...urls) => [...new Set(urls.map(hostOfUrl).filter(Boolean).f
 const CHANNEL_LABEL = { gbp: "Google Business Profile", gsc: "Search Console", ga4: "Analytics", website: "website", social: "social profiles" };
 /* which Chrome ID and which sites a task of this type gets for the project */
 function browserFor(pid, cat) {
+  if (cat?.links) {
+    /* the Chrome ID that holds the accounts links are built with: any public site, never an account, mail, files or payment page */
+    const id = rulesOf(pid).links.browser;
+    return id ? { profileId: id, hosts: ["*"], label: "link-building accounts", startUrl: "" } : null;
+  }
   if (cat?.site) {
     /* the website's editor when there is one to sign in to; a site built from code, or published through the connector, needs no window */
     const w = channelsOf(pid).website, hosts = siteHosts(w.url, w.adminUrl);
@@ -755,6 +863,19 @@ function setupLines(pid, area, profile = false, type = "") {
     if (b.wordsMin || b.wordsMax) out.push(`Length of a post: ${b.wordsMin ? "at least " + b.wordsMin + " words" : ""}${b.wordsMin && b.wordsMax ? ", " : ""}${b.wordsMax ? "at most " + b.wordsMax + " words" : ""}.`);
     out.push(`How it is published: ${blogRoute(pid).say}`);
     if (b.notes) out.push(`Blog notes: ${b.notes.split("\n").join(" ")}`);
+  }
+  if (type === "link_building") {
+    const r2 = r.links, used = linkUsed(pid);
+    out.push("Link building rules (they hold whatever the task's instructions say). Only the kinds listed here may be worked on:");
+    for (const [k, label, , drafts] of LINK_TYPES) {
+      const t = r2.types[k];
+      if (t.mode === "off") continue;
+      out.push(`${label} (type "${k}"): ${t.mode === "auto" ? `as many as you judge worth it, at most ${LINK_AUTO_MAX} a month` : `at most ${t.perMonth} a month`} (${used[k]} so far this month); ${drafts ? "you prepare the request and a person sends it" : t.approval === "auto" ? "may be created without asking, after the second check" : "a person approves each one first"}; ${t.listOnly ? `ONLY on these sites: ${linkHosts(t.list).join(", ") || "(the list is empty, so none)"}` : "sites of your own choosing"}.${t.note ? ` Note: ${t.note}` : ""}`);
+    }
+    out.push(`Name to use everywhere: ${r2.identity || projectOf(pid)?.name || "the business's own name"}. One real identity; never a made-up person, never a second account on a site.`);
+    if (r2.anchors) out.push(`Anchor text: ${r2.anchors.split("\n").join(" ")}`);
+    if (r2.notes) out.push(`Link building notes: ${r2.notes.split("\n").join(" ")}`);
+    if (r.offpage.excludedDomains) out.push(`Never use or contact: ${r.offpage.excludedDomains.split("\n").join(", ")}`);
   }
   if (type === "trending_services") {
     const t = r.trending;
@@ -1692,6 +1813,7 @@ function blockOf(t, device) {
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
   if (cat.channel === "gbp") { const no = gbpBlocked(t.projectId, t.type); if (no) return no; }
   if (t.type === "blog_publish") { const no = blogBlocked(t.projectId); if (no) return no; }
+  if (t.type === "link_building") { const no = linkBlocked(t.projectId); if (no) return no; }
   if (cat.site) {
     /* a task that changes the website by whichever way the project has: its repository, or its editor in the browser */
     const w = channelsOf(t.projectId).website, r = load("repos")[t.projectId];
@@ -1857,6 +1979,9 @@ function attention() {
     const u = usageOf(p.id), ex = { projectId: p.id, project: p.name };
     if (ps.tokensPerMonth > 0) level(u.month, ps.tokensPerMonth, "p:" + p.id, "monthly token limit", p.name, ex);
     if (ps.tokensPerDay > 0 && u.day >= ps.tokensPerDay) add("limit", "warn", `day:${p.id}:${m}-${dayKey()}`, `${p.name} reached today's token limit`, "The agent carries on there tomorrow.", ex);
+    /* accounts the agent asked a person to create for link building */
+    const asked = (load("links")[p.id]?.requests || []).filter((x) => !x.done);
+    if (asked.length) add("signin", "act", `accounts:${p.id}:${asked.length}:${asked.at(-1).at}`, `Create ${asked.length === 1 ? "an account" : asked.length + " accounts"} the agent asked for: ${p.name}`, `${asked.slice(0, 6).map((x) => x.site).join(", ")}${asked.length > 6 ? " and more" : ""}. What to fill in is under Work setup, Offpage SEO, Accounts and links. Sign in to each in the link-building Chrome ID, then mark it as created.`, { ...ex, at: asked.at(-1).at });
     for (const [key, c] of Object.entries(ps.checks || {})) if (c?.state === "signin") add("signin", "act", `signin:${p.id}:${key}:${c.at || 0}`, `Sign in again for ${p.name}`, `Chrome ID ${cfg.projects[p.id]?.checks?.[key]?.profileId || c.profileId || ""} on ${c.device || "the agent's computer"} asked for a sign-in${c.title ? ` ("${c.title}")` : ""}. Open the application there, Settings, Chrome IDs, Sign in.`, { ...ex, at: c.at });
     const site = st.sites[p.id];
     if (triggersOf(p.id).siteDown && site?.state === "down") add("site", "act", `site:${p.id}:${site.since}`, `${p.name}: the website does not answer`, `${site.url} has failed every check since ${new Date(site.since).toISOString().slice(0, 16).replace("T", " ")} UTC (${site.detail || "no answer"}).`, { ...ex, at: site.since });
@@ -2760,6 +2885,60 @@ const SERVER_TOOLS = [
     const sum = visRunSummary(run);
     return { ok: true, logged: results.length, namedIn: `${sum.named} of ${sum.asked}`, sharePercent: sum.share, ...(off ? { note: `${off} result${off === 1 ? " was" : "s were"} for a question that is not on the project's list. They are kept, but the list is what makes checks comparable.` } : {}) };
   }),
+  tool("link_plan", "Read what link building is allowed for this project right now: the kinds that are switched on, how many of each are left this month, whether a person approves each one, the sites you must keep to (or may choose yourself), the links already built (so nothing is made twice), and the accounts you asked for. Start every link-building task here.", {}, [], (ctx) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Link building belongs to a client project." };
+    const r = rulesOf(pid).links, used = linkUsed(pid), l = linksOf(pid);
+    return { kinds: LINK_TYPES.filter(([k]) => r.types[k].mode !== "off").map(([k, label, hint, drafts]) => { const t = r.types[k]; return { type: k, kind: label, what: hint, leftThisMonth: Math.max(0, linkCap(t) - used[k]), builtThisMonth: used[k], needsApproval: drafts ? "you only draft; a person sends" : t.approval === "ask", onlyTheseSites: t.listOnly ? linkHosts(t.list) : null, sites: t.listOnly ? "only the listed sites" : "your own choice", note: t.note || "" }; }),
+      nameToUse: r.identity || projectOf(pid)?.name || "", anchorText: r.anchors || "", notes: r.notes || "", neverUse: rulesOf(pid).offpage.excludedDomains ? rulesOf(pid).offpage.excludedDomains.split("\n") : [],
+      alreadyBuilt: l.built.slice(-150).map((x) => ({ type: x.type, site: x.site, url: x.url, state: x.state, date: new Date(x.at).toISOString().slice(0, 10) })),
+      accountsAskedFor: l.requests.slice(-40).map((x) => ({ site: x.site, created: !!x.done, asked: new Date(x.at).toISOString().slice(0, 10) })) };
+  }),
+  tool("link_check", "Ask whether one kind of link may be made on one site, before you prepare it: the kind has to be switched on, have room left this month, and the site has to be on the manager's list where a list is set. Also tells you when the project already has that link.", { type: { type: "string", description: "The kind of link, as link_plan names it (listings, profiles, web2, articles, forums, qa, social, sharing, bookmarks, press, community, mentions, journalists)." }, site: { type: "string", description: "The site's address." } }, ["type", "site"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Link building belongs to a client project." };
+    const no = linkRefusal(pid, a.type, a.site);
+    if (no) return { allowed: false, why: no };
+    const host = hostOfUrl(a.site), have = linksOf(pid).built.filter((x) => x.type === a.type && hostOfUrl(x.site) === host);
+    const single = ["listings", "profiles", "web2", "bookmarks"].includes(a.type);
+    if (single && have.length) return { allowed: false, why: `The project already has this on ${host} (${have[0].url}). One per site.` };
+    const later = linkNotNow(ctx, a.type);
+    return { allowed: true, postInThisRun: !later && !!ctx.mayChange, ...(later ? { why: later } : !ctx.mayChange ? { why: "Nothing is posted before the plan is approved." } : {}), ...(have.length ? { note: `${have.length} already on ${host}: do not repeat a thread or a text.` } : {}), accountCreated: linksOf(pid).requests.some((x) => hostOfUrl(x.site) === host && x.done) || undefined };
+  }),
+  tool("log_link", "Record a link you built, submitted or prepared, so it counts against the month's number for its kind and appears in the work report. state: live (it is there now), submitted (waiting for the site to accept it), or drafted (for a person to send or post). Call it once per link, right after it is done.", { type: { type: "string", description: "The kind of link, as link_plan names it." }, site: { type: "string", description: "The site the link is on." }, url: { type: "string", description: "The page where the link is (or will be)." }, target: { type: "string", description: "The page on the client's site it points to." }, anchor: { type: "string", description: "The link's text." }, state: { type: "string", description: "live, submitted or drafted." }, note: { type: "string" } }, ["type", "site", "state"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Link building belongs to a client project." };
+    const state = oneOf(String(a.state || "").toLowerCase(), ["live", "submitted", "drafted"], "");
+    if (!state) return { error: "state is live, submitted or drafted." };
+    if (state !== "drafted" && !ctx.mayChange) return { error: "Nothing is posted before the plan is approved, so nothing can be live or submitted yet. Record it as drafted, or put it in your proposal." };
+    const no = linkRefusal(pid, a.type, a.site) || (state !== "drafted" ? linkNotNow(ctx, a.type) : "");
+    if (no) return { error: no };
+    const url = cut(httpUrl(a.url), 400), host = hostOfUrl(a.site), l = linksOf(pid);
+    if (url && l.built.some((x) => x.url === url && x.type === a.type)) return { error: "That link is already recorded." };
+    const def = LINK_TYPES.find(([k]) => k === a.type);
+    const row = { id: uid("lk_"), type: a.type, site: host, url, target: cut(String(a.target || ""), 300), anchor: line(a.anchor, 160), state, note: line(a.note, 300), at: now(), taskId: ctx.chat ? null : ctx.task.id };
+    l.built.push(row);
+    if (l.built.length > 3000) l.built.splice(0, l.built.length - 3000);
+    save("links");
+    addWork(pid, { section: "offpage", kind: a.type === "listings" ? "citation" : def[3] || state === "drafted" ? "outreach" : "link_built", title: `${def[1]}: ${host}${state === "live" ? "" : ` (${state})`}`, detail: [row.anchor ? `Anchor: ${row.anchor}` : "", row.note].filter(Boolean).join(". "), url, target: row.target, type: ctx.task.type || "", taskId: row.taskId, by: "AI agent", source: "agent" });
+    const t = rulesOf(pid).links.types[a.type];
+    return { ok: true, recorded: `${def[1]} on ${host}`, leftThisMonth: Math.max(0, linkCap(t) - linkUsed(pid)[a.type]) };
+  }),
+  tool("account_request", "Ask a person to create an account on a site, because you never create accounts yourself. Give the site, why it is worth having, and everything they need to fill in (the name to use, the description, the category, the website address, the phone). It appears in the CRM for the team; link_plan shows when the account has been created.", { site: { type: "string", description: "The site's address." }, why: { type: "string", description: "One or two sentences: what this account is for and why this site." }, details: { type: "string", description: "What to enter when signing up and in the profile, ready to copy." } }, ["site", "why", "details"], (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Link building belongs to a client project." };
+    const host = hostOfUrl(a.site);
+    if (!host) return { error: "Give the site's address." };
+    if (TOOL_NEVER.test(host) && !/(^|\.)(facebook\.com|instagram\.com)$/i.test(host)) return { error: "That is not a site to ask an account for." };
+    const l = linksOf(pid);
+    const same = l.requests.find((x) => x.site === host);
+    if (same) return { ok: true, already: true, created: !!same.done, note: same.done ? "That account exists. Use it in its Chrome ID." : "You already asked for this account. It has not been created yet." };
+    if (l.requests.filter((x) => !x.done).length >= 25) return { error: "Twenty-five accounts are already waiting to be created. Work with the ones that exist." };
+    l.requests.push({ id: uid("ar_"), site: host, why: para(a.why, 500), details: para(a.details, 2000), at: now(), taskId: ctx.chat ? null : ctx.task.id, done: false });
+    save("links");
+    logActivity("task", `The agent asks for an account on ${host} for ${projectOf(pid)?.name} (Work setup, Offpage SEO, Link building).`, { projectId: pid, taskId: ctx.chat ? null : ctx.task.id });
+    return { ok: true, asked: host, note: "A person creates it and signs in to it in the link-building Chrome ID. Carry on with other sites; do not try to create it yourself." };
+  }),
   tool("blog_plan", "Read this project's blog plan from the CRM's own Blogs & FAQs tool: every planned, written and published post with its id, kind (blog, news or faq), keyword, category and state, how many of each kind may still be published this month, and the posts that are live on the site (for internal links and to avoid writing the same thing twice). Start every blog task here.", { state: { type: "string", description: "Optional: planned, written, scheduled or published." } }, [], (ctx, a) => {
     const got = blogPlan(ctx.task.projectId);
     if (got.error) return got;
@@ -2824,6 +3003,7 @@ const SERVER_TOOLS = [
     if (p.status === "published") return { error: "That post is already published." };
     const room = blogRoom(pid, p);
     if (room) return { error: room };
+    if (rulesOf(pid).blog.kinds[blogKindOf(p)].approval === "ask" && !personApproved(ctx.task)) return { error: `${BLOG_KINDS.find(([k]) => k === blogKindOf(p))[1]} need a person's approval before they are published, and no person approved this run. Put the post in your proposal (request_approval), or queue it with suggest_task (needs_approval true).` };
     const when = /^\d{4}-\d\d-\d\d$/.test(String(a.date || "")) ? new Date(a.date + "T09:00:00") : null, scheduled = !!when && when.getTime() > now();
     const b = rulesOf(pid).blog, kind = blogKindOf(p), w = got.site, cred = typeof w.credential === "string" ? w.credential : w.credential?.value || "";
     const category = p.wpCategory || b.kinds[kind].category || (kind === "faq" ? "Answer" : kind === "news" ? "News" : "Blog");
@@ -2922,7 +3102,7 @@ function overview(admin) {
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!dfsCreds(""), own: dfsOwn(), balance: dfsBalanceView(), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
-      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, resources: (load("resources")[p.id] || []).length, repo: load("repos")[p.id]?.url ? { ready: !!(load("repos")[p.id].method === "token" ? load("repos")[p.id].tokenAt : load("repos")[p.id].publicKey), ok: load("repos")[p.id].test?.ok === true } : null, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
+      return { ...p, setting: projectSetting(p.id), brand: brandSummary(p.id), photos: (load("media")[p.id] || []).length, linkRequests: (load("links")[p.id]?.requests || []).filter((x) => !x.done).length, resources: (load("resources")[p.id] || []).length, repo: load("repos")[p.id]?.url ? { ready: !!(load("repos")[p.id].method === "token" ? load("repos")[p.id].tokenAt : load("repos")[p.id].publicKey), ok: load("repos")[p.id].test?.ok === true } : null, visibility: (() => { const v = load("visibility")[p.id], last = v?.runs?.[v.runs.length - 1]; return last ? { at: last.at, share: visRunSummary(last).share, asked: last.results.length } : null; })(), workItems: (workStore().projects[p.id] || []).length, learning: (() => { const l = learningOf(p.id); return { done: l.done, lessons: l.lessons }; })(), tasks: Object.fromEntries(CATALOG.filter((c) => !!c.agencyOnly === (p.id === AGENCY_PROJECT)).map((c) => [c.key, { ...taskSetting(p.id, c.key), used: runsInWindow(p.id, c.key, PERIOD_MS[taskSetting(p.id, c.key).per]) }])), usage: usageOf(p.id), waiting: blocked, api: (() => { const g = projectOf(p.id)?.raw?.google || {}; return { searchConsole: !!(g.connectionId && g.gscSite), gscSite: g.gscSite || "", analytics: !!g.ga4Property, ga4Property: g.ga4Property ? String(g.ga4Property) : "" }; })(), ownKey: maskKey(secrets().projects[p.id]), chat: { pending: !!pendingOf(p.id), last: (load("chats")[p.id]?.messages || []).slice(-1).map((m) => ({ role: m.role, at: m.at, text: clip(m.text, 90) }))[0] || null } };
     }),
     devices: load("devices").filter((d) => !d.revoked).map(({ th, ...d }) => ({ ...d, online: now() - (d.lastSeen || 0) < 3 * 60e3, currentTask: tasks.find((t) => t.status === "running" && t.deviceId === d.id)?.title || null })),
     tasks: tasks.slice(-200).reverse().map((t) => ({ ...lightTask(t), blockedReason: t.status === "queued" || t.status === "approved" ? blockOf(t, null) : null })),
@@ -3268,9 +3448,10 @@ function claimPayload(t, d) {
     const repo = t.projectId === AGENCY_PROJECT ? null : load("repos")[t.projectId];
     return {
       id: t.id, projectId: t.projectId, projectName: p.name, clientName: p.client, type: t.type, label: cat.label, title: t.title, instructions: t.instructions, reason: t.reason || "",
-      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways || gbpNeedsPerson(t.projectId, t.type) || (t.type === "blog_publish" && blogNeedsPerson(t.projectId)) ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
+      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways || gbpNeedsPerson(t.projectId, t.type) || (t.type === "blog_publish" && blogNeedsPerson(t.projectId)) || (t.type === "link_building" && linkNeedsPerson(t.projectId)) ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
       ...(cat.write && !t.askAlways && !gbpNeedsPerson(t.projectId, t.type) && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
       ...(t.type === "blog_publish" && !t.askAlways && ts.approval !== "ask" && blogPolicy(t.projectId) ? { policy: blogPolicy(t.projectId) } : {}),
+      ...(t.type === "link_building" && !t.askAlways && ts.approval !== "ask" && linkPolicy(t.projectId) ? { policy: linkPolicy(t.projectId) } : {}),
       ...(cat.write ? { secondCheck: { on: cfg.global.secondCheck !== false, model: MODELS.some((m) => m.id === cfg.global.checkModel) ? cfg.global.checkModel : "claude-sonnet-5-5" } } : {}),
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
@@ -3599,7 +3780,12 @@ function projectCopy(admin, body) {
       next.onpage = { ...a.onpage, protectedUrls: b.onpage.protectedUrls };
       next.offpage = { ...a.offpage, senderName: b.offpage.senderName };
       next.social = { ...a.social };
-      done.push("on-page, off-page and social rules with their notes");
+      /* blog rules as they are; the trending section's rules without the pages and the area, which name this one client's site and town;
+         the link-building rules with their lists, but not the Chrome ID or the name that belong to the other client */
+      next.blog = copy(a.blog);
+      next.trending = { ...copy(a.trending), pages: b.trending.pages, area: b.trending.area, heading: b.trending.heading };
+      next.links = { ...copy(a.links), browser: b.links.browser, identity: b.links.identity };
+      done.push("on-page, off-page and social rules with their notes, the blog publishing rules and the link-building rules");
     }
     if (want.includes("profileRules")) { next.gbp = copy(a.gbp); done.push("Business Profile rules"); }
     dst.rules = cleanRules(next);
@@ -4172,6 +4358,7 @@ export async function agentOpsPost(req, body) {
     case "repo": return repoEdit(admin, body || {});
     case "signin": return signinEdit(admin, body || {});
     case "output": return outputEdit(admin, body || {});
+    case "links": return linksEdit(admin, body || {});
     case "project/copy": return projectCopy(admin, body || {});
     case "ranking": return rankingEdit(admin, body || {});
     case "evidence": return evidenceGet(body || {});

@@ -904,6 +904,45 @@ The website editor's sign-in can be handed over from the CRM like a tool's
 (Settings, Website): the program then signs in to the editor itself when it
 has been signed out.
 
+## Link building
+
+The task type *Build links* works on the kinds of link the manager switched on
+under Work setup, Offpage SEO, Link building: business listings, profile
+backlinks, web 2.0 properties, article submissions, forum profiles and
+replies, question and answer sites, social media commenting, image, video
+and document sharing, social bookmarks, press releases, and three kinds the
+agent only drafts for a person to send (sponsorships and resource pages,
+unlinked mentions and broken links, journalist requests). Each kind has its
+own number a month (or "the agent decides", at most twelve), its own
+permission, and optionally a preferable list: with it on, only the listed
+sites may be used.
+
+The CRM tools are `link_plan` (what is allowed and left this month, the
+sites, what was built already, the accounts asked for), `link_check` (may
+this kind be made on this site), `log_link` (record a link; it counts
+against the month and appears in the work report) and `account_request`.
+
+What this program enforces, whatever a task says:
+
+- **It never creates accounts.** The task works in one Chrome ID that holds
+  the link-building accounts a person created and signed in to. That window
+  may open any public site, but `Browser.wideRefusal` closes pages whose
+  address is a sign-up page (`/register`, `/signup`, `/join`,
+  `/create-account` and the like), before opening and again after every page
+  change. Where an account is missing the agent calls `account_request` with
+  everything a person needs to fill in, and carries on elsewhere.
+- **Never mail, an account provider or money.** The same window refuses mail
+  hosts, the big account providers' sign-in hosts and payment sites, on top
+  of the pages no signed-in window ever shows (settings, security, billing).
+- **No way round a site's checks.** The program does not complete captchas,
+  phone or email verification; a task stops on that site and says so.
+- **Without that Chrome ID the task does not start**, so it never falls back
+  to a window without these limits.
+
+Whether what is posted is useful and within a site's rules rests on the
+playbook, the second check and, by default, a person's approval of every
+link: each kind starts as "I approve each one before it is posted".
+
 ## Working documents (Excel and Word files)
 
 In the CRM, a project's Report tab has **Working documents**: a folder on

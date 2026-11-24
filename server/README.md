@@ -93,6 +93,21 @@ Rules the server enforces:
   src/lib/mergestate.js keeps them when a tab with an older copy saves. `blog_plan_publish` calls the
   existing WordPress connector (`handleWpDeploy`) with the connection saved for the site; the agent never
   sees it. Test hook: `AGENTOPS_WP_TEST_FILE`.
+- Rules gained `rules.links`: per kind of link (`LINK_TYPES`: listings, profiles, web2, articles, forums,
+  qa, social, sharing, bookmarks, press, community, mentions, journalists) a `mode` (`off`, `limited`,
+  `auto`), `perMonth`, `listOnly` + `list` (the preferable list: when on, only those sites pass),
+  `approval` and a note; plus `browser` (the Chrome ID that holds the link-building accounts), `identity`,
+  `anchors`, `notes`. "Auto" has a ceiling of `LINK_AUTO_MAX` per kind and month. Task type `link_building`
+  (catalog flag `links`): its window lists the host `*`, which the device treats as any public site except
+  mail, account providers, payment sites and pages that create an account. The task does not start without
+  that Chrome ID, with no kind switched on, or when the month is full for every kind that is on.
+- `data/agentops/links.json`: per project the links the agent recorded (`log_link`: kind, site, address,
+  target, anchor, state live / submitted / drafted; the month's count is taken from here) and the accounts
+  it asked a person to create (`account_request`). `POST /api/agentops/links` (`get`, `request-done`,
+  `request-remove`, `remove`) is the team's view. `link_check` and `log_link` refuse a kind that is off, a
+  site off an enforced list, a full month, and account, mail or payment hosts; nothing can be recorded as
+  live or submitted before the plan is approved, nor (for a kind whose permission is "ask") in a run no person
+  approved (`personApproved`, also checked by `blog_plan_publish` per kind of post).
 
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 

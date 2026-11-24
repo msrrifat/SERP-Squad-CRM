@@ -35,6 +35,7 @@ export const CATALOG = [
   t("geogrid_plan", "Work", "Geo-grid action plan", "Finds the weak zones on the map grid and proposes a fix for each.", [], { mode: "limited", max: 1, per: "month", auto: false, recAuto: true, everyDays: 30 }, { maxRunTokens: 200000 }),
   t("citations_links", "Work", "Citation and link monitor", "Checks name, address and phone consistency and looks for new or lost links and mentions.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30 }),
   t("ai_visibility", "Work", "AI search visibility", "Checks whether the business is cited in AI Overviews and AI answers for its main keywords.", ["web"], { mode: "limited", max: 2, per: "month", auto: false, everyDays: 14 }),
+  t("link_building", "Work", "Build links", "Creates the kinds of link you switched on (listings, profiles, web 2.0, articles, forum and Q&A answers, social comments and more), inside the number and the sites you set for each.", ["browser", "web"], { mode: "off", max: 8, per: "month", auto: false, everyDays: 7 }, { write: true, links: true, maxRunTokens: 400000 }),
   t("backlink_prospects", "Work", "Backlink prospects and outreach drafts", "Finds realistic link opportunities and drafts the outreach emails. It does not send them.", ["web"], { mode: "limited", max: 2, per: "month", auto: false, everyDays: 30 }),
   t("experiment_review", "Work", "Change review", "Measures what each logged change did to rankings after two and four weeks.", [], { mode: "limited", max: 1, per: "week", auto: false, recAuto: true, everyDays: 7 }, { maxRunTokens: 150000 }),
   t("report_draft", "Work", "Monthly report narrative", "Drafts the plain-language summary of what was done and what moved this month.", [], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30 }, { maxRunTokens: 150000 }),
@@ -77,13 +78,13 @@ const AREA = {
   ranking_review: "general", niche_study: "general", competitor_study: "general",
   morning_check: "general", rank_drop: "general", google_updates: "general", competitor_watch: "general", experiment_review: "general", report_draft: "general", monthly_plan: "general", custom: "general", experience_review: "general",
   blog_publish: "onpage", trending_services: "onpage", repo_edit: "onpage", site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
-  profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
+  link_building: "offpage", profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
   prospect_audit: "agency", knowledge_study: "agency", crm_review: "agency",
 };
 const CHANNEL = { profile_guard: "gbp", gbp_audit: "gbp", gbp_post: "gbp", gbp_review_reply: "gbp", gbp_update: "gbp", gsc_browser: "gsc", site_edit: "website", social_publish: "social" };
 /* task types that write copy for the client: they are given the short brand documents in full, the others only the brand profile and the document list */
-const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_edit", "repo_edit", "blog_publish", "trending_services", "gbp_post", "gbp_review_reply", "gbp_update", "backlink_prospects", "social_calendar", "social_post", "social_publish", "report_draft", "custom"]);
+const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_edit", "repo_edit", "blog_publish", "trending_services", "link_building", "gbp_post", "gbp_review_reply", "gbp_update", "backlink_prospects", "social_calendar", "social_post", "social_publish", "report_draft", "custom"]);
 /* Where a finished task of each type is filed in a project's work report, and
    the plain name of that kind of work there. Types that are the agent's own
    housekeeping are not in the report. */
@@ -91,7 +92,7 @@ const REPORT = {
   ranking_review: "research", niche_study: "research", competitor_study: "research",
   morning_check: "research", rank_drop: "research", google_updates: "research", competitor_watch: "research", gsc_opportunities: "research", content_brief: "research", ai_visibility: "research", experiment_review: "research", report_draft: "research", monthly_plan: "research", custom: "research",
   site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_draft: "onpage", site_edit: "onpage", repo_edit: "onpage", blog_publish: "onpage", trending_services: "onpage", gsc_browser: "onpage",
-  profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
+  link_building: "offpage", profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
 };
 export const REPORT_LABEL = { ranking_review: "Weekly ranking reviews", niche_study: "Learning the trade", competitor_study: "Competitor research", morning_check: "Daily ranking checks", rank_drop: "Ranking and search results diagnosis", google_updates: "Google update watch", competitor_watch: "Competitor research", gsc_opportunities: "Keyword research (Search Console)", content_brief: "Content gaps and planning",
@@ -150,6 +151,7 @@ You are the SEO operations agent of a local-SEO agency. You work on one client p
 - Media for the work. When the task message lists media sources (folders, Google Drive folders), those are the pictures and videos the client or the manager provided, each with a note on what it is for and what it must not be used for. Follow those notes exactly. List a source with resources_list, look at a picture with resource_look before you choose it, and use only a picture you have looked at and that fits what it is used for. Never use a picture from anywhere else for the client's own pages and profiles, and never describe a picture as something it does not show.
 - The website's code. When your tools include repo_files and repo_read, the site is built from code in a repository, and those tools read it (after repo_sync). Use them to see how the site is put together before you judge or propose anything about it. You never run the repository's code, never read or write files that hold keys or settings for servers, and you change files only in the task type that is for it.
 - Signed-in SEO tools. When the task message lists SEO tools, they are paid tools the agency has an account with, opened with seo_tool_open. Use one when it gives data the CRM tools and the web do not. There you read reports and search: you never change the account, a project, a plan, a payment or a setting, never export or invite anything on the account's behalf, and never open the account, billing or API pages. If a tool asks for a code, a captcha or a new sign-in, stop using it and say so in the report: a person has to sign in.
+- Link building. Links are built only of the kinds, in the numbers and on the sites the work setup allows, checked with link_check and recorded with log_link. You never create an account (ask for it with account_request), never invent an identity, never complete a captcha or any check a site uses to tell people from programs, and never post anything that is not useful where it is posted.
 - Working documents. When your tools include work_file_save, the project has a folder for the documents people will open: keyword research, a content plan, an audit table, a list of prospects. Save such a result there as a sheet (rows and columns) or a document (headings and text), with a clear name, and say in your report which file you saved. Look at what is already there (work_files_list) and add to an existing sheet instead of starting a second one for the same thing. Your own working notes still belong in your working folder, not here.
 - A run that was cut off. When the task message says this run is being carried on after the computer restarted, what you see above it is what you had done until then. The browser has been restarted, so open pages again. If a step was in progress when the computer stopped, first look at what is actually there (the live page, the profile, the repository) and do only what is still missing. Never do the same thing twice.
 - Looking over the CRM. When your tools include crm_overview and crm_read, they read the CRM itself: a task on a client project sees all of that project's records, pages, posts, reports and rankings; an agency-level task sees every client and project. Use them when the task needs something the other tools do not give. What you read about one client never goes into work for another.
@@ -543,6 +545,37 @@ Goal: the internal links that would help the pages that matter most.
 4. Note orphan pages (in the sitemap, linked from nowhere you can find) and links to redirected or missing pages.
 
 Report: a table of source page, target page, sentence and anchor, best targets first. Nothing is changed by this task.`,
+
+  link_building: `# Build links
+
+Goal: a small number of links this month that a person would be glad to find, of the kinds the manager switched on, on sites that fit.
+
+What holds for every kind, whatever a task says:
+- One real identity: the name in the work setup. Never a made-up person, never a second account on one site.
+- You never create an account. Where one is needed, call account_request with the site, why, and everything a person needs to fill in; then carry on elsewhere. You use an account only once link_plan shows it was created.
+- You never complete a captcha, a phone or email check, or any step a site uses to tell people from programs. Stop there and say so.
+- Everything you post has to be useful to the people who read it there, in the client's trade or area, and follow that site's own rules for links and self-promotion. At most one link, only where it adds something, with natural anchor text. Never the same text twice.
+- Say that you write for the business wherever the site's rules or honesty ask for it.
+
+1. Call link_plan. It gives the kinds that are on, how many of each are left this month, which need approval, the sites you must keep to or may choose, what was built already and the accounts you asked for. If nothing has room, say so and finish.
+2. Choose where to work, per kind that has room:
+   - with a list of "only these sites": those sites and no others;
+   - otherwise find the sites yourself: search the client's main terms and area and see which directories, platforms, forums, question sites and social networks rank or are used by the competitors that outrank the client (the status and competitor notes help; with live SEO data, competitors' referring domains). Prefer places the client's customers really use. Skip anything on the "never use" list.
+   Call link_check for each kind and site before you prepare anything.
+3. Prepare each link:
+   - listings: the business's exact name, address and phone as in the brand facts, the right category, hours, description, website; identical everywhere.
+   - profiles: a complete profile, description written for that platform, the logo or a photo from the media sources.
+   - web2: an original short article on a topic of the trade, different from anything on the client's site, with one link.
+   - articles: the site's contribution rules first; then a topic that suits its readers and an original article to its length and style.
+   - forums and qa: a thread or question that is recent, real and unanswered or poorly answered, where the business knows the answer. Write the answer a tradesperson would give; add the link only when a page of the client's goes further than the answer.
+   - social: under posts and in groups the client's customers read; a comment that adds a fact, an answer or a local detail. No link unless the platform's custom allows it and it helps.
+   - sharing and bookmarks: the client's own photos, guides or pages, with a description written for the platform.
+   - press: only something real and recent from the business facts or the manager.
+   - community, mentions, journalists: you draft the request or the answer for a person to send. Record it with log_link as drafted.
+4. Hand in the plan with request_approval where approval is asked: for every link its kind, the site, the exact text, the page it points to and the anchor.
+5. Carry it out (after approval, or in a run that may act alone): in the link-building Chrome ID, on sites where the account exists and is signed in. If a site asks for a sign-in the program cannot complete, a captcha or a code, stop on that site and move on. Read each post back after sending. Call log_link for every link, with its state: live, submitted, or drafted.
+
+Report: per kind what was built (site, address, anchor, state), the accounts you asked for and why, what you chose not to do and why, and what is left this month.`,
 
   blog_publish: `# Write and publish blog posts
 

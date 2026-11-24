@@ -790,6 +790,22 @@ const GBP_PARTS = [["name", "Business name", "The name shown on Google. A change
   ["products", "Products", "Adding products with name, description and photo."], ["photos", "Photos and videos", "Adding pictures to the profile (taken from the project's Resources)."], ["posts", "Posts", "Publishing updates, offers and events."],
   ["reviews", "Review replies", "Answering customer reviews."], ["qa", "Questions and answers", "Answering questions asked on the profile."], ["attributes", "Attributes", "Payment methods, accessibility, amenities and the like."]];
 const GBP_START = { name: "never", address: "never", phone: "never", categories: "never", website: "ask", hours: "ask", specialHours: "ask" };
+/* the kinds of link the agent can work on; the last flag marks the kinds where it only drafts and a person sends */
+const LINK_TYPES = [
+  ["listings", "Business listings and citations", "Directory and map listings with the name, address and phone: general, local and trade directories.", false],
+  ["profiles", "Profile backlinks", "A profile page for the business on platforms that show a website link.", false],
+  ["web2", "Web 2.0 properties", "The business's own small blog or page on free publishing platforms, with original posts that link to the site.", false],
+  ["articles", "Article submissions and guest posts", "An original article placed on a site that accepts contributions.", false],
+  ["forums", "Forum profiles and replies", "A member profile on forums of the trade or the area, and replies that help in threads the business knows the answer to.", false],
+  ["qa", "Question and answer sites", "Answers to real questions on Quora and similar sites, where the client's page adds to the answer.", false],
+  ["social", "Social media commenting", "Useful comments on the social platforms that rank for the client's terms, under relevant posts and in local groups.", false],
+  ["sharing", "Image, video and document sharing", "The client's own photos, videos, guides and slides on sharing platforms, with a link back.", false],
+  ["bookmarks", "Social bookmarks and content curation", "The client's pages saved and described on bookmarking and curation platforms.", false],
+  ["press", "Press releases and local news", "A release or a news tip about something real: an opening, an award, a community project.", false],
+  ["community", "Sponsorships, associations and resource pages", "Chambers of commerce, trade bodies, charities and local resource pages that list members and supporters.", true],
+  ["mentions", "Unlinked mentions and broken links", "Pages that name the business without linking, or link to a page that is gone.", true],
+  ["journalists", "Journalist requests", "Requests from journalists for an expert comment in the client's trade.", true],
+];
 const GBP_MODES = [["never", "Not allowed", "#B91C1C", "#FEE2E2"], ["ask", "Only with my approval", "#92400E", "#FEF3C7"], ["allowed", "Allowed", "#15803D", "#DCFCE7"]];
 const Ready = ({ ok, yes = "Ready", no = "Not set up" }) => <Chip fg={ok ? "#15803D" : "#B45309"} bg={ok ? "#DCFCE7" : "#FEF3C7"}>{ok ? yes : no}</Chip>;
 const txtCls = inputCls + " min-h-[64px] resize-y";
@@ -810,6 +826,10 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const setKind = (k, patch) => setRule("blog", { ...br, kinds: { ...br.kinds, [k]: { ...kindOf(k), ...patch } } });
   const tr = { pages: "", position: "", heading: "", count: 4, area: "", notes: "", ...(rules.trending || {}) };
   const blogTotal = blogKinds.reduce((n, [k]) => n + (+kindOf(k).perMonth || 0), 0);
+  const lr = { types: {}, browser: "", identity: "", anchors: "", notes: "", ...(rules.links || {}) };
+  const linkOf = (k) => ({ mode: "off", perMonth: 4, listOnly: false, list: "", approval: "ask", note: "", ...(lr.types[k] || {}) });
+  const setLink = (k, patch) => setRule("links", { ...lr, types: { ...lr.types, [k]: { ...linkOf(k), ...patch } } });
+  const linksOn = LINK_TYPES.filter(([k]) => linkOf(k).mode !== "off").length;
   const smm = ch.smm || {};
   const setSmm = (patch) => setCh({ smm: { on: false, name: "", url: "", browser: "", workspace: "", notes: "", ...smm, ...patch } });
   const onProfile = (c) => c.channel === "gbp";
@@ -954,7 +974,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
             <div className="mb-2 text-[11.5px] text-gray-500">Create and sign in to them in the agent application, under Settings. One Chrome ID per Google account or social login keeps each client's work in its own signed-in session.</div>
             {!profiles.length && <div className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-900">No Chrome ID exists yet. Open the agent application on its computer, go to Settings, add a Chrome ID and sign in to the Google account there.</div>}
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {profiles.map((p) => { const uses = [ch.website.browser === p.id && "Website", ch.gbp.some((x) => x.browser === p.id) && "Business Profile", ch.gsc.browser === p.id && "Search Console", ch.ga4.browser === p.id && "Analytics", ch.social.some((x) => x.browser === p.id) && "Social"].filter(Boolean);
+              {profiles.map((p) => { const uses = [ch.website.browser === p.id && "Website", ch.gbp.some((x) => x.browser === p.id) && "Business Profile", ch.gsc.browser === p.id && "Search Console", ch.ga4.browser === p.id && "Analytics", ch.social.some((x) => x.browser === p.id) && "Social", lr.browser === p.id && "Link building"].filter(Boolean);
                 return <div key={p.id + p.device} className="rounded-lg border border-gray-200 px-3 py-2"><div className="flex items-center justify-between gap-2"><code className="rounded bg-gray-100 px-1.5 py-0.5 text-[12px] font-semibold text-gray-800">{p.id}</code><span className="text-[11px] text-gray-400">{p.device}</span></div><div className="mt-1 truncate text-[12.5px] text-gray-800">{p.name}</div><div className="text-[11px] text-gray-500">{uses.length ? "Used here for: " + uses.join(", ") : "Not used by this project"}</div></div>; })}
             </div>
           </Card>
@@ -1107,6 +1127,45 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
             </div>
             <div className="mt-2 text-[11px] text-gray-400">The agent drafts outreach; a person sends it.</div>
           </Card>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-[13.5px] font-semibold text-gray-900">Link building</div>
+              <Chip fg={linksOn ? "#15803D" : "#6B7280"} bg={linksOn ? "#DCFCE7" : "#F3F4F6"}>{linksOn ? `${linksOn} kind${linksOn === 1 ? "" : "s"} of link switched on` : "No kind switched on"}</Chip>
+            </div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Choose which kinds of link the agent works on for {project.name}, how many of each in a month, and where. With <b>Preferable list</b> on, it builds that kind <b>only</b> on the sites you list; with it off, it finds the sites itself: it looks at what ranks for the client's terms and what the competitors above the client use. The task type <b>Build links</b> in the list below switches the work on.</div>
+            <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600"><b>What stays the same for every kind.</b> The agent does not create accounts: where one is needed it asks you, with everything to fill in, and you create it and sign in to it in the Chrome ID below. It uses one real identity, never a made-up person or a second account on a site. It does not complete captchas or phone and email checks. Everything it posts has to be useful where it is posted and follow that site's rules, with at most one link.</div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Labeled label="Chrome ID that holds the link-building accounts"><ChromeSelect label="Chrome ID for link-building accounts" profiles={profiles} value={lr.browser} onChange={(v) => setRule("links", { ...lr, browser: v })} /></Labeled>
+              <Labeled label="Name used on profiles and posts (empty: the business's name)"><input className={inputCls} maxLength={120} placeholder={project.name} value={lr.identity} onChange={(e) => setRule("links", { ...lr, identity: e.target.value })} /></Labeled>
+              <Labeled label="Anchor text guidance"><textarea className={txtCls} placeholder={"Mostly the business name and the plain address of the page. A service with the town now and then. Never the same keyword anchor twice in a month."} value={lr.anchors} onChange={(e) => setRule("links", { ...lr, anchors: e.target.value })} /></Labeled>
+              <Labeled label="Other link-building notes for the agent"><textarea className={txtCls} placeholder={"For example: UK sites only. Link to the service pages more than the home page. No adult, casino or coupon sites."} value={lr.notes} onChange={(e) => setRule("links", { ...lr, notes: e.target.value })} /></Labeled>
+            </div>
+            <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200">
+              {LINK_TYPES.map(([k, label, hint, drafts]) => { const x = linkOf(k), on = x.mode !== "off"; return (
+                <div key={k} className="px-3 py-2.5" data-link-type={k}>
+                  <div className="grid items-center gap-2 md:grid-cols-[1.5fr_1.1fr_90px_1.2fr]">
+                    <div className="min-w-0"><div className="text-[13px] font-medium text-gray-900">{label}</div><div className="text-[11.5px] leading-4 text-gray-500">{hint}</div></div>
+                    <Labeled label="How many"><select className={inputCls} aria-label={`${label}: how many`} value={x.mode} onChange={(e) => setLink(k, { mode: e.target.value })}><option value="off">Off</option><option value="limited">A set number a month</option><option value="auto">Auto: the agent decides (at most 12 a month)</option></select></Labeled>
+                    <Labeled label="A month"><input className={inputCls} inputMode="numeric" aria-label={`${label} a month, at most`} disabled={x.mode !== "limited"} value={x.mode === "limited" ? x.perMonth : x.mode === "auto" ? "Auto" : ""} onChange={(e) => setLink(k, { perMonth: Math.min(200, numOnly(e.target.value)) })} /></Labeled>
+                    <Labeled label="Permission">{drafts
+                      ? <div className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-[12px] text-gray-600">The agent drafts it, a person sends it</div>
+                      : <select className={inputCls} aria-label={`${label}: permission`} disabled={!on} value={x.approval} onChange={(e) => setLink(k, { approval: e.target.value })}><option value="ask">I approve each one before it is posted</option><option value="auto">May post without asking (after the second check)</option></select>}</Labeled>
+                  </div>
+                  {on && (
+                    <div className="mt-2 grid gap-2 md:grid-cols-[1.5fr_2.4fr]">
+                      <label className="flex items-start gap-2 text-[12px] leading-5 text-gray-700"><input type="checkbox" className="mt-1" checked={x.listOnly} onChange={(e) => setLink(k, { listOnly: e.target.checked })} /><span><b>Preferable list</b><br /><span className="text-gray-500">{x.listOnly ? "On: only the sites listed here are used." : "Off: the agent chooses the sites itself."}</span></span></label>
+                      <div className="grid gap-2">
+                        {x.listOnly && <textarea className={txtCls} aria-label={`${label}: preferable list`} placeholder={"One site per line, for example:\nyell.com\nthomsonlocal.com"} value={x.list} onChange={(e) => setLink(k, { list: e.target.value })} />}
+                        <input className={inputCls} maxLength={300} aria-label={`${label}: note`} placeholder="Note for this kind of link (optional)" value={x.note} onChange={(e) => setLink(k, { note: e.target.value })} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ); })}
+            </div>
+            <div className="mt-2 text-[11px] leading-5 text-gray-400">Sites under "never to contact or seek links from" above are left out for every kind. A link counts against its month when the agent records it. Press Save changes to keep these rules.</div>
+          </Card>
+          {!agency && <LinkWork project={project} accent={accent} />}
           {taskList("offpage", "Off-page tasks")}
         </>
       )}
@@ -2255,6 +2314,69 @@ function DfsLogin({ data, accent, act, busy }) {
 /* ---------- a tool's sign-in: typed here once, kept only on the agent's computer ---------- */
 function siteOfUrl(u) {
   try { const h = new URL(u).hostname.toLowerCase(), parts = h.split("."); const three = parts.length > 2 && parts[parts.length - 1].length === 2 && ["co", "com", "org", "net", "ac", "gov", "edu"].includes(parts[parts.length - 2]); return parts.slice(three ? -3 : -2).join("."); } catch { return ""; }
+}
+/* What link building has produced for a project: the accounts the agent asked a person to create, and the links it recorded. */
+function LinkWork({ project, accent }) {
+  const [v, setV] = useState(null); const [err, setErr] = useState(""); const [open, setOpen] = useState("");
+  const run = useCallback(async (body) => { setErr(""); try { const o = await api("links", { projectId: project.id, ...body }); setV(o); return o; } catch (e) { setErr(String(e.message || e)); return null; } }, [project.id]);
+  useEffect(() => { run({ action: "get" }); }, [run]);
+  if (!v) return err ? <Card className="p-4 text-[12.5px] text-red-700">{err}</Card> : null;
+  const label = (k) => v.types.find((t) => t.key === k)?.label || k;
+  const waiting = v.requests.filter((r) => !r.done), usedKinds = v.types.filter((t) => v.used[t.key] > 0);
+  if (!v.requests.length && !v.total) return null;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[13.5px] font-semibold text-gray-900">Accounts and links</div>
+        {waiting.length > 0 ? <Chip fg="#92400E" bg="#FEF3C7">{waiting.length} account{waiting.length === 1 ? "" : "s"} to create</Chip> : <Chip>{v.total} link{v.total === 1 ? "" : "s"} recorded</Chip>}
+      </div>
+      {err && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-800" role="alert">{err}</div>}
+      {v.requests.length > 0 && (
+        <div className="mt-3">
+          <div className="text-[12px] font-semibold text-gray-700">Accounts the agent asked for</div>
+          <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Create the account yourself, sign in to it in the link-building Chrome ID on the agent's computer, then mark it as created. The agent uses it from its next task.</div>
+          <div className="mt-2 divide-y divide-gray-100 rounded-xl border border-gray-200">
+            {v.requests.map((r) => (
+              <div key={r.id} className="px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0"><span className="text-[13px] font-medium text-gray-900">{r.site}</span> {r.done ? <Chip fg="#15803D" bg="#DCFCE7">Created</Chip> : <Chip fg="#92400E" bg="#FEF3C7">Waiting</Chip>} <span className="text-[11px] text-gray-400">asked {relTime(r.at)}</span></div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Btn ghost onClick={() => setOpen(open === r.id ? "" : r.id)}>{open === r.id ? "Hide details" : "What to fill in"}</Btn>
+                    {!r.done && <Btn accent={accent} onClick={() => run({ action: "request-done", id: r.id })}><Check size={13} /> Mark as created</Btn>}
+                    <Btn ghost onClick={() => run({ action: "request-remove", id: r.id })}>Remove</Btn>
+                  </div>
+                </div>
+                <div className="mt-0.5 text-[12px] leading-5 text-gray-600">{r.why}</div>
+                {open === r.id && <pre className="mt-1.5 whitespace-pre-wrap rounded-lg bg-gray-50 px-3 py-2 text-[12px] leading-5 text-gray-700">{r.details}</pre>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {v.total > 0 && (
+        <div className="mt-3">
+          <div className="text-[12px] font-semibold text-gray-700">This month{usedKinds.length ? ": " + usedKinds.map((t) => `${t.label.toLowerCase()} ${v.used[t.key]}`).join(", ") : ": nothing yet"}</div>
+          <div className="mt-2 overflow-x-auto rounded-xl border border-gray-200">
+            <table className="w-full text-left text-[12px]">
+              <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500"><tr><th className="px-3 py-1.5">Kind</th><th className="px-3 py-1.5">Site</th><th className="px-3 py-1.5">Anchor</th><th className="px-3 py-1.5">State</th><th className="px-3 py-1.5">When</th><th className="px-3 py-1.5" /></tr></thead>
+              <tbody className="divide-y divide-gray-100">
+                {v.recent.map((x) => (
+                  <tr key={x.id}>
+                    <td className="px-3 py-1.5 text-gray-700">{label(x.type)}</td>
+                    <td className="px-3 py-1.5">{x.url ? <a className="text-blue-700 hover:underline" href={x.url} target="_blank" rel="noreferrer noopener">{x.site}</a> : x.site}</td>
+                    <td className="px-3 py-1.5 text-gray-600">{x.anchor || ""}</td>
+                    <td className="px-3 py-1.5">{x.state === "live" ? <Chip fg="#15803D" bg="#DCFCE7">Live</Chip> : x.state === "submitted" ? <Chip fg="#1D4ED8" bg="#DBEAFE">Submitted</Chip> : <Chip>Drafted</Chip>}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{relTime(x.at)}</td>
+                    <td className="px-3 py-1.5 text-right"><button className="text-[11.5px] text-gray-500 hover:text-red-700" title="Remove this record. It no longer counts against the month. Nothing is removed from the site itself." onClick={() => run({ action: "remove", id: x.id })}>Remove</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
 }
 function SignInRelay({ name, url, profileId, accent }) {
   const [v, setV] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [note, setNote] = useState("");
