@@ -2678,7 +2678,9 @@ function Resources({ project, accent, reload, onSettings }) {
               <Labeled label="Use these for"><textarea rows={3} className={area} value={f.useFor} maxLength={600} placeholder="Blog posts and Business Profile photos about boiler work. Before-and-after pairs belong together." onChange={(e) => setForm({ ...form, useFor: e.target.value })} /></Labeled>
               <Labeled label="Do not use these for"><textarea rows={3} className={area} value={f.notFor} maxLength={600} placeholder="Nothing showing a customer's face or a house number. Not for directory listings." onChange={(e) => setForm({ ...form, notFor: e.target.value })} /></Labeled>
             </div>
-            {f.kind === "drive" && <div className="mt-2 text-[11.5px] leading-5 text-gray-500">In Google Drive, share the folder with <b>Anyone with the link</b> (Viewer). The agent's computer reads it without signing in, so a private folder cannot be read. Google Docs, Sheets and Slides in it are skipped; files over 80 MB are too large to fetch this way.</div>}
+            {f.kind === "drive" && (v.driveEmail
+              ? <div className="mt-2 text-[11.5px] leading-5 text-gray-500">In Google Drive, share the folder with <b>{v.driveEmail}</b> as Viewer. It stays private: no public link is needed. Pictures and other files up to 15 MB are fetched through the CRM; Google Docs and Sheets in it can be read as text by the agent.</div>
+              : <div className="mt-2 text-[11.5px] leading-5 text-gray-500">In Google Drive, share the folder with <b>Anyone with the link</b> (Viewer). The agent's computer reads it without signing in, so a private folder cannot be read. Google Docs, Sheets and Slides in it are skipped; files over 80 MB are too large to fetch this way. To keep folders private, connect Google Drive under API setup.</div>)}
             {f.kind === "folder" && !LOCAL_APP?.chooseFolder && <div className="mt-2 text-[11.5px] leading-5 text-gray-500">A web page cannot look into another computer's folders, so the path is typed here. In the agent's own application on that computer, this same screen has a <b>Choose folder</b> button.</div>}
             <div className="mt-3"><Btn accent={accent} disabled={busy || !f.location.trim() || (f.kind === "folder" && !f.deviceId)} onClick={add}><Plus size={13} /> Add source</Btn></div>
           </div>
@@ -2781,6 +2783,7 @@ function WorkDocs({ project, accent }) {
           <select className={inputCls} value={form.deviceId} onChange={(e) => setForm({ ...form, deviceId: e.target.value })}><option value="">Choose…</option>{v.devices.map((d) => <option key={d.id} value={d.id}>{d.name}{d.online ? "" : " (offline)"}</option>)}</select>
         </Labeled>
         <Labeled label="Google Drive link of that folder (optional)"><input className={inputCls} value={form.driveUrl} maxLength={300} placeholder="https://drive.google.com/drive/folders/…" onChange={(e) => setForm({ ...form, driveUrl: e.target.value })} /></Labeled>
+        {v.driveEmail && <div className="md:col-span-2 -mt-1 text-[11.5px] leading-5 text-gray-500">With Google Drive connected (API setup): share this folder with <b>{v.driveEmail}</b> as Content manager and the agent also saves real Google Sheets and Google Docs in it. Google allows that only for a folder inside a <b>shared drive</b>; in a personal Drive the agent keeps using the Excel and Word files in the folder above.</div>}
         <Labeled label="What to keep there (optional note for the agent)"><input className={inputCls} value={form.note} maxLength={600} placeholder="Keyword research in one sheet per month. Plans as documents. English only." onChange={(e) => setForm({ ...form, note: e.target.value })} /></Labeled>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -3205,6 +3208,51 @@ function SecondCheckCard({ data, accent, act, busy }) {
     </Card>
   );
 }
+/* Google Drive through a service account: private folders without a public link */
+function DriveCard({ data, accent, act, busy }) {
+  const d = data.drive || { set: false };
+  const [json, setJson] = useState(""); const [open, setOpen] = useState(false); const [folder, setFolder] = useState(""); const [test, setTest] = useState(null);
+  const save = async () => { const o = await act("credentials", { kind: "googledrive", action: "set", json }); setJson(""); if (o) { setOpen(false); setTest(null); } };
+  const runTest = async () => { setTest({ running: true }); try { const o = await api("credentials", { kind: "googledrive", action: "test", folder }); setTest(o.test); } catch (e) { setTest({ ok: false, detail: String(e.message || e) }); } };
+  const remove = async () => { if (await askConfirm({ title: "Disconnect Google Drive?", message: "The agent can then read only Drive folders that are shared with \"Anyone with the link\". The key is deleted from this server. The service account itself stays in your Google Cloud project until you delete it there.", confirmLabel: "Disconnect", danger: true })) { await act("credentials", { kind: "googledrive", action: "remove" }); setTest(null); } };
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><FolderInput size={15} style={{ color: accent }} /> Google Drive (through Google's API)</div>
+        {d.set ? <Chip fg="#15803D" bg="#DCFCE7">Connected</Chip> : <Chip>Not connected</Chip>}
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">Lets the agent read private Drive folders without a public link and without anyone's Google sign-in. It uses a <b>service account</b>: a Google identity of its own with an email address. You share a folder with that address, as you would with a colleague, and the agent can read that folder and nothing else in your Drive. Its key is kept encrypted on this server, never shown again, and never sent to the agent's computer or to Claude.</div>
+      {d.set && (
+        <div className="mt-3 rounded-xl border border-gray-200 p-3 text-[12.5px] text-gray-800">
+          <div>Share folders with: <b className="break-all">{d.email}</b> <button className="ml-1 text-[11.5px] font-semibold text-gray-500 hover:text-gray-800" onClick={() => navigator.clipboard?.writeText(d.email)}>Copy</button></div>
+          <div className="mt-0.5 text-[11.5px] text-gray-500">Viewer is enough to read. To let the agent save Google Sheets and Docs in a working-documents folder, the folder has to be inside a shared drive, with this address as Content manager.{d.by ? ` Connected by ${d.by}${d.updatedAt ? " " + relTime(d.updatedAt) : ""}.` : ""}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input className={inputCls + " max-w-md flex-1"} aria-label="A Drive folder link to test" placeholder="Paste a folder's link to test that it can be read (optional)" value={folder} onChange={(e) => setFolder(e.target.value)} />
+            <Btn ghost disabled={busy || test?.running} onClick={runTest}><RefreshCw size={13} /> {test?.running ? "Testing…" : "Test"}</Btn>
+            <Btn ghost danger disabled={busy} onClick={remove}>Disconnect</Btn>
+          </div>
+          {test && !test.running && <div className={`mt-2 rounded-lg px-3 py-2 text-[12px] ${test.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`} role="status">{test.detail}</div>}
+        </div>
+      )}
+      {!open ? <div className="mt-3"><Btn accent={d.set ? undefined : accent} ghost={d.set} onClick={() => setOpen(true)}>{d.set ? "Replace the key" : "Connect Google Drive"}</Btn></div> : (
+        <div className="mt-3 rounded-xl border border-gray-200 p-3">
+          <ol className="list-decimal space-y-0.5 pl-5 text-[11.5px] leading-5 text-gray-600">
+            <li>In the Google Cloud console, in a project of your own, enable <b>Google Drive API</b>.</li>
+            <li>Under IAM and admin, Service accounts, create a service account (no roles are needed).</li>
+            <li>Open it, Keys, Add key, Create new key, <b>JSON</b>. A file is downloaded.</li>
+            <li>Open that file in a text editor and paste its whole content below.</li>
+          </ol>
+          <textarea className={inputCls + " mt-2 min-h-[92px] resize-y font-mono text-[11.5px]"} aria-label="Service account key file" autoComplete="off" spellCheck={false} placeholder={'{ "type": "service_account", "project_id": "…", "private_key": "…", "client_email": "…" }'} value={json} onChange={(e) => setJson(e.target.value)} />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Btn accent={accent} disabled={busy || json.trim().length < 100} onClick={save}>Check with Google and save</Btn>
+            <Btn ghost onClick={() => { setOpen(false); setJson(""); }}>Cancel</Btn>
+            <span className="text-[11.5px] text-gray-500">The key is checked with Google first; a key Google does not accept is not saved. Delete the downloaded file afterwards.</span>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 /* Privacy: what the agent is not given, and what leaves the office at all */
 function PrivacyCard({ data, accent, act, busy }) {
   const p = { hideContacts: true, hideMoney: true, hideTeamChats: true, oneProject: false, basicWeb: false, confidential: "", ...(data.global.privacy || {}) };
@@ -3336,6 +3384,7 @@ function ApiSetupView({ data, accent, act, busy }) {
         <div className="mt-1 text-[11.5px] leading-5 text-gray-500">The agent reads a page as text. With this on it can also ask for a picture of the page when the text is not enough: a visual editor, a photo, a layout. A picture costs more tokens than a reading, so it is told to use it sparingly. No picture is ever taken of a page that asks for a sign-in, has a field for a password, a code or a key, or shows something that looks like one. The same rule holds for the screenshot the agent keeps as proof when a task that changed something ends.</div>
       </Card>
       <SeoDataCard data={data} accent={accent} act={act} busy={busy} />
+      <DriveCard data={data} accent={accent} act={act} busy={busy} />
 
       <Card className="p-4">
         <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Lock size={15} style={{ color: accent }} /> How passwords and keys are kept safe</div>

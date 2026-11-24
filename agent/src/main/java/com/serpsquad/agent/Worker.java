@@ -805,6 +805,7 @@ final class Worker {
                 boolean askedForUpdate = updateRequested;
                 updateRequested = false;
                 if (askedForUpdate) updater.forget();
+                Drive.viaCrm(h.path("driveApi").asBoolean(false) ? crm : null);
                 if (h.path("privacy").isObject()) {
                     List<String> words = new ArrayList<>();
                     for (JsonNode w : h.path("privacy").path("hide")) words.add(w.asText(""));

@@ -1,5 +1,7 @@
 package com.serpsquad.agent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -57,9 +59,31 @@ final class Drive {
         return html.replaceAll("<[^>]+>", "").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").trim();
     }
 
+    /**
+     * Set when the CRM holds the agency's Google service account: folders are
+     * then listed and files fetched through the CRM, which reads what was
+     * shared with that account, so a folder needs no public link. The account's
+     * key never comes to this computer.
+     */
+    private static volatile CrmClient viaCrm;
+    static void viaCrm(CrmClient crm) { viaCrm = crm; }
+    static boolean throughCrm() { return viaCrm != null; }
+
+    private static JsonNode ask(String action, String id) throws DriveException {
+        ObjectNode b = Json.obj();
+        b.put("action", action).put("id", id);
+        try { return viaCrm.post("agent/drive", b); }
+        catch (CrmClient.CrmException e) { throw new DriveException(Json.clip(String.valueOf(e.getMessage()), 300)); }
+    }
+
     /** What is in one folder. */
     static List<Entry> list(String folderId) throws DriveException {
         if (!folderId.matches("[A-Za-z0-9_-]{10,80}")) throw new DriveException("That is not a Google Drive folder.");
+        if (viaCrm != null) {
+            List<Entry> out = new ArrayList<>();
+            for (JsonNode e : ask("list", folderId).path("entries")) out.add(new Entry(e.path("id").asText(""), Json.clip(e.path("name").asText(""), 200), e.path("modified").asText(""), e.path("folder").asBoolean(false), e.path("document").asBoolean(false)));
+            return out;
+        }
         String html;
         try {
             HttpResponse<String> r = HTTP.send(HttpRequest.newBuilder(URI.create(LIST + folderId)).timeout(Duration.ofSeconds(40)).header("User-Agent", "SERPSquadAgent (reads a shared folder)").GET().build(), HttpResponse.BodyHandlers.ofString());
@@ -86,6 +110,13 @@ final class Drive {
     /** Fetch one file into `to`. Returns its size. */
     static long download(String fileId, Path to) throws DriveException {
         if (!fileId.matches("[A-Za-z0-9_-]{10,80}")) throw new DriveException("That is not a Google Drive file.");
+        if (viaCrm != null) {
+            byte[] bytes;
+            try { bytes = java.util.Base64.getDecoder().decode(ask("file", fileId).path("base64").asText("")); } catch (IllegalArgumentException e) { throw new DriveException("The CRM did not hand over a readable file."); }
+            if (bytes.length == 0) throw new DriveException("The CRM handed over an empty file.");
+            try { Files.createDirectories(to.getParent()); Files.write(to, bytes); } catch (Exception e) { throw new DriveException("The file could not be saved on this computer: " + Json.clip(String.valueOf(e.getMessage()), 120)); }
+            return bytes.length;
+        }
         Path tmp = to.resolveSibling(to.getFileName() + ".part");
         try {
             Files.createDirectories(to.getParent());

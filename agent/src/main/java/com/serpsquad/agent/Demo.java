@@ -590,6 +590,7 @@ final class Demo {
     private final Map<String, ObjectNode> demoOutput = new HashMap<>();
     private final Map<String, ObjectNode> demoLinks = new HashMap<>();
     private final Map<String, List<ObjectNode>> demoProposals = new HashMap<>();
+    private ObjectNode demoDrive = Json.obj().put("set", true).put("email", "agent-drive@northgate-agency.iam.gserviceaccount.com").put("cloudProject", "northgate-agency").put("updatedAt", System.currentTimeMillis() - 5 * 24 * 3600_000L).put("by", "You");
     private static final String[][] LINK_TYPES = {
         { "listings", "Business listings and citations", "Directory and map listings with the name, address and phone: general, local and trade directories.", "" },
         { "profiles", "Profile backlinks", "A profile page for the business on platforms that show a website link.", "" },
@@ -1158,6 +1159,7 @@ final class Demo {
         sch.set("workHours", workHours);
         sch.putNull("offNow");
         /* live SEO data (DataForSEO): the same fields the CRM reports, with made-up spend */
+        o.set("drive", demoDrive.deepCopy());
         ObjectNode seo = o.putObject("seoData");
         seo.put("enabled", global.path("seoData").asBoolean(false)).put("usdPerMonth", global.path("seoUsdPerMonth").asDouble(25)).put("login", true).put("testedAt", 0).put("testOk", false).put("requestsPerTask", 20);
         seo.set("own", dfsOwn.deepCopy());
@@ -1888,6 +1890,14 @@ final class Demo {
             }
             case "credentials": {
                 String a = body.path("action").asText("");
+                if (body.path("kind").asText("").equals("googledrive")) {
+                    if (a.equals("test")) { ObjectNode out = Json.obj(); out.put("ok", true); out.putObject("test").put("ok", true).put("detail", body.path("folder").asText("").isBlank() ? "Demo: Google would accept the key. Share a folder with the address above and the agent can read it." : "Demo: the folder can be read: 14 items in it."); return new Reply(200, out); }
+                    if (a.equals("set")) {
+                        if (!body.path("json").asText("").contains("service_account")) return bad(400, "That is not the key file. Paste the whole content of the .json file Google gave you for the service account.");
+                        demoDrive = Json.obj().put("set", true).put("email", "agent-drive@your-project.iam.gserviceaccount.com").put("cloudProject", "your-project").put("updatedAt", System.currentTimeMillis()).put("by", "Office PC (agent's computer)");
+                    } else if (a.equals("remove")) demoDrive = Json.obj().put("set", false);
+                    return new Reply(200, overview());
+                }
                 if (body.path("kind").asText("").equals("dataforseo")) {
                     if (a.equals("set")) {
                         String login = body.path("login").asText("").trim();

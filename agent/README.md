@@ -915,6 +915,18 @@ expire. `index_check` only checks pages the CRM does not record as indexed.
 A browser on Search Console remains for what has no API (requesting indexing,
 removals, manual actions): the task type *Search Console in the browser*.
 
+## Google Drive without a public link
+
+When the agency has connected Google Drive in the CRM (API setup, a Google
+service account), the hello answer carries `driveApi: true` and `Drive.java`
+asks the CRM for folder listings and files (`agent/drive`) instead of reading
+Google's public folder pages. A media folder then only has to be shared with
+the service account's address. Files up to 15 MB pass through the CRM;
+larger ones belong in a folder on this computer. The account's key stays on
+the CRM's server and never comes here. Reading documents and sheets
+(`drive_read`) and saving working documents as Google sheets and documents
+(`drive_save`) are CRM tools; they need nothing on this computer.
+
 ## Commands in the chat
 
 In a project's chat the manager can tell the agent to change how it works:

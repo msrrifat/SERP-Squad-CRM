@@ -102,6 +102,17 @@ Rules the server enforces:
   counted at $0.004 an address; answers are written back as `index: { status, checkedAt, source, by,
   reason }` through `updateProjectOptimization`, and `keepNewerIndex` in src/lib/mergestate.js keeps them
   on a merge). Task type `index_watch`. Test hook: `AGENTOPS_GOOGLE_TEST_FILE` (stand-ins for all three).
+- Google Drive through a service account (server/gdrive.js: a signed JWT exchanged for a token, then Drive
+  API v3; no SDK). The key file is pasted under AI agent, API setup, checked with Google, and kept in
+  `secrets.json` as `google` (encrypted like the Claude keys, never returned, never sent to a device or to
+  Claude). `credentials` with `kind: "googledrive"` (`set`, `test`, `remove`). The agent reaches only the
+  folders listed for a project (Drive media sources in Resources, the Drive link of the working-documents
+  folder) and what was listed below them (`driveTops`, `driveSeen`): tools `drive_list`, `drive_read`
+  (Google documents as text, sheets as CSV, text files) and `drive_save` (a Google sheet from CSV or a
+  Google document from HTML in the working-documents folder; same name updates). Devices get listings and
+  files up to 15 MB through `POST /api/agentops/agent/drive`, so `Drive.java` needs no public link when
+  `driveApi` is true in the hello answer. Google lets a service account create files only inside a shared
+  drive; that error is passed on in plain words. Test hooks: `AGENTOPS_GTOKEN_URL`, `AGENTOPS_GDRIVE_BASE`.
 - The chat can command the agent. `work_settings` reads a project's settings by path; `propose_settings`,
   `propose_guide` and `cancel_task` exist only in a chat turn. A proposal is stored in `chats.json`
   (`proposals`), validated by a dry run of the same code the settings screen uses (`applyProjectPatch`,

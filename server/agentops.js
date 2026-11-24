@@ -29,6 +29,7 @@ import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:
 import { gzipSync, gunzipSync } from "node:zlib";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { parseServiceAccount, forgetDriveToken, driveWho, driveList, driveMeta, driveDownload, driveExport, driveCreate, driveReplace, GOOGLE_DOC, GOOGLE_SHEET } from "./gdrive.js";
 import { AREAS, CATALOG, CATALOG_BY_KEY, CHANNEL_CHECK_URL, CHANNEL_HOSTS, DEFAULT_PLAYBOOKS, MODELS, PRICES, REPORT_LABEL, SOCIAL_PLATFORMS, WORK_KINDS } from "./agentops-catalog.js";
 
 const DIR = new URL("./data/agentops/", import.meta.url);
@@ -233,9 +234,10 @@ function secrets() {
     v = key ? openSecrets(raw, key) : null;
     secretsLocked = !v;
   }
-  secretsCache = { claude: v?.claude?.key ? v.claude : null, projects: v?.projects && typeof v.projects === "object" ? v.projects : {}, dataforseo: v?.dataforseo?.login && v?.dataforseo?.password ? v.dataforseo : null };
+  secretsCache = { claude: v?.claude?.key ? v.claude : null, projects: v?.projects && typeof v.projects === "object" ? v.projects : {}, dataforseo: v?.dataforseo?.login && v?.dataforseo?.password ? v.dataforseo : null,
+    google: v?.google?.clientEmail && v?.google?.privateKey ? v.google : null };
   /* an older plain file is moved to the encrypted form the first time it is read */
-  if (raw && !raw.enc && (secretsCache.claude || secretsCache.dataforseo || Object.keys(secretsCache.projects).length) && master()) { try { saveSecrets(); } catch { /* stays plain */ } }
+  if (raw && !raw.enc && (secretsCache.claude || secretsCache.dataforseo || secretsCache.google || Object.keys(secretsCache.projects).length) && master()) { try { saveSecrets(); } catch { /* stays plain */ } }
   return secretsCache;
 }
 function saveSecrets() {
@@ -272,6 +274,37 @@ async function credentials(admin, body) {
   if (pid && !projectOf(pid)) return [404, { error: "not_found", detail: "Unknown project." }];
   const sec = secrets();
   const where = pid ? `for ${projectOf(pid).name}` : "for the company";
+  if (body.kind === "googledrive") {
+    /* a Google service account for Drive: the key file is checked with Google, then kept encrypted; it is never returned */
+    if (body.action === "set") {
+      let sa;
+      try { sa = parseServiceAccount(body.json); } catch (e) { return [400, { error: "bad_request", detail: e.message }]; }
+      try { await driveWho(sa); } catch (e) { return [400, { error: "bad_request", detail: `Not saved. ${e.message}` }]; }
+      forgetDriveToken();
+      sec.google = { ...sa, updatedAt: now(), by: admin.name };
+      saveSecrets();
+      driveSeen.clear();
+      logActivity("settings", `${admin.name} connected Google Drive for the agent through the service account ${sa.clientEmail}.`);
+      return [200, overview(admin)];
+    }
+    if (body.action === "remove") {
+      forgetDriveToken(); sec.google = null; saveSecrets(); driveSeen.clear();
+      logActivity("settings", `${admin.name} removed the agent's Google Drive service account.`);
+      return [200, overview(admin)];
+    }
+    if (body.action === "test") {
+      const sa = driveSa();
+      if (!sa) return [400, { error: "not_configured", detail: "No service account is set." }];
+      const link = String(body.folder || "").trim(), id = link ? driveFolderId(link) : "";
+      if (link && !id) return [200, { ok: true, test: { ok: false, detail: "That is not the link of a Google Drive folder." } }];
+      try {
+        if (!id) { await driveWho(sa); return [200, { ok: true, test: { ok: true, detail: `Google accepts the key. Share a folder with ${sa.clientEmail} and the agent can read it.` } }]; }
+        const got = await driveList(sa, id);
+        return [200, { ok: true, test: { ok: true, detail: `The folder can be read: ${got.entries.length}${got.more ? " or more" : ""} item${got.entries.length === 1 ? "" : "s"} in it.` } }];
+      } catch (e) { return [200, { ok: true, test: { ok: false, detail: e.message } }]; }
+    }
+    return [400, { error: "bad_request", detail: "Unknown action." }];
+  }
   if (body.kind === "dataforseo") {
     if (body.action === "set") {
       const login = String(body.login || "").trim(), password = String(body.password || "");
@@ -2840,6 +2873,55 @@ const SERVER_TOOLS = [
     return { checkedThrough: method, checked: urls.length, nowIndexed, notIndexed: still, ...(failed.length ? { couldNotBeChecked: failed } : {}), ...(skipped.length ? { skipped: skipped.slice(0, 60) } : {}), ...(costUsd ? { costUsd, costNote: "Counted against this project's DataForSEO spend limit." } : { costUsd: 0 }),
       recorded: tag.size ? "The CRM's index tags now show these answers." : "Nothing was recorded.", ...(!(Array.isArray(a.urls) && a.urls.length) && open.length > pick.length ? { more: `${open.length - pick.length} more addresses are open to a check. Call index_check again for the next ones.` } : {}), ...(why && method !== "Search Console" ? { note: `Search Console could not be used (${why}), so the CRM's index checker was.` } : {}) };
   }),
+  tool("drive_list", "List what is in this project's Google Drive folders, read through the agency's service account (no public link and no sign-in needed). With no folder it names the project's Drive folders: its media sources and its working-documents folder. With a folder id it lists that folder. Free.", { folder: { type: "string", description: "Optional: the id of a folder from an earlier drive_list." } }, [], async (ctx, a) => {
+    const pid = ctx.task.projectId;
+    if (pid === AGENCY_PROJECT) return { error: "Drive folders belong to a client project." };
+    if (!driveSa()) return { error: "Google Drive is not connected for the agent through its API. Media from a Drive link shared with \"Anyone with the link\" is still read with the resources tools." };
+    const tops = driveTops(pid);
+    if (!a.folder) return { folders: [...tops].map(([id, t]) => ({ id, name: t.label, ...(t.write ? { youMaySaveHere: true } : {}), ...(t.useFor ? { useFor: t.useFor } : {}), ...(t.notFor ? { notFor: t.notFor } : {}) })), ...(tops.size ? {} : { note: "This project has no Google Drive folder. The manager adds one under Resources, or a Drive link for working documents under Report." }) };
+    try { const got = await driveListFor(String(a.folder), pid); return { folder: String(a.folder), items: got.entries.slice(0, 200).map((e) => ({ id: e.id, name: e.name, kind: e.folder ? "folder" : e.mimeType === GOOGLE_DOC ? "Google document" : e.mimeType === GOOGLE_SHEET ? "Google sheet" : e.document ? "Google file" : "file", modified: e.modified, ...(e.size ? { bytes: e.size } : {}) })), ...(got.more || got.entries.length > 200 ? { note: "More items than are shown." } : {}) }; }
+    catch (e) { return { error: clip(e?.message || e, 300) }; }
+  }),
+  tool("drive_read", "Read the text of one file from this project's Google Drive folders: a Google document as text, a Google sheet as rows (its first tab), or a plain text, CSV, Markdown or JSON file. Give its id from drive_list. Pictures and videos are not read here: look at them with the resources tools. Free.", { file: { type: "string", description: "The file's id from drive_list." } }, ["file"], async (ctx, a) => {
+    const pid = ctx.task.projectId, sa = driveSa();
+    if (!sa) return { error: "Google Drive is not connected for the agent through its API." };
+    const f = driveKnown(String(a.file), pid);
+    if (!f || f.folder) return { error: "That file was not listed from one of this project's Google Drive folders. List its folder with drive_list first." };
+    try {
+      let text = "", kind = "";
+      if (f.mimeType === GOOGLE_DOC) { text = await driveExport(sa, a.file, "text/plain"); kind = "Google document"; }
+      else if (f.mimeType === GOOGLE_SHEET) { text = await driveExport(sa, a.file, "text/csv"); kind = "Google sheet (first tab, as CSV)"; }
+      else if (/^text\/|json|csv|markdown|xml$/.test(f.mimeType || "") || /\.(txt|md|csv|json)$/i.test(f.name)) { if (f.size > 2 * 1024 * 1024) return { error: "That file is larger than 2 MB. Ask for a smaller export." }; text = (await driveDownload(sa, a.file)).toString("utf8"); kind = "text file"; }
+      else return { error: `"${f.name}" is not a text file (${f.mimeType || "unknown kind"}). Word and Excel files are read after saving them as a Google document or sheet; pictures are looked at with the resources tools.` };
+      return { name: f.name, kind, text: scrub(cut(text, DRIVE_TEXT_MAX)), ...(text.length > DRIVE_TEXT_MAX ? { note: `Cut at ${DRIVE_TEXT_MAX.toLocaleString("en-US")} characters.` } : {}) };
+    } catch (e) { return { error: clip(e?.message || e, 300) }; }
+  }),
+  tool("drive_save", "Save a working document as a real Google sheet or Google document in this project's working-documents folder in Google Drive, where the team opens it: keyword research and lists as a sheet, plans and audits as a document. A file with the same name is updated, never duplicated. Only in the folder the manager set for working documents.", { name: { type: "string", description: "The document's name, for example \"Keyword research 2026-11\"." }, kind: { type: "string", description: "sheet or doc." }, rows: { type: "array", description: "For a sheet: the rows, each an array of cells; the first row is the header.", items: { type: "array", items: {} } }, text: { type: "string", description: "For a doc: the text in simple Markdown (headings, lists, bold, links)." }, mode: { type: "string", description: "For a sheet that exists: append (add the rows below, the default) or replace (the rows become the whole sheet). A doc is always replaced." } }, ["name", "kind"], async (ctx, a) => {
+    const pid = ctx.task.projectId, sa = driveSa();
+    if (pid === AGENCY_PROJECT) return { error: "Working documents belong to a client project." };
+    if (!sa) return { error: "Google Drive is not connected for the agent through its API. Save the document with work_file_save instead." };
+    const topId = driveFolderId(outputOf(pid)?.driveUrl || "");
+    if (!topId) return { error: "This project has no Google Drive folder for working documents. The manager gives its link under Report, Working documents. Until then save with work_file_save." };
+    const name = line(a.name, 120).replace(/[\\/]/g, " ").trim(), kind = a.kind === "sheet" || a.kind === "doc" ? a.kind : "";
+    if (name.length < 3) return { error: "Give the document a name." };
+    if (!kind) return { error: "kind is sheet or doc." };
+    let content, target = kind === "sheet" ? GOOGLE_SHEET : GOOGLE_DOC, type = kind === "sheet" ? "text/csv" : "text/html";
+    const rows = Array.isArray(a.rows) ? a.rows.slice(0, 5000).map((r) => (Array.isArray(r) ? r.slice(0, 60).map((c) => clip(c == null ? "" : String(c), 2000)) : [clip(String(r ?? ""), 2000)])) : [];
+    if (kind === "sheet" && !rows.length) return { error: "Give the rows of the sheet." };
+    if (kind === "doc" && String(a.text || "").trim().length < 10) return { error: "Give the text of the document." };
+    try {
+      const got = await driveListFor(topId, pid), old = got.entries.find((e) => e.name === name && e.mimeType === target);
+      let out, added = rows.length;
+      if (kind === "sheet") {
+        if (old && a.mode !== "replace") { const before = (await driveExport(sa, old.id, "text/csv")).replace(/\s+$/, ""); content = before ? before + "\r\n" + csvOf(rows) : csvOf(rows); }
+        else content = csvOf(rows);
+      } else content = `<html><body>${mdToHtml(scrub(String(a.text)).slice(0, 200000), 1)}</body></html>`;
+      out = old ? await driveReplace(sa, old.id, type, content) : await driveCreate(sa, { name, parent: topId, target, contentType: type, content });
+      driveSeen.set(out.id, { pid, folder: false, name, mimeType: target, size: 0, write: true });
+      addWork(pid, { section: "research", kind: "other", title: `${kind === "sheet" ? "Sheet" : "Document"} in Google Drive: ${name}`, detail: old ? (kind === "sheet" && a.mode !== "replace" ? `${added} row${added === 1 ? "" : "s"} added` : "updated") : "created", url: out.link || "", type: ctx.task.type || "", taskId: ctx.chat ? null : ctx.task.id, by: "AI agent", source: "agent" });
+      return { ok: true, saved: name, as: kind === "sheet" ? "Google sheet" : "Google document", ...(old ? { updated: true } : { created: true }), ...(out.link ? { link: out.link } : {}) };
+    } catch (e) { return { error: clip(e?.message || e, 320) }; }
+  }),
   tool("geo_grid", "Read the project's Google Maps geo-grid reports: per keyword the average rank where found, share of points in the top 3, coverage, the average rank in each quarter of the grid (a point where the business was not found counts as 21), and the previous scan for comparison.", {}, [], (ctx) => {
     const reports = geoSummary(ctx.task.projectId);
     return reports.length ? { reports } : { error: "No geo-grid reports exist for this project." };
@@ -3287,6 +3369,7 @@ function overview(admin) {
     knowledge: { docs: knowDocs().length, studied: knowDocs().filter((d) => d.digest).length },
     usageSummary: usageSummary(),
     attention: attention(), alerts: { ...alertCfg(), mailReady: mailReady(), recipients: alertRecipients().length, admins: adminEmails().length }, schedule: { timeZone: tzName(), workHours: workHours(), offNow: offHours(), localTime: (() => { const z = zoned(); return `${DAY_NAMES[z.dow]} ${String(z.h).padStart(2, "0")}:${String(z.min).padStart(2, "0")}`; })() },
+    drive: driveSa() ? { set: true, email: driveSa().clientEmail, cloudProject: driveSa().projectId || "", updatedAt: driveSa().updatedAt || null, by: driveSa().by || "" } : { set: false },
     seoData: { enabled: seoGlobal().enabled, usdPerMonth: seoGlobal().usdPerMonth, login: !!dfsCreds(""), own: dfsOwn(), balance: dfsBalanceView(), monthUsd: usd4(seoCompanyUsd()), monthCalls: seoCompanyCalls(), testedAt: cfg.global.seoTestedAt || 0, testOk: cfg.global.seoTestOk === true, requestsPerTask: SEO_REQUESTS_PER_TASK, apis: SEO_APIS },
     projects: projects.map((p) => {
       const blocked = tasks.filter((t) => t.projectId === p.id && (t.status === "queued" || t.status === "approved")).length;
@@ -3690,7 +3773,7 @@ function agentHello(d, body) {
      old behaviour and is caught by the longest-run limit instead. */
   const idle = body?.idleSeconds == null ? 0 : num(body.idleSeconds, 0, 864e2, 0);
   for (const t of load("tasks")) if (t.status === "running" && t.deviceId === d.id) t.heartbeatAt = Math.max(t.heartbeatAt || 0, now() - idle * 1000);
-  return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, privacy: { basicWeb: privacyOf().basicWeb, hide: confidentialTerms() }, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key, checks: pendingChecks(d), asks: pendingAsks(d) }];
+  return [200, { ok: true, device: { id: d.id, name: d.name, canManage: d.canManage === true, paused: !!d.paused || !!cfg.global.paused || !cfg.global.enabled }, syncNow: syncNow && !body?.synced, driveApi: !!driveSa(), privacy: { basicWeb: privacyOf().basicWeb, hide: confidentialTerms() }, playbooksRev: cfg.playbooksRev, release: load("releases").current ? { version: load("releases").current.version, sha256: load("releases").current.sha256, size: load("releases").current.size } : null, pollSeconds: 60, serverTime: now(), keyOnServer: !!secrets().claude?.key, checks: pendingChecks(d), asks: pendingAsks(d) }];
 }
 function agentClaim(d) {
   requeueStale();
@@ -3803,9 +3886,56 @@ function driveFolderId(u) {
   const m = String(u || "").trim().match(/^https:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?id=|embeddedfolderview\?id=)([A-Za-z0-9_-]{10,80})(?:[/?#&].*)?$/);
   return m ? m[1] : "";
 }
+/* ---------- Google Drive through the service account ----------
+   The agent may read exactly the Drive folders the manager listed: a project's media sources (Resources) and
+   its working-documents folder (Report), with everything below them. A folder or file is reachable only
+   after it was seen in a listing that started at one of those, so an id from anywhere else is refused. */
+const driveSa = () => secrets().google;
+const DRIVE_FILE_MAX = 15 * 1024 * 1024, DRIVE_TEXT_MAX = 60000;
+const driveSeen = new Map();                    // id -> { pid, folder, name, mimeType, size, write }
+function driveTops(pid) {
+  const out = new Map();
+  for (const [p, list] of Object.entries(load("resources"))) { if (pid && p !== pid) continue; for (const x of list || []) if (x.kind === "drive") { const id = driveFolderId(x.location); if (id) out.set(id, { pid: p, label: x.label || "Google Drive folder", write: false, useFor: x.useFor || "", notFor: x.notFor || "" }); } }
+  for (const [p, o] of Object.entries(load("outputs"))) { if (pid && p !== pid) continue; const id = driveFolderId(o?.driveUrl || ""); if (id) out.set(id, { pid: p, label: "Working documents", write: true, useFor: o.note || "", notFor: "" }); }
+  return out;
+}
+function driveKnown(id, pid) {
+  const top = driveTops(pid).get(id);
+  if (top) return { ...top, folder: true, name: top.label, top: true };
+  const seen = driveSeen.get(id);
+  return seen && (!pid || seen.pid === pid) ? seen : null;
+}
+async function driveListFor(id, pid) {
+  const sa = driveSa(), at = driveKnown(id, pid);
+  if (!sa) throw new Error("Google Drive is not connected for the agent (AI agent, API setup, Google Drive).");
+  if (!at || !at.folder) throw new Error("That folder is not one of this project's Google Drive folders, or was not listed yet. Start from the folders drive_list names.");
+  const got = await driveList(sa, id);
+  if (driveSeen.size > 30000) driveSeen.clear();
+  for (const e of got.entries) driveSeen.set(e.id, { pid: at.pid, folder: e.folder, name: e.name, mimeType: e.mimeType, size: e.size, write: !!at.write });
+  return got;
+}
+/* a device asks for what the service account can read: the listing of a project folder, or one ordinary file */
+async function agentDrive(d, body) {
+  if (!driveSa()) return [400, { error: "not_configured", detail: "Google Drive is not connected for the agent." }];
+  const id = String(body?.id || "");
+  try {
+    if (body.action === "list") { const got = await driveListFor(id, ""); return [200, { ok: true, entries: got.entries.map((e) => ({ id: e.id, name: e.name, folder: e.folder, document: e.document, modified: e.modified, size: e.size })), more: got.more }]; }
+    if (body.action === "file") {
+      const f = driveKnown(id, "");
+      if (!f || f.folder) return [404, { error: "not_found", detail: "That file was not listed from one of the projects' Google Drive folders." }];
+      if (/^application\/vnd\.google-apps\./.test(f.mimeType || "")) return [400, { error: "bad_request", detail: "That is a Google document, not a file to fetch. Read it with drive_read." }];
+      if (f.size > DRIVE_FILE_MAX) return [400, { error: "too_large", detail: `That file is larger than ${DRIVE_FILE_MAX / 1024 / 1024} MB, which is the most that is passed through the CRM. Keep it in a folder on the agent's computer instead.` }];
+      const buf = await driveDownload(driveSa(), id);
+      if (buf.length > DRIVE_FILE_MAX) return [400, { error: "too_large", detail: "That file is too large to pass through the CRM." }];
+      return [200, { ok: true, id, name: f.name, size: buf.length, base64: buf.toString("base64") }];
+    }
+    return [400, { error: "bad_request", detail: "Unknown action." }];
+  } catch (e) { return [e?.status === 404 ? 404 : 502, { error: "drive_error", detail: clip(e?.message || e, 300) }]; }
+}
+const csvOf = (rows) => rows.map((r) => (Array.isArray(r) ? r : [r]).map((c) => { const v = c == null ? "" : String(c); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(",")).join("\r\n");
 function resourcesView(pid) {
   const repo = load("repos")[pid] || null;
-  return { ok: true, projectId: pid, max: RES_MAX,
+  return { ok: true, projectId: pid, max: RES_MAX, driveEmail: driveSa()?.clientEmail || "",
     devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
     sources: resourcesOf(pid).map((x) => ({ ...x, deviceName: x.deviceId ? load("devices").find((d) => d.id === x.deviceId)?.name || "a removed computer" : "" })),
     repo: repo ? { url: repo.url, branch: repo.branch, mode: repo.mode, deviceId: repo.deviceId, deviceName: load("devices").find((d) => d.id === repo.deviceId)?.name || "a removed computer", notes: repo.notes || "", method: repo.method || "key", tokenAt: repo.tokenAt || null, publicKey: repo.publicKey || "", keyAt: repo.keyAt || null, test: repo.test || null, asking: repo.ask && now() - repo.ask.at < ASK_TTL ? repo.ask.kind : "", by: repo.by || "", at: repo.at || null } : null,
@@ -3826,7 +3956,7 @@ function resourcesEdit(admin, body) {
       const raw = String(body.location || "").trim();
       if (kind === "drive") {
         const id = driveFolderId(raw);
-        if (!id) return bad("Paste the link of a Google Drive folder (it looks like https://drive.google.com/drive/folders/…). The folder has to be shared with \"Anyone with the link\".");
+        if (!id) return bad("Paste the link of a Google Drive folder (it looks like https://drive.google.com/drive/folders/…). The folder has to be shared with the agent's Google address (API setup, Google Drive) or with \"Anyone with the link\".");
         location = "https://drive.google.com/drive/folders/" + id;
       } else {
         if (!LOCAL_PATH.test(raw)) return bad("Give the folder's full path on the agent's computer, for example C:\\Clients\\Northgate\\Photos or /Users/office/Clients/Northgate/Photos.");
@@ -4096,7 +4226,7 @@ function projectCopy(admin, body) {
 const outputOf = (pid) => load("outputs")[pid] || null;
 function outputView(pid) {
   const o = outputOf(pid);
-  return { ok: true, projectId: pid, devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
+  return { ok: true, projectId: pid, driveEmail: driveSa()?.clientEmail || "", devices: load("devices").filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, online: now() - (d.lastSeen || 0) < 3 * 60e3 })),
     output: o ? { folder: o.folder, deviceId: o.deviceId, deviceName: load("devices").find((d) => d.id === o.deviceId)?.name || "a removed computer", driveUrl: o.driveUrl || "", note: o.note || "", check: o.check || null, asking: !!(o.ask && now() - o.ask.at < ASK_TTL), by: o.by || "", at: o.at || null } : null };
 }
 function outputEdit(admin, body) {
@@ -4200,7 +4330,7 @@ function blogMirror(site, p, { scheduled, when, url, category }) {
   return { ...site, blogs: [row, ...(site.blogs || []).filter((b) => b.slug !== p.slug)] };
 }
 /* Markdown to the plain HTML a WordPress post takes: headings, paragraphs, lists, tables, bold, italic, links */
-function mdToHtml(md) {
+function mdToHtml(md, top = 2) {      // top: the highest heading level a single # becomes (2 for a post, whose title is the page's own h1)
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, (m, t, u) => `<a href="${u.replace(/"/g, "%22")}">${t}</a>`);
   const out = [], rows = String(md || "").replace(/\r\n?/g, "\n").split("\n");
@@ -4211,7 +4341,7 @@ function mdToHtml(md) {
     const t = rows[i].trim();
     if (!t) { flush(); close(); continue; }
     const h = t.match(/^(#{1,4})\s+(.+)$/), ul = t.match(/^[-*]\s+(.+)$/), ol = t.match(/^\d{1,3}[.)]\s+(.+)$/);
-    if (h) { flush(); close(); out.push(`<h${Math.max(2, h[1].length)}>${inline(h[2])}</h${Math.max(2, h[1].length)}>`); continue; }
+    if (h) { flush(); close(); out.push(`<h${Math.max(top, h[1].length)}>${inline(h[2])}</h${Math.max(top, h[1].length)}>`); continue; }
     if (t.startsWith("|") && /^\|?[\s:|-]{3,}\|?$/.test((rows[i + 1] || "").trim())) {
       flush(); close();
       const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
@@ -4635,6 +4765,7 @@ export async function agentOpsPost(req, body) {
       case "agent/asked": return agentAsked(d, body || {});
       case "agent/board": return agentBoard(d);
       case "agent/media": return agentMedia(d, body || {});
+      case "agent/drive": return agentDrive(d, body || {});
       case "agent/evidence": return agentEvidence(d, body || {});
       case "agent/chat/get": return chatGet(body || {});
       case "agent/chat/send": return chatSend({ name: `${d.name} (agent's computer)` }, body || {});
