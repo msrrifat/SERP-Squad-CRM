@@ -826,7 +826,9 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const setKind = (k, patch) => setRule("blog", { ...br, kinds: { ...br.kinds, [k]: { ...kindOf(k), ...patch } } });
   const tr = { pages: "", position: "", heading: "", count: 4, area: "", notes: "", ...(rules.trending || {}) };
   const blogTotal = blogKinds.reduce((n, [k]) => n + (+kindOf(k).perMonth || 0), 0);
-  const lr = { types: {}, browser: "", identity: "", anchors: "", notes: "", ...(rules.links || {}) };
+  const lr = { types: {}, browser: "", identity: "", email: "", sites: [], anchors: "", notes: "", ...(rules.links || {}) };
+  const [newSite, setNewSite] = useState("");
+  const addLinkSite = () => { const u = newSite.trim(); if (!u) return; const full = /^https?:\/\//i.test(u) ? u : "https://" + u; if (!(lr.sites || []).includes(full)) setRule("links", { ...lr, sites: [...(lr.sites || []), full].slice(0, 40) }); setNewSite(""); };
   const linkOf = (k) => ({ mode: "off", perMonth: 4, listOnly: false, list: "", approval: "ask", note: "", ...(lr.types[k] || {}) });
   const setLink = (k, patch) => setRule("links", { ...lr, types: { ...lr.types, [k]: { ...linkOf(k), ...patch } } });
   const linksOn = LINK_TYPES.filter(([k]) => linkOf(k).mode !== "off").length;
@@ -1134,9 +1136,32 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
             </div>
             <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">Choose which kinds of link the agent works on for {project.name}, how many of each in a month, and where. With <b>Preferable list</b> on, it builds that kind <b>only</b> on the sites you list; with it off, it finds the sites itself: it looks at what ranks for the client's terms and what the competitors above the client use. The task type <b>Build links</b> in the list below switches the work on.</div>
             <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600"><b>What stays the same for every kind.</b> The agent does not create accounts: where one is needed it asks you, with everything to fill in, and you create it and sign in to it in the Chrome ID below. It uses one real identity, never a made-up person or a second account on a site. It does not complete captchas or phone and email checks. Everything it posts has to be useful where it is posted and follow that site's rules, with at most one link.</div>
+            <div className="mt-3 rounded-xl border border-gray-200 bg-white p-3" data-link-accounts>
+              <div className="text-[12.5px] font-semibold text-gray-900">Accounts for link building</div>
+              <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">The Chrome ID on the agent's computer where the link-building accounts live, the email address they are registered under, and the name they carry. Sign in to that mailbox yourself in this Chrome ID once (the agent's application, Settings, Chrome IDs, Sign in): its password is not kept anywhere here, and the agent never opens mail.</div>
+              <div className="mt-2 grid gap-3 md:grid-cols-3">
+                <Labeled label="Chrome ID that holds the accounts"><ChromeSelect label="Chrome ID for link-building accounts" profiles={profiles} value={lr.browser} onChange={(v) => setRule("links", { ...lr, browser: v })} /></Labeled>
+                <Labeled label="Email address the accounts are under"><input className={inputCls} type="email" maxLength={150} placeholder="links@yourclient.com" value={lr.email || ""} onChange={(e) => setRule("links", { ...lr, email: e.target.value })} /></Labeled>
+                <Labeled label="Name on profiles and posts (empty: the business's name)"><input className={inputCls} maxLength={120} placeholder={project.name} value={lr.identity} onChange={(e) => setRule("links", { ...lr, identity: e.target.value })} /></Labeled>
+              </div>
+              {!agency && (
+                <div className="mt-3">
+                  <div className="text-[12px] font-semibold text-gray-700">Sign-ins for single sites (optional)</div>
+                  <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">For a directory, forum or platform that signs out often: give its sign-in page, press Save changes, then hand over its user name and password below. They go once to the agent's computer, which keeps them encrypted and types them only on that site. Google, Microsoft, Apple, Facebook, Instagram and payment sites cannot be added: a person signs in to those in the Chrome ID.</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input className={inputCls + " max-w-md flex-1"} aria-label="Sign-in page of a site" placeholder="https://www.example-directory.com/login" value={newSite} onChange={(e) => setNewSite(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLinkSite(); } }} />
+                    <Btn ghost onClick={addLinkSite} disabled={!newSite.trim()}><Plus size={13} /> Add site</Btn>
+                  </div>
+                  {(lr.sites || []).map((u) => (
+                    <div key={u} className="mt-2 rounded-lg border border-gray-100 bg-gray-50 p-2.5" data-link-site={u}>
+                      <div className="flex flex-wrap items-center justify-between gap-2"><span className="break-all text-[12.5px] font-medium text-gray-800">{u}</span><Btn ghost onClick={() => setRule("links", { ...lr, sites: lr.sites.filter((x) => x !== u) })}>Remove from the list</Btn></div>
+                      {lr.browser ? <SignInRelay name={siteOfUrl(u) || u} url={u} profileId={lr.browser} accent={accent} /> : <div className="mt-1 text-[11.5px] text-gray-500">Choose the Chrome ID above first.</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <Labeled label="Chrome ID that holds the link-building accounts"><ChromeSelect label="Chrome ID for link-building accounts" profiles={profiles} value={lr.browser} onChange={(v) => setRule("links", { ...lr, browser: v })} /></Labeled>
-              <Labeled label="Name used on profiles and posts (empty: the business's name)"><input className={inputCls} maxLength={120} placeholder={project.name} value={lr.identity} onChange={(e) => setRule("links", { ...lr, identity: e.target.value })} /></Labeled>
               <Labeled label="Anchor text guidance"><textarea className={txtCls} placeholder={"Mostly the business name and the plain address of the page. A service with the town now and then. Never the same keyword anchor twice in a month."} value={lr.anchors} onChange={(e) => setRule("links", { ...lr, anchors: e.target.value })} /></Labeled>
               <Labeled label="Other link-building notes for the agent"><textarea className={txtCls} placeholder={"For example: UK sites only. Link to the service pages more than the home page. No adult, casino or coupon sites."} value={lr.notes} onChange={(e) => setRule("links", { ...lr, notes: e.target.value })} /></Labeled>
             </div>
@@ -1176,19 +1201,31 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-[220px] flex-1">
                 <div className="text-[13.5px] font-semibold text-gray-900">SMM management software</div>
-                <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">If your agency manages and schedules social posts from one tool (Buffer, Hootsuite, Metricool, Publer and the like), set it up here. With it switched on, the agent publishes and schedules this client's approved posts in that tool instead of on each platform, in the workspace you name. It cannot connect or disconnect accounts, change the plan or touch another client's workspace.</div>
+                <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">If your agency manages and schedules social posts from one tool (Sociamonials, Buffer, Hootsuite, Metricool and the like), set it up here. With it switched on, the agent publishes and schedules this client's approved posts in that tool instead of on each platform, in the workspace you name. It cannot connect or disconnect accounts, change the plan or touch another client's workspace.</div>
               </div>
               <label className="flex items-center gap-2 text-[12.5px] font-medium text-gray-700"><Switch on={!!smm.on} label="Publish through the SMM management software" onChange={(v) => setSmm({ on: v })} /> {smm.on ? "On" : "Off"}</label>
             </div>
+            {!smm.url && !smm.name && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-[12px] text-gray-700">
+                <span>Quick start:</span>
+                <Btn accent={accent} onClick={() => setSmm({ name: "Sociamonials", url: "https://www.sociamonials.com/login.php", notes: smm.notes || "Open this client's workspace first. Schedule posts through the queue, never post at once. Leave connected profiles and account settings alone." })}>Use Sociamonials</Btn>
+                <span className="text-gray-500">or type another tool's name and address below.</span>
+              </div>
+            )}
             <div className="mt-3 grid gap-2 md:grid-cols-2">
-              <Labeled label="Name of the tool"><input className={inputCls} maxLength={60} placeholder="Metricool" value={smm.name || ""} onChange={(e) => setSmm({ name: e.target.value })} /></Labeled>
-              <Labeled label="Its address"><input className={inputCls} maxLength={200} placeholder="https://app.metricool.com/" value={smm.url || ""} onChange={(e) => setSmm({ url: e.target.value })} /></Labeled>
+              <Labeled label="Name of the tool"><input className={inputCls} maxLength={60} placeholder="Sociamonials" value={smm.name || ""} onChange={(e) => setSmm({ name: e.target.value })} /></Labeled>
+              <Labeled label="Its sign-in address"><input className={inputCls} maxLength={200} placeholder="https://www.sociamonials.com/login.php" value={smm.url || ""} onChange={(e) => setSmm({ url: e.target.value })} /></Labeled>
               <Labeled label="Chrome ID signed in to it"><ChromeSelect profiles={profiles} value={smm.browser || ""} onChange={(v) => setSmm({ browser: v })} /></Labeled>
               <Labeled label="This client in the tool (workspace, brand or profile group)"><input className={inputCls} maxLength={120} placeholder={project.name} value={smm.workspace || ""} onChange={(e) => setSmm({ workspace: e.target.value })} /></Labeled>
               <div className="md:col-span-2"><Labeled label="Notes for the agent about the tool"><textarea className={txtCls} placeholder={"For example: schedule posts for 9:30 in the morning. Use the queue, never \"Publish now\". Instagram posts always need a picture."} value={smm.notes || ""} onChange={(e) => setSmm({ notes: e.target.value })} /></Labeled></div>
             </div>
             {smm.on && !smm.url && <div className="mt-2 text-[12px] text-amber-800">Give the tool's address (https) before switching it on. Google, Microsoft, Apple, Facebook and payment sites cannot be set up as a tool.</div>}
             {dirty && (smm.url || smm.on) && <div className="mt-2 text-[11.5px] text-gray-500">Press <b>Save changes</b> to keep the tool's settings.</div>}
+            <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-[11.5px] leading-5 text-gray-500">
+              <li>Give the tool's name and sign-in address, choose the Chrome ID it is used in, name this client's workspace, and press Save changes.</li>
+              <li>Hand over the tool's sign-in below (Enter the sign-in), or sign in to it by hand in that Chrome ID on the agent's computer.</li>
+              <li>Switch it on above, then switch on the task type <b>Publish to social profiles</b> in the list below.</li>
+            </ol>
             {!agency && <SignInRelay name={smm.name} url={smm.url} profileId={smm.browser} accent={accent} />}
             {smm.on && checkLine("smm", smm.browser)}
           </Card>
@@ -2004,11 +2041,37 @@ const agentLine = (a) => (!a ? null : a.listening.length ? { tone: "#15803D", te
   : a.outdated.length ? { tone: "#B45309", text: `${a.outdated.join(", ")} is online but runs an agent version without chat. Publish a newer version under Devices & updates.`, short: "Agent needs an update to chat" }
   : { tone: "#6B7280", text: "No device is online. Your message is answered as soon as the agent is running.", short: "Agent offline, your message will wait" });
 
+/* a change the agent proposed in the chat: nothing happens until a person presses Apply */
+function ChatProposal({ p, call, accent, compact }) {
+  const [busy, setBusy] = useState("");
+  const act = async (action) => { setBusy(action); await call("chat/change", { id: p.id, action }); setBusy(""); };
+  const waiting = p.state === "waiting";
+  return (
+    <div className="flex justify-start gap-2" data-proposal={p.id}>
+      {!compact && <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: "#FEF3C7", color: "#92400E" }}><Settings2 size={15} /></span>}
+      <div className={`min-w-0 rounded-2xl rounded-bl-md border px-3.5 py-2.5 ${waiting ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"} ${compact ? "max-w-[94%]" : "max-w-[84%]"}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] font-semibold text-gray-900">{p.kind === "guide" ? p.title : `Proposed change: ${p.title}`}</span>
+          {waiting ? <Chip fg="#92400E" bg="#FEF3C7">Waiting for you</Chip> : p.state === "applied" ? <Chip fg="#15803D" bg="#DCFCE7">Applied{p.by ? ` by ${p.by}` : ""}</Chip> : <Chip>Discarded{p.by ? ` by ${p.by}` : ""}</Chip>}
+        </div>
+        {p.why && <div className="mt-0.5 text-[11.5px] text-gray-500">{p.why}</div>}
+        <ul className="mt-1.5 space-y-1 text-[12.5px] leading-5 text-gray-800">{p.lines.map((l, i) => <li key={i} className="break-words">{l}</li>)}</ul>
+        {waiting && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Btn accent={accent} disabled={!!busy} onClick={() => act("apply")}><Check size={13} /> {busy === "apply" ? "Applying…" : "Apply"}</Btn>
+            <Btn ghost disabled={!!busy} onClick={() => act("discard")}>Discard</Btn>
+            <span className="text-[11px] text-gray-500">Nothing changes until you press Apply.</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 function ChatMessages({ c, project, accent, compact }) {
   const { chat, pending, canSend, send, call } = c;
   const boxRef = useRef(null);
   const last = chat?.messages[chat.messages.length - 1];
-  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, last?.activity, pending, project.id]);
+  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, chat?.proposals?.length, last?.activity, pending, project.id]);
   const a = chat?.agent;
   return (
     <div ref={boxRef} className={`flex-1 space-y-2.5 overflow-y-auto bg-gray-50 ${compact ? "px-3 py-3" : "px-4 py-4"}`} style={compact ? undefined : { height: "max(300px, calc(100vh - 480px))" }}>
@@ -2018,11 +2081,13 @@ function ChatMessages({ c, project, accent, compact }) {
         <div className="mx-auto max-w-md py-6 text-center">
           {!compact && <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={20} /></div>}
           <div className="mt-2 text-[13px] font-semibold text-gray-900">Talk to the agent about {project.name}</div>
-          <div className="mt-1 text-[11.5px] text-gray-500">Ask how the project is doing, tell it what to do, or tell it how you want the work done. Everything you say here is kept as its memory and directions.</div>
+          <div className="mt-1 text-[11.5px] text-gray-500">Ask how the project is doing, tell it what to do, or tell it how you want the work done. You can also tell it to change its own work settings or add a guide: it shows the change here and you press Apply. Everything you say here is kept as its memory and directions.</div>
           <div className="mt-3 flex flex-wrap justify-center gap-1.5">{STARTERS.slice(0, compact ? 2 : 4).map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[11.5px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
         </div>
       )}
-      {chat?.messages.map((m) => m.system ? (
+      {(chat ? [...chat.messages, ...(chat.proposals || []).map((x) => ({ ...x, proposal: true }))].sort((x, y) => x.at - y.at) : []).map((m) => m.proposal ? (
+        <ChatProposal key={m.id} p={m} call={call} accent={accent} compact={compact} />
+      ) : m.system ? (
         <div key={m.id} className={`text-center text-[11px] ${m.error ? "text-red-700" : "text-gray-400"}`}>{m.text}</div>
       ) : m.role === "user" ? (
         <div key={m.id} className="flex justify-end">
@@ -2192,7 +2257,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
       <Card className="overflow-hidden">
         <div className="border-b border-gray-100 px-4 py-3">
           <div className="text-[13.5px] font-semibold text-gray-900">Devices</div>
-          <div className="text-[11.5px] text-gray-500">A device is a computer running the agent. It only makes outbound requests to this CRM and checks in every minute.</div>
+          <div className="text-[11.5px] leading-5 text-gray-500">A device is a computer running the agent. It only makes outbound requests to this CRM and checks in every minute. <b>From the CRM to the computer:</b> every project's work settings, rules, limits, playbooks and guides are kept here and are sent with each task and at each check-in, so a change made here holds from the computer's next task; <b>Sync now</b> sends them at once. <b>From the computer to the CRM:</b> its state, its Chrome IDs, which sign-ins it holds (never the sign-ins themselves) and the results of its work. With <b>Manages settings</b> on, the same screens in the agent's application on that computer can change the settings here.</div>
         </div>
         {!data.devices.length && <div className="px-4 py-6 text-center text-[12.5px] text-gray-400">No device registered yet.</div>}
         {data.devices.map((d) => { const stale = d.playbooksRev != null && d.playbooksRev !== data.playbooksRev; const behind = data.release && d.version && d.version !== data.release.version;
@@ -2202,7 +2267,7 @@ function DevicesView({ data, accent, act, busy, reload, setErr }) {
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold text-gray-900">{d.name} <span className="font-normal text-gray-500">{d.online ? (d.paused ? "· paused" : "· online") : d.lastSeen ? `· last seen ${relTime(d.lastSeen)}` : "· never connected"}</span></div>
                 <div className="truncate text-[11.5px] text-gray-500">{[d.host, d.os, d.version && "version " + d.version].filter(Boolean).join(" · ") || "Waiting for the first check-in"}</div>
-                <div className="truncate text-[11.5px] text-gray-600">{d.currentTask ? "Working on: " + d.currentTask : d.state || ""}{stale ? " · playbooks not synced yet" : ""}{behind ? (d.updateSkipped === data.release.version ? ` · version ${data.release.version} failed its self-test here and was not installed` : ` · update to ${data.release.version} pending`) : ""}{d.googleProfile === false ? " · no Google browser profile" : ""}{d.localKey ? " · uses its own Claude key" : ""}</div>
+                <div className="truncate text-[11.5px] text-gray-600">{d.currentTask ? "Working on: " + d.currentTask : d.state || ""}{stale ? " · playbooks not synced yet" : ""}{behind ? (d.updateSkipped === data.release.version ? ` · version ${data.release.version} failed its self-test here and was not installed` : ` · update to ${data.release.version} pending`) : ""}{d.googleProfile === false ? " · no Google browser profile" : ""}{d.localKey ? " · uses its own Claude key" : ""}{d.lastSync ? ` · settings and playbooks last synced ${relTime(d.lastSync)}` : ""}</div>
               </div>
               <Btn ghost onClick={() => act("device/update", { id: d.id, syncNow: true })} disabled={busy} title="The device syncs playbooks and settings on its next check-in, within a minute."><RefreshCw size={13} /> {d.syncRequested ? "Sync requested" : "Sync now"}</Btn>
               <Btn ghost onClick={() => act("device/update", { id: d.id, canManage: !d.canManage })} disabled={busy} title="When on, limits, tasks, approvals, directions, playbooks and API keys can be changed in the agent's application on this computer. Devices and program versions are always managed here.">{d.canManage ? "Manages settings: on" : "Manages settings: off"}</Btn>
@@ -3140,6 +3205,50 @@ function SecondCheckCard({ data, accent, act, busy }) {
     </Card>
   );
 }
+/* Privacy: what the agent is not given, and what leaves the office at all */
+function PrivacyCard({ data, accent, act, busy }) {
+  const p = { hideContacts: true, hideMoney: true, hideTeamChats: true, oneProject: false, basicWeb: false, confidential: "", ...(data.global.privacy || {}) };
+  const [words, setWords] = useState(p.confidential || ""); const [more, setMore] = useState(false);
+  useEffect(() => { setWords(p.confidential || ""); }, [p.confidential]);
+  const set = (patch) => act("config", { global: { privacy: patch } });
+  const row = (key, label, hint) => (
+    <label className="flex items-start gap-2.5 py-1.5 text-[12.5px] text-gray-800"><span className="mt-0.5"><Switch on={!!p[key]} label={label} onChange={(v) => set({ [key]: v })} /></span><span><span className="font-medium">{label}</span><br /><span className="text-[11.5px] leading-5 text-gray-500">{hint}</span></span></label>
+  );
+  const count = (p.confidential || "").split("\n").filter(Boolean).length;
+  return (
+    <Card className="p-4" >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Lock size={15} style={{ color: accent }} /> Privacy and confidentiality</div>
+        <Chip fg="#15803D" bg="#DCFCE7">{[p.hideContacts, p.hideMoney, p.hideTeamChats, p.oneProject, p.basicWeb].filter(Boolean).length + (count ? 1 : 0)} of 6 protections on</Chip>
+      </div>
+      <div className="mt-1 text-[11.5px] leading-5 text-gray-500">These decide how little of your data the agent is given. They hold for every project, every task and the chat.</div>
+      <div className="mt-2 divide-y divide-gray-100">
+        {row("hideContacts", "People's contact details are not shown to the agent", "Email addresses and phone numbers of clients, contacts and team members are left out of what it reads from the CRM. The business's public name, address and phone still come from the brand facts.")}
+        {row("hideMoney", "Money is kept out of the agent's reach", "Invoices, accounting, fees, retainers and payroll in the CRM cannot be read by it.")}
+        {row("hideTeamChats", "The team's own chats are kept out of the agent's reach", "Direct messages and group chats between team members cannot be read by it.")}
+        {row("oneProject", "A project's chat sees only that project", "Off: in a project's chat you can ask about any client. On: the chat, like a task, reads only the project it belongs to; the agency-level review task still sees all.")}
+        {row("basicWeb", "Basic web search and page reading", "On: search results and fetched pages are not post-processed in Anthropic's code sandbox. Slightly more tokens per search; needed for a zero-retention arrangement.")}
+      </div>
+      <div className="mt-3">
+        <Labeled label={`Confidential words and phrases, one per line (${count} saved)`}><textarea className={inputCls + " min-h-[84px] resize-y"} aria-label="Confidential words and phrases" placeholder={"For example:\nProject Falcon\nthe name of a client you work for under NDA\nan internal price or margin"} value={words} onChange={(e) => setWords(e.target.value)} /></Labeled>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <Btn accent={accent} disabled={busy || words === (p.confidential || "")} onClick={() => set({ confidential: words })}>Save the list</Btn>
+          <span className="text-[11.5px] leading-5 text-gray-500">Each one is replaced by [confidential] before any text reaches Claude: in tasks, tool results, the chat and pages the agent reads. It can then not appear in a search, a post or a form either. Do not list what the agent needs for its work (the business's public name, address, phone). At least 4 characters each.</span>
+        </div>
+      </div>
+      <button className="mt-3 text-[12px] font-semibold text-gray-700 hover:underline" onClick={() => setMore(!more)}>{more ? "Hide" : "Show"} what leaves this office, and what never does</button>
+      {more && (
+        <div className="mt-2 space-y-2 rounded-xl bg-gray-50 px-3.5 py-3 text-[12px] leading-5 text-gray-700">
+          <div><b>Never leaves.</b> Passwords, API keys, app passwords and saved sign-ins: they are stored encrypted (on this server, or on the agent's computer for site sign-ins), are never sent to Claude, never written to a log, and are masked wherever they turn up in a page or a message. Google, Microsoft, Apple, Facebook and payment sign-ins are never stored or typed by the program at all. The agent's browser cannot open mail, account, security or payment pages.</div>
+          <div><b>Goes to Claude (Anthropic's API), because that is where the agent thinks.</b> The text of the task or chat message, the playbook and your guides, the project's brand facts and status, the tool results it asks for (rankings, Search Console and Analytics tables, the parts of the CRM it reads), and the text of web pages it opens. Nothing is sent for a project the agent is not switched on for.</div>
+          <div><b>What Anthropic does with it, by its commercial terms.</b> API inputs and outputs are not used to train its models unless you opt in or send feedback. They are deleted within 30 days by default; content flagged by its automated safety checks can be kept up to two years. An organisation can ask Anthropic's sales team for zero data retention; some models and features are outside that arrangement. A Data Processing Addendum is part of the commercial terms. These are Anthropic's terms, not a promise of this CRM: read the current text at anthropic.com/legal/commercial-terms and privacy.claude.com before relying on it.</div>
+          <div><b>Goes to the open internet only as approved work.</b> A post, a reply, a listing or a page change is published after your approval, or within the rules you set for acting alone. Websites the agent visits see what any visitor's browser shows them. Web searches are run by Anthropic's search tool with the query the agent wrote.</div>
+          <div><b>Stays on your own machines.</b> The CRM's data on your server; working files, checkpoints and logs on the agent's computer. The device token lets that computer read project data through the CRM, so treat it like a password and remove a device you no longer use.</div>
+        </div>
+      )}
+    </Card>
+  );
+}
 function SeoDataCard({ data, accent, act, busy }) {
   const s = data.seoData || {};
   const [test, setTest] = useState(null);
@@ -3218,6 +3327,7 @@ function ApiSetupView({ data, accent, act, busy }) {
       </Card>
       <SeoToolsCard data={data} accent={accent} act={act} busy={busy} />
       <SecondCheckCard data={data} accent={accent} act={act} busy={busy} />
+      <PrivacyCard data={data} accent={accent} act={act} busy={busy} />
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900"><Eye size={15} style={{ color: accent }} /> Looking at pages as pictures</div>

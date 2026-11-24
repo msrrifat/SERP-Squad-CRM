@@ -93,11 +93,33 @@ Rules the server enforces:
   src/lib/mergestate.js keeps them when a tab with an older copy saves. `blog_plan_publish` calls the
   existing WordPress connector (`handleWpDeploy`) with the connection saved for the site; the agent never
   sees it. Test hook: `AGENTOPS_WP_TEST_FILE`.
+- Google through its APIs for the agent. `handleGscInspect` (server/index.js) asks Search Console's URL
+  Inspection about single addresses with the project's saved Google connection (free; same fallback to a
+  readable property as `handleGscQuery`). It, `handleGa4Report` and `handleCheckIndex` are handed to
+  agentops as `gscInspect`, `ga4Report` and `checkIndex`. Tools: `analytics` (two periods, a short table),
+  `index_status` (the CRM's own index tags) and `index_check` (only pages not recorded as indexed; Search
+  Console when connected, otherwise the CRM's index checker inside the project's DataForSEO spend limit,
+  counted at $0.004 an address; answers are written back as `index: { status, checkedAt, source, by,
+  reason }` through `updateProjectOptimization`, and `keepNewerIndex` in src/lib/mergestate.js keeps them
+  on a merge). Task type `index_watch`. Test hook: `AGENTOPS_GOOGLE_TEST_FILE` (stand-ins for all three).
+- The chat can command the agent. `work_settings` reads a project's settings by path; `propose_settings`,
+  `propose_guide` and `cancel_task` exist only in a chat turn. A proposal is stored in `chats.json`
+  (`proposals`), validated by a dry run of the same code the settings screen uses (`applyProjectPatch`,
+  `settingsDryRun`), shown in the chat, and applied by a person through `POST /api/agentops/chat/change`
+  (`apply` / `discard`), which runs `saveConfig` or `guideEdit` as that person. Nothing a task or a web page
+  says can change a setting.
+- Privacy (`global.privacy`, saved through `config`): `hideContacts`, `hideMoney`, `hideTeamChats` (all on
+  unless switched off) filter what `crm_overview` and `crm_read` return; `oneProject` limits a project's
+  chat to that project; `basicWeb` makes devices use the basic web search and fetch tools; `confidential`
+  is a list of words that `hideDeep` replaces with `[confidential]` in every answer to `agent/claim`,
+  `agent/resume`, `agent/tool`, `agent/chat/wait` and `agent/sync`, and that devices receive at
+  `agent/hello` to hide in page text (`Redact.confidential`).
 - Rules gained `rules.links`: per kind of link (`LINK_TYPES`: listings, profiles, web2, articles, forums,
   qa, social, sharing, bookmarks, press, community, mentions, journalists) a `mode` (`off`, `limited`,
   `auto`), `perMonth`, `listOnly` + `list` (the preferable list: when on, only those sites pass),
   `approval` and a note; plus `browser` (the Chrome ID that holds the link-building accounts), `identity`,
-  `anchors`, `notes`. "Auto" has a ceiling of `LINK_AUTO_MAX` per kind and month. Task type `link_building`
+  `email` (the address the accounts are under; never a mailbox password), `sites` (sign-in pages of single
+  sites whose sign-in is handed to the device through `signin`), `anchors`, `notes`. "Auto" has a ceiling of `LINK_AUTO_MAX` per kind and month. Task type `link_building`
   (catalog flag `links`): its window lists the host `*`, which the device treats as any public site except
   mail, account providers, payment sites and pages that create an account. The task does not start without
   that Chrome ID, with no kind switched on, or when the month is full for every kind that is on.

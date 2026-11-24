@@ -228,8 +228,18 @@ final class ToolBox {
                     /* a tool whose sign-in is saved on this computer (an SMM management tool): the program signs in itself, the agent never sees the sign-in */
                     if (!inTool() && browser == ownBrowser && sites != null && task.path("browser").path("signIn").asBoolean(false) && page.contains("SIGN-IN REQUIRED")) {
                         ObjectNode tool = Json.obj();
-                        tool.put("name", task.path("browser").path("label").asText("the tool")).put("url", task.path("browser").path("startUrl").asText(""));
-                        page = sites.signIn(browser, tool);
+                        boolean anySite = false;
+                        for (JsonNode h : task.path("browser").path("hosts")) if ("*".equals(h.asText())) anySite = true;
+                        if (anySite) {
+                            /* a window for link-building accounts: the sign-in saved for the site that was opened, if this computer has one */
+                            String at = input.path("url").asText("");
+                            tool.put("name", Vault.hostOf(at)).put("url", at);
+                            try { page = sites.signIn(browser, tool); }
+                            catch (Browser.BrowserException e) { page = page + "\n\n" + e.getMessage(); }
+                        } else {
+                            tool.put("name", task.path("browser").path("label").asText("the tool")).put("url", task.path("browser").path("startUrl").asText(""));
+                            page = sites.signIn(browser, tool);
+                        }
                     }
                     return new Outcome(page, false);
                 }

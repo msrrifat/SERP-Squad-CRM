@@ -589,6 +589,7 @@ final class Demo {
     private final java.util.Set<String> demoSignins = new java.util.LinkedHashSet<>(List.of("ahrefs.example"));
     private final Map<String, ObjectNode> demoOutput = new HashMap<>();
     private final Map<String, ObjectNode> demoLinks = new HashMap<>();
+    private final Map<String, List<ObjectNode>> demoProposals = new HashMap<>();
     private static final String[][] LINK_TYPES = {
         { "listings", "Business listings and citations", "Directory and map listings with the name, address and phone: general, local and trade directories.", "" },
         { "profiles", "Profile backlinks", "A profile page for the business on platforms that show a website link.", "" },
@@ -1734,6 +1735,7 @@ final class Demo {
             case "config": {
                 if (body.path("global").isObject()) {
                     copyIf(body.path("global"), global, "enabled", "paused", "model", "effort", "tokensPerMonth", "seoData", "seoUsdPerMonth", "timeZone", "secondCheck", "checkModel", "vision", "crmRead", "resume");
+                    if (body.path("global").path("privacy").isObject()) { ObjectNode pv = global.path("privacy").isObject() ? (ObjectNode) global.get("privacy") : global.putObject("privacy"); pv.setAll((ObjectNode) body.path("global").get("privacy")); }
                     if (body.path("global").path("seoTools").isArray()) {
                         ArrayNode next = Json.arr();
                         for (JsonNode x : body.path("global").path("seoTools")) {
@@ -2041,6 +2043,15 @@ final class Demo {
                 ObjectNode r = chat(p.substring(5), body.isObject() ? (ObjectNode) body : Json.obj());
                 return new Reply(r.path("ok").asBoolean(true) ? 200 : 404, r);
             }
+            case "chat/change": {
+                for (ObjectNode x : demoProposals.getOrDefault(pid, List.of())) if (x.path("id").asText().equals(body.path("id").asText()) && x.path("state").asText().equals("waiting")) {
+                    boolean apply = body.path("action").asText().equals("apply");
+                    x.put("state", apply ? "applied" : "discarded").put("by", "You").put("decidedAt", System.currentTimeMillis());
+                    chats.computeIfAbsent(pid, (k) -> new ArrayList<>()).add(msg("agent", apply ? "You applied \"" + x.path("title").asText() + "\". (Demo: the sample settings are not really changed.)" : "You discarded the proposal. Nothing was changed.", System.currentTimeMillis(), "").put("system", true));
+                }
+                chatVer.merge(pid, 1, Integer::sum);
+                return new Reply(200, chatState(pid));
+            }
             case "chat/clear": {
                 chats.put(pid, new ArrayList<>());
                 pending.remove(pid);
@@ -2083,7 +2094,14 @@ final class Demo {
             long waited = now - pend.path("at").asLong();
             if (waited > 4300) {
                 pend.put("status", "done").put("activity", "");
-                list.add(msg("agent", answer(i, pend.path("text").asText("")), now, ""));
+                String asked = pend.path("text").asText("").toLowerCase();
+                if (i >= 0 && asked.matches("(?s).*\\b(set|change|raise|lower|increase|reduce|switch|turn|allow|make it|limit)\\b.*") && asked.matches("(?s).*\\b(blog|post|posts|link|links|approval|month|week|limit|rule)\\b.*")) {
+                    ObjectNode pr = Json.obj();
+                    pr.put("id", "pr_demo" + (++ids)).put("kind", "settings").put("title", "Blog publishing, Blog posts, a month").put("why", "You asked for more blog posts a month.").put("at", now + 1).put("state", "waiting").put("by", "").putNull("decidedAt").put("note", "");
+                    pr.putArray("lines").add("Blog publishing, Blog posts, a month: 2 → 4").add("Write and publish blog posts: working limit: limited → open");
+                    demoProposals.computeIfAbsent(pid, (k) -> new ArrayList<>()).add(pr);
+                    list.add(msg("agent", "I have written that change down as a proposal in the card below: blog posts go from 2 to 4 a month, and the blog task is no longer capped by a weekly number. Nothing has changed yet. Press **Apply** to make it, or **Discard**. (Demo: the card is a sample.)", now, ""));
+                } else list.add(msg("agent", answer(i, pend.path("text").asText("")), now, ""));
                 pending.remove(pid);
                 chatVer.merge(pid, 1, Integer::sum);
                 pend = null;
@@ -2102,6 +2120,8 @@ final class Demo {
         a.putArray("outdated");
         ArrayNode ms = s.putArray("messages");
         for (ObjectNode m : list) ms.add(m);
+        ArrayNode ps = s.putArray("proposals");
+        for (ObjectNode x : demoProposals.getOrDefault(pid, List.of())) ps.add(x);
         return s;
     }
 

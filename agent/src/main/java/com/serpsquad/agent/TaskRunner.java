@@ -221,7 +221,7 @@ final class TaskRunner {
         for (BetaTool t : toolDefs) b.addTool(t);
         if (needs("web")) {
             /* the newer web tools filter results themselves but need a current Opus or Sonnet model */
-            if (model.contains("haiku")) {
+            if (model.contains("haiku") || Redact.basicWeb()) {
                 b.addTool(BetaWebSearchTool20250305.builder().maxUses(8L).build());
                 b.addTool(BetaWebFetchTool20250910.builder().maxUses(10L).maxContentTokens(20000L).build());
             } else {

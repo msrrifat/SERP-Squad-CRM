@@ -805,6 +805,12 @@ final class Worker {
                 boolean askedForUpdate = updateRequested;
                 updateRequested = false;
                 if (askedForUpdate) updater.forget();
+                if (h.path("privacy").isObject()) {
+                    List<String> words = new ArrayList<>();
+                    for (JsonNode w : h.path("privacy").path("hide")) words.add(w.asText(""));
+                    Redact.confidential(words);
+                    Redact.basicWeb(h.path("privacy").path("basicWeb").asBoolean(false));
+                }
                 JsonNode rel = h.path("release");
                 String offered = rel.path("version").asText("");
                 if (rel.isObject() && Updater.compare(offered, version) > 0 && offered.equals(updater.skipped())) {

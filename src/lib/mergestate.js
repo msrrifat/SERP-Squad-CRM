@@ -173,12 +173,28 @@ function keepAgentPosts(serverOpt, opt) {
   return { ...opt, website: { ...opt.website, postsPlan: { ...(opt.website.postsPlan || {}), posts }, blogs: [...added, ...blogsMine] } };
 }
 
+/* The index tags the AI agent (or another tab) recorded on the server are kept when this tab's copy of a page
+   or post carries an older check, or none. */
+function keepNewerIndex(serverOpt, opt) {
+  const theirs = serverOpt?.website, mine = opt?.website;
+  if (!theirs || !mine) return opt;
+  let changed = false;
+  const take = (list, from) => {
+    if (!Array.isArray(list) || !Array.isArray(from)) return list;
+    const by = new Map(from.filter((x) => x?.id != null && x.index?.checkedAt).map((x) => [x.id, x.index]));
+    if (!by.size) return list;
+    return list.map((x) => { const s = x && by.get(x.id); if (s && s.checkedAt > (x.index?.checkedAt || 0)) { changed = true; return { ...x, index: s }; } return x; });
+  };
+  const pages = take(mine.pages, theirs.pages), blogs = take(mine.blogs, theirs.blogs);
+  return changed ? { ...opt, website: { ...mine, pages, blogs } } : opt;
+}
+
 const mergeProject = (a, b) => {
   /* scalar/config fields follow the side edited last, so a settings change is
      not undone; the collections below are unions regardless */
   const base = ts(b) > ts(a) ? { ...a, ...b } : { ...b, ...a };
   const geoGrid = mergeGeoGrid(a.geoGrid, b.geoGrid);
-  const opt = keepAgentPosts(a.opt, base.opt);
+  const opt = keepNewerIndex(a.opt, keepAgentPosts(a.opt, base.opt));
   return {
     ...base,
     ...(opt && opt !== base.opt ? { opt } : {}),

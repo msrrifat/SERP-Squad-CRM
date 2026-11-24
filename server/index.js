@@ -971,6 +971,34 @@ async function handleGscQuery(body) {
     }
   } catch (e) { return gErr(e); }
 }
+/* ---- Search Console: what Google says about single addresses (URL Inspection, free, 2,000 a day for a property) ----
+   Used by the AI agent's index check. The same fallback as the query above: when the saved property cannot
+   be read by this account, the same domain's readable property answers instead. */
+async function handleGscInspect(body) {
+  if (!body?.connectionId || !body?.siteUrl) return [400, { error: "bad_request", detail: "connectionId and siteUrl required." }];
+  const urls = [...new Set((Array.isArray(body.urls) ? body.urls : []).map((u) => String(u).trim()).filter((u) => /^https?:\/\//i.test(u)))].slice(0, 40);
+  if (!urls.length) return [400, { error: "bad_request", detail: "urls[] required (up to 40 full addresses)." }];
+  try {
+    const { accessToken } = await googleAccess(body.connectionId);
+    let site = body.siteUrl;
+    const one = async (url) => {
+      try {
+        const d = await gPost(accessToken, "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect", { inspectionUrl: url, siteUrl: site, languageCode: "en" });
+        const s = d.inspectionResult?.indexStatusResult || {};
+        return { url, indexed: s.verdict === "PASS", verdict: s.verdict || "", coverage: s.coverageState || "", robots: s.robotsTxtState || "", indexing: s.indexingState || "", fetch: s.pageFetchState || "",
+          lastCrawl: s.lastCrawlTime || "", googleCanonical: s.googleCanonical || "", userCanonical: s.userCanonical || "", inSitemap: (s.sitemap || []).length > 0, checkedAt: Date.now() };
+      } catch (e) { return { url, error: String(e?.message || e).slice(0, 200) }; }
+    };
+    let first = await one(urls[0]);
+    if (first.error && /permission|not found|403|404|own|verif/i.test(first.error)) {
+      const alt = await resolveGscSite(accessToken, body.siteUrl).catch(() => null);
+      if (alt) { site = alt; first = await one(urls[0]); }
+    }
+    const results = [first, ...(await pool(urls.slice(1), one, 4))];
+    if (results.every((r) => r.error)) return [/permission|403/i.test(results[0].error) ? 403 : 502, { error: "provider_error", detail: results[0].error }];
+    return [200, { live: true, siteUsed: site, results }];
+  } catch (e) { return gErr(e); }
+}
 async function handleGa4Properties(body) {
   if (!body?.connectionId) return [503, { error: "not_connected", detail: "Connect a Google account first." }];
   try { const { accessToken } = await googleAccess(body.connectionId);
@@ -6026,7 +6054,7 @@ function updateProjectOptimization(pid, fn) {
   rememberDoc("optimization", out.written.optimization ?? next);
   return entry;
 }
-initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject, updateProjectOptimization, wpDeploy: handleWpDeploy,
+initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, gscInspect: handleGscInspect, ga4Report: handleGa4Report, checkIndex: handleCheckIndex, dfsForProject, updateProjectOptimization, wpDeploy: handleWpDeploy,
   /* alerts from the agent go out through the agency's own email account (API settings, Email SMTP) */
   mailReady: () => { const m = storedSmtp(); return !!(m?.host && m.user); },
   mail: (to, subject, text) => { const m = storedSmtp(); if (!m?.host || !m.user) throw new Error("No email account is set up."); return sendMail(m, to, subject, text); },

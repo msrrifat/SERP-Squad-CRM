@@ -41,6 +41,8 @@ final class Redact {
     static String text(String input) {
         if (input == null) return "";
         String t = input;
+        Pattern conf = confidential;
+        if (conf != null) t = conf.matcher(t).replaceAll(Matcher.quoteReplacement(CONFIDENTIAL));
         for (String s : ALSO) if (t.contains(s)) t = t.replace(s, HIDDEN);
         if (t.length() < 8) return t;
         for (Pattern p : PATTERNS) t = p.matcher(t).replaceAll(Matcher.quoteReplacement(HIDDEN));
@@ -70,6 +72,23 @@ final class Redact {
     }
 
     private static final Set<String> ALSO = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    static final String CONFIDENTIAL = "[confidential]";
+    private static volatile Pattern confidential;
+    private static volatile boolean basicWeb;
+
+    /** The agency's confidential words (AI agent, API setup, Privacy and confidentiality): hidden in every text that passes through here, whatever their case. */
+    static void confidential(java.util.List<String> words) {
+        StringBuilder re = new StringBuilder();
+        java.util.List<String> sorted = new java.util.ArrayList<>(words);
+        sorted.sort((a, b) -> b.length() - a.length());
+        for (String w : sorted) { if (w == null || w.trim().length() < 4) continue; if (re.length() > 0) re.append('|'); re.append(Pattern.quote(w.trim())); }
+        confidential = re.length() == 0 ? null : Pattern.compile(re.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    }
+
+    /** Whether the agency asked for the basic web search and fetch, whose results are not filtered in Anthropic's code sandbox. */
+    static void basicWeb(boolean on) { basicWeb = on; }
+    static boolean basicWeb() { return basicWeb; }
 
     /** A value this program knows to be secret (a saved password): hidden wherever it turns up in text. */
     static void alsoHide(String secret) { if (secret != null && secret.length() >= 4) ALSO.add(secret); }

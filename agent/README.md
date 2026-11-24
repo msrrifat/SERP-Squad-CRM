@@ -904,6 +904,38 @@ The website editor's sign-in can be handed over from the CRM like a tool's
 (Settings, Website): the program then signs in to the editor itself when it
 has been signed out.
 
+## Google's data through the CRM, not the browser
+
+Search Console, Analytics, rankings, the Maps geo-grid and index status reach
+a task as CRM tools (`search_console`, `analytics`, `rank_table`, `geo_grid`,
+`index_status`, `index_check`): the CRM's server asks Google's APIs with the
+connection saved for the project and the agent sees a short table. That costs
+far fewer tokens than reading the same numbers off a page, and no sign-in can
+expire. `index_check` only checks pages the CRM does not record as indexed.
+A browser on Search Console remains for what has no API (requesting indexing,
+removals, manual actions): the task type *Search Console in the browser*.
+
+## Commands in the chat
+
+In a project's chat the manager can tell the agent to change how it works:
+a rule, a limit, a schedule, an approval, a list, a note, or a guide for
+every project. The agent reads the settings (`work_settings`) and writes the
+change down (`propose_settings`, `propose_guide`); the chat shows a card with
+every value before and after, and a person presses **Apply**. The agent
+cannot apply it, and those tools do not exist in a task, so nothing a web
+page or a document says can change a setting.
+
+## Privacy
+
+Company-wide, under API setup (API keys in this application) in the management screens. This program takes
+part in two ways: at every check-in it receives the agency's confidential
+words and hides them (`Redact.confidential`) in every text that passes
+through it, whatever their case, so they cannot reach Claude from a page and
+cannot be typed into one; and with "basic web search and page reading" on it
+uses the web tools whose results are not post-processed in Anthropic's code
+sandbox. Everything else (what the agent may read from the CRM) is decided on
+the CRM's server.
+
 ## Link building
 
 The task type *Build links* works on the kinds of link the manager switched on
@@ -925,7 +957,11 @@ against the month and appears in the work report) and `account_request`.
 What this program enforces, whatever a task says:
 
 - **It never creates accounts.** The task works in one Chrome ID that holds
-  the link-building accounts a person created and signed in to. That window
+  the link-building accounts a person created and signed in to. Where a
+  site has signed out and its sign-in was handed over from the CRM (Offpage
+  SEO, Accounts for link building), the program signs in by itself; the
+  mailbox the accounts are under is never opened and its password is never
+  kept. That window
   may open any public site, but `Browser.wideRefusal` closes pages whose
   address is a sign-up page (`/register`, `/signup`, `/join`,
   `/create-account` and the like), before opening and again after every page

@@ -108,7 +108,7 @@ final class ChatRunner {
             .outputConfig(BetaOutputConfig.builder().effort("low".equals(effort) ? BetaOutputConfig.Effort.LOW : "high".equals(effort) ? BetaOutputConfig.Effort.HIGH : BetaOutputConfig.Effort.MEDIUM).build())
             .messages(history);
         for (BetaTool t : toolDefs) b.addTool(t);
-        if (model.contains("haiku")) {
+        if (model.contains("haiku") || Redact.basicWeb()) {
             b.addTool(BetaWebSearchTool20250305.builder().maxUses(4L).build());
             b.addTool(BetaWebFetchTool20250910.builder().maxUses(4L).maxContentTokens(12000L).build());
         } else {
