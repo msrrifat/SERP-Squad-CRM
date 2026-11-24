@@ -119,6 +119,17 @@ Rules the server enforces:
   `settingsDryRun`), shown in the chat, and applied by a person through `POST /api/agentops/chat/change`
   (`apply` / `discard`), which runs `saveConfig` or `guideEdit` as that person. Nothing a task or a web page
   says can change a setting.
+- The agency chat is one more conversation, kept under the agency itself (`chatRoom`, project id
+  `_agency`), and shown on the AI agent's main screen and first in the Chat tab. Its turn carries
+  `scope: "company"`, the list of projects (`companyBlock`) and its own tool list (`toolDefs`, from
+  `COMPANY_TOOLS`; any other tool is refused in `agentTool`). A tool that reads one project takes
+  `project` (a name or an id, `findProject`). Everything it changes is a proposal a person applies through
+  `chat/change`: an instruction for every project (kind `instruction`; stored as the agency's directions and
+  given to every task and chat by `directionsFor`, after the project's own), a guide, company-wide settings
+  (kind `company`; only the values in `COMPANY_SETTINGS`, so privacy, the second check, what the agent may
+  read and every key cannot be proposed), or the same setting on many projects (kind `settings` with
+  `targets`; nothing is saved unless every project still has the value the card showed). Its playbook is
+  `_company`. Its tokens are counted under "Agency (no project)".
 - Privacy (`global.privacy`, saved through `config`): `hideContacts`, `hideMoney`, `hideTeamChats` (all on
   unless switched off) filter what `crm_overview` and `crm_read` return; `oneProject` limits a project's
   chat to that project; `basicWeb` makes devices use the basic web search and fetch tools; `confidential`

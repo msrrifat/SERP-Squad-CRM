@@ -204,7 +204,7 @@ export function AgentOpsSection({ company, app = null }) {
         ))}
       </div>
 
-      {view === "limits" && <LimitsView leaveGuard={leaveGuard} reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onOpenTask={setOpenTask} onChat={(id) => { setChatPid(id); setView("chat"); }} />}
+      {view === "limits" && <LimitsView leaveGuard={leaveGuard} reload={load} data={data} accent={accent} act={act} busy={busy} tick={app?.tick || 0} sticky={+app?.sticky || 0} onPage={setInProject} setData={setData} onOpenTask={setOpenTask} onChat={(id) => { setChatPid(id); setView("chat"); }} goTasks={() => setView("tasks")} />}
       {view === "chat" && <ChatView data={data} accent={accent} pid={chatPid} setPid={setChatPid} goTasks={() => setView("tasks")} />}
       {view === "tasks" && <TasksView data={data} accent={accent} act={act} busy={busy} onOpen={setOpenTask} />}
       {view === "devices" && !app && <DevicesView data={data} accent={accent} act={act} busy={busy} reload={load} setErr={setErr} />}
@@ -438,7 +438,7 @@ function PageNav({ canBack, canForward, onBack, onForward }) {
     </div>
   );
 }
-function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData, onOpenTask, leaveGuard }) {
+function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky = 0, onPage, setData, onOpenTask, leaveGuard, goTasks }) {
   /* Projects are pages. The list of projects is one page, a project's
      dashboard is another, and so is each tab of its work setup. `trail` is the
      history that Back and Forward walk; choosing something new drops whatever
@@ -494,6 +494,7 @@ function LimitsView({ data, accent, act, busy, onChat, reload, tick = 0, sticky 
     const on = data.projects.filter((p) => p.id !== "_agency" && p.setting.enabled).length;
     return (
       <div className="space-y-4" ref={topRef} style={{ scrollMarginTop: 16 }}>
+        <AgencyChat data={data} accent={accent} goTasks={goTasks} onOpen={() => onChat("_agency")} />
         <div className="flex flex-wrap items-center gap-3">
           {nav}
           <div className="min-w-[200px] flex-1"><div className="text-[15px] font-semibold text-gray-900">Projects</div><div className="text-[11.5px] text-gray-500">Choose a project to open its dashboard. The agent is switched on for {on} of {data.projects.length - 1}.</div></div>
@@ -2002,6 +2003,8 @@ function TaskModal({ id, accent, act, onClose }) {
    once and answers with Claude using that project's data. While it works the
    bubble shows what it is doing. Chat tokens count against the project's
    token limit. */
+const AGENCY_STARTERS = ["What is the agent working on across all projects?", "Which projects lost rankings this week?", "Show me the company-wide settings.", "Which instructions and guides do you follow on every project?"];
+const AGENCY = "_agency", AGENCY_NAME = "The whole agency";
 const STARTERS = ["How are the rankings doing this week?", "What changed since last month, and why?", "What is the agent working on for this project?", "What should we do next to get more calls?"];
 /* One held request per open conversation: the server answers the moment the
    conversation or its directions change, so the screen is live without asking
@@ -2051,7 +2054,7 @@ function ChatProposal({ p, call, accent, compact }) {
       {!compact && <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: "#FEF3C7", color: "#92400E" }}><Settings2 size={15} /></span>}
       <div className={`min-w-0 rounded-2xl rounded-bl-md border px-3.5 py-2.5 ${waiting ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"} ${compact ? "max-w-[94%]" : "max-w-[84%]"}`}>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[12.5px] font-semibold text-gray-900">{p.kind === "guide" ? p.title : `Proposed change: ${p.title}`}</span>
+          <span className="text-[12.5px] font-semibold text-gray-900">{p.kind === "guide" || p.kind === "instruction" ? p.title : `Proposed change: ${p.title}`}</span>
           {waiting ? <Chip fg="#92400E" bg="#FEF3C7">Waiting for you</Chip> : p.state === "applied" ? <Chip fg="#15803D" bg="#DCFCE7">Applied{p.by ? ` by ${p.by}` : ""}</Chip> : <Chip>Discarded{p.by ? ` by ${p.by}` : ""}</Chip>}
         </div>
         {p.why && <div className="mt-0.5 text-[11.5px] text-gray-500">{p.why}</div>}
@@ -2067,22 +2070,25 @@ function ChatProposal({ p, call, accent, compact }) {
     </div>
   );
 }
-function ChatMessages({ c, project, accent, compact }) {
+function ChatMessages({ c, project, accent, compact, height }) {
   const { chat, pending, canSend, send, call } = c;
+  const agency = project.id === AGENCY;
   const boxRef = useRef(null);
   const last = chat?.messages[chat.messages.length - 1];
   useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, chat?.proposals?.length, last?.activity, pending, project.id]);
   const a = chat?.agent;
   return (
-    <div ref={boxRef} className={`flex-1 space-y-2.5 overflow-y-auto bg-gray-50 ${compact ? "px-3 py-3" : "px-4 py-4"}`} style={compact ? undefined : { height: "max(300px, calc(100vh - 480px))" }}>
+    <div ref={boxRef} className={`flex-1 space-y-2.5 overflow-y-auto bg-gray-50 ${compact ? "px-3 py-3" : "px-4 py-4"}`} style={compact ? undefined : { height: height || "max(300px, calc(100vh - 480px))" }}>
       {!chat && <div className="py-10 text-center text-[12.5px] text-gray-400">Loading the conversation…</div>}
       {chat && chat.total > chat.messages.length && <div className="text-center text-[10.5px] text-gray-400">Showing the latest {chat.messages.length} of {chat.total} messages. All of them are kept.</div>}
       {chat && !chat.messages.length && (
         <div className="mx-auto max-w-md py-6 text-center">
           {!compact && <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><Bot size={20} /></div>}
-          <div className="mt-2 text-[13px] font-semibold text-gray-900">Talk to the agent about {project.name}</div>
-          <div className="mt-1 text-[11.5px] text-gray-500">Ask how the project is doing, tell it what to do, or tell it how you want the work done. You can also tell it to change its own work settings or add a guide: it shows the change here and you press Apply. Everything you say here is kept as its memory and directions.</div>
-          <div className="mt-3 flex flex-wrap justify-center gap-1.5">{STARTERS.slice(0, compact ? 2 : 4).map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[11.5px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
+          <div className="mt-2 text-[13px] font-semibold text-gray-900">{agency ? "Talk to the agent about the whole agency" : `Talk to the agent about ${project.name}`}</div>
+          <div className="mt-1 text-[11.5px] text-gray-500">{agency
+            ? "What you say here is about every project. Tell the agent what should hold everywhere from now on, tell it to change a setting for the whole company, for all projects or for some of them, or ask what is going on across the projects. It puts each instruction, guide and settings change in a card here, and nothing changes until you press Apply."
+            : "Ask how the project is doing, tell it what to do, or tell it how you want the work done. You can also tell it to change its own work settings or add a guide: it shows the change here and you press Apply. Everything you say here is kept as its memory and directions."}</div>
+          <div className="mt-3 flex flex-wrap justify-center gap-1.5">{(agency ? AGENCY_STARTERS : STARTERS).slice(0, compact ? 2 : 4).map((q) => <button key={q} disabled={!canSend} onClick={() => send(q)} className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[11.5px] text-gray-700 hover:border-gray-300 disabled:opacity-40">{q}</button>)}</div>
         </div>
       )}
       {(chat ? [...chat.messages, ...(chat.proposals || []).map((x) => ({ ...x, proposal: true }))].sort((x, y) => x.at - y.at) : []).map((m) => m.proposal ? (
@@ -2127,13 +2133,13 @@ function ChatComposer({ c, project, accent, compact, goTasks }) {
       {chat?.blocked && <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{chat.blocked}</div>}
       {err && <div className="mb-2 text-[11.5px] text-red-700">{err}</div>}
       <div className="flex items-end gap-2">
-        <textarea aria-label={`Message about ${project.name}`} rows={compact ? 1 : 2} className={compact ? "h-[38px] min-w-0 flex-1 resize-none rounded-full border border-gray-200 bg-gray-50 px-3.5 py-2 text-[13px]" : inputCls + " min-h-[44px] flex-1 resize-none"} placeholder={compact ? "Message the agent…" : `Ask about ${project.name}, or tell the agent what to do…`} value={text} disabled={!!chat?.blocked}
+        <textarea aria-label={project.id === AGENCY ? "Message about the whole agency" : `Message about ${project.name}`} rows={compact ? 1 : 2} className={compact ? "h-[38px] min-w-0 flex-1 resize-none rounded-full border border-gray-200 bg-gray-50 px-3.5 py-2 text-[13px]" : inputCls + " min-h-[44px] flex-1 resize-none"} placeholder={compact ? "Message the agent…" : project.id === AGENCY ? "Tell the agent something for every project, or ask about all of them…" : `Ask about ${project.name}, or tell the agent what to do…`} value={text} disabled={!!chat?.blocked}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); go(); } }} />
         {compact
           ? <button aria-label="Send" disabled={!canSend || !text.trim()} onClick={go} className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-white disabled:opacity-40" style={{ background: accent }}><Send size={15} /></button>
           : <Btn accent={accent} disabled={!canSend || !text.trim()} onClick={go}><Send size={13} /> Send</Btn>}
       </div>
-      {!compact && <div className="mt-1.5 text-[11px] text-gray-400">Enter sends, Shift+Enter starts a new line. Work you ask for is queued as a task; see <button className="underline" onClick={goTasks}>Tasks</button> for reports and approvals.</div>}
+      {!compact && <div className="mt-1.5 text-[11px] text-gray-400">Enter sends, Shift+Enter starts a new line. Work you ask for is queued as a task; see {goTasks ? <button className="underline" onClick={goTasks}>Tasks</button> : "Tasks"} for reports and approvals.</div>}
     </div>
   );
 }
@@ -2157,34 +2163,82 @@ function PhoneChat({ c, project, accent }) {
     </div>
   );
 }
-/* standing instructions for a project: saved from the chat or typed here */
-function DirectionsCard({ c, project, accent }) {
+/* standing instructions: a project's own, or (in the agency chat) the ones that hold for every project */
+function DirectionsCard({ c, project, accent, bare }) {
   const [text, setText] = useState("");
-  const list = c.chat?.directions || [];
+  const agency = project.id === AGENCY;
+  const list = c.chat?.directions || [], everywhere = (!agency && c.chat?.everywhere) || [];
   const add = async () => { const o = await c.call("direction", { action: "add", text }); if (o) setText(""); };
+  const Box = bare ? "div" : Card;
   return (
-    <Card className="p-4">
-      <div className="text-[13.5px] font-semibold text-gray-900">Directions for the agent</div>
-      <div className="text-[11.5px] text-gray-500">How you want this project handled. Tell the agent in the chat and it keeps it here, or type one below. Every task and every answer for {project.name} follows them.</div>
+    <Box className={bare ? "" : "p-4"}>
+      <div className="text-[13.5px] font-semibold text-gray-900">{agency ? "Instructions for every project" : "Directions for the agent"}</div>
+      <div className="text-[11.5px] text-gray-500">{agency
+        ? "What the agent follows in every task and every answer, on every project. Tell it in this chat and press Apply on its card, or type one below."
+        : `How you want this project handled. Tell the agent in the chat and it keeps it here, or type one below. Every task and every answer for ${project.name} follows them.`}</div>
       <div className="mt-2">
         {list.map((d, i) => (
           <div key={d.id} className="flex items-start gap-2 border-t border-gray-100 py-1.5 text-[12.5px] first:border-t-0">
             <span className="w-4 shrink-0 font-semibold text-gray-400">{i + 1}</span>
-            <span className="min-w-0 flex-1 text-gray-800">{d.text}<span className="text-gray-400"> · {d.source === "chat" ? "from the chat" : `added by ${d.by}`} {relTime(d.at)}</span></span>
-            <button aria-label="Remove direction" title="Remove" onClick={() => c.call("direction", { action: "remove", id: d.id })} className="shrink-0 text-gray-400 hover:text-red-700"><Trash2 size={13} /></button>
+            <span className="min-w-0 flex-1 text-gray-800">{d.text}<span className="text-gray-400"> · {d.source === "chat" ? (agency ? `from the chat, applied by ${d.by}` : "from the chat") : `added by ${d.by}`} {relTime(d.at)}</span></span>
+            <button aria-label={agency ? "Remove instruction" : "Remove direction"} title="Remove" onClick={() => c.call("direction", { action: "remove", id: d.id })} className="shrink-0 text-gray-400 hover:text-red-700"><Trash2 size={13} /></button>
           </div>
         ))}
-        {c.chat && !list.length && <div className="py-1.5 text-[12px] text-gray-400">None yet. For example: "Focus on emergency keywords first" or "Never mention prices".</div>}
+        {c.chat && !list.length && <div className="py-1.5 text-[12px] text-gray-400">{agency ? 'None yet. For example: "Never promise a ranking position" or "Write in British English".' : 'None yet. For example: "Focus on emergency keywords first" or "Never mention prices".'}</div>}
       </div>
       <div className="mt-2 flex gap-2">
-        <input className={inputCls + " min-w-0 flex-1"} placeholder="Add a direction" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) add(); }} />
+        <input className={inputCls + " min-w-0 flex-1"} placeholder={agency ? "Add an instruction for every project" : "Add a direction"} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) add(); }} />
         <Btn accent={accent} disabled={!text.trim()} onClick={add}><Plus size={13} /> Add</Btn>
       </div>
+      {everywhere.length > 0 && (
+        <div className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-[11.5px] leading-5 text-gray-600" data-everywhere>
+          <div className="font-semibold text-gray-700">Also followed here: {everywhere.length === 1 ? "an instruction" : `${everywhere.length} instructions`} for every project</div>
+          <ul className="mt-0.5 list-disc pl-4">{everywhere.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          <div className="mt-0.5 text-gray-400">They are changed in the agency chat, on the AI agent's main screen.</div>
+        </div>
+      )}
+    </Box>
+  );
+}
+/* the agency chat on the AI agent's main screen: what is said here is about every project */
+function AgencyChat({ data, accent, goTasks, onOpen }) {
+  const row = data.projects.find((p) => p.id === AGENCY);
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem("ss-agent-agencychat") !== "closed"; } catch { return true; } });
+  const c = useProjectChat(open && row ? AGENCY : "");
+  if (!row) return null;
+  const room = { ...row, name: AGENCY_NAME };
+  const avail = agentLine(c.chat?.agent);
+  const toggle = () => { const next = !open; setOpen(next); try { localStorage.setItem("ss-agent-agencychat", next ? "open" : "closed"); } catch { /* it stays as it is for this visit */ } };
+  const last = row.chat?.last;
+  return (
+    <Card className="overflow-hidden" data-agency-chat>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ background: accent + "1A", color: accent }}><MessageSquare size={17} /></span>
+        <div className="min-w-[220px] flex-1">
+          <div className="text-[14px] font-semibold text-gray-900">Agency chat</div>
+          <div className="text-[11.5px] text-gray-500">{open
+            ? "Tell the agent what should hold on every project, or change a setting for the whole company or for many projects at once. Nothing changes until you press Apply on its card."
+            : row.chat?.pending ? "The agent is answering…" : last ? (last.role === "user" ? "You: " : "Agent: ") + last.text.replace(/[*_`#>|]/g, "").replace(/\s+/g, " ") : "Tell the agent something for every project, or ask about all of them."}</div>
+        </div>
+        {open && avail && <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: avail.tone }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: avail.tone }} />{avail.short}</div>}
+        {open && onOpen && <Btn ghost onClick={onOpen} title="Open this conversation in the Chat tab, at full height">Open in Chat</Btn>}
+        <Btn ghost onClick={toggle}>{open ? "Hide" : "Open the chat"}</Btn>
+      </div>
+      {open && (
+        <div className="grid border-t border-gray-100 lg:grid-cols-[minmax(0,1fr)_330px]">
+          <div className="flex min-w-0 flex-col lg:border-r lg:border-gray-100">
+            <ChatMessages c={c} project={room} accent={accent} height={320} />
+            <ChatComposer c={c} project={room} accent={accent} goTasks={goTasks} />
+          </div>
+          <div className="border-t border-gray-100 p-4 lg:border-t-0"><DirectionsCard c={c} project={room} accent={accent} bare /></div>
+        </div>
+      )}
     </Card>
   );
 }
 function ChatView({ data, accent, pid, setPid, goTasks }) {
-  const projects = data.projects.filter((p) => p.id !== "_agency");
+  const agencyRow = data.projects.find((p) => p.id === AGENCY);
+  const projects = [...(agencyRow ? [{ ...agencyRow, name: AGENCY_NAME }] : []), ...data.projects.filter((p) => p.id !== AGENCY)];
   const project = projects.find((p) => p.id === pid) || projects[0] || null;
   const id = project?.id || "";
   const c = useProjectChat(id);
@@ -2199,7 +2253,7 @@ function ChatView({ data, accent, pid, setPid, goTasks }) {
             <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: p.chat.pending ? "#D97706" : p.chat.last ? accent : "#E5E7EB" }} title={p.chat.pending ? "The agent is answering" : ""} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[12.5px] font-medium text-gray-800">{p.name}</span>
-              <span className="block truncate text-[10.5px] text-gray-400">{p.chat.pending ? "Answering…" : p.chat.last ? (p.chat.last.role === "user" ? "You: " : "") + p.chat.last.text.replace(/[*_`#>|]/g, "").replace(/\s+/g, " ") : "No messages yet"}</span>
+              <span className="block truncate text-[10.5px] text-gray-400">{p.chat.pending ? "Answering…" : p.chat.last ? (p.chat.last.role === "user" ? "You: " : "") + p.chat.last.text.replace(/[*_`#>|]/g, "").replace(/\s+/g, " ") : p.id === AGENCY ? "For every project" : "No messages yet"}</span>
             </span>
           </button>
         ))}
@@ -2208,12 +2262,12 @@ function ChatView({ data, accent, pid, setPid, goTasks }) {
         <Card className="flex flex-col overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
             <div className="min-w-0">
-              <div className="truncate text-[14px] font-semibold text-gray-900">{project.name}</div>
+              <div className="truncate text-[14px] font-semibold text-gray-900">{project.name}{project.id === AGENCY && <span className="ml-2 align-middle"><Chip>What you say here is about every project</Chip></span>}</div>
               {avail && <div className="flex items-center gap-1.5 text-[11.5px]" style={{ color: avail.tone }}><span className="h-1.5 w-1.5 rounded-full" style={{ background: avail.tone }} />{avail.text}</div>}
             </div>
             <div className="flex items-center gap-3 text-[11.5px] text-gray-500">
-              <span title="Chat counts against this project's token limit.">{fmtTok(project.usage.month)}{project.setting.tokensPerMonth ? ` of ${fmtTok(project.setting.tokensPerMonth)}` : ""} tokens this month</span>
-              {c.chat?.messages.length > 0 && <button className="font-semibold text-gray-500 underline hover:text-gray-800" onClick={async () => { if (await askConfirm({ title: "Delete this conversation?", message: `Every message for ${project.name} is deleted and the agent starts the conversation fresh.`, note: "Directions, saved notes and task reports are kept.", confirmLabel: "Yes, delete the messages", danger: true })) c.call("chat/clear", {}); }}>Delete messages</button>}
+              <span title={project.id === AGENCY ? "The agency chat counts against the token limit of \"Agency (no project)\" and the company-wide limit." : "Chat counts against this project's token limit."}>{fmtTok(project.usage.month)}{project.setting.tokensPerMonth ? ` of ${fmtTok(project.setting.tokensPerMonth)}` : ""} tokens this month</span>
+              {c.chat?.messages.length > 0 && <button className="font-semibold text-gray-500 underline hover:text-gray-800" onClick={async () => { if (await askConfirm({ title: "Delete this conversation?", message: project.id === AGENCY ? "Every message of the agency chat is deleted and the agent starts the conversation fresh." : `Every message for ${project.name} is deleted and the agent starts the conversation fresh.`, note: project.id === AGENCY ? "Instructions for every project, guides and settings are kept." : "Directions, saved notes and task reports are kept.", confirmLabel: "Yes, delete the messages", danger: true })) c.call("chat/clear", {}); }}>Delete messages</button>}
             </div>
           </div>
           <ChatMessages c={c} project={project} accent={accent} />
@@ -3274,7 +3328,7 @@ function PrivacyCard({ data, accent, act, busy }) {
         {row("hideContacts", "People's contact details are not shown to the agent", "Email addresses and phone numbers of clients, contacts and team members are left out of what it reads from the CRM. The business's public name, address and phone still come from the brand facts.")}
         {row("hideMoney", "Money is kept out of the agent's reach", "Invoices, accounting, fees, retainers and payroll in the CRM cannot be read by it.")}
         {row("hideTeamChats", "The team's own chats are kept out of the agent's reach", "Direct messages and group chats between team members cannot be read by it.")}
-        {row("oneProject", "A project's chat sees only that project", "Off: in a project's chat you can ask about any client. On: the chat, like a task, reads only the project it belongs to; the agency-level review task still sees all.")}
+        {row("oneProject", "A project's chat sees only that project", "Off: in a project's chat you can ask about any client. On: the chat, like a task, reads only the project it belongs to; the agency chat and the agency-level review task still see all.")}
         {row("basicWeb", "Basic web search and page reading", "On: search results and fetched pages are not post-processed in Anthropic's code sandbox. Slightly more tokens per search; needed for a zero-retention arrangement.")}
       </div>
       <div className="mt-3">

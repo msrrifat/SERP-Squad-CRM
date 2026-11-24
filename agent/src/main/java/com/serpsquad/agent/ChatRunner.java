@@ -36,6 +36,10 @@ import java.util.Map;
  * project-scoped CRM tools a task uses (plus web search), reports its token
  * use after every Claude call, and always ends by sending a reply, even when
  * something went wrong, so the person is never left waiting.
+ *
+ * A message in the agency chat (scope "company") is about every project: it
+ * is answered with the agency chat's own instructions and with the short list
+ * of tools the CRM sends with the message.
  */
 final class ChatRunner {
     private static final int MAX_TURNS = 12;
@@ -43,7 +47,9 @@ final class ChatRunner {
         Map.entry("project_brief", "Reading the project"), Map.entry("rank_table", "Reading the rankings"), Map.entry("rank_history", "Reading a keyword's history"),
         Map.entry("rank_compare", "Comparing rankings between two dates"), Map.entry("search_console", "Reading Search Console"), Map.entry("geo_grid", "Reading the map grid"),
         Map.entry("past_reports", "Reading earlier reports"), Map.entry("project_tasks", "Checking the task list"), Map.entry("remember", "Saving a note"),
-        Map.entry("log_change", "Logging a change"), Map.entry("suggest_task", "Queueing a task"));
+        Map.entry("log_change", "Logging a change"), Map.entry("suggest_task", "Queueing a task"), Map.entry("work_settings", "Reading the settings"),
+        Map.entry("propose_settings", "Writing down the change for you to apply"), Map.entry("propose_guide", "Writing down the guide for you to apply"), Map.entry("save_direction", "Saving the instruction"),
+        Map.entry("crm_overview", "Looking over the CRM"), Map.entry("crm_read", "Reading the CRM"), Map.entry("ranking_report", "Reading the ranking report"), Map.entry("project_status", "Reading the project's status"));
 
     private final AnthropicClient claude;
     private final CrmClient crm;
@@ -61,7 +67,32 @@ final class ChatRunner {
         this.model = turn.path("model").asText("claude-opus-5-5");
     }
 
+    private boolean company() {
+        return "company".equals(turn.path("scope").asText(""));
+    }
+
+    /** The agency chat: about every project, with the standing instructions that hold everywhere. */
+    private String companySystem() {
+        String chat = store.playbook("_company");
+        StringBuilder s = new StringBuilder();
+        s.append(chat.isBlank() ? "You are the SEO operations agent of a local-SEO agency, talking to a manager in the agency chat, which is about every project and not one. Be direct and brief. Use the tools for every fact and never invent a number. A setting, a guide or an instruction for every project is only proposed: the manager applies it in the chat." : chat);
+        s.append("\n\n---\n\nThis conversation is about the whole agency, not one project.");
+        s.append("\nToday: ").append(LocalDate.now());
+        String by = turn.path("by").asText("");
+        if (!by.isBlank()) s.append("\nYou are talking to: ").append(by);
+        String knowledge = turn.path("knowledge").asText("");
+        if (!knowledge.isBlank()) s.append("\n\n").append(knowledge);
+        s.append("\n\nInstructions the manager has given for every project (you are given them in every task and every answer):\n");
+        if (turn.path("directions").size() == 0) s.append("None saved yet.\n");
+        int n = 1;
+        for (JsonNode d : turn.path("directions")) s.append(n++).append(". ").append(d.asText("")).append('\n');
+        long older = turn.path("olderMessages").asLong(0);
+        if (older > 0) s.append("\nThis conversation has ").append(older).append(" earlier messages that are not shown below. Read them with chat_history when you need them.\n");
+        return s.toString();
+    }
+
     private String system() {
+        if (company()) return companySystem();
         String chat = store.playbook("_chat");
         StringBuilder s = new StringBuilder();
         s.append(chat.isBlank() ? "You are the SEO operations agent of a local-SEO agency, talking to a manager in a live chat about one client project. Be direct and brief. Use the tools for every fact and never invent a number." : chat);
@@ -90,7 +121,9 @@ final class ChatRunner {
 
     private List<BetaTool> tools() {
         List<BetaTool> out = new ArrayList<>();
-        for (JsonNode t : store.tools()) {
+        /* a message that brings its own tools (the agency chat) is answered with exactly those */
+        JsonNode defs = turn.path("toolDefs").isArray() ? turn.path("toolDefs") : store.tools();
+        for (JsonNode t : defs) {
             String name = t.path("name").asText("");
             if (!name.isEmpty()) out.add(ToolBox.tool(name, t.path("description").asText(""), t.path("input_schema")));
         }

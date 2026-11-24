@@ -937,6 +937,31 @@ every value before and after, and a person presses **Apply**. The agent
 cannot apply it, and those tools do not exist in a task, so nothing a web
 page or a document says can change a setting.
 
+### The agency chat
+
+One more conversation, about every project instead of one. It is on the AI
+agent's main screen (above the list of projects), first in the Chat tab, and
+behind a button on this application's Overview. The CRM sends such a message
+with `scope: "company"`, the list of projects and its own short list of tools
+(`toolDefs`), and `ChatRunner` answers it with the `_company` playbook instead
+of the project one. There the manager can:
+
+- give an instruction for every project ("never promise a ranking position"):
+  the agent proposes it, a person presses **Apply**, and from then on every
+  task and every chat answer on every project starts with it, after the
+  project's own directions;
+- ask for a guide for a kind of work on every project;
+- change a company-wide setting (agent on or paused, model, effort, token and
+  spend limits, time zone, working hours), or the same work setting on all
+  projects or on the ones named: one card lists every value before and after
+  and every project it touches;
+- ask what is going on across the projects, read one project by naming it,
+  queue a task for a project, or cancel one that has not started.
+
+Privacy, the second check before a change, what the agent may read in the CRM
+and every key are not changed from the chat; a person changes them on their
+own screens.
+
 ## Privacy
 
 Company-wide, under API setup (API keys in this application) in the management screens. This program takes

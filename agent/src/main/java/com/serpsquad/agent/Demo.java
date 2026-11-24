@@ -434,6 +434,7 @@ final class Demo {
         direction("p1", "No work on the bathroom pages until January.", now - 25 * HOUR, "chat");
         direction("p2", "Write in British English.", now - 30 * HOUR, "chat");
         direction("p2", "Never mention prices in any content.", now - 30 * HOUR, "chat");
+        direction("_agency", "Write in plain words a customer would use; no jargon in anything a client's customers read.", now - 50 * HOUR, "chat");
     }
 
     // ---------- the scripted running task ----------
@@ -1228,7 +1229,7 @@ final class Demo {
         while (names.hasNext()) {
             String k = names.next();
             ObjectNode e = pb.addObject();
-            e.put("key", k).put("label", k.equals("_rules") ? "Agent rules (all tasks)" : k.equals("_chat") ? "Chat (talking about a project)" : label(k)).put("edited", playbookEdits.containsKey(k));
+            e.put("key", k).put("label", k.equals("_rules") ? "Agent rules (all tasks)" : k.equals("_chat") ? "Chat (talking about a project)" : k.equals("_company") ? "Chat (talking about the whole agency)" : label(k)).put("edited", playbookEdits.containsKey(k));
             if (playbookEdits.containsKey(k)) e.put("updatedAt", playbookEdits.get(k).path("updatedAt").asLong()); else e.putNull("updatedAt");
         }
         o.putNull("release");
@@ -2018,7 +2019,7 @@ final class Demo {
                 return new Reply(200, out);
             }
             case "direction": {
-                if (!known(pid)) return bad(404, "Unknown project.");
+                if (!known(pid) && !AGENCY.equals(pid)) return bad(404, "Unknown project.");
                 if (body.path("action").asText().equals("add")) {
                     String text = body.path("text").asText("").trim();
                     if (text.length() < 4) return bad(400, "Write the direction first.");
@@ -2057,6 +2058,7 @@ final class Demo {
                 for (ObjectNode x : demoProposals.getOrDefault(pid, List.of())) if (x.path("id").asText().equals(body.path("id").asText()) && x.path("state").asText().equals("waiting")) {
                     boolean apply = body.path("action").asText().equals("apply");
                     x.put("state", apply ? "applied" : "discarded").put("by", "You").put("decidedAt", System.currentTimeMillis());
+                    if (apply && x.has("instruction")) direction(AGENCY, x.path("instruction").asText(), System.currentTimeMillis(), "chat");
                     chats.computeIfAbsent(pid, (k) -> new ArrayList<>()).add(msg("agent", apply ? "You applied \"" + x.path("title").asText() + "\". (Demo: the sample settings are not really changed.)" : "You discarded the proposal. Nothing was changed.", System.currentTimeMillis(), "").put("system", true));
                 }
                 chatVer.merge(pid, 1, Integer::sum);
@@ -2073,7 +2075,40 @@ final class Demo {
         }
     }
 
-    // ---------- demo chat: one conversation and one list of directions per project ----------
+    // ---------- demo chat: one conversation and one list of directions per project, and one for the whole agency ----------
+    private static final String AGENCY = "_agency";
+
+    /** The agency chat in the demo: an instruction or a settings change becomes a card, anything else a sample answer. */
+    private String companyAnswer(String q, long now) {
+        String t = q.toLowerCase();
+        int on = 0;
+        for (Object[] pr : PROJECTS) if (!hidden.contains((String) pr[0]) && projSetting.get((String) pr[0]).path("enabled").asBoolean(false)) on++;
+        if (t.matches("(?s).*\\b(set|change|raise|lower|increase|reduce|switch|turn|allow|make it|limit|pause)\\b.*") && t.matches("(?s).*\\b(blog|post|posts|link|links|approval|month|week|limit|rule|hours|model)\\b.*")) {
+            ObjectNode pr = Json.obj();
+            pr.put("id", "pr_demo" + (++ids)).put("kind", "settings").put("title", "Blog publishing, Blog posts, a month on " + Math.max(1, on) + " projects").put("why", "You asked for the same number of blog posts on every project.").put("at", now + 1).put("state", "waiting").put("by", "").putNull("decidedAt").put("note", "");
+            ArrayNode lines = pr.putArray("lines");
+            lines.add("Blog publishing, Blog posts, a month: (differs between the projects) → 4");
+            StringBuilder names = new StringBuilder();
+            for (Object[] x : PROJECTS) if (!hidden.contains((String) x[0])) names.append(names.length() > 0 ? ", " : "").append((String) x[1]);
+            lines.add("Projects: " + names);
+            demoProposals.computeIfAbsent(AGENCY, (k) -> new ArrayList<>()).add(pr);
+            return "I have written that down as one change for every project in the card below. Nothing has changed yet. Press **Apply** to make it on all of them, or **Discard**. (Demo: the card is a sample.)";
+        }
+        if (t.matches("(?s).*\\b(always|never|from now|focus on|do not|don't|prefer|make sure|priority|prioritise|prioritize|learn|remember)\\b.*")) {
+            String text = q.trim().replaceAll("\\s+", " ");
+            if (text.length() > 200) text = text.substring(0, 200);
+            ObjectNode pr = Json.obj();
+            pr.put("id", "pr_demo" + (++ids)).put("kind", "instruction").put("title", "Instruction for every project").put("why", "").put("at", now + 1).put("state", "waiting").put("by", "").putNull("decidedAt").put("note", "").put("instruction", text);
+            pr.putArray("lines").add(text).add("The agent is given it in every task and every chat answer, on every project, until it is removed.");
+            demoProposals.computeIfAbsent(AGENCY, (k) -> new ArrayList<>()).add(pr);
+            return "That is an instruction for every project, so I have put it in the card below. Press **Apply** and I will follow it in every task and every answer, on every project. (Demo: the card is a sample.)";
+        }
+        if (t.matches("(?s).*\\b(task|tasks|working|doing|status|queue|approve|approval)\\b.*")) return "Across the agency right now: the agent is switched on for **" + on + " projects**, one task is running, and the daily checks ran this morning. Anything that changes a live profile or website waits for approval under Tasks.";
+        if (t.matches("(?s).*\\b(rank|ranking|rankings|position|keyword|keywords|lost|drop|dropped|week|month)\\b.*")) return "Looking over the projects: **" + PROJECTS[0][1] + "** has " + RANKS[0][1] + " of " + RANKS[0][0] + " keywords in the top 10, with its biggest drop on *" + RANKS[0][3] + "*. Ask about one project by name and I will read its ranking report.";
+        if (t.matches("(?s).*\\b(setting|settings|instruction|instructions|guide|guides|follow)\\b.*")) return "Company-wide the agent is switched on and works by the guides under Playbooks and the instructions listed next to this chat. Tell me what should change, for every project or for some of them, and I will put it in a card for you to apply.";
+        if (t.matches("(?s).*\\b(hi|hello|hey)\\b.*")) return "Hello. This chat is about the whole agency. Tell me what should hold on every project from now on, ask me to change a setting for all projects or for some, or ask what is going on across them.";
+        return "This is the demo, so I am answering from sample data. In the real application this chat reads every project, queues work on any of them, and puts instructions, guides and settings for every project in a card that you apply.";
+    }
 
     private String answer(int i, String q) {
         if (i < 0) return "This project has just been put on the agent's list, so there is nothing to report yet. Switch the agent on for it, fill in its work setup and brand voice, and give it a first task. (This is the demo: the answer is a sample.)";
@@ -2111,17 +2146,19 @@ final class Demo {
                     pr.putArray("lines").add("Blog publishing, Blog posts, a month: 2 → 4").add("Write and publish blog posts: working limit: limited → open");
                     demoProposals.computeIfAbsent(pid, (k) -> new ArrayList<>()).add(pr);
                     list.add(msg("agent", "I have written that change down as a proposal in the card below: blog posts go from 2 to 4 a month, and the blog task is no longer capped by a weekly number. Nothing has changed yet. Press **Apply** to make it, or **Discard**. (Demo: the card is a sample.)", now, ""));
-                } else list.add(msg("agent", answer(i, pend.path("text").asText("")), now, ""));
+                } else list.add(msg("agent", AGENCY.equals(pid) ? companyAnswer(pend.path("text").asText(""), now) : answer(i, pend.path("text").asText("")), now, ""));
                 pending.remove(pid);
                 chatVer.merge(pid, 1, Integer::sum);
                 pend = null;
             } else {
-                pend.put("status", "working").put("activity", waited < 1300 ? "Thinking" : waited < 2800 ? "Reading the rankings" : "Checking the task list");
+                pend.put("status", "working").put("activity", waited < 1300 ? "Thinking" : AGENCY.equals(pid) ? (waited < 2800 ? "Reading the settings" : "Looking over the projects") : waited < 2800 ? "Reading the rankings" : "Checking the task list");
             }
         }
         ObjectNode s = Json.obj();
         s.put("ok", true).put("projectId", pid).put("v", chatVer.getOrDefault(pid, 0)).put("pending", pend != null).putNull("blocked");
         s.put("total", list.size());
+        if (AGENCY.equals(pid)) s.put("company", true);
+        else { ArrayNode ev = s.putArray("everywhere"); for (ObjectNode d : directions.getOrDefault(AGENCY, List.of())) ev.add(d.path("text").asText()); }
         ArrayNode ds = s.putArray("directions");
         for (ObjectNode d : directions.getOrDefault(pid, List.of())) ds.add(d);
         ObjectNode a = s.putObject("agent");
@@ -2138,7 +2175,7 @@ final class Demo {
     /** The chat endpoints, answered from sample data. */
     synchronized ObjectNode chat(String action, ObjectNode body) {
         String pid = body.path("projectId").asText("");
-        if (!known(pid)) { ObjectNode n = Json.obj(); n.put("ok", false); n.put("detail", "Unknown project."); return n; }
+        if (!known(pid) && !AGENCY.equals(pid)) { ObjectNode n = Json.obj(); n.put("ok", false); n.put("detail", "Unknown project."); return n; }
         if (action.equals("send")) {
             String text = body.path("text").asText("").trim();
             if (!text.isEmpty() && !pending.containsKey(pid)) {

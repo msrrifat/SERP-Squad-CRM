@@ -245,6 +245,11 @@
             <div class="btns"><button class="b" id="pauseBtn">Pause</button><button class="b" id="checkBtn">Check for work now</button><button class="b vhide" id="retryBtn">Try again now</button></div>
             <div class="msg" id="nowMsg"></div>
           </section>
+          <section class="card vhide" data-manage id="agencyChatCard">
+            <h2>Agency chat</h2>
+            <div class="hint">Tell the agent what should hold on every project from now on, or change a setting for the whole company or for many projects at once. It shows each change as a card, and nothing changes until you press Apply.</div>
+            <div class="btns"><button class="b" data-go="chat">Open the agency chat</button></div>
+          </section>
           <section class="card vhide" id="usageCard">
             <h2>API usage</h2>
             <div class="hint">What the agent has used on every computer, as each provider reported it.</div>
@@ -468,7 +473,7 @@
   const say = (id, text, cls) => { const el = $(id); el.textContent = text || ""; el.className = "msg " + (cls || ""); };
   const STATUS = { queued: "Waiting", approved: "Approved, waiting", running: "Running", needs_approval: "Needs approval", done: "Done", failed: "Failed", stopped: "Stopped", cancelled: "Cancelled", released: "Returned to queue" };
   const PILL = { working: "Working", idle: "Idle, waiting for work", paused: "Paused", blocked: "Blocked", offline: "Cannot reach the CRM", setup: "Not connected yet", stopped: "Agent not running" };
-  const PAGES = { overview: ["Overview", "What the agent is doing on this computer"], projects: ["Projects", "Chat, directions, token limits and working limits for each project"], tasks: ["Tasks", "Give the agent work, approve it, see what it found"], alerts: ["Alerts", "What needs a person, email alerts, time zone and working hours"], chat: ["Chat", "Talk to the agent about a project"], knowledge: ["Knowledge", "Documents the agent studies and applies to every project"], playbooks: ["Playbooks", "The instructions the agent follows for each kind of task"], keys: ["API keys", "The Claude keys the agent works with"], activity: ["Activity", "The agent's own log on this computer"], settings: ["Settings", "Connection, this computer's key, Chrome IDs"] };
+  const PAGES = { overview: ["Overview", "What the agent is doing on this computer"], projects: ["Projects", "Chat, directions, token limits and working limits for each project"], tasks: ["Tasks", "Give the agent work, approve it, see what it found"], alerts: ["Alerts", "What needs a person, email alerts, time zone and working hours"], chat: ["Chat", "Talk to the agent about the whole agency, or about one project"], knowledge: ["Knowledge", "Documents the agent studies and applies to every project"], playbooks: ["Playbooks", "The instructions the agent follows for each kind of task"], keys: ["API keys", "The Claude keys the agent works with"], activity: ["Activity", "The agent's own log on this computer"], settings: ["Settings", "Connection, this computer's key, Chrome IDs"] };
   /* which of the management screens (the same ones the CRM shows) a sidebar entry opens */
   const MANAGE = { projects: "limits", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", keys: "api" }, BACK = { limits: "projects", tasks: "tasks", alerts: "alerts", chat: "chat", knowledge: "knowledge", playbooks: "playbooks", api: "keys" };
   let updAsked = 0;      // when "Sync for update" was last pressed in this window
