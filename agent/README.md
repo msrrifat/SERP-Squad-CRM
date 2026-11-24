@@ -878,6 +878,32 @@ Apple, Facebook, payment sites and code hosts cannot be saved. This protects
 the passwords from the file being read on its own; it does not protect them
 from someone who can use this computer's user account.
 
+## Blog publishing, and the month's trending services
+
+**Blog publishing.** The task type *Write and publish blog posts* works in
+the CRM's own Blogs & FAQs plan (Optimization Studio, Business Website). The
+CRM tools `blog_plan`, `blog_plan_get`, `blog_plan_add`, `blog_plan_write`,
+`blog_plan_publish` and `blog_plan_published` read the plan, add a topic,
+save the written article into the plan (where the team sees it), publish it
+and mark it. How a post reaches the website depends on the project: through
+the CRM's website connector when the site is connected there (no browser
+needed), through the repository for a site built from code, otherwise in the
+site's editor in the browser. The rules are per kind of post (blog, news,
+FAQ): how many a month, the website category, and whether a person approves
+each one; they are enforced by the CRM (the task does not start when nothing
+is allowed or the month is full, and a run asks a person when every kind
+with room left needs approval). A tool that publishes runs only in a run
+that may change things: this program tells the CRM so with every tool call.
+
+**Trending services.** The task type *This month's trending services* works
+out which of the client's own services are most in demand this month in its
+area and writes or replaces one section for them on the page chosen in the
+work setup, through the site's editor or its repository, after approval.
+
+The website editor's sign-in can be handed over from the CRM like a tool's
+(Settings, Website): the program then signs in to the editor itself when it
+has been signed out.
+
 ## Working documents (Excel and Word files)
 
 In the CRM, a project's Report tab has **Working documents**: a folder on

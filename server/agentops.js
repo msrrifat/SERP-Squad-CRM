@@ -610,6 +610,45 @@ function gbpNeedsPerson(pid, type) {
   /* an edit run may act alone only on parts that are allowed; with the second check off nothing would stop it at a part that asks for approval */
   return !modes.includes("allowed") || (modes.includes("ask") && load("config").global.secondCheck === false);
 }
+/* how a post gets onto the website for this project: the CRM's own website connector when it is set up, the
+   repository for a site built from code, otherwise the site's editor in the browser */
+function blogRoute(pid) {
+  const ch = channelsOf(pid), w = deps.readDocCached("optimization", {})?.[pid]?.opt?.website || {};
+  const cred = typeof w.credential === "string" ? w.credential : w.credential?.value || "";
+  if (w.platform === "wordpress" && /:/.test(cred)) return { how: "connector", say: "through the CRM's website connector (blog_plan_publish): the post goes straight to the WordPress site, no browser needed." };
+  if (ch.website.cms === "github") return { how: "repo", say: "the site is built from code: add the post as a file with the repo tools and deliver it, then mark it published with blog_plan_published." };
+  if (ch.website.browser) return { how: "browser", say: "in the website's editor, in the browser (the Chrome ID signed in to it): create the post there, publish it, then mark it published with blog_plan_published." };
+  return { how: "", say: "no way to publish is set up: connect the website in Optimization Studio, or choose a Chrome ID or a repository for it under Work setup, Settings." };
+}
+/* posts the agent published this month, by kind */
+function blogUsed(pid) {
+  const posts = deps.readDocCached("optimization", {})?.[pid]?.opt?.website?.postsPlan?.posts || [], from = periodStart("month");
+  const used = { blog: 0, news: 0, faq: 0 };
+  for (const p of posts) if (p?.status === "published" && p.publishedBy === "agent" && (p.publishedAt || 0) >= from) used[blogKindOf(p)] += 1;
+  return used;
+}
+const blogKindOf = (p) => (p?.kind === "news" ? "news" : p?.category === "answer" ? "faq" : "blog");
+function blogBlocked(pid) {
+  if (pid === AGENCY_PROJECT) return "";
+  const b = rulesOf(pid).blog, used = blogUsed(pid);
+  if (BLOG_KINDS.every(([k]) => !b.kinds[k].perMonth)) return "No kind of post is allowed yet. Set how many blogs, news posts or FAQs a month under Work setup, Onpage SEO, Blog publishing.";
+  if (BLOG_KINDS.every(([k]) => used[k] >= b.kinds[k].perMonth)) return "This month's number of posts is reached for every kind (Work setup, Onpage SEO, Blog publishing).";
+  if (!blogRoute(pid).how) return "No way to publish a post is set up. Connect the website in Optimization Studio, or choose a Chrome ID or a repository for it under Work setup, Settings.";
+  if (!deps.readDocCached("optimization", {})?.[pid]?.opt?.website) return "Open this project's Business Website tab in Optimization Studio once, so its Blogs & FAQs plan exists.";
+  return "";
+}
+/* does a blog run need a person, whatever the task type is set to? Only when every kind that still has room asks for one. */
+function blogNeedsPerson(pid) {
+  if (pid === AGENCY_PROJECT) return false;
+  const b = rulesOf(pid).blog, used = blogUsed(pid), open = BLOG_KINDS.filter(([k]) => b.kinds[k].perMonth > used[k]);
+  return open.length > 0 && open.every(([k]) => b.kinds[k].approval === "ask");
+}
+function blogPolicy(pid) {
+  const b = rulesOf(pid).blog, used = blogUsed(pid), open = BLOG_KINDS.filter(([k]) => b.kinds[k].perMonth > used[k]);
+  const alone = open.filter(([k]) => b.kinds[k].approval === "auto").map(([, l]) => l.toLowerCase()), asks = open.filter(([k]) => b.kinds[k].approval === "ask").map(([, l]) => l.toLowerCase());
+  if (!alone.length || !asks.length) return "";
+  return `In this run only ${alone.join(" and ")} may be published without a person. ${asks.join(" and ")} need a person's approval: do not publish one here; for those call suggest_task once with type blog_publish and needs_approval true, naming the post.`;
+}
 function gbpBlocked(pid, type) {
   if (pid === AGENCY_PROJECT) return "";
   const g = rulesOf(pid).gbp.parts;
@@ -618,10 +657,33 @@ function gbpBlocked(pid, type) {
   if (type === "gbp_update" && GBP_EDIT.every((k) => g[k].mode === "never")) return "Every kind of profile edit is set to \"Not allowed\" in this project's Business Profile rules.";
   return "";
 }
+/* ---------- blog publishing, and the month's trending services ----------
+   Blog publishing: how many posts of each kind the agent may publish in a month, in which category of the
+   website each goes, and whether a person approves each one first. The posts themselves live in the CRM's
+   own Blogs & FAQs plan (Optimization Studio), which the agent reads and writes through its blog tools.
+   Trending services: a section on a chosen page that names the services most in demand this month in the
+   client's area, rewritten each month. */
+const BLOG_KINDS = [["blog", "Blog posts"], ["news", "News posts"], ["faq", "FAQ / answer posts"]];
+function cleanBlogRules(b) {
+  const x = b && typeof b === "object" ? b : {};
+  return {
+    kinds: Object.fromEntries(BLOG_KINDS.map(([k]) => [k, { perMonth: num(x.kinds?.[k]?.perMonth, 0, 60, 0), category: line(x.kinds?.[k]?.category, 80), approval: oneOf(x.kinds?.[k]?.approval, ["ask", "auto"], "ask") }])),
+    topics: oneOf(x.topics, ["plan", "add"], "add"),            // only topics already in the plan, or may the agent add its own
+    adjust: oneOf(x.adjust, ["never", "ask", "allowed"], "ask"),   // changing a post that is already published (text, internal links)
+    wordsMin: num(x.wordsMin, 0, 20000, 0), wordsMax: num(x.wordsMax, 0, 20000, 0),
+    notes: lines(x.notes, 1500),
+  };
+}
+function cleanTrendingRules(t) {
+  const x = t && typeof t === "object" ? t : {};
+  return { pages: lines(x.pages, 800), position: line(x.position, 240), heading: line(x.heading, 120), count: num(x.count, 2, 12, 4), area: line(x.area, 160), notes: lines(x.notes, 1500) };
+}
 function cleanRules(r = {}) {
   const on = r.onpage || {}, off = r.offpage || {}, so = r.social || {};
   return {
     gbp: cleanGbpRules(r.gbp, off),
+    blog: cleanBlogRules(r.blog),
+    trending: cleanTrendingRules(r.trending),
     onpage: { siteChanges: oneOf(on.siteChanges, ["never", "approval"], "never"), maxPagesPerWeek: num(on.maxPagesPerWeek, 0, 200, 3), wordsMin: num(on.wordsMin, 0, 20000, 0), wordsMax: num(on.wordsMax, 0, 20000, 0), language: line(on.language, 80), protectedUrls: lines(on.protectedUrls), notes: lines(on.notes, 1500) },
     offpage: { reviewReplies: oneOf(off.reviewReplies, ["all", "positive", "none"], "all"), postsPerWeek: num(off.postsPerWeek, 0, 50, 1), outreachPerMonth: num(off.outreachPerMonth, 0, 500, 10), senderName: line(off.senderName, 120), excludedDomains: lines(off.excludedDomains), notes: lines(off.notes, 1500) },
     social: { postsPerWeek: num(so.postsPerWeek, 0, 100, 3), hashtags: oneOf(so.hashtags, ["none", "few", "many"], "few"), tone: line(so.tone, 200), avoidTopics: lines(so.avoidTopics, 1000), notes: lines(so.notes, 1500) },
@@ -639,6 +701,12 @@ const siteHosts = (...urls) => [...new Set(urls.map(hostOfUrl).filter(Boolean).f
 const CHANNEL_LABEL = { gbp: "Google Business Profile", gsc: "Search Console", ga4: "Analytics", website: "website", social: "social profiles" };
 /* which Chrome ID and which sites a task of this type gets for the project */
 function browserFor(pid, cat) {
+  if (cat?.site) {
+    /* the website's editor when there is one to sign in to; a site built from code, or published through the connector, needs no window */
+    const w = channelsOf(pid).website, hosts = siteHosts(w.url, w.adminUrl);
+    if (w.cms === "github" || !w.browser || !hosts.length) return null;
+    return { profileId: w.browser, hosts, label: "website editor", startUrl: w.adminUrl || w.url, signIn: true };
+  }
   if (!cat?.channel) return null;
   const ch = channelsOf(pid), where = "in Work setup, Settings";
   if (cat.channel === "gbp") {
@@ -656,7 +724,7 @@ function browserFor(pid, cat) {
     const w = ch.website, hosts = siteHosts(w.url, w.adminUrl);
     if (!hosts.length) return { error: `Add this project's website ${where}.` };
     if (!w.browser) return { error: `Choose a Chrome ID for the website's editor ${where}.` };
-    return { profileId: w.browser, hosts, label: "website editor", startUrl: w.adminUrl || w.url };
+    return { profileId: w.browser, hosts, label: "website editor", startUrl: w.adminUrl || w.url, signIn: true };
   }
   if (cat.channel === "social" && ch.smm.on) {
     if (!ch.smm.browser) return { error: "Choose a Chrome ID for the SMM management tool in Work setup, Social Media." };
@@ -673,8 +741,30 @@ function browserFor(pid, cat) {
 }
 const platformLabel = (k) => SOCIAL_PLATFORMS.find((p) => p.key === k)?.label || k;
 /* what the agent is told about where and how to work, for one area of work */
-function setupLines(pid, area, profile = false) {
+function setupLines(pid, area, profile = false, type = "") {
   const ch = channelsOf(pid), r = rulesOf(pid), out = [];
+  if (type === "blog_publish") {
+    const b = r.blog, used = blogUsed(pid);
+    out.push("Blog publishing rules (they hold whatever the task's instructions say):");
+    for (const [k, label] of BLOG_KINDS) {
+      const x = b.kinds[k];
+      out.push(x.perMonth ? `${label}: at most ${x.perMonth} a month (${used[k]} published so far this month, ${Math.max(0, x.perMonth - used[k])} left)${x.category ? `, in the website category "${x.category}"` : ""}; ${x.approval === "auto" ? "may be published without asking, after the second check" : "a person approves each one before it is published"}.` : `${label}: not allowed.`);
+    }
+    out.push(b.topics === "add" ? "Topics: take them from the CRM's Blogs & FAQs plan; when it has none left that fit, you may add your own to the plan." : "Topics: only the ones already in the CRM's Blogs & FAQs plan. When none is left, say so and stop.");
+    out.push(b.adjust === "never" ? "A post that is already published is never changed." : b.adjust === "ask" ? "A post that is already published (its text, its internal links) may be changed only with a person's approval of the exact change." : "A post that is already published may be adjusted (text, internal links) within the approval setting of the task.");
+    if (b.wordsMin || b.wordsMax) out.push(`Length of a post: ${b.wordsMin ? "at least " + b.wordsMin + " words" : ""}${b.wordsMin && b.wordsMax ? ", " : ""}${b.wordsMax ? "at most " + b.wordsMax + " words" : ""}.`);
+    out.push(`How it is published: ${blogRoute(pid).say}`);
+    if (b.notes) out.push(`Blog notes: ${b.notes.split("\n").join(" ")}`);
+  }
+  if (type === "trending_services") {
+    const t = r.trending;
+    out.push("Trending services section (they hold whatever the task's instructions say):");
+    out.push(t.pages ? `Pages that carry the section: ${t.pages.split("\n").join(", ")}.` : "Page that carries the section: the home page.");
+    out.push(`Where on the page: ${t.position || "after the main services section, before the reviews or the footer"}.`);
+    out.push(`Heading: ${t.heading || "written by you, naming the month and the area"}. Number of services: ${t.count}.`);
+    if (t.area) out.push(`The area it is about: ${t.area}.`);
+    if (t.notes) out.push(`Trending services notes: ${t.notes.split("\n").join(" ")}`);
+  }
   if (ch.website.url) out.push(`Website: ${ch.website.url}${ch.website.cms === "github" ? " (built from code in a Git repository: pages and posts are changed through the task type \"Change the website's code\", not in a site editor)" : ch.website.cms ? ` (${ch.website.cms})` : ""}`);
   for (const n of ch.website.notes) out.push(`Website note: ${n}`);
   if (area === "offpage" || area === "general") for (const g of ch.gbp) out.push(`Google Business Profile: ${g.name || g.link}${g.link && g.name ? ` (${g.link})` : ""}${g.note ? `. ${g.note}` : ""}`);
@@ -1601,6 +1691,15 @@ function blockOf(t, device) {
   if (!ps.enabled && !cat.system) return "The agent is not enabled for this project.";      // studying the agency's own knowledge needs no project switched on
   if (ts.mode === "off") return `${cat.label} is switched off for this project.`;
   if (cat.channel === "gbp") { const no = gbpBlocked(t.projectId, t.type); if (no) return no; }
+  if (t.type === "blog_publish") { const no = blogBlocked(t.projectId); if (no) return no; }
+  if (cat.site) {
+    /* a task that changes the website by whichever way the project has: its repository, or its editor in the browser */
+    const w = channelsOf(t.projectId).website, r = load("repos")[t.projectId];
+    if (w.cms === "github") {
+      if (!r?.url || !(r.method === "token" ? r.tokenAt : r.publicKey)) return "The website is built from code, and its repository is not set up yet (Work setup, Settings, Website).";
+      if (device && r.deviceId !== device.id) return "The repository's access is on another computer.";
+    } else if (t.type !== "blog_publish" && !w.browser) return "Choose a Chrome ID for the website's editor under Work setup, Settings, so the agent can make the change.";
+  }
   if (ts.mode === "limited" && t.status === "queued" && !t.firstStartedAt && runsInWindow(t.projectId, t.type, ts.per) >= ts.max) return `Working limit reached: ${ts.max} per ${ts.per} for ${cat.label}.`;
   if (t.source !== "manual" && t.phase !== "execute") { const off = offHours(); if (off) return off; }
   const room = tokenRoom(t.projectId);
@@ -2661,6 +2760,101 @@ const SERVER_TOOLS = [
     const sum = visRunSummary(run);
     return { ok: true, logged: results.length, namedIn: `${sum.named} of ${sum.asked}`, sharePercent: sum.share, ...(off ? { note: `${off} result${off === 1 ? " was" : "s were"} for a question that is not on the project's list. They are kept, but the list is what makes checks comparable.` } : {}) };
   }),
+  tool("blog_plan", "Read this project's blog plan from the CRM's own Blogs & FAQs tool: every planned, written and published post with its id, kind (blog, news or faq), keyword, category and state, how many of each kind may still be published this month, and the posts that are live on the site (for internal links and to avoid writing the same thing twice). Start every blog task here.", { state: { type: "string", description: "Optional: planned, written, scheduled or published." } }, [], (ctx, a) => {
+    const got = blogPlan(ctx.task.projectId);
+    if (got.error) return got;
+    const b = rulesOf(ctx.task.projectId).blog, used = blogUsed(ctx.task.projectId);
+    const want = ["planned", "written", "scheduled", "published"].includes(a.state) ? a.state : "";
+    const posts = got.posts.filter((p) => p.status !== "removed" && (!want || p.status === want));
+    return { thisMonth: Object.fromEntries(BLOG_KINDS.map(([k]) => [k, { allowed: b.kinds[k].perMonth, published: used[k], left: Math.max(0, b.kinds[k].perMonth - used[k]), needsApproval: b.kinds[k].approval === "ask", category: b.kinds[k].category || "" }])),
+      howPublished: blogRoute(ctx.task.projectId).say, posts: posts.slice(0, 150).map(blogRow), ...(posts.length > 150 ? { more: posts.length - 150 } : {}),
+      liveOnTheSite: (got.site.blogs || []).filter((x) => x?.status === "published").slice(0, 80).map((x) => ({ title: cut(x.title || "", 120), url: cut(x.url || (x.slug ? "/blog/" + x.slug : ""), 200) })),
+      pages: (got.site.pages || []).slice(0, 80).map((x) => ({ title: cut(x.title || x.name || "", 120), url: cut(x.url || x.slug || "", 200) })) };
+  }),
+  tool("blog_plan_get", "Read one post of the blog plan in full: its brief (keyword, angle, outline, questions) and, when it has been written, its whole text and meta title and description.", { id: { type: "string", description: "The post's id from blog_plan." } }, ["id"], (ctx, a) => {
+    const got = blogPlan(ctx.task.projectId);
+    if (got.error) return got;
+    const p = got.posts.find((x) => x.id === a.id && x.status !== "removed");
+    if (!p) return { error: "There is no post with that id in the plan. See blog_plan." };
+    const { content, dup, ...brief } = p;
+    return { ...blogRow(p), brief: Object.fromEntries(Object.entries(brief).filter(([k, v]) => !["id", "status", "tags", "agentAt"].includes(k) && v != null && typeof v !== "object").map(([k, v]) => [k, clip(String(v), 600)])), tags: (p.tags || []).slice(0, 20), outline: Array.isArray(p.outline) ? p.outline.slice(0, 30).map((x) => clip(typeof x === "string" ? x : x?.h || x?.title || "", 200)) : undefined,
+      text: content?.markdown ? clip(content.markdown, 40000) : "(not written yet)", metaTitle: content?.metaTitle || "", metaDescription: content?.metaDesc || "" };
+  }),
+  tool("blog_plan_add", "Add a topic to the blog plan, when the rules allow you to add your own. Give a title a customer would search or ask, the kind (blog, news or faq) and the main keyword. Read blog_plan first: a topic that is already planned, written or live is refused.", { title: { type: "string" }, kind: { type: "string", description: "blog, news or faq." }, keyword: { type: "string", description: "The main search term." }, angle: { type: "string", description: "One or two sentences: what the post answers and for whom." } }, ["title", "kind", "keyword"], (ctx, a) => {
+    const pid = ctx.task.projectId, got = blogPlan(pid);
+    if (got.error) return got;
+    if (rulesOf(pid).blog.topics !== "add") return { error: "The rules for this project allow only topics that are already in the plan. Say in your report which topics you would add." };
+    const title = line(a.title, 140), kind = oneOf(String(a.kind || "").toLowerCase(), ["blog", "news", "faq"], "");
+    if (title.length < 8 || !kind || line(a.keyword, 100).length < 3) return { error: "Give a title, a kind (blog, news or faq) and the main keyword." };
+    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const same = [...got.posts.filter((x) => x.status !== "removed"), ...(got.site.blogs || [])].find((x) => norm(x.title) === norm(title));
+    if (same) return { error: `"${cut(same.title, 100)}" is already in the plan or on the site. Choose another topic.` };
+    if (got.posts.filter((x) => x.status !== "removed").length >= 400) return { error: "The plan already holds 400 posts." };
+    const post = { id: uid("pa_"), title, category: kind === "faq" ? "answer" : "blog", ...(kind === "news" ? { kind: "news" } : {}), primaryKw: line(a.keyword, 100), note: line(a.angle, 400), slug: norm(title).replace(/ /g, "-").slice(0, 80), status: "planned", content: null, tags: [], source: "agent", agentAt: now(), updatedAt: now() };
+    const done = blogPatch(pid, (posts) => [...posts, post]);
+    if (done.error) return done;
+    logActivity("task", `The agent added the topic "${title}" to the blog plan of ${projectOf(pid)?.name}.`, { projectId: pid, taskId: ctx.chat ? null : ctx.task.id });
+    return { ok: true, id: post.id, kind, note: "It is in the CRM's Blogs & FAQs plan now. Write it with blog_plan_write." };
+  }),
+  tool("blog_plan_write", "Save the text you wrote for a post into the blog plan, so the team sees it in the CRM's Blogs & FAQs tool and it can be published from there. Give the whole article in Markdown (start with the title as a # heading), a meta title of at most 60 characters and a meta description of at most 160. Use it for a new post, and to save an adjusted version of one (better text, internal links).", { id: { type: "string", description: "The post's id from blog_plan." }, markdown: { type: "string", description: "The whole article in Markdown." }, metaTitle: { type: "string" }, metaDescription: { type: "string" } }, ["id", "markdown", "metaTitle", "metaDescription"], (ctx, a) => {
+    const pid = ctx.task.projectId, got = blogPlan(pid);
+    if (got.error) return got;
+    const p = got.posts.find((x) => x.id === a.id && x.status !== "removed");
+    if (!p) return { error: "There is no post with that id in the plan. See blog_plan." };
+    const b = rulesOf(pid).blog, md = scrub(String(a.markdown || "").replace(/\r\n?/g, "\n")).trim(), words = md.split(/\s+/).filter(Boolean).length;
+    if (p.status === "published" && b.adjust === "never") return { error: "A post that is already published is never changed for this project (Blog publishing rules)." };
+    if (words < 120) return { error: "That is not a whole article. Send the complete text in Markdown." };
+    if (md.length > 60000) return { error: "That is too long for one post (60,000 characters at most)." };
+    if (b.wordsMin && words < b.wordsMin) return { error: `The rules ask for at least ${b.wordsMin} words; this has ${words}.` };
+    if (b.wordsMax && words > b.wordsMax) return { error: `The rules ask for at most ${b.wordsMax} words; this has ${words}.` };
+    const metaTitle = line(a.metaTitle, 70), metaDesc = line(a.metaDescription, 180);
+    if (metaTitle.length < 10 || metaDesc.length < 40) return { error: "Give a meta title and a meta description." };
+    const done = blogPatch(pid, (posts) => posts.map((x) => (x.id === p.id ? { ...x, status: x.status === "published" || x.status === "scheduled" ? x.status : "written", content: { ...(x.content || {}), generatedAt: now(), live: true, provider: "agent", markdown: md, metaTitle, metaDesc, wordCount: words, ...(x.status === "published" ? { adjustedAt: now() } : {}) }, agentAt: now(), updatedAt: now() } : x)));
+    if (done.error) return done;
+    return { ok: true, id: p.id, words, state: p.status === "published" ? "published (the CRM's copy now holds your adjusted text; the live post changes only when you publish the change)" : "written", ...(metaTitle.length > 60 ? { note: "The meta title is over 60 characters and may be cut off in search results." } : {}) };
+  }),
+  tool("blog_plan_publish", "Publish a written post from the blog plan to the website through the CRM's website connector, or schedule it for a date. Only when blog_plan says the connector is how this project publishes, and only in a run that may change things (after approval where approval is asked). The post is marked published in the plan by itself.", { id: { type: "string", description: "The post's id from blog_plan." }, date: { type: "string", description: "Optional: a date (YYYY-MM-DD) to schedule it for. Leave out to publish now." } }, ["id"], async (ctx, a) => {
+    const pid = ctx.task.projectId, got = blogPlan(pid);
+    if (got.error) return got;
+    if (!ctx.mayChange) return { error: "Nothing is published before the plan is approved. Put the post in your proposal (request_approval)." };
+    const route = blogRoute(pid);
+    if (route.how !== "connector") return { error: "This project does not publish through the connector. " + route.say };
+    const p = got.posts.find((x) => x.id === a.id && x.status !== "removed");
+    if (!p?.content?.markdown) return { error: "That post is not written yet. Save its text with blog_plan_write first." };
+    if (p.status === "published") return { error: "That post is already published." };
+    const room = blogRoom(pid, p);
+    if (room) return { error: room };
+    const when = /^\d{4}-\d\d-\d\d$/.test(String(a.date || "")) ? new Date(a.date + "T09:00:00") : null, scheduled = !!when && when.getTime() > now();
+    const b = rulesOf(pid).blog, kind = blogKindOf(p), w = got.site, cred = typeof w.credential === "string" ? w.credential : w.credential?.value || "";
+    const category = p.wpCategory || b.kinds[kind].category || (kind === "faq" ? "Answer" : kind === "news" ? "News" : "Blog");
+    let res;
+    try {
+      res = await wpDeploy({ site: projectOf(pid)?.website || channelsOf(pid).website.url, credential: cred, payload: { kind: "post", slug: p.slug, title: p.title, metaTitle: p.content.metaTitle, metaDesc: p.content.metaDesc, content: mdToHtml(p.content.markdown.replace(/^#\s.*\n/, "")), categories: [category], tags: p.tags || [], ...(scheduled ? { status: "future", date: when.toISOString() } : { status: "publish" }) } });
+    } catch (e) { return { error: "The website did not take the post: " + clip(e?.message || e, 200) }; }
+    if (!Array.isArray(res) || res[0] !== 200) return { error: "The website did not take the post: " + clip(res?.[1]?.detail || res?.[1]?.error || "no reason given", 240) };
+    const url = cut(String(res[1]?.link || res[1]?.url || ""), 300);
+    blogPatch(pid, (posts) => posts.map((x) => (x.id === p.id ? { ...x, ...(scheduled ? { status: "scheduled", scheduledAt: when.getTime() } : { status: "published", publishedAt: now() }), publishedBy: "agent", ...(url ? { liveUrl: url } : {}), wpCategory: category, agentAt: now(), updatedAt: now() } : x)), (site) => blogMirror(site, p, { scheduled, when: when?.getTime(), url, category }));
+    addChange(pid, { what: `${scheduled ? "Scheduled" : "Published"} the ${kind} post "${cut(p.title, 120)}"`, where: url || p.slug || "", by: "AI agent", taskId: ctx.task.id });
+    logActivity("task", `The agent ${scheduled ? "scheduled" : "published"} "${cut(p.title, 100)}" on the website of ${projectOf(pid)?.name} through the connector.`, { projectId: pid, taskId: ctx.task.id });
+    return { ok: true, state: scheduled ? "scheduled for " + a.date : "published", ...(url ? { url } : {}), category, note: "It is marked in the CRM's Blogs & FAQs plan and logged in the change journal." };
+  }),
+  tool("blog_plan_published", "Mark a post of the blog plan as published, after you published it yourself in the website's editor or delivered it through the repository. Give the address where it is live: the CRM opens it to make sure it answers before it marks the post. Only in a run that may change things.", { id: { type: "string", description: "The post's id from blog_plan." }, url: { type: "string", description: "The full address of the live post." } }, ["id", "url"], async (ctx, a) => {
+    const pid = ctx.task.projectId, got = blogPlan(pid);
+    if (got.error) return got;
+    if (!ctx.mayChange) return { error: "A post is marked published only in a run that published it." };
+    const p = got.posts.find((x) => x.id === a.id && x.status !== "removed");
+    if (!p) return { error: "There is no post with that id in the plan. See blog_plan." };
+    const url = String(a.url || "").trim(), site = hostOfUrl(channelsOf(pid).website.url || projectOf(pid)?.website || "");
+    if (!/^https?:\/\//i.test(url) || !site || !(hostOfUrl(url) === site || hostOfUrl(url).endsWith("." + site))) return { error: "Give the full address of the post on this project's own website." };
+    const repoSite = channelsOf(pid).website.cms === "github";
+    const live = await checkSite(url);
+    if (!live.up && !repoSite) return { error: `That address does not answer yet (${live.detail}). Check that the post is published, then try again.` };
+    if (p.status !== "published") { const room = blogRoom(pid, p); if (room) return { error: room }; }
+    const kind = blogKindOf(p);
+    blogPatch(pid, (posts) => posts.map((x) => (x.id === p.id ? { ...x, status: "published", publishedAt: x.publishedAt || now(), publishedBy: x.publishedBy || "agent", liveUrl: cut(url, 300), markedPublished: true, agentAt: now(), updatedAt: now() } : x)), (s) => blogMirror(s, p, { url, category: p.wpCategory || rulesOf(pid).blog.kinds[kind].category }));
+    logActivity("task", `The agent marked "${cut(p.title, 100)}" as published for ${projectOf(pid)?.name}.`, { projectId: pid, taskId: ctx.task.id });
+    return { ok: true, state: "published", url, ...(live.up ? {} : { note: "The address does not answer yet: a site built from code shows the post after it has been merged and rebuilt. Say so in your report." }) };
+  }),
   tool("photos", "List the photos that were uploaded to the CRM for this project in the past (new photos are not uploaded any more: they are in the project's media sources, see resources_list). You may attach one to a post or a profile (browser_upload takes a photo's id). Each has a name, the team's note on what it shows, and when it was last used. Choose one that fits what you are writing about and was not used recently. If the list is empty, publish without a photo and say so in the report.", {}, [], (ctx) => {
     if (ctx.task.projectId === AGENCY_PROJECT) return { photos: [] };
     return { photos: photosOf(ctx.task.projectId).map((x) => ({ id: x.id, name: x.name, whatItShows: x.note || "(no note)", added: new Date(x.addedAt).toISOString().slice(0, 10), timesUsed: (x.used || []).length, lastUsed: (x.used || []).length ? new Date(x.used[x.used.length - 1].at).toISOString().slice(0, 10) : "never" })) };
@@ -3074,8 +3268,9 @@ function claimPayload(t, d) {
     const repo = t.projectId === AGENCY_PROJECT ? null : load("repos")[t.projectId];
     return {
       id: t.id, projectId: t.projectId, projectName: p.name, clientName: p.client, type: t.type, label: cat.label, title: t.title, instructions: t.instructions, reason: t.reason || "",
-      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways || gbpNeedsPerson(t.projectId, t.type) ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
+      phase: t.phase, needs: cat.needs || [], write: !!cat.write, approval: cat.write ? (t.askAlways || gbpNeedsPerson(t.projectId, t.type) || (t.type === "blog_publish" && blogNeedsPerson(t.projectId)) ? "ask" : ts.approval === "auto_positive" ? "auto" : ts.approval) : "none",
       ...(cat.write && !t.askAlways && !gbpNeedsPerson(t.projectId, t.type) && POLICY[ts.approval]?.[t.type] ? { policy: POLICY[ts.approval][t.type] } : {}),
+      ...(t.type === "blog_publish" && !t.askAlways && ts.approval !== "ask" && blogPolicy(t.projectId) ? { policy: blogPolicy(t.projectId) } : {}),
       ...(cat.write ? { secondCheck: { on: cfg.global.secondCheck !== false, model: MODELS.some((m) => m.id === cfg.global.checkModel) ? cfg.global.checkModel : "claude-sonnet-5-5" } } : {}),
       model: ts.model || cfg.global.model, effort: cfg.global.effort, runBudgetTokens: t.runBudget,
       approved: t.phase === "execute" ? { details: t.approval?.details || "", note: t.approval?.note || "", proposal: t.proposal || null } : null,
@@ -3083,7 +3278,7 @@ function claimPayload(t, d) {
       keySource: t.keySource, ...(claudeKey ? { claudeApiKey: claudeKey } : {}),
       vision: cfg.global.vision !== false, photos: t.projectId === AGENCY_PROJECT ? 0 : photosOf(t.projectId).length,
       directions: directionsOf(t.projectId).map((x) => x.text),
-      setup: setupLines(t.projectId, cat.area, cat.channel === "gbp"),
+      setup: setupLines(t.projectId, cat.area, cat.channel === "gbp", t.type),
       brand: brandBlock(t.projectId, !!cat.writes),
       lessons: t.projectId === AGENCY_PROJECT ? [] : lessonsFor(t.projectId, t.type, { count: true }),
       knowledge: t.type === "knowledge_study" ? "" : [knowledgeBlock(cat.area === "agency" ? "general" : cat.area), statusBlock(t.projectId)].filter(Boolean).join("\n\n"),
@@ -3462,6 +3657,73 @@ function outputEdit(admin, body) {
   return [200, outputView(p.id)];
 }
 
+/* ---------- the agent in the CRM's own blog tool ----------
+   The plan lives in the workspace (Optimization Studio, Business Website, Blogs & FAQs). The agent reads it
+   and changes single posts through the server: every post it touches is stamped (agentAt), which is what
+   keeps its work when a browser tab that held an older copy saves afterwards. */
+function blogPlan(pid) {
+  if (pid === AGENCY_PROJECT) return { error: "The blog plan belongs to a client project." };
+  const site = deps.readDocCached("optimization", {})?.[pid]?.opt?.website;
+  if (!site || typeof site !== "object") return { error: "This project has no Blogs & FAQs plan yet. A person opens the project's Business Website tab in Optimization Studio once; then it exists." };
+  return { site, posts: Array.isArray(site.postsPlan?.posts) ? site.postsPlan.posts : [] };
+}
+const blogRow = (p) => ({ id: p.id, title: cut(p.title || "", 140), kind: blogKindOf(p), keyword: cut(p.primaryKw || "", 100), category: cut(p.wpCategory || "", 80), state: p.status || "planned", written: !!p.content?.markdown, words: p.content?.wordCount || 0, ...(p.liveUrl ? { url: p.liveUrl } : {}), ...(p.publishedAt ? { published: new Date(p.publishedAt).toISOString().slice(0, 10) } : {}), ...(p.source === "agent" ? { addedBy: "you" } : {}) });
+function blogRoom(pid, p) {
+  const b = rulesOf(pid).blog, kind = blogKindOf(p), used = blogUsed(pid), label = BLOG_KINDS.find(([k]) => k === kind)[1].toLowerCase();
+  if (!b.kinds[kind].perMonth) return `${label} are not allowed for this project (Blog publishing rules).`;
+  if (used[kind] >= b.kinds[kind].perMonth) return `This month's number of ${label} is reached (${b.kinds[kind].perMonth}).`;
+  return "";
+}
+function blogPatch(pid, postsFn, siteFn) {
+  if (!deps.updateProjectOptimization) return { error: "This CRM cannot change the blog plan from the agent yet." };
+  const out = deps.updateProjectOptimization(pid, (entry) => {
+    const site = entry?.opt?.website;
+    if (!site) return null;
+    let next = { ...site, postsPlan: { ...(site.postsPlan || {}), posts: postsFn(Array.isArray(site.postsPlan?.posts) ? site.postsPlan.posts : []) } };
+    if (siteFn) next = siteFn(next);
+    return { ...entry, opt: { ...entry.opt, website: next } };
+  });
+  return out ? { ok: true } : { error: "The blog plan could not be changed." };
+}
+/* the CRM's website connector (server/index.js). In tests a stand-in answers instead of a real site and keeps what it was sent. */
+const wpDeploy = process.env.AGENTOPS_WP_TEST_FILE
+  ? async (body) => { appendFileSync(process.env.AGENTOPS_WP_TEST_FILE, JSON.stringify({ site: body.site, hasCredential: !!body.credential, payload: body.payload }) + "\n"); return /will-fail/.test(body.payload.slug) ? [502, { error: "wp_error", detail: "The site answered 403 (stand-in)." }] : [200, { live: true, id: 77, link: `${withScheme(String(body.site || "")).replace(/\/+$/, "")}/${body.payload.slug}/` }]; }
+  : (body) => deps.wpDeploy(body);
+/* a published post also appears in the site's list of posts in the CRM, as it does when a person publishes one */
+function blogMirror(site, p, { scheduled, when, url, category }) {
+  const row = { id: "pb" + now().toString(36), title: p.title, slug: p.slug, metaTitle: p.content?.metaTitle || "", metaDesc: p.content?.metaDesc || "", categories: category ? [category] : [], tags: p.tags || [],
+    ...(scheduled ? { status: "scheduled", scheduledAt: when } : { status: "published", publishedAt: now() }), ...(url ? { url } : {}), createdAt: now(), agentAt: now(), byAgent: true };
+  return { ...site, blogs: [row, ...(site.blogs || []).filter((b) => b.slug !== p.slug)] };
+}
+/* Markdown to the plain HTML a WordPress post takes: headings, paragraphs, lists, tables, bold, italic, links */
+function mdToHtml(md) {
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g, (m, t, u) => `<a href="${u.replace(/"/g, "%22")}">${t}</a>`);
+  const out = [], rows = String(md || "").replace(/\r\n?/g, "\n").split("\n");
+  let list = "", para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+  const close = () => { if (list) { out.push(`</${list}>`); list = ""; } };
+  for (let i = 0; i < rows.length; i++) {
+    const t = rows[i].trim();
+    if (!t) { flush(); close(); continue; }
+    const h = t.match(/^(#{1,4})\s+(.+)$/), ul = t.match(/^[-*]\s+(.+)$/), ol = t.match(/^\d{1,3}[.)]\s+(.+)$/);
+    if (h) { flush(); close(); out.push(`<h${Math.max(2, h[1].length)}>${inline(h[2])}</h${Math.max(2, h[1].length)}>`); continue; }
+    if (t.startsWith("|") && /^\|?[\s:|-]{3,}\|?$/.test((rows[i + 1] || "").trim())) {
+      flush(); close();
+      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      let html = `<table><thead><tr>${cells(t).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`;
+      i += 2;
+      while (i < rows.length && rows[i].trim().startsWith("|")) { html += `<tr>${cells(rows[i]).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`; i++; }
+      i--; out.push(html + "</tbody></table>");
+      continue;
+    }
+    if (ul || ol) { flush(); const want = ul ? "ul" : "ol"; if (list !== want) { close(); out.push(`<${want}>`); list = want; } out.push(`<li>${inline((ul || ol)[1])}</li>`); continue; }
+    close(); para.push(t);
+  }
+  flush(); close();
+  return out.join("\n");
+}
+
 /* ---------- SEO tools the agent may use, signed in ----------
    Paid tools the agency has an account with (a rank tracker, a backlink
    index, a site crawler). Each is opened in a Chrome ID a person signed in
@@ -3561,7 +3823,7 @@ async function agentTool(d, body) {
   if (!def) return [404, { error: "unknown_tool", detail: "No such CRM tool." }];
   if (turn) turn.m.turn.activityAt = now(); else t.heartbeatAt = now();
   try {
-    const out = await def.run({ task: t, device: d, chat: turn ? { by: turn.m.by || "the team" } : null }, body.input && typeof body.input === "object" ? body.input : {});
+    const out = await def.run({ task: t, device: d, chat: turn ? { by: turn.m.by || "the team" } : null, mayChange: !turn && (body.mayChange === true || t.phase === "execute") }, body.input && typeof body.input === "object" ? body.input : {});
     return [200, { ok: true, result: out }];
   } catch (e) { return [200, { ok: true, result: { error: "The CRM could not answer: " + clip(e?.message || e, 200) } }]; }
 }

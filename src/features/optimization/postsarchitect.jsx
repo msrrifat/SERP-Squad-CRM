@@ -545,6 +545,19 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
   /* per-row instant publish / schedule (same engine as the bulk modal) */
   const credStr = typeof w.credential === "string" ? w.credential : (w.credential?.value || "");
   const canLive = w.platform === "wordpress" && /:/.test(credStr);
+  /* A post that went live some other way than through the connector: it is marked published here and shown
+     in the site's list of posts, and nothing is sent to the website. The live address is optional. */
+  const markPublished = async (p) => {
+    const url = await askInput({ title: "Mark as published", message: `"${p.title || "This post"}" is marked as published in the CRM. Nothing is sent to the website.\n\nIf you have it, paste the address where the post is live (optional).`, placeholder: "https://example.com/blog/the-post/", confirmLabel: "Mark as published" });
+    if (url == null) return;
+    const liveUrl = /^https?:\/\//i.test(String(url).trim()) ? String(url).trim().slice(0, 300) : "";
+    patchPost(p.id, { status: "published", publishedAt: Date.now(), markedPublished: true, updatedAt: Date.now(), ...(liveUrl ? { liveUrl } : {}) });
+    setOpt("website", (cur) => ({ blogs: [
+      { id: "pb" + Date.now(), title: p.title, slug: p.slug, metaTitle: p.content?.metaTitle || "", metaDesc: p.content?.metaDesc || "", content: p.content?.markdown ? mdToBlocks(p.content.markdown) : [],
+        categories: [p.wpCategory || (p.category === "answer" ? "Answer" : "Blog")], tags: p.tags || [], status: "published", publishedAt: Date.now(), createdAt: Date.now(), manual: true, ...(liveUrl ? { url: liveUrl } : {}) },
+      ...(cur.blogs || []).filter((x) => x.slug !== p.slug) ] }));
+    work?.("website", "blogPublished", { detail: `${p.title} (marked as published)` });
+  };
   useEffect(() => {
     if (!canLive) { setWpCats(null); return; }
     let alive = true;
@@ -1032,6 +1045,13 @@ export function PostsArchitectTab({ opt, setOpt, accent, log, project, aiConfig 
                                   </button>
                                 </>
                               )
+                            )}
+                            {/* published some other way (by hand, by the AI agent in the site's editor, through a repository): mark it, without sending anything to the website */}
+                            {p.status !== "published" && schedFor?.id !== p.id && (
+                              <button onClick={() => markPublished(p)} disabled={!!rowBusy} title="For a post that was published without the website connector. Nothing is sent to the website: the post is only marked as published here."
+                                className="whitespace-nowrap rounded-lg border border-gray-200 px-2 py-1 text-[10.5px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                                Mark as published
+                              </button>
                             )}
                             <button onClick={async () => { if (await askDelete(`the post "${p.title || "this post"}"`)) patchPost(p.id, { status: "removed" }); }} className="shrink-0 rounded p-1 text-gray-300 opacity-0 hover:text-red-500 group-hover:opacity-100"><Trash2 size={12} /></button>
                           </span>

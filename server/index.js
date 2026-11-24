@@ -6010,7 +6010,23 @@ function migrateStorage() {
 }
 migrateStorage();
 /* local AI agent control plane (devices, task queue, working and token limits) — see agentops.js */
-initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject,
+/* One project's optimisation data changed on the server (the AI agent writing into the Blogs & FAQs plan).
+   The stored document is read, `fn` returns the project's new entry (or null to leave it), only that
+   project's file is written and the revision moves, exactly as when the rank worker writes its scans. A
+   browser tab that held an older copy merges on its next save (src/lib/mergestate.js keeps what the agent
+   wrote). */
+function updateProjectOptimization(pid, fn) {
+  const doc = readDocCached("optimization", {}) || {};
+  const cur = doc[pid];
+  if (!cur || typeof cur !== "object") return null;
+  const entry = fn(cur);
+  if (!entry || entry === cur) return null;
+  const next = { ...doc, [pid]: entry };
+  const out = saveDomainDocs({ optimization: next }, { optimization: { set: [pid] } });
+  rememberDoc("optimization", out.written.optimization ?? next);
+  return entry;
+}
+initAgentOps({ sessionFromReq, readDocCached, gscQuery: handleGscQuery, dfsForProject, updateProjectOptimization, wpDeploy: handleWpDeploy,
   /* alerts from the agent go out through the agency's own email account (API settings, Email SMTP) */
   mailReady: () => { const m = storedSmtp(); return !!(m?.host && m.user); },
   mail: (to, subject, text) => { const m = storedSmtp(); if (!m?.host || !m.user) throw new Error("No email account is set up."); return sendMail(m, to, subject, text); },

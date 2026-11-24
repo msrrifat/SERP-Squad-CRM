@@ -156,13 +156,32 @@ export function collapseAutoRecords(records) {
   return out;
 }
 
+/* Posts the AI agent wrote into the Blogs & FAQs plan on the server carry a stamp (agentAt). When this tab
+   held an older copy of the project and its side wins the merge, those posts are put back: a post the agent
+   changed after this tab last saw it replaces the tab's copy, and one the agent added is kept. Everything
+   else in the optimisation data follows the side that was edited last, as before. */
+function keepAgentPosts(serverOpt, opt) {
+  const theirs = serverOpt?.website?.postsPlan?.posts;
+  if (!Array.isArray(theirs) || !opt?.website || !theirs.some((p) => p?.agentAt)) return opt;
+  const mine = Array.isArray(opt.website.postsPlan?.posts) ? opt.website.postsPlan.posts : [], have = new Map(mine.map((p) => [p?.id, p]));
+  let changed = false;
+  const posts = mine.map((p) => { const s = theirs.find((x) => x?.id === p?.id); if (s?.agentAt && s.agentAt > Math.max(+(p.agentAt || 0), +(p.updatedAt || 0))) { changed = true; return s; } return p; });
+  for (const s of theirs) if (s?.agentAt && !have.has(s.id)) { posts.push(s); changed = true; }
+  const blogsMine = Array.isArray(opt.website.blogs) ? opt.website.blogs : [], slugs = new Set(blogsMine.map((x) => x?.slug));
+  const added = (serverOpt.website.blogs || []).filter((x) => x?.agentAt && !slugs.has(x.slug));
+  if (!changed && !added.length) return opt;
+  return { ...opt, website: { ...opt.website, postsPlan: { ...(opt.website.postsPlan || {}), posts }, blogs: [...added, ...blogsMine] } };
+}
+
 const mergeProject = (a, b) => {
   /* scalar/config fields follow the side edited last, so a settings change is
      not undone; the collections below are unions regardless */
   const base = ts(b) > ts(a) ? { ...a, ...b } : { ...b, ...a };
   const geoGrid = mergeGeoGrid(a.geoGrid, b.geoGrid);
+  const opt = keepAgentPosts(a.opt, base.opt);
   return {
     ...base,
+    ...(opt && opt !== base.opt ? { opt } : {}),
     records: collapseAutoRecords(unionById(a.records, b.records, mergeRecord)),
     lists: unionById(a.lists, b.lists),
     tracking: unionById(a.tracking, b.tracking, mergeTracking),

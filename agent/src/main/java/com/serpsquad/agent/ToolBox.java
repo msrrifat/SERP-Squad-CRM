@@ -295,6 +295,7 @@ final class ToolBox {
                     body.put("taskId", task.path("id").asText());
                     body.put("name", name);
                     body.set("input", input == null || !input.isObject() ? Json.obj() : input);
+                    body.put("mayChange", changeAllowed());        // a CRM tool that changes something outside the CRM (publishing a post) runs only when this run may
                     JsonNode res = crm.post("agent/tool", body).path("result");
                     return new Outcome(Redact.text(Json.clip(Json.str(res), 60000)), res.has("error"));
             }

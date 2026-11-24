@@ -83,6 +83,17 @@ Rules the server enforces:
 - `POST /api/agentops/output` (`get`, `save`, `check`, `remove`): the folder for a project's working documents
   (`data/agentops/outputs.json`: a path on a named device, an optional Drive folder link, a note).
 
+- Rules gained `rules.blog` (per kind of post: `perMonth`, `category`, `approval`; `topics`, `adjust`, word
+  limits, notes) and `rules.trending` (pages, position, heading, count, area, notes). Task types
+  `blog_publish` and `trending_services` carry the catalog flag `site`: they change the website by whichever
+  way the project has (connector, repository, editor).
+- The agent's blog tools change one project's optimisation data on the server through
+  `updateProjectOptimization` (server/index.js): only that project's file is written and the revision moves,
+  as with the rank worker's write-back. Posts the agent touched carry `agentAt`; `keepAgentPosts` in
+  src/lib/mergestate.js keeps them when a tab with an older copy saves. `blog_plan_publish` calls the
+  existing WordPress connector (`handleWpDeploy`) with the connection saved for the site; the agent never
+  sees it. Test hook: `AGENTOPS_WP_TEST_FILE`.
+
 ## Still demo (frontend simulation, clearly labeled) — and what each needs to go live
 
 | Feature | What going live requires |

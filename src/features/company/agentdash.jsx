@@ -804,6 +804,12 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
   const setRow = (key, i, patch) => setCh({ [key]: ch[key].map((x, k) => (k === i ? { ...x, ...patch } : x)) });
   const delRow = (key, i) => setCh({ [key]: ch[key].filter((_, k) => k !== i) });
   const setRule = (area, patch) => set({ rules: { ...rules, [area]: { ...rules[area], ...patch } } });
+  const blogKinds = [["blog", "Blog posts", "Articles: guides, how-tos, cost and comparison pieces."], ["news", "News posts", "Company and local news, seasonal announcements."], ["faq", "FAQ / answer posts", "One customer question answered per post."]];
+  const br = { kinds: {}, topics: "add", adjust: "ask", wordsMin: 0, wordsMax: 0, notes: "", ...(rules.blog || {}) };
+  const kindOf = (k) => ({ perMonth: 0, category: "", approval: "ask", ...(br.kinds[k] || {}) });
+  const setKind = (k, patch) => setRule("blog", { ...br, kinds: { ...br.kinds, [k]: { ...kindOf(k), ...patch } } });
+  const tr = { pages: "", position: "", heading: "", count: 4, area: "", notes: "", ...(rules.trending || {}) };
+  const blogTotal = blogKinds.reduce((n, [k]) => n + (+kindOf(k).perMonth || 0), 0);
   const smm = ch.smm || {};
   const setSmm = (patch) => setCh({ smm: { on: false, name: "", url: "", browser: "", workspace: "", notes: "", ...smm, ...patch } });
   const onProfile = (c) => c.channel === "gbp";
@@ -916,6 +922,7 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
                   <div className="mt-2"><Btn ghost disabled={(ch.website.notes || []).length >= 60} onClick={() => setOne("website", { notes: [...(ch.website.notes || []), ""] })}><Plus size={13} /> Add a note</Btn></div>
                 </div>
                 {ch.website.cms !== "github" && checkLine("website", ch.website.browser)}
+                {ch.website.cms !== "github" && !agency && ch.website.browser && (ch.website.adminUrl || ch.website.url) && <SignInRelay name={`${project.name} website editor`} url={/^https?:\/\//i.test(ch.website.adminUrl || ch.website.url) ? (ch.website.adminUrl || ch.website.url) : "https://" + (ch.website.adminUrl || ch.website.url)} profileId={ch.website.browser} accent={accent} />}
               </Tile>
               </div>
 
@@ -973,6 +980,46 @@ function WorkSetup({ data, project, draft, set, setTask, accent, tab, setTab, di
               <Labeled label="Protected pages, one address per line (never changed, never rewritten)"><textarea className={txtCls} placeholder={"/contact/\n/pricing/"} value={rules.onpage.protectedUrls} onChange={(e) => setRule("onpage", { protectedUrls: e.target.value })} /></Labeled>
               <Labeled label="Other on-page notes for the agent"><textarea className={txtCls} placeholder="For example: every service page ends with the 24 hour call-out number." value={rules.onpage.notes} onChange={(e) => setRule("onpage", { notes: e.target.value })} /></Labeled>
             </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-[13.5px] font-semibold text-gray-900">Blog publishing</div>
+              <Chip fg={blogTotal ? "#15803D" : "#6B7280"} bg={blogTotal ? "#DCFCE7" : "#F3F4F6"}>{blogTotal ? `${blogTotal} post${blogTotal === 1 ? "" : "s"} a month allowed` : "Nothing allowed yet"}</Chip>
+            </div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">The agent works in the CRM's own <b>Blogs &amp; FAQs</b> plan (Optimization Studio, Business Website): it takes the next planned post or adds a topic, writes it so you see it there, and publishes it on the website: through the CRM's website connector when it is connected, otherwise in the site's editor or through its repository. Set how many of each kind it may publish in a month, the category each goes into, and whether you approve each one first. The task type <b>Write and publish blog posts</b> in the list below switches the work on.</div>
+            <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200">
+              {blogKinds.map(([k, label, hint]) => { const x = kindOf(k); return (
+                <div key={k} className="grid items-center gap-2 px-3 py-2.5 md:grid-cols-[1.2fr_110px_1fr_1.3fr]">
+                  <div className="min-w-0"><div className="text-[13px] font-medium text-gray-900">{label}</div><div className="text-[11.5px] text-gray-500">{hint}</div></div>
+                  <Labeled label="A month, at most"><input className={inputCls} inputMode="numeric" aria-label={`${label} a month, at most`} value={x.perMonth} onChange={(e) => setKind(k, { perMonth: Math.min(60, numOnly(e.target.value)) })} /></Labeled>
+                  <Labeled label="Category on the website"><input className={inputCls} maxLength={80} placeholder={k === "faq" ? "Answers" : k === "news" ? "News" : "Blog"} disabled={!x.perMonth} value={x.category} onChange={(e) => setKind(k, { category: e.target.value })} /></Labeled>
+                  <Labeled label="Permission"><select className={inputCls} disabled={!x.perMonth} value={x.approval} onChange={(e) => setKind(k, { approval: e.target.value })}><option value="ask">I approve each one before it is published</option><option value="auto">May publish without asking (after the second check)</option></select></Labeled>
+                </div>
+              ); })}
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <Labeled label="Topics"><select className={inputCls} value={br.topics} onChange={(e) => setRule("blog", { ...br, topics: e.target.value })}><option value="add">From the plan, and its own when the plan runs out</option><option value="plan">Only topics already in the plan</option></select></Labeled>
+              <Labeled label="Posts already published"><select className={inputCls} value={br.adjust} onChange={(e) => setRule("blog", { ...br, adjust: e.target.value })}><option value="never">Never changed</option><option value="ask">Adjusted only with my approval</option><option value="allowed">May be adjusted (text, internal links)</option></select></Labeled>
+              <Labeled label="Words per post, at least"><input className={inputCls} inputMode="numeric" value={br.wordsMin || ""} placeholder="no minimum" onChange={(e) => setRule("blog", { ...br, wordsMin: numOnly(e.target.value) })} /></Labeled>
+              <Labeled label="Words per post, at most"><input className={inputCls} inputMode="numeric" value={br.wordsMax || ""} placeholder="no maximum" onChange={(e) => setRule("blog", { ...br, wordsMax: numOnly(e.target.value) })} /></Labeled>
+            </div>
+            <div className="mt-3"><Labeled label="Other notes about blog posts for the agent"><textarea className={txtCls} placeholder={"For example: every post ends with a call to book a visit. Link each post to one service page and one area page. No posts about prices."} value={br.notes} onChange={(e) => setRule("blog", { ...br, notes: e.target.value })} /></Labeled></div>
+            <div className="mt-2 text-[11px] leading-5 text-gray-400">If any kind that still has room this month needs your approval and none may be published without it, every run asks first. A post published without the connector is marked published in the plan by the agent; you can do the same by hand there with <b>Mark as published</b>. Press Save changes to keep these rules.</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-[13.5px] font-semibold text-gray-900">This month's trending services</div>
+            <div className="mt-0.5 text-[11.5px] leading-5 text-gray-500">A section on a page of the website that names the services people in the client's area need most <b>this month</b>, rewritten every month. The agent works it out from the season and the weather there, dates coming up, what is being searched (the rank tracker, Search Console and, when switched on, live search volumes) and what local competitors put forward, and uses only services the business really offers. Last month's section is replaced, never added twice. The task type <b>This month's trending services</b> below switches it on: Off, Limited or Open, and whether it asks first.</div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Labeled label="Pages that carry the section, one per line (empty: the home page)"><textarea className={txtCls} placeholder={"/\n/services/"} value={tr.pages} onChange={(e) => setRule("trending", { ...tr, pages: e.target.value })} /></Labeled>
+              <Labeled label="Where on the page"><textarea className={txtCls} placeholder={"For example: after the third section, directly under \"Our services\" and above the reviews."} value={tr.position} onChange={(e) => setRule("trending", { ...tr, position: e.target.value })} /></Labeled>
+              <Labeled label="Heading (empty: the agent writes one with the month and the area)"><input className={inputCls} maxLength={120} placeholder="Most requested in Leeds this month" value={tr.heading} onChange={(e) => setRule("trending", { ...tr, heading: e.target.value })} /></Labeled>
+              <div className="grid grid-cols-2 gap-3">
+                <Labeled label="Number of services"><input className={inputCls} inputMode="numeric" value={tr.count} onChange={(e) => setRule("trending", { ...tr, count: Math.min(12, numOnly(e.target.value)) })} /></Labeled>
+                <Labeled label="Area it is about"><input className={inputCls} maxLength={160} placeholder="Leeds and the LS postcodes" value={tr.area} onChange={(e) => setRule("trending", { ...tr, area: e.target.value })} /></Labeled>
+              </div>
+              <div className="md:col-span-2"><Labeled label="Other notes for this section"><textarea className={txtCls} placeholder={"For example: each service as a card with a one-line reason and a button to its page. Never list bathroom fitting from November to February. Keep the section under 120 words."} value={tr.notes} onChange={(e) => setRule("trending", { ...tr, notes: e.target.value })} /></Labeled></div>
+            </div>
+            <div className="mt-2 text-[11px] leading-5 text-gray-400">The change is made in the site's editor (the Chrome ID under Settings, Website) or, for a site built from code, through its repository. Press Save changes to keep these settings.</div>
           </Card>
           {taskList("onpage", "On-page tasks")}
         </>

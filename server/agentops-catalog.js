@@ -51,6 +51,8 @@ export const CATALOG = [
   t("schema_markup", "Work", "Structured data for a page", "Writes the structured data (schema) a page should carry, ready to paste, from the facts on the page and in the brand voice.", ["web"], { mode: "limited", max: 4, per: "month", auto: false, everyDays: 30 }),
   t("meta_rewrite", "Work", "Titles and descriptions", "Proposes better titles and meta descriptions for pages with weak click-through.", [], { mode: "limited", max: 2, per: "month", auto: false, everyDays: 30 }, { maxRunTokens: 200000 }),
   t("internal_links", "Work", "Internal linking", "Finds pages that should link to each other and suggests the anchor text.", ["web"], { mode: "limited", max: 1, per: "month", auto: false, everyDays: 30 }),
+  t("blog_publish", "Work", "Write and publish blog posts", "Takes the next post from the CRM's Blogs & FAQs plan (or adds a topic), writes it, and publishes it on the website: through the CRM's connector, the site's editor or its repository.", ["web"], { mode: "off", max: 8, per: "month", auto: false, everyDays: 7 }, { write: true, site: true, maxRunTokens: 400000 }),
+  t("trending_services", "Work", "This month's trending services", "Works out which of the client's services are most in demand this month in its area, and writes or updates the section for them on the page you chose.", ["web"], { mode: "off", max: 1, per: "month", auto: false, everyDays: 30 }, { write: true, site: true, maxRunTokens: 350000 }),
   t("repo_edit", "Work", "Change the website's code (repository)", "For a site built from code in a Git repository: prepares exact file changes (a post, a page edit, titles, structured data) and delivers them after approval.", ["repo"], { mode: "off", max: 6, per: "month", auto: false, everyDays: 30 }, { write: true, maxRunTokens: 400000 }),
   t("site_edit", "Work", "Apply changes on the website", "Makes an approved on-page change in the site's editor, in the browser.", ["browser"], { mode: "off", max: 4, per: "month", auto: false, everyDays: 30 }, { write: true }),
   t("social_watch", "Social", "Social profile check", "Looks at the public social profiles: last post, how often, what gets a response.", ["web"], { mode: "limited", max: 1, per: "week", auto: false, everyDays: 7, recAuto: true }, { maxRunTokens: 150000 }),
@@ -74,21 +76,21 @@ export const CATALOG = [
 const AREA = {
   ranking_review: "general", niche_study: "general", competitor_study: "general",
   morning_check: "general", rank_drop: "general", google_updates: "general", competitor_watch: "general", experiment_review: "general", report_draft: "general", monthly_plan: "general", custom: "general", experience_review: "general",
-  repo_edit: "onpage", site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
+  blog_publish: "onpage", trending_services: "onpage", repo_edit: "onpage", site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", gsc_opportunities: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_brief: "onpage", content_draft: "onpage", ai_visibility: "onpage", gsc_browser: "onpage", site_edit: "onpage",
   profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
   prospect_audit: "agency", knowledge_study: "agency", crm_review: "agency",
 };
 const CHANNEL = { profile_guard: "gbp", gbp_audit: "gbp", gbp_post: "gbp", gbp_review_reply: "gbp", gbp_update: "gbp", gsc_browser: "gsc", site_edit: "website", social_publish: "social" };
 /* task types that write copy for the client: they are given the short brand documents in full, the others only the brand profile and the document list */
-const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_edit", "repo_edit", "gbp_post", "gbp_review_reply", "gbp_update", "backlink_prospects", "social_calendar", "social_post", "social_publish", "report_draft", "custom"]);
+const WRITES = new Set(["content_brief", "content_draft", "meta_rewrite", "site_edit", "repo_edit", "blog_publish", "trending_services", "gbp_post", "gbp_review_reply", "gbp_update", "backlink_prospects", "social_calendar", "social_post", "social_publish", "report_draft", "custom"]);
 /* Where a finished task of each type is filed in a project's work report, and
    the plain name of that kind of work there. Types that are the agent's own
    housekeeping are not in the report. */
 const REPORT = {
   ranking_review: "research", niche_study: "research", competitor_study: "research",
   morning_check: "research", rank_drop: "research", google_updates: "research", competitor_watch: "research", gsc_opportunities: "research", content_brief: "research", ai_visibility: "research", experiment_review: "research", report_draft: "research", monthly_plan: "research", custom: "research",
-  site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_draft: "onpage", site_edit: "onpage", repo_edit: "onpage", gsc_browser: "onpage",
+  site_health: "onpage", site_audit: "onpage", schema_markup: "onpage", onpage_audit: "onpage", meta_rewrite: "onpage", internal_links: "onpage", content_draft: "onpage", site_edit: "onpage", repo_edit: "onpage", blog_publish: "onpage", trending_services: "onpage", gsc_browser: "onpage",
   profile_guard: "offpage", gbp_audit: "offpage", gbp_post: "offpage", gbp_review_reply: "offpage", gbp_update: "offpage", geogrid_plan: "offpage", citations_links: "offpage", backlink_prospects: "offpage",
   social_watch: "social", social_calendar: "social", social_post: "social", social_publish: "social",
 };
@@ -541,6 +543,48 @@ Goal: the internal links that would help the pages that matter most.
 4. Note orphan pages (in the sitemap, linked from nowhere you can find) and links to redirected or missing pages.
 
 Report: a table of source page, target page, sentence and anchor, best targets first. Nothing is changed by this task.`,
+
+  blog_publish: `# Write and publish blog posts
+
+Goal: one good post on the client's website per run, taken from the CRM's own Blogs & FAQs plan, inside the blog publishing rules in the work setup.
+
+Prepare:
+1. Read the blog publishing rules in the work setup, then call blog_plan. It tells you which kinds of post still have room this month, which need a person's approval, the category each goes into, how this project publishes, what is planned and written, and what is live on the site.
+2. Choose the post: a kind that has room, a written post before a planned one, the oldest first unless the task names one. When no topic fits and the rules allow it, add one with blog_plan_add: a question or need a local customer really has, from the rank table, Search Console (gsc_opportunities data in project_brief or past reports), the project status and the trade notes. Never a topic that is already planned, written or live.
+3. Write it when it is not written (blog_plan_get gives the brief): in the brand voice, from the business facts, for the client's area, answering the question in the first paragraph. Follow the length in the rules. Add three to five internal links to pages and posts from blog_plan (liveOnTheSite and pages), with varied, natural anchor text, each to a page that really helps at that point. State nothing about the business that the facts do not support. Choose a picture from the project's media sources when it has one that fits.
+4. Save it with blog_plan_write (whole text in Markdown, meta title of at most 60 characters, meta description of at most 160). The team now sees it in the CRM.
+5. Hand in the plan with request_approval: the post's title and id, its kind and category, where and how it will be published, the publishing date, the picture, and the complete text. Stop there when approval is asked.
+
+Publish (after approval, or in a run that may act alone):
+- Through the connector: call blog_plan_publish with the post's id (and a date to schedule it). That is all: the CRM publishes it and marks it.
+- In the website's editor: open the editor, create a new post, set the title, the text with its headings, lists and links, the category from the rules, the meta title and description where the editor has fields for them, the picture; read it back; publish. Then open the live post, check it shows correctly, and call blog_plan_published with its address.
+- Through the repository: read how existing posts are stored (repo_files, repo_read two of them), write the new file in the same form, add the picture with repo_add_media, repo_diff, repo_publish; then call blog_plan_published with the address the post will have.
+Then log_change with the title and the address.
+
+Adjusting a published post (only when the rules allow it and the task asks for it): read the live post, write the better version (new internal links to posts published since, updated facts), save it with blog_plan_write, hand in the exact differences for approval where asked, then change the live post the same way it was published.
+
+Report: the post (title, kind, address), how it was published, the internal links you placed, what is left in the plan for this month, and anything a person has to do.`,
+
+  trending_services: `# This month's trending services
+
+Goal: a section on the client's page that names the services people in its area need most this month, true for this month and this place, rewritten every month.
+
+1. Read the work setup (which page, where on it, the heading, how many services, the area) and the project status. Call project_brief for the services the client really offers. Only services the business offers can appear: never invent one.
+2. Work out what is in demand now, from evidence:
+   - the season and the weather this month in the client's area, and what that does to the trade (read "How this trade works" in the status);
+   - dates in the coming weeks that matter locally: holidays, school terms, regulation deadlines, local events;
+   - what people search: the rank table and Search Console queries that are rising against last month, and, when live SEO data is available, monthly search volumes for the client's service terms in its area with their month-by-month pattern;
+   - what local competitors put forward on their home pages and profiles this month (search the main terms; read what is public).
+   Score each of the client's services on that evidence and take the top ones, as many as the setup asks for. If the evidence for a service is thin, leave it out and say so.
+3. Open the page (fetch it, and the repository file or the editor view when the site gives you one) and find last month's section: a heading like the one in the setup. The section is replaced, never added a second time.
+4. Write the section: the heading (naming the month and the area unless the setup gives one), one or two sentences on why these now, then for each service its name, one or two sentences that say why it matters this month here, and a link to that service's own page. Brand voice, facts only, no prices or offers the business facts do not give.
+5. Call request_approval with: the page, exactly where the section goes (which heading it follows, after how many sections), what is there now, the complete new section, and the evidence for each service in one line.
+
+Execute (after approval, or in a run that may act alone): put the section exactly there, by the way this site is changed: in its editor in the browser, or in its repository (repo_write, repo_diff, repo_publish). Replace last month's section in place. Read the live page back and check the section, its links and the page around it. log_change with the page and the month.
+
+Then write the month's choice into the project status ("In progress and next": the month, the services, the page), so next month starts from it.
+
+Report: the services chosen with the evidence for each, the section as published and where, what was there before, and when it should be looked at again.`,
 
   repo_edit: `# Change the website's code (repository)
 
